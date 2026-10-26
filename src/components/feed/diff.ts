@@ -52,6 +52,16 @@ export const TEXT_DIFF_CAPS: DiffCaps = {
   totalChars: 128_000,
 };
 
+/** Caps for one file of a lane's review diff (docs/design/lane-diff-comments.md
+    §1): 2,000 lines covers the largest file of nine lanes in ten. */
+export const REVIEW_DIFF_CAPS: DiffCaps = {
+  files: 1,
+  hunksPerFile: 200,
+  linesPerFile: 2_000,
+  charsPerLine: 2_000,
+  totalChars: 256_000,
+};
+
 const BLOB_MIN = 20_000;
 const INTRALINE_MIN_SIMILARITY = 0.5;
 const INTRALINE_MAX_CELLS = 250_000;
@@ -439,6 +449,31 @@ export function diffFromCodexFileChange(changes: unknown): DiffModel {
     files.push({ path, op, hunks, content, includeEmpty: true });
   }
   return finalize(files);
+}
+
+/** One file of `git diff -U3 <base> <head> -- <path>` → the same capped model.
+    Everything before the first hunk header is git's file header; after it a
+    line is read by its marker alone, so content that looks like `--- a/x`
+    stays content. Git's `Binary files … differ` marks a binary file. */
+export function diffFromGitFilePatch(path: string, op: Exclude<FileOp, "move">, patch: string, caps: DiffCaps = REVIEW_DIFF_CAPS): FileDiff {
+  const hunks: RawFile["hunks"] = [];
+  let hunk: RawFile["hunks"][number] | null = null;
+  for (const line of patch.split("\n")) {
+    const header = line.match(/^@@(.*)$/);
+    if (header) {
+      hunk = { header: header[1].trim(), lines: [] };
+      hunks.push(hunk);
+      continue;
+    }
+    if (!hunk) {
+      if (/^Binary files .* differ$/.test(line)) return { path, op, hunks: [], added: 0, removed: 0, binary: true, truncated: false };
+      continue;
+    }
+    const marker = line[0];
+    if (marker !== "+" && marker !== "-" && marker !== " ") continue;
+    hunk.lines.push({ t: marker, text: line.slice(1) });
+  }
+  return finalizeFile({ path, op, hunks, content: "", includeEmpty: true }, { remaining: caps.totalChars }, caps);
 }
 
 /** Dispatch by tool name; the one entry point the parser calls for Claude

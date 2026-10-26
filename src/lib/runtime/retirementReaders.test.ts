@@ -358,9 +358,13 @@ for (const retainedHost of [false, true]) test(`startup finalization reads selec
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
   const client = emptyJournalClient(journal);
   const preparations: string[] = [];
+  let initialPreparation = true;
   const prepare = registry.prepareReadOnlySnapshot.bind(registry);
   const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
-    preparations.push(structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.phase ?? "initial");
+    // The initial read precedes this pass's first phase report. Its status
+    // still belongs to the preceding pass, including the previous test case.
+    if (initialPreparation) initialPreparation = false;
+    else preparations.push(structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.phase ?? "initial");
     return prepare(...args);
   });
   let capturedReceipts = false, fencedAfterCapture = false;

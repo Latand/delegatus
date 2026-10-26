@@ -315,6 +315,8 @@ export interface PipelinePorts {
     "prompt": string;
     parentPath: string | null;
     clientAttemptId: string;
+    /** Per-call monotonic cutoff derived from the persisted controller wait. */
+    spawnAdmissionDeadline?: number;
     membership: DurableMembershipInput;
     /** Pipeline creator (#393): the container acts for the conversation that
         created it, so reviewer-isolation and depth admission key on this —
@@ -733,6 +735,12 @@ async function spawnPipelineAgent(
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
   preparePrompt?: () => Promise<string>,
 ): Promise<PipelineStageSpawn> {
+  // Account/parent lookups and registry admission spend the same cutoff.
+  const deadline = input.spawnAdmissionDeadline ?? Infinity;
+  const assertAdmissionCurrent = () => {
+    if (performance.now() >= deadline) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+  };
+  assertAdmissionCurrent();
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
   // Filter after the reservation and Git setup, immediately before dispatch.
@@ -855,9 +863,10 @@ async function spawnPipelineAgent(
       supersedes,
       supersedesReason: "stage-retry",
     }, () => {
+      assertAdmissionCurrent();
       // A writer retry must recheck the drain before creating its receipt.
       if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
-    });
+    }, { deadline });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
   try {
     await onReserved({
@@ -914,6 +923,7 @@ async function spawnPipelineAgent(
         accountId: begun.receipt.accountId ?? account.accountId });
       return filtered;
     });
+    assertAdmissionCurrent();
   } catch (error) {
     await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage Git guard preparation or activation recheck failed before dispatch");
     throw error;
@@ -930,6 +940,7 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
+      authorize: assertAdmissionCurrent,
     });
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
@@ -7076,10 +7087,24 @@ async function spawnRunStage(
       }
       await persist();
       try {
+        // Fenced-message retries spend a persisted count.
+        // Their backoff record has no lane deadline to carry into admission.
+        const wait = attempt.fencedMessageRetries && attempt.controllerWait?.budgetMs === undefined
+          ? undefined : attempt.controllerWait;
+        const budgetMs = wait ? wait.budgetMs ?? SPAWN_CONTROLLER_WAIT_BUDGET_MS : SPAWN_HOST_WAIT_BUDGET_MS;
+        const remainingMs = unixMs(wait?.startedAt ?? activationNow) + budgetMs - unixMs(ports.now());
+        const spawnAdmissionDeadline = performance.now() + Math.max(0, remainingMs);
+        if (remainingMs <= 0) {
+          const failure = pipeline.stateDetail?.match(/^stage spawn deferred: (.*); retry at /)?.[1];
+          throw failure && (isTransientStructuredSpawnFailure(failure) || isLaunchAdmissionContention(new Error(failure))) ? new Error(failure)
+            : wait && budgetMs === SPAWN_CONTROLLER_WAIT_BUDGET_MS ? new Error("structured delivery controller is unavailable")
+            : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+        }
         assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
         spawned = await ports.spawnAgent({
           ...spawnInput,
           clientAttemptId: callId,
+          spawnAdmissionDeadline,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
           ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
@@ -7103,7 +7128,7 @@ async function spawnRunStage(
            not a rejected launch, so it gets the wall-clock wait budget; every
            other transient keeps the two immediate handshake retries (#1056),
            which stay well inside the controller's phase deadline. */
-        const accountMutationContention = isAccountMutationContention(message);
+        const accountMutationContention = isAccountMutationContention(message) || message.includes(REGISTRY_WRITER_BUSY);
         const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
         /* #1750: an unverified delivery must never take the immediate
            handshake retries below — those re-dispatch the prompt on sight.
@@ -11107,7 +11132,7 @@ function syncControllerWaitStateDetail(
   failure: string | null,
 ): void {
   const retryAfter = attempt.controllerWait?.retryAfter;
-  if (failure !== null && (isAccountMutationContention(failure) || isRuntimeHostUnavailableSpawnFailure(failure) || isPrepublicationSpawnFailure(failure)) && retryAfter !== undefined) {
+  if (failure !== null && (isAccountMutationContention(failure) || failure.includes(REGISTRY_WRITER_BUSY) || isRuntimeHostUnavailableSpawnFailure(failure) || isPrepublicationSpawnFailure(failure)) && retryAfter !== undefined) {
     pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(failure)}; retry at ${retryAfter}`;
   } else if (pipeline.stateDetail?.startsWith("stage spawn deferred: ")) {
     pipeline.stateDetail = null;
@@ -11148,6 +11173,7 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
   if (failure.startsWith("Codex callback ")) return isRuntimeHostUnavailableSpawnFailure(failure);
   return failure === SEND_LOST_REASON || isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
+    || failure.includes(REGISTRY_WRITER_BUSY)
     || isRuntimeHostUnavailableSpawnFailure(failure)
     || isUnverifiedDeliverySpawnFailure(failure)
     || isPrepublicationSpawnFailure(failure)
@@ -11170,6 +11196,7 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
 function spawnWaitBudget(failure: string): { budgetMs: number; retryMaxMs: number } | undefined {
   return isRuntimeHostUnavailableSpawnFailure(failure)
     || isAccountMutationContention(failure)
+    || failure.includes(REGISTRY_WRITER_BUSY)
     || isUnverifiedDeliverySpawnFailure(failure)
     || isPrepublicationSpawnFailure(failure)
     ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }

@@ -8,6 +8,7 @@ import type { Flow } from "@/lib/flows/types";
 
 import { projectForCwd } from "./describe";
 import {
+  knownProjectFileRoots,
   projectDirectoryCandidates,
   projectDirectoryFallbacks,
   resetProjectDirectoryCacheForTests,
@@ -113,5 +114,27 @@ test("a cross-process SQLite flow commit refreshes warm project-directory sugges
     else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(sandbox, { recursive: true, force: true });
     resetProjectDirectoryCacheForTests();
+  }
+});
+
+test("a catalog cwd inside a linked checkout admits the whole checkout on its first read", () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "project-file-roots-"));
+  const previous = process.env.LLV_STATE_DIR;
+  const repository = path.join(sandbox, "repo");
+  const checkout = path.join(sandbox, "lane");
+  const state = path.join(sandbox, "state");
+  try {
+    process.env.LLV_STATE_DIR = state;
+    initializeRepository(repository);
+    const gitdir = path.join(repository, ".git", "worktrees", "lane");
+    fs.mkdirSync(gitdir, { recursive: true }); fs.writeFileSync(path.join(gitdir, "HEAD"), "ref: refs/heads/lane\n");
+    const cwd = path.join(checkout, "src"); fs.mkdirSync(cwd, { recursive: true });
+    fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${gitdir}\n`);
+    fs.mkdirSync(state); fs.writeFileSync(path.join(state, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd, projectRoot: repository } } }));
+    resetProjectDirectoryCacheForTests();
+    expect(knownProjectFileRoots()).toContain(checkout);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    resetProjectDirectoryCacheForTests(); fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });

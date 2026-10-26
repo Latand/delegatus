@@ -106,6 +106,20 @@ const transactionProbe = spyOn(databasePrototype, "transaction").mockImplementat
   // descriptors while observing immediate(), rather than mutating the native.
   return Object.defineProperties((...args: never[]) => Reflect.apply(prepared as unknown as (...args: never[]) => unknown, prepared, args), properties) as unknown as Transaction;
 });
+// Startup transactions also use explicit BEGIN statements so writer diagnostics
+// can observe them. Keep the callback observer for the pre-fix baseline.
+const exec = Database.prototype.exec;
+const execProbe = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
+  const opening = route === "continuation" && /^\s*BEGIN\s+IMMEDIATE\b/i.test(sql);
+  if (opening) attempts++;
+  try { return exec.call(this, sql); }
+  catch (error) {
+    if (opening && (error as { code?: string }).code === "SQLITE_BUSY") {
+      constructorBusy = true; errno = (error as { errno?: number }).errno; observed.resolve();
+    }
+    throw error;
+  }
+});
 const originalDependencies = { ...productionSpawnCommandDependencies };
 const body = { clientAttemptId: `writer_${route}_${site}_${revoked}`, engine: "claude", model: "sonnet",
   title: "Registry contention fixture", cwd, prompt: "Inspect the fixture", mcpServers: [] };
@@ -153,6 +167,7 @@ try {
 } finally {
   probe.mockRestore();
   transactionProbe.mockRestore();
+  execProbe.mockRestore();
   Object.assign(productionSpawnCommandDependencies, originalDependencies);
   await holder.close();
   registry?.close();

@@ -54,6 +54,12 @@ test("in Delegatus mode the operator's root conversation leaves project and mach
   expect(projectView(project).scopes.find(scope => scope.scope === `project:${project}`)?.active[0]?.stageId).toBe("operator");
 });
 
+test("an operator correction in the operator's own conversation carries the curator's correction marker", async () => {
+  chooseSource("active");
+  expect(await call({ correction: true, ...lesson("project") })).toMatchObject({ ok: true, left: [{ scope: `project:${project}`, state: "active" }] });
+  expect(projectView(project).scopes.find(scope => scope.scope === `project:${project}`)?.active[0]).toMatchObject({ operatorCorrection: true, stageId: "operator", awaitingCuration: true });
+});
+
 test("the operator's conversation is refused at role scope, for declines, problems and usage", async () => {
   chooseSource("draining");
   const before = roleMemoryCollection()?.snapshot() ?? [];
