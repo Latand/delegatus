@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { updateCodex, CHECK_INTERVAL_MS, newer, type UpdateNotice, type UpdatePorts } from "./update";
+import { hasPendingCodexUpdate, updateCodex, CHECK_INTERVAL_MS, newer, type UpdateNotice, type UpdatePorts } from "./update";
 import { installedTarget, updateDirectory, waitForCodexProcess, withCliSwitch, withCodexCliLaunch } from "./installation";
 import { codexProcessesPresent, runUpdateCommand } from "./production";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
@@ -42,6 +42,64 @@ function fixture() {
 }
 
 describe("Codex CLI automatic updates", () => {
+  test.each(["busy", "report-fail"])("requested recovery crosses an earlier location cooldown after restart (%s)", async outcome => {
+    const work = fixture(); let clock = "";
+    for (const mode of ["scheduler-fail", `scheduler-request-${outcome}`, "scheduler-resume"]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, mode, "0"], { stdout: "pipe", stderr: "pipe" });
+      const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+      const currentClock = fs.readFileSync(path.join(work.root, "scheduler.json"), "utf8");
+      if (mode === "scheduler-fail") clock = currentClock;
+      else expect(currentClock).toBe(clock);
+      if (mode.startsWith("scheduler-request-")) {
+        expect(hasPendingCodexUpdate(work.binary)).toBeTrue();
+        expect(installedTarget(work.binary)).toBe(outcome === "busy" ? work.old : work.candidate);
+      }
+    }
+    expect(installedTarget(work.binary)).toBe(work.candidate);
+    expect(hasPendingCodexUpdate(work.binary)).toBeFalse();
+    const lines = fs.readFileSync(path.join(work.root, "calls"), "utf8").trim().split("\n");
+    expect(lines.filter(line => line === "probe")).toHaveLength(1);
+    expect(lines.filter(line => line === "Codex CLI 0.164.0: updated")).toHaveLength(1);
+  });
+  test("explicit checks keep a rolled-back release rejected", async () => {
+    const work = fixture();
+    await updateCodex(work.binary, work.ports);
+    await updateCodex(work.binary, work.ports, true);
+    await updateCodex(work.binary, work.ports, false, true);
+    expect(installedTarget(work.binary)).toBe(work.old);
+    expect(work.calls).toEqual(["latest", "install", "probe", "latest"]);
+    expect(work.notices.at(-1)?.line).toBe("Codex CLI 0.163.0: rolled back; rejected release held");
+  });
+  test.each(["idle", "busy", "refused", "demoted"])("explicit checks retain compatibility and serving/idle admission (%s)", async outcome => {
+    const work = fixture();
+    work.ports.latest = async () => "0.163.0";
+    await updateCodex(work.binary, work.ports);
+    work.ports.latest = async () => { work.calls.push("latest"); return "0.164.0"; };
+    work.ports.idle = async () => outcome !== "busy";
+    if (outcome === "refused") work.ports.probe = async () => { work.calls.push("probe"); throw new Error("unreviewed schema"); };
+    if (outcome === "demoted") work.ports.current = () => false;
+    await updateCodex(work.binary, work.ports, false, true);
+    expect(installedTarget(work.binary)).toBe(outcome === "idle" ? work.candidate : work.old);
+    expect(work.calls).toEqual(outcome === "demoted" ? [] : ["latest", "install", "probe"]);
+    if (outcome === "busy") {
+      work.ports.idle = async () => true;
+      await updateCodex(work.binary, work.ports);
+      expect(installedTarget(work.binary)).toBe(work.candidate);
+    }
+  });
+
+  test("a requested retry after restart probes and waits for idle without resetting stored clocks", async () => {
+    const work = fixture();
+    for (const mode of ["fail", "request-busy", "request"]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, mode, "0"], { stdout: "pipe", stderr: "pipe" });
+      const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+      if (mode !== "request") expect(installedTarget(work.binary)).toBe(work.old);
+    }
+    expect(installedTarget(work.binary)).toBe(work.candidate);
+    const lines = fs.readFileSync(path.join(work.root, "calls"), "utf8").trim().split("\n");
+    expect(lines.filter(line => line === "probe")).toHaveLength(2);
+    expect(JSON.parse(fs.readFileSync(path.join(updateDirectory(work.binary), "state.json"), "utf8")).nextCheck).toBe(CHECK_INTERVAL_MS);
+  });
   test("no newer version spends one durable daily check", async () => {
     const work = fixture(); work.ports.latest = async () => { work.calls.push("latest"); return "0.163.0"; };
     await updateCodex(work.binary, work.ports); await updateCodex(work.binary, work.ports);
