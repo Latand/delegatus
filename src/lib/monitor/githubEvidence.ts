@@ -5,6 +5,8 @@ import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
 import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 
+import { productionPorts, readGhApiArgs } from "../../../bin/forge-app-token.mjs";
+
 import type { GithubEvidenceRow } from "./evidence";
 
 /**
@@ -40,15 +42,26 @@ export interface GithubRunnerOptions {
 }
 
 /** Resolve reads before requesting a token; writes retain their existing gate. */
-async function readRepository(args: string[], cwd: string, timeoutMs: number): Promise<{ repository: string; args: string[] } | null> {
+async function readRepository(args: string[], cwd: string): Promise<{ repository: string; args: string[] } | null> {
   const readCommand = (["pr", "issue"].includes(args[0] ?? "") && ["list", "view"].includes(args[1] ?? ""))
     || (args[0] === "repo" && args[1] === "view");
   const api = args[0] === "api";
   const query = args.find(arg => arg.startsWith("query="))?.slice(6);
   if (!readCommand && !api) return null;
-  if (api && (args.includes("--input") || args.includes("-X") || args.includes("--method") || args.some(arg => /^(?:--method=|-X.)/.test(arg)))) return null;
-  if (api && args[1] === "graphql" && (!query || /\bmutation\b/.test(query))) return null;
-  if (api && args[1] !== "graphql" && args.some(arg => ["-f", "-F", "--field", "--raw-field"].includes(arg))) return null;
+  if (api) {
+    // Use gh's accepted flag spellings and skip flag values before choosing
+    // read credentials. Body flags imply POST unless GET was explicit.
+    const { last } = readGhApiArgs(args);
+    const method = last("-X", "--method");
+    if (method && method.toUpperCase() !== "GET") return null;
+    if (last("--input") !== null) return null;
+    if (args[1] === "graphql") {
+      if (!query || /\bmutation\b/.test(query)) return null;
+    } else {
+      const body = ["-f", "-F", "--field", "--raw-field"].some(flag => last(flag) !== null);
+      if ((method ?? (body ? "POST" : "GET")).toUpperCase() !== "GET") return null;
+    }
+  }
   const index = args.findIndex(arg => arg === "--repo" || arg === "-R");
   const explicit = index >= 0 ? args[index + 1] : args.find(arg => arg.startsWith("--repo="))?.slice(7);
   const endpoint = api ? /^\/?repos\/([^/]+\/[^/?]+)/.exec(args[1] ?? "")?.[1] : null;
@@ -65,13 +78,8 @@ async function readRepository(args: string[], cwd: string, timeoutMs: number): P
     return resolved ? { repository: resolved, args } : null;
   }
   if (!readCommand || index >= 0) return null;
-  let context = process.env.GH_REPO;
-  if (!context) {
-    try {
-      const { stdout } = await execFileAsync("git", ["remote", "get-url", "origin"], { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 });
-      context = stdout.trim();
-    } catch { return null; }
-  }
+  const context = process.env.GH_REPO || (await productionPorts(process.env, cwd).checkoutRepositories())[0];
+  if (!context) return null;
   const resolved = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(context) ? context.toLowerCase() : githubRepositoryOfRemote(context);
   if (!resolved) return null;
   // Pin the context used to mint the token so gh cannot choose another remote.
@@ -89,7 +97,7 @@ export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunn
   const asApp = options.asApp ?? forgeAppWriter(cwd, timeoutMs);
   const declared = options.declared ?? isForgeAppRepository;
   return async (args) => {
-    const target = await readRepository(args, cwd, timeoutMs);
+    const target = await readRepository(args, cwd);
     return target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args);
   };
 }

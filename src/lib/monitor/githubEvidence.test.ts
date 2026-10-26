@@ -492,3 +492,185 @@ test("a read carries only the App token and never retries as another identity", 
   }
   expect(fallbackCalls).toBe(0);
 });
+
+
+describe("REST read credential classification", () => {
+  const bodyFlags = [
+    ["--raw-field", "title=example"], ["--raw-field=title=example"],
+    ["--field", "title=example"], ["--field=title=example"],
+    ["-f", "title=example"], ["-ftitle=example"], ["-f=title=example"],
+    ["-F", "title=example"], ["-Ftitle=example"], ["-F=title=example"],
+    ["--input", "body.json"], ["--input=body.json"],
+    ["-if", "title=example"], ["-f", "--method=GET"],
+  ];
+  test.each(bodyFlags.map(flags => [flags]))("body flags %j keep writes on the ordinary route", async (flags: string[]) => {
+    const { githubRunner } = await import("./githubEvidence");
+    const ordinary: string[][] = [];
+    let appCalls = 0;
+    const run = githubRunner(SANDBOX, 1000, {
+      declared: () => true,
+      asApp: async () => { appCalls++; return "app"; },
+      exec: async args => { ordinary.push(args); return "ordinary"; },
+    });
+    const args = ["api", "repos/acme/widgets/issues", ...flags];
+    expect(await run(args)).toBe("ordinary");
+    expect(ordinary).toEqual([args]);
+    expect(appCalls).toBe(0);
+  });
+
+  test.each([["-X", "GET"], ["-XGET"], ["--method", "GET"], ["--method=GET"]].map(method => [method]))(
+    "explicit GET %j uses the App even with query parameters", async (method: string[]) => {
+      const { githubRunner } = await import("./githubEvidence");
+      const calls: string[][] = [];
+      const run = githubRunner(SANDBOX, 1000, {
+        declared: repository => repository === "acme/widgets",
+        asApp: async args => { calls.push(args); return "app"; },
+        exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+      });
+      const args = ["api", "repos/acme/widgets/issues", ...method, "--field=state=open"];
+      expect(await run(args)).toBe("app");
+      expect(calls).toEqual([args]);
+    },
+  );
+
+  test.each([["-X", "POST"], ["-XPATCH"], ["--method", "PUT"], ["--method=DELETE"], ["-XGET", "--method=POST"]].map(method => [method]))(
+    "explicit write method %j keeps its route", async (method: string[]) => {
+      const { githubRunner } = await import("./githubEvidence");
+      let appCalls = 0;
+      const run = githubRunner(SANDBOX, 1000, {
+        declared: () => true,
+        asApp: async () => { appCalls++; return "app"; },
+        exec: async args => JSON.stringify(args),
+      });
+      const args = ["api", "repos/acme/widgets/issues", ...method];
+      expect(await run(args)).toBe(JSON.stringify(args));
+      expect(appCalls).toBe(0);
+    },
+  );
+
+  test("REST and GraphQL App read refusals never try ordinary credentials", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const repositories: string[] = [];
+    let ordinary = 0;
+    const run = githubRunner(SANDBOX, 1000, {
+      declared: repository => repository === "acme/widgets",
+      asApp: async (_args, repository) => { repositories.push(repository); throw new Error("App refused"); },
+      exec: async () => { ordinary++; return "ordinary"; },
+    });
+    for (const args of [
+      ["api", "repos/acme/widgets/issues", "--method=GET"],
+      ["api", "graphql", "-F", "owner=acme", "-F", "name=widgets", "-f", "query=query { repository(owner: $owner, name: $name) { name } }"],
+    ]) await expect(run(args)).rejects.toThrow("App refused");
+    expect(repositories).toEqual(["acme/widgets", "acme/widgets"]);
+    expect(ordinary).toBe(0);
+  });
+});
+
+describe("checkout read repository selection", () => {
+  function checkout() {
+    const root = fs.mkdtempSync(path.join(SANDBOX, "remote-selection-"));
+    const git = (...args: string[]) => {
+      expect(Bun.spawnSync(["git", ...args], { cwd: root }).exitCode).toBe(0);
+    };
+    git("init");
+    return { root, git };
+  }
+  const reads = [["pr", "list"], ["issue", "list"], ["repo", "view"]];
+  const pinned = (args: string[], repository: string) => args[0] === "repo"
+    ? [...args, repository] : [...args, "--repo", repository];
+
+  test("configured defaults override origin and are reread between calls", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    git("config", "remote.origin.gh-resolved", "base");
+    const calls: { args: string[]; repository: string }[] = [];
+    const run = githubRunner(root, 1000, {
+      declared: () => true,
+      asApp: async (args, repository) => { calls.push({ args, repository }); return "app"; },
+      exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+    });
+    expect(await run(["pr", "list"])).toBe("app");
+    expect(calls.pop()?.repository).toBe("acme/widgets");
+    git("config", "--unset", "remote.origin.gh-resolved");
+    git("config", "remote.upstream.gh-resolved", "base");
+    for (const args of reads) {
+      expect(await run(args)).toBe("app");
+      expect(calls.pop()).toEqual({ args: pinned(args, "acme/canonical"), repository: "acme/canonical" });
+    }
+    git("config", "remote.upstream.gh-resolved", "acme/selected");
+    expect(await run(["issue", "list"])).toBe("app");
+    expect(calls.pop()?.repository).toBe("acme/selected");
+  });
+
+  test("checkout remote preference works with or without origin", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    const run = githubRunner(root, 1000, {
+      declared: repository => repository === "acme/canonical",
+      asApp: async (args, repository) => JSON.stringify({ args, repository }),
+      exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+    });
+    for (const args of reads) expect(JSON.parse(await run(args))).toEqual({ args: pinned(args, "acme/canonical"), repository: "acme/canonical" });
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "github", "https://github.com/acme/mirror.git");
+    expect(JSON.parse(await run(["pr", "list"])).repository).toBe("acme/canonical");
+    git("remote", "remove", "upstream");
+    const mirrorRun = githubRunner(root, 1000, {
+      declared: repository => repository === "acme/mirror",
+      asApp: async (_args, repository) => repository,
+      exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+    });
+    expect(await mirrorRun(["pr", "list"])).toBe("acme/mirror");
+  });
+
+  test("an undeclared default passes original arguments, and explicit sources override it", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    git("config", "remote.upstream.gh-resolved", "base");
+    const ordinary: string[][] = [];
+    let appCalls = 0;
+    const run = githubRunner(root, 1000, {
+      declared: repository => repository === "acme/widgets",
+      asApp: async (_args, repository) => { appCalls++; return repository; },
+      exec: async args => { ordinary.push(args); return "ordinary"; },
+    });
+    for (const args of reads) expect(await run(args)).toBe("ordinary");
+    expect(ordinary).toEqual(reads);
+    expect(appCalls).toBe(0);
+    const previous = process.env.GH_REPO;
+    try {
+      process.env.GH_REPO = "acme/widgets";
+      for (const args of reads) expect(await run(args)).toBe("acme/widgets");
+      process.env.GH_REPO = "acme/canonical";
+      expect(await run(["pr", "list", "--repo", "acme/widgets"])).toBe("acme/widgets");
+      expect(await run(["repo", "view", "acme/widgets"])).toBe("acme/widgets");
+    } finally {
+      if (previous === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = previous;
+    }
+    expect(appCalls).toBe(5);
+  });
+
+  test("a chosen default's App refusal never falls back to origin or ordinary credentials", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    git("config", "remote.upstream.gh-resolved", "base");
+    const repositories: string[] = [];
+    let ordinary = 0;
+    const run = githubRunner(root, 1000, {
+      declared: () => true,
+      asApp: async (_args, repository) => { repositories.push(repository); throw new Error("App refused"); },
+      exec: async () => { ordinary++; return "ordinary"; },
+    });
+    for (const args of reads) await expect(run(args)).rejects.toThrow("App refused");
+    expect(repositories).toEqual(reads.map(() => "acme/canonical"));
+    expect(ordinary).toBe(0);
+  });
+});
