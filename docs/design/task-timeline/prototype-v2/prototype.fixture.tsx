@@ -164,8 +164,8 @@ const PIPELINES: Pipeline[] = [
     [stage("build", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "fix", maxRounds: 3 } }), stage("fix", "builder", "review")],
     [
       { stageId: "build", attempts: [attempt(A, "build", 1, AT.build, "pass", L(
-        "csvWriter now streams rows in chunks of 5,000 instead of building the file in memory; uploads retry on 503 with pauses of 1 → 2 → 4 s. The file format is unchanged.",
-        "csvWriter тепер пише рядки потоком частинами по 5 000, а не збирає файл у пам’яті; вивантаження повторюється на 503 з паузами 1 → 2 → 4 с. Формат файлу не змінено.",
+        "csvWriter now streams rows in chunks of 5,000 instead of building the file in memory; uploads retry on 503 with pauses of 1 → 2 → 4 s. The file format is unchanged.",
+        "csvWriter тепер пише рядки потоком частинами по 5 000, а не збирає файл у пам’яті; вивантаження повторюється на 503 з паузами 1 → 2 → 4 с. Формат файлу не змінено.",
       ))] },
       { stageId: "review", attempts: [
         attempt(A, "review", 1, AT.review1, "fail", L("3 findings: duplicated rows after a retry, no retry test, no upload timeout.", "3 зауваження: дублі рядків після повтору, немає тесту на повтор, немає таймауту."), { roleId: "reviewer", findings: FINDINGS_1, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } }),
@@ -239,7 +239,7 @@ const attemptKey = (pipelineId: string, stageId: string, n: number) => `${pipeli
 type Part = string | { link: string; text: string };
 type Note = { why?: Part[]; result: string };
 const NOTES: Record<string, Note> = {
-  [attemptKey(A, "build", 1)]: { result: L("Streaming writes in 5,000-row chunks; the file format is unchanged", "Потоковий запис частинами по 5 000 рядків; формат файлу той самий") },
+  [attemptKey(A, "build", 1)]: { result: L("The writer streams straight into the upload, with no temporary file; the in-memory path is gone", "Запис іде потоком одразу у вивантаження, без тимчасового файлу; шлях через пам’ять вилучено") },
   [attemptKey(A, "review", 1)]: { result: L("Duplicate rows after a retry, no retry test, no upload timeout", "Дублі рядків після повтору, без тесту на повтор і без таймауту") },
   [attemptKey(A, "fix", 1)]: {
     why: [L("Answers ", "Відповідь на "), { link: attemptKey(A, "review", 1), text: `${stageName(A, "review")} · 1` }],
@@ -248,7 +248,7 @@ const NOTES: Record<string, Note> = {
   [attemptKey(A, "review", 2)]: { result: L("The third retry failed with a different error", "Третій повтор падав з іншою помилкою") },
   [attemptKey(A, "fix", 2)]: {
     why: [L("Answers ", "Відповідь на "), { link: attemptKey(A, "review", 2), text: `${stageName(A, "review")} · 2` }],
-    result: L("Pauses of 1 → 2 → 4 s; the test covers all three retries", "Паузи 1 → 2 → 4 с; тест покриває всі три повтори"),
+    result: L("The pauses between retries now grow; the test covers all three retries", "Паузи між повторами тепер наростають; тест покриває всі три повтори"),
   },
   [attemptKey(A, "review", 3)]: { result: L("No findings; memory stays under 120 MB", "Без зауважень; пам’ять не перевищує 120 МБ") },
   [`${A}:merge:update:0`]: { result: L(`#${OTHER_PR} changed the same upload.ts: a conflict`, `#${OTHER_PR} змінив той самий upload.ts: конфлікт`) },
@@ -274,13 +274,13 @@ const SUMMARY = {
   byAria: L(`written by the ${stageName(C, "deploy")} stage at ${clock(AT.note)}`, `написав етап ${stageName(C, "deploy")} о ${clock(AT.note)}`),
   headline: L("CSV export holds up on large projects", "Експорт CSV витримує великі проєкти"),
   lead: L(
-    "CSV export no longer fails on large projects. The file is written as a stream in 5,000-row chunks, and a storage failure loses no work: the upload retries by itself with pauses of 1 → 2 → 4 s, and only after the third failure does the person see an error. 80k rows take 6 s; the file format is unchanged.",
-    "Експорт CSV більше не падає на великих проєктах. Файл пишеться потоком частинами по 5 000 рядків, а збій сховища не губить роботу: вивантаження повторюється саме, з паузами 1 → 2 → 4 с, і лише після третьої невдачі людина бачить помилку. 80 тис. рядків проходять за 6 с; формат файлу той самий.",
+    "CSV export no longer fails on large projects. The file is written as a stream in 5,000-row chunks, and a storage failure loses no work: the upload retries by itself with pauses of 1 → 2 → 4 s, and only after the third failure does the person see an error. 80k rows take 6 s; the file format is unchanged.",
+    "Експорт CSV більше не падає на великих проєктах. Файл пишеться потоком частинами по 5 000 рядків, а збій сховища не губить роботу: вивантаження повторюється саме, з паузами 1 → 2 → 4 с, і лише після третьої невдачі людина бачить помилку. 80 тис. рядків проходять за 6 с; формат файлу той самий.",
   ),
   /* Variant 3's shorter prose under its headline. */
   short: L(
-    "The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1 → 2 → 4 s), then a clear error. 80k rows take 6 s; the file format is unchanged.",
-    "Файл пишеться потоком частинами по 5 000 рядків; збій сховища дає три повтори (1 → 2 → 4 с), далі зрозуміла помилка. 80 тис. рядків проходять за 6 с; формат файлу той самий.",
+    "The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1 → 2 → 4 s), then a clear error. 80k rows take 6 s; the file format is unchanged.",
+    "Файл пишеться потоком частинами по 5 000 рядків; збій сховища дає три повтори (1 → 2 → 4 с), далі зрозуміла помилка. 80 тис. рядків проходять за 6 с; формат файлу той самий.",
   ),
   facts: {
     release: [
@@ -291,7 +291,7 @@ const SUMMARY = {
   },
   rows: [
     { label: L("Changed", "Зроблено"), value: L("Streaming CSV writes in 5,000-row chunks and an upload retry on 503.", "Потоковий запис CSV частинами по 5 000 рядків і повтор вивантаження на 503.") },
-    { label: L("Works now", "Працює тепер"), value: L("80k rows in 6 s, the same format. A storage failure gets three retries with pauses of 1 → 2 → 4 s, then a clear error.", "80 тис. рядків за 6 с, формат той самий. Збій сховища дає три повтори з паузами 1 → 2 → 4 с, далі зрозуміла помилка.") },
+    { label: L("Works now", "Працює тепер"), value: L("80k rows in 6 s, the same format. A storage failure gets three retries with pauses of 1 → 2 → 4 s, then a clear error.", "80 тис. рядків за 6 с, формат той самий. Збій сховища дає три повтори з паузами 1 → 2 → 4 с, далі зрозуміла помилка.") },
     { label: L("Release", "Версія"), value: `${RELEASE} · 15:05 · PR #${PR}` },
     { label: L("Left", "Лишилось"), value: L("Nothing required. An idea: show the export's progress in the\u00a0UI.", "Нічого обов’язкового. Ідея: показувати прогрес експорту в інтерфейсі.") },
   ],
@@ -432,6 +432,12 @@ const TONE: Partial<Record<ChronologyEntry["kind"], "ok" | "bad" | "warn">> = {
 };
 const entryId = (key: string) => `tl-${key.replace(/[^a-z0-9]+/gi, "-")}`;
 
+/** A stage writes its result as a sentence; the composed line joins it to a
+    reason with «: ». Ukrainian continues in lowercase after a colon inside a
+    sentence, so the line lowercases the result's first letter there, unless
+    the result opens with a name or an acronym (a second capital, a digit, #). */
+const afterColon = (result: string) => LANG === "uk" && /^[А-ЯІЇЄҐ][а-яіїєґ’]/u.test(result) ? result[0]!.toLowerCase() + result.slice(1) : result;
+
 function NoteLine({ note, variant }: { note: Note; variant: 1 | 2 | 3 }) {
   const why = note.why ? (
     <span className="tl-why">
@@ -441,9 +447,10 @@ function NoteLine({ note, variant }: { note: Note; variant: 1 | 2 | 3 }) {
     </span>
   ) : null;
   const joiner = why && note.result ? ": " : "";
+  const result = why ? afterColon(note.result) : note.result;
   return (
     <span className="tl-note" data-proto-note={variant}>
-      {why}{joiner}{note.result ? <span>{note.result}</span> : null}
+      {why}{joiner}{result ? <span>{result}</span> : null}
     </span>
   );
 }

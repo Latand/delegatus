@@ -1938,6 +1938,27 @@ export async function captureTaskTimelinePrototype(browser: Browser, base: strin
         for (const link of document.querySelectorAll<HTMLAnchorElement>("[data-proto-why-link]")) {
           if (!document.getElementById(link.getAttribute("href")!.slice(1))) problems.push(`link «${link.textContent}» points at no entry`);
         }
+        /* A figure is said once per frame: the chunk size, the pause sequence and the unchanged format live in the summary alone. */
+        const said = [...document.querySelectorAll("[data-proto-summary], [data-proto-timeline]")].map((scope) => scope.textContent ?? "").join("\n");
+        const figures: Record<string, RegExp> = { chunk: /5[\u00a0 ,]000/g, pauses: /1\u00a0→\u00a02\u00a0→\u00a04/g, format: /format|формат/gi };
+        const saidOnce = Object.fromEntries(Object.entries(figures).map(([figure, pattern]) => [figure, (said.match(pattern) ?? []).length]));
+        for (const [figure, count] of Object.entries(saidOnce)) if (count > 1) problems.push(`the ${figure} figure is said ${count} times in one frame`);
+        /* The pause sequence never breaks across lines, and a uk result after the reason's colon continues in lowercase. */
+        for (const note of document.querySelectorAll("[data-proto-summary], [data-proto-timeline]")) {
+          const walker = document.createTreeWalker(note, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const match = /\d\u00a0→\u00a0\d\u00a0→\u00a0\d\u00a0\S+/.exec(node.textContent ?? "");
+            if (!match) continue;
+            const range = document.createRange(); range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
+            const tops = new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
+            if (tops.size > 1) problems.push(`«${match[0]}» breaks across ${tops.size} lines`);
+          }
+        }
+        if (document.documentElement.lang === "uk") for (const note of document.querySelectorAll("[data-proto-note]")) {
+          const capital = /: ([А-ЯІЇЄҐ][а-яіїєґ’]+)/u.exec(note.textContent ?? "");
+          if (capital) problems.push(`«${capital[1]}» opens with a capital after the reason's colon`);
+        }
         /* The timeline's entries that carry a stage's line: how many lines each takes. */
         const lines = [...document.querySelectorAll("[data-proto-note]")].map((note) => {
           const range = document.createRange(); range.selectNodeContents(note);
@@ -1945,13 +1966,13 @@ export async function captureTaskTimelinePrototype(browser: Browser, base: strin
         });
         const summary = document.querySelector("[data-proto-summary]")?.getBoundingClientRect();
         const timeline = document.querySelector("[data-proto-timeline]")?.getBoundingClientRect();
-        return { problems, noteLines: lines, summaryHeight: summary ? Math.round(summary.height) : null, timelineHeight: timeline ? Math.round(timeline.height) : null };
+        return { problems, noteLines: lines, saidOnce, summaryHeight: summary ? Math.round(summary.height) : null, timelineHeight: timeline ? Math.round(timeline.height) : null };
       });
       for (const problem of cut.problems) failures.push(`${name}: ${problem}`);
       if (pageErrors.length) failures.push(`${name}: page errors ${pageErrors.join(" | ")}`);
       /* The phone at its own density (2×), the desktop at 1. */
       await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: true, scale: phone ? "device" : "css" });
-      readings.push({ name, variant, width, lang, theme, folded, viewport: { width, height: grown }, first, noteLines: cut.noteLines, summaryHeight: cut.summaryHeight, timelineHeight: cut.timelineHeight });
+      readings.push({ name, variant, width, lang, theme, folded, viewport: { width, height: grown }, first, noteLines: cut.noteLines, saidOnce: cut.saidOnce, summaryHeight: cut.summaryHeight, timelineHeight: cut.timelineHeight });
     } catch (error) {
       failures.push(`${name}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       await page.screenshot({ path: path.join(out, `${name}-failed.png`) }).catch(() => {});

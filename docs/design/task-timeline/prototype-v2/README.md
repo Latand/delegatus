@@ -29,6 +29,12 @@ built from the product's own card, task screen, tokens and type.
 |---|---|---|
 | 1 «Абзацом» | A section like «Хронологія»: its heading with the writer and time at the end («від Deploy · 15:07»), a paragraph in the card's primary ink (12 px on the desktop, 13 px on the phone), and two quiet lines of facts under it («Працює з 2.14.1 · 15:05 · PR #412», then «Лишилось …» on a line of its own) | A stage's line on a second line of its entry, muted; the reason first, its link in the accent, then the result |
 | 2 «Рядками» | The same heading over labelled rows: «Зроблено» («Changed» in en, a word apart from the state line's «Done»), «Працює тепер», «Версія», «Лишилось», the label in a muted column of its own, the value in primary ink | The line runs on in the entry's own words after « · » (the separator stuck to the entry's last word, so no line starts with it), the reason joined to its result by «: » as in the other variants; the timeline stays one paragraph per entry |
+
+In every variant a reason is joined to its result by «: ». A stage writes its
+result as a sentence; in uk the composed line lowercases its first letter, as
+Ukrainian continues in lowercase after a colon inside a sentence («Відповідь
+на Review · 1: повтор іде з останньої підтвердженої частини»), unless the
+result opens with a name or an acronym. English keeps the capital.
 | 3 «Панеллю» | A panel on the well surface (the one the card's details use), a one-line headline in bold, two shorter sentences and the facts lines | An entry that answers another carries a 2 px rule in the gutter beside its words (every entry's words start at one x), so the answer is seen before it is read; the reason stays in muted ink and the result in secondary |
 
 Every treatment uses the card's label (11 px), ui (12 px) and body (13 px)
@@ -39,8 +45,13 @@ task screen's card frame (12 px radius, the card surface, shadow 1); variant
 desktop card the description under the summary carries the section label the
 phone already gives it («Опис»), so it never reads as the summary's last
 sentence. A fact is said once per surface: the measurement (80 тис. рядків за
-6 с) and the release live in the summary, and Review · 3 and Deploy's lines
-say what only they say. A reason's link («Review · 1») never breaks inside.
+6 с), the release, the 5 000-row chunks, the pauses 1 → 2 → 4 с and the
+unchanged format live in the summary; Build's line says what the writer does
+now and what is gone, Fix · 2's that the pauses grow and the test covers all
+three retries, and Review · 3 and Deploy's lines say what only they say. A
+reason's link («Review · 1») never breaks inside, and neither does the pause
+sequence: its arrows and unit are tied with non-breaking spaces, as every
+number is to its unit.
 
 ## The fixture
 
@@ -108,4 +119,8 @@ named viewport, the block measures where the summary's first line ends: it
 must end on the first screen. After it grows, every text range in the summary,
 the timeline and the variant band is checked to be whole, on the page, never
 cut by a scroller or ended in an ellipsis, and every reason's link to point at
-an entry on the page.
+an entry on the page. The block also counts the chunk size, the pause sequence
+and the unchanged-format sentence across the summary and the timeline (each at
+most once per frame, recorded as `saidOnce`), requires the pause sequence to
+sit on one line, and in uk refuses a result that opens with a capital after
+the reason's colon.

@@ -1,7 +1,7 @@
 {
-  "capturedAt": "2026-10-26T10:19:13.538Z",
+  "capturedAt": "2026-10-26T10:43:18.457Z",
   "sourceDigests": {
-    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "375263c12f4c2dcfb0a1fe6f203865e410415d6d15467ff3415f08444d0cc9f4",
+    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "a53d47a9aa71bc9dc8938322b934da430e3f525c3613de03b01db99ab7a58198",
     "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "4853f6374a0091c952f44cbfb16d27538a4e4665f7ef55267299eafe61220204"
   },
   "readings": [
@@ -37,6 +37,11 @@
         1,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 216,
       "timelineHeight": 765
     },
@@ -66,6 +71,11 @@
         1,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 216,
       "timelineHeight": 428
     },
@@ -101,6 +111,11 @@
         1,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 216,
       "timelineHeight": 765
     },
@@ -136,6 +151,11 @@
         1,
         1
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 216,
       "timelineHeight": 711
     },
@@ -171,6 +191,11 @@
         1,
         1
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 216,
       "timelineHeight": 711
     },
@@ -183,7 +208,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1898
+        "height": 1934
       },
       "first": {
         "summaryTop": 156,
@@ -193,11 +218,11 @@
         "innerWidth": 390
       },
       "noteLines": [
-        2,
+        3,
         2,
         3,
         2,
-        2,
+        3,
         2,
         2,
         3,
@@ -206,8 +231,13 @@
         2,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 199,
-      "timelineHeight": 639
+      "timelineHeight": 675
     },
     {
       "name": "variant-2-390-uk-light-folded",
@@ -235,6 +265,11 @@
         2,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 199,
       "timelineHeight": 374
     },
@@ -247,7 +282,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1898
+        "height": 1934
       },
       "first": {
         "summaryTop": 156,
@@ -257,11 +292,11 @@
         "innerWidth": 390
       },
       "noteLines": [
-        2,
+        3,
         2,
         3,
         2,
-        2,
+        3,
         2,
         2,
         3,
@@ -270,8 +305,13 @@
         2,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 199,
-      "timelineHeight": 639
+      "timelineHeight": 675
     },
     {
       "name": "variant-2-390-en-light",
@@ -282,7 +322,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1898
+        "height": 1934
       },
       "first": {
         "summaryTop": 156,
@@ -292,11 +332,11 @@
         "innerWidth": 390
       },
       "noteLines": [
-        2,
+        3,
         2,
         3,
         2,
-        2,
+        3,
         2,
         2,
         3,
@@ -305,8 +345,13 @@
         2,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 199,
-      "timelineHeight": 639
+      "timelineHeight": 675
     },
     {
       "name": "variant-2-390-en-dark",
@@ -317,7 +362,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1898
+        "height": 1934
       },
       "first": {
         "summaryTop": 156,
@@ -327,11 +372,11 @@
         "innerWidth": 390
       },
       "noteLines": [
-        2,
+        3,
         2,
         3,
         2,
-        2,
+        3,
         2,
         2,
         3,
@@ -340,8 +385,13 @@
         2,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 199,
-      "timelineHeight": 639
+      "timelineHeight": 675
     },
     {
       "name": "variant-3-390-uk-light",
@@ -375,6 +425,11 @@
         1,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 188,
       "timelineHeight": 765
     },
@@ -404,6 +459,11 @@
         1,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 188,
       "timelineHeight": 428
     },
@@ -439,6 +499,11 @@
         1,
         2
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 188,
       "timelineHeight": 765
     },
@@ -474,6 +539,11 @@
         1,
         1
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 171,
       "timelineHeight": 729
     },
@@ -509,6 +579,11 @@
         1,
         1
       ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
       "summaryHeight": 171,
       "timelineHeight": 729
     },
@@ -525,6 +600,11 @@
       },
       "first": null,
       "noteLines": [],
+      "saidOnce": {
+        "chunk": 0,
+        "pauses": 0,
+        "format": 0
+      },
       "summaryHeight": null,
       "timelineHeight": null
     }
