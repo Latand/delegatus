@@ -2189,3 +2189,152 @@ export async function captureTaskSummaryFrames(browser: Browser, base: string, o
   fs.mkdirSync("evidence/task-summary", { recursive: true });
   fs.writeFileSync(`evidence/task-summary/${phone ? "phone" : "desktop"}.json`, record);
 }
+
+/** The task summary and timeline prototype v2
+ * (docs/design/task-timeline/prototype-v2/): three visual treatments of one
+ * structure over the real board card and phone task screen, each variant at
+ * every width the brief names (and 820 px between them) in both languages and
+ * themes. Each frame is whole: the viewport grows until nothing scrolls inside
+ * the card's column or the task screen. The readings say where the summary's
+ * first line ends at the named viewport before it grows, and that no added
+ * text is cut sideways, clipped by a scroller or ended in an ellipsis. */
+export async function captureTaskTimelinePrototype(browser: Browser, base: string, out: string, phone: boolean) {
+  const widths = phone ? [390] : [1440, 820];
+  const readings: Array<Record<string, unknown>> = [];
+  const failures: string[] = [];
+  const shots: Array<{ variant: number; width: number; lang: "en" | "uk"; theme: "light" | "dark"; folded: boolean }> = [];
+  for (const variant of [1, 2, 3]) for (const width of widths) for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) {
+    shots.push({ variant, width, lang, theme, folded: false });
+    if (width === widths[0] && lang === "uk" && theme === "light") shots.push({ variant, width, lang, theme, folded: true });
+  }
+  for (const width of widths) shots.push({ variant: 0, width, lang: "uk", theme: "light", folded: true });
+  for (const shot of shots) {
+    const { variant, width, lang, theme, folded } = shot;
+    const height = phone ? 844 : 900;
+    const name = `${variant ? `variant-${variant}` : "today"}-${width}-${lang}-${theme}${folded && variant ? "-folded" : ""}`;
+    const url = `${base}?variant=${variant}&device=${phone ? "phone" : "desktop"}&lang=${lang}&theme=${theme}${folded ? "&fold=1" : ""}`;
+    const { context, page, pageErrors } = await openFixture(browser, url, { width, height }, theme, lang, "reduce", phone, phone ? 2 : 1);
+    try {
+      const card = phone ? "[data-phone-task-body]" : '[data-kanban-card="task:t-csv"][data-collapsed="0"]';
+      await page.locator(card).waitFor({ timeout: 30_000 });
+      if (variant) {
+        await page.locator("[data-proto-summary]").waitFor({ timeout: 30_000 });
+        await page.locator("[data-proto-timeline]").waitFor({ timeout: 30_000 });
+      }
+      await page.evaluate(() => document.fonts.ready);
+      /* The narrow board scrolls sideways: bring the card's column wholly into view first. */
+      if (!phone) await page.evaluate((selector) => {
+        const element = document.querySelector(selector);
+        element?.scrollIntoView({ block: "start", inline: "end" });
+        for (let node = element?.parentElement; node; node = node.parentElement) {
+          if (/(auto|scroll)/.test(getComputedStyle(node).overflowX) && node.scrollWidth > node.clientWidth) node.scrollLeft = node.scrollWidth;
+        }
+      }, card);
+      await page.waitForTimeout(150);
+      /* At the named viewport, before it grows: where the summary's first line ends. */
+      const first = await page.evaluate((selector) => {
+        const summary = document.querySelector("[data-proto-summary]");
+        const lead = summary?.querySelector("[data-proto-summary-headline], [data-proto-summary-lead]") ?? summary;
+        const node = lead ? document.createTreeWalker(lead, NodeFilter.SHOW_TEXT).nextNode() : null;
+        if (!node) return null;
+        const range = document.createRange(); range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        const top = summary!.getBoundingClientRect().top;
+        const cardTop = document.querySelector(selector)!.getBoundingClientRect().top;
+        return { summaryTop: top, cardTop, firstLineBottom: rects[0]?.bottom ?? null, innerHeight, innerWidth };
+      }, card);
+      if (variant && first && (first.firstLineBottom === null || first.firstLineBottom > first.innerHeight || first.summaryTop < 0)) failures.push(`${name}: the summary's first line is not on the first screen (${JSON.stringify(first)})`);
+      /* Grow the viewport until no ancestor of the card scrolls. */
+      let grown = height;
+      for (let round = 0; round < 4; round++) {
+        const extra = await page.evaluate((selector) => {
+          let most = 0;
+          for (let node = document.querySelector(selector); node; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            if (/(auto|scroll)/.test(style.overflowY)) most = Math.max(most, node.scrollHeight - node.clientHeight);
+          }
+          return most;
+        }, card);
+        if (extra <= 0) break;
+        grown += extra + 1;
+        await page.setViewportSize({ width, height: grown });
+        await page.waitForTimeout(100);
+      }
+      /* Every text range in what the prototype added, and in the timeline: whole, on the page, never cut by a scroller or an ellipsis. */
+      const cut = await page.evaluate(() => {
+        const problems: string[] = [];
+        const scopes = document.querySelectorAll("[data-proto-summary], [data-proto-timeline], [data-proto-header]");
+        for (const scope of scopes) {
+          const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const words = node.textContent?.trim();
+            if (!words) continue;
+            const range = document.createRange(); range.selectNodeContents(node);
+            for (const rect of range.getClientRects()) {
+              if (rect.width === 0 || rect.height === 0) continue;
+              if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) problems.push(`«${words.slice(0, 40)}» leaves the viewport (${Math.round(rect.left)},${Math.round(rect.top)}–${Math.round(rect.right)},${Math.round(rect.bottom)})`);
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent);
+                if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+                const box = parent.getBoundingClientRect();
+                if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) problems.push(`«${words.slice(0, 40)}» is clipped by ${parent.className || parent.tagName}`);
+              }
+            }
+            const element = node.parentElement!;
+            if (getComputedStyle(element).textOverflow === "ellipsis" && element.scrollWidth > element.clientWidth + 0.5) problems.push(`«${words.slice(0, 40)}» ends in an ellipsis`);
+          }
+        }
+        for (const link of document.querySelectorAll<HTMLAnchorElement>("[data-proto-why-link]")) {
+          if (!document.getElementById(link.getAttribute("href")!.slice(1))) problems.push(`link «${link.textContent}» points at no entry`);
+        }
+        /* A figure is said once per frame: the chunk size, the pause sequence and the unchanged format live in the summary alone. */
+        const said = [...document.querySelectorAll("[data-proto-summary], [data-proto-timeline]")].map((scope) => scope.textContent ?? "").join("\n");
+        const figures: Record<string, RegExp> = { chunk: /5[\u00a0 ,]000/g, pauses: /1\u00a0→\u00a02\u00a0→\u00a04/g, format: /format|формат/gi };
+        const saidOnce = Object.fromEntries(Object.entries(figures).map(([figure, pattern]) => [figure, (said.match(pattern) ?? []).length]));
+        for (const [figure, count] of Object.entries(saidOnce)) if (count > 1) problems.push(`the ${figure} figure is said ${count} times in one frame`);
+        /* The pause sequence never breaks across lines, and a uk result after the reason's colon continues in lowercase. */
+        for (const note of document.querySelectorAll("[data-proto-summary], [data-proto-timeline]")) {
+          const walker = document.createTreeWalker(note, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const match = /\d\u00a0→\u00a0\d\u00a0→\u00a0\d\u00a0\S+/.exec(node.textContent ?? "");
+            if (!match) continue;
+            const range = document.createRange(); range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
+            const tops = new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
+            if (tops.size > 1) problems.push(`«${match[0]}» breaks across ${tops.size} lines`);
+          }
+        }
+        if (document.documentElement.lang === "uk") for (const note of document.querySelectorAll("[data-proto-note]")) {
+          const capital = /: ([А-ЯІЇЄҐ][а-яіїєґ’]+)/u.exec(note.textContent ?? "");
+          if (capital) problems.push(`«${capital[1]}» opens with a capital after the reason's colon`);
+        }
+        /* The timeline's entries that carry a stage's line: how many lines each takes. */
+        const lines = [...document.querySelectorAll("[data-proto-note]")].map((note) => {
+          const range = document.createRange(); range.selectNodeContents(note);
+          return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
+        });
+        const summary = document.querySelector("[data-proto-summary]")?.getBoundingClientRect();
+        const timeline = document.querySelector("[data-proto-timeline]")?.getBoundingClientRect();
+        return { problems, noteLines: lines, saidOnce, summaryHeight: summary ? Math.round(summary.height) : null, timelineHeight: timeline ? Math.round(timeline.height) : null };
+      });
+      for (const problem of cut.problems) failures.push(`${name}: ${problem}`);
+      if (pageErrors.length) failures.push(`${name}: page errors ${pageErrors.join(" | ")}`);
+      /* The phone at its own density (2×), the desktop at 1. */
+      await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: true, scale: phone ? "device" : "css" });
+      readings.push({ name, variant, width, lang, theme, folded, viewport: { width, height: grown }, first, noteLines: cut.noteLines, saidOnce: cut.saidOnce, summaryHeight: cut.summaryHeight, timelineHeight: cut.timelineHeight });
+    } catch (error) {
+      failures.push(`${name}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      await page.screenshot({ path: path.join(out, `${name}-failed.png`) }).catch(() => {});
+    } finally {
+      await context.close();
+    }
+  }
+  const sources = ["docs/design/task-timeline/prototype-v2/prototype.fixture.tsx", "docs/design/task-timeline/prototype-v2/prototype.styles.ts"];
+  const sourceDigests = Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+  const record = JSON.stringify({ capturedAt: new Date().toISOString(), sourceDigests, readings, failures }, null, 2) + "\n";
+  fs.writeFileSync(path.join(out, "readings.json"), record);
+  fs.mkdirSync("evidence/task-timeline-v2", { recursive: true });
+  fs.writeFileSync(`evidence/task-timeline-v2/${phone ? "phone" : "desktop"}.json`, record);
+  expect(failures).toEqual([]);
+}

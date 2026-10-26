@@ -1,6 +1,7 @@
 import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import type { TaskSummaryContent } from "@/lib/tasks/types";
+import type { MergeRecovery } from "@/lib/forge/postMerge";
 import type { BackgroundWait } from "./backgroundTasks";
 
 export type PipelineAccess = "read-only" | "read-write";
@@ -707,6 +708,10 @@ export type PipelineStageAttempt = {
   /** Proven fenced first messages replaced in this attempt. Retained across
       successful spawn handshakes and controller restarts; at most three. */
   fencedMessageRetries?: number;
+  /** Socketless recovery hands a failed launch back to its runnable Viewer
+      for at most ten minutes. Ownership changes and controller restarts keep
+      this deadline; successful retirement clears it before replacement. */
+  startupOwnerWait?: { launchId: string; deadline: string };
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
@@ -1289,6 +1294,11 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** Enrolled when this release automatically lands the PR. */
+  postMergeWatch?: boolean;
+  /** Required main checks passed on this exact merge commit. */
+  postMergeVerifiedAt?: string;
+  recovery?: MergeRecovery;
   /** Durable create reservation; a missing id is replayed on the next sweep. */
   refresh?: PipelineRefresh;
   state: PipelineMergeState;

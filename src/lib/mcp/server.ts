@@ -3675,7 +3675,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
-    "Create a durable board task.",
+    "Create a durable board task. Give every promise a future dueAt. Pass dueTz with dueAt when creating the task. A promise within an existing outcome is an open step on that task, whose dueAt must be no later than the earliest open promise.",
     "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
@@ -3688,6 +3688,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   update_task: [
     "The orchestrator may set or correct the task summary with summary; null clears it.",
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
+    "Give an undated open task a dueAt when you touch it. Reschedule with a future dueAt and dueReason (1 to 200 characters) when moving a passed date later; this records a slip. Moves before the date passes or to an earlier instant count nothing. Only the operator may clear a date. Keep the task due no later than its earliest open promise.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
     "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
@@ -3808,7 +3809,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
   account_project_binding: [
-    "List, add and remove the bindings that decide which accounts a project's work may run on. `action` is list (the default), add or remove; add and remove need `engine`, `accountId` and `project`.",
+    "List and change the bindings that decide which accounts a project's work may run on. `action` is list (the default), add, remove or set-fallback; mutations need `engine`, `accountId` and `project`. Add accepts `fallback:true`; set-fallback requires a boolean `fallback` and an existing binding. Fallback accounts are selected only after primary allowed accounts lose capacity. Named pins retain their choice.",
     "Every answer is a READ of the record. A list answers the whole binding table. An add or a remove answers the row it changed — `engine`, `accountId`, `project`, `changed`, and `bound` re-read from the store after the write — with that project's allowed accounts for that engine; a mutation the re-read does not show is refused rather than reported ok.",
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
@@ -4742,14 +4743,15 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
-    action: z.enum(["list", "add", "remove"]).optional()
-      .describe("list (default) reads the whole record; add and remove change it and answer with the changed row read back."),
+    fallback: z.boolean().optional().describe("Use this binding only when primary allowed accounts have no capacity. Required for set-fallback; optional on add."),
+    action: z.enum(["list", "add", "remove", "set-fallback"]).optional()
+      .describe("list reads the record; add, remove and set-fallback change a binding and return its stored state."),
     engine: z.enum(["claude", "codex"]).optional()
-      .describe("Engine the account belongs to. Required to add or remove."),
+      .describe("Engine the account belongs to. Required for mutations."),
     accountId: z.string().trim().min(1).optional()
-      .describe("Account to allow on, or stop allowing on, the project. Required to add or remove."),
+      .describe("Account to allow on, or stop allowing on, the project. Required for mutations."),
     project: z.string().trim().min(1).optional()
-      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
+      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()

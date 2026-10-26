@@ -141,7 +141,8 @@ describe("pipeline and seat Telegram destinations", () => {
           const clientRequestId = `still-missing-${reason}-${caller}`;
           const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId }), world);
           expect(response.status).toBe(200);
-          expect((await response.json()).telegramPost).toMatchObject({ state: "failed", reason, key: `${round.id}:resend:${clientRequestId}` });
+          expect((await response.json()).telegramPost).toEqual(round.telegramPost);
+          expect(findPrototypeRound(round.taskId, round.id)!.telegramPost).toEqual(round.telegramPost);
           expect(findPrototypeRound(round.taskId, round.id)!.questions).toEqual(round.questions);
           expect(signals()).toEqual([]);
         }
@@ -149,14 +150,14 @@ describe("pipeline and seat Telegram destinations", () => {
       expect(transport.callsOf("getChat")).toHaveLength(0);
       expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
       updateRelayStore(s => ({ ...s, relays: [pairing()] }));
-      const response = await resendTelegramPOST(request({ reviewId: rounds[0]!.id, clientRequestId: `configured-${reason}` }), seat);
+      const response = await resendTelegramPOST(request({ reviewId: rounds[0]!.id, clientRequestId: `still-missing-${reason}-seat` }), seat);
       expect(response.status).toBe(200);
       expect((await response.json()).telegramPost.state).toBe("sent");
       await service.waitForReviewPolls();
       expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect(signals()).toEqual([]);
     });
-  test.each(["forbidden", "send_uncertain", "unavailable", "destination_unavailable", "future_reason", "constructor", "__proto__", undefined])(
+  test.each(["forbidden", "send_uncertain", "unavailable", "destination_unavailable", "future_reason", "toString", "constructor", "__proto__", undefined])(
     "delivery failure %s keeps its task and seat wake signals", reason => {
       const taskRound = telegramRound("delivery-task");
       const seatRound = { ...telegramRound("delivery-seat"), taskId: null };
@@ -173,6 +174,34 @@ describe("pipeline and seat Telegram destinations", () => {
       }
       expect(telegramPostSignals("project-b", [telegramTask([taskRound])], [seatRound])).toEqual([]);
     });
+  test("a transient post failure wakes the seat and an explicit resend delivers it", async () => {
+    const { service, transport } = await sender();
+    transport.script("sendRichMessage", refused(429, "Too Many Requests"));
+    const round = await publish(seat, form("transient-post"));
+    expect(round.telegramPost).toMatchObject({ state: "failed", reason: "rate_limited" });
+    expect(telegramPostSignals("project-a", [], loadSeatRounds("project-a")))
+      .toMatchObject([{ actionable: true, id: `prototype-telegram:${round.id}:${round.id}` }]);
+    const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: "retry-transient" }), seat);
+    expect(response.status).toBe(200);
+    expect((await response.json()).telegramPost).toMatchObject({ state: "sent", key: `${round.id}:resend:retry-transient` });
+    await service.waitForReviewPolls();
+    expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
+    expect(telegramPostSignals("project-a", [], loadSeatRounds("project-a"))).toEqual([]);
+  });
+  test("a changed destination refusal updates the stored diagnostic without a wake", async () => {
+    const { transport } = await sender();
+    updateRelayStore(s => ({ ...s, relays: [destinationRelay([])] }));
+    const round = await publish(seat, form("changed-destination-refusal"));
+    expect(round.telegramPost?.destinationDetail).toBe("no_destination");
+    updateRelayStore(s => ({ ...s, relays: [destinationRelay([{ ...destinationTarget("disabled"), enabled: false }])] }));
+    const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: "changed-refusal" }), seat);
+    expect(response.status).toBe(200);
+    expect((await response.json()).telegramPost).toMatchObject({ state: "failed", reason: "no_target",
+      destinationDetail: "destination_disabled", key: `${round.id}:resend:changed-refusal` });
+    expect(findPrototypeRound(null, round.id)!.telegramPost?.destinationDetail).toBe("destination_disabled");
+    expect(telegramPostSignals("project-a", [], loadSeatRounds("project-a"))).toEqual([]);
+    expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+  });
   test("genuinely missing, disabled or service-only targets report no_target for both callers and resend", async () => {
     const { transport } = await sender();
     const targets = [[], [{ ...destinationTarget("disabled"), enabled: false }],
@@ -187,7 +216,7 @@ describe("pipeline and seat Telegram destinations", () => {
         expect(round.telegramPost).toEqual({ ...expected, key: round.id, at: "2026-10-20T11:00:00.000Z" });
         const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: `missing-${index}-${caller}` }), seat);
         expect(response.status).toBe(200);
-        expect((await response.json()).telegramPost).toEqual({ ...expected, key: `${round.id}:resend:missing-${index}-${caller}`, at: "2026-10-20T11:00:00.000Z" });
+        expect((await response.json()).telegramPost).toEqual(round.telegramPost);
         expect(findPrototypeRound(round.taskId, round.id)!.telegramPost).toMatchObject(expected);
       }
     }

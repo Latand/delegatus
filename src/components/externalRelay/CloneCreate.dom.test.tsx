@@ -180,7 +180,7 @@ test("a stored request resumes the wait, and cancel deletes it and returns to th
   expect(host.querySelector("[data-clone-form]")).toBeTruthy();
 });
 
-test("created: the new row is marked New, takes Claude with its default model, and is answered here; Open in Telegram links the bot", async () => {
+test("created: the new row is marked New, takes Codex Cloud with its default model, and is answered here; Open in Telegram links the bot", async () => {
   state = { relays: [relay({ cloneRequest: request() })], pending: [], status: [] };
   route((url, init) => {
     if (url === `${BASE}/clone-requests/req-1` && init?.method === "DELETE") return new Response(null, { status: 204 });
@@ -202,7 +202,7 @@ test("created: the new row is marked New, takes Claude with its default model, a
   await act(async () => settle(20));
   const patches = harness.calls.filter((call) => call.method === "PATCH");
   expect(patches.map((call) => [call.url, call.body])).toEqual([
-    [BASE, { target: { id: "fresh", engine: "claude", model: expect.any(String) } }],
+    [BASE, { target: { id: "fresh", engine: "codex-cloud", model: "gpt-6.1-sol" } }],
     [`${BASE}/targets/fresh`, { answered_by: "install" }],
   ]);
   const row = host.querySelector("[data-external-relay-target='fresh']")!;
@@ -376,7 +376,7 @@ test("closing the settings while the status read is on the wire still sets the c
   const again = await mount(<ExternalRelaySection />);
   await act(async () => settle(30));
   expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
-  expect(relayFake.fake.fresh).toMatchObject({ engine: "claude", model: expect.any(String), answered_by: "install" });
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
   expect(relayFake.fake.record).toBeNull();
   expect(again.querySelector("[data-external-relay-target='fresh'] [data-external-relay-fresh]")).toBeTruthy();
   expect(again.querySelector("[data-clone-created]")?.textContent).toContain("This install answers it.");
@@ -452,7 +452,7 @@ test("an unfinished setup keeps Create away, survives reopening the settings, an
   await click(again.querySelector("[data-clone-setup-retry]"));
   await act(async () => settle(30));
   expect(writes().slice(4)).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
-  expect(relayFake.fake.fresh).toMatchObject({ engine: "claude", answered_by: "install" });
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "codex-cloud", answered_by: "install" });
   expect(again.querySelector("[data-clone-setup-failed]")).toBeNull();
   expect(again.querySelector("[data-clone-open]")).toBeTruthy();
 }, 20_000);
@@ -479,7 +479,7 @@ test("a creation refused while another page's clone waits for its setup brings t
   expect(host.querySelector("[data-clone-form]")).toBeNull();
   expect(host.querySelector("[data-clone-created]")).toBeTruthy();
   expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
-  expect(relayFake.fake.fresh).toMatchObject({ engine: "claude", answered_by: "install" });
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "codex-cloud", answered_by: "install" });
   expect(host.querySelector("[data-clone-open]")).toBeTruthy();
 });
 

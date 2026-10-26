@@ -1,3 +1,4 @@
+import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
@@ -2096,6 +2097,15 @@ export function defaultPipelinePorts(
            again once the stop settles. */
         let effectStarted = false;
         const root = writer?.structuredHost?.process ?? null;
+        /* A socketless caller cannot release another live Viewer's controller.
+           Leave its failed launch pending for that controller, without taking
+           a tree capture or spending the startup retry budget. The caller
+           bounds this handoff separately. Dead or exited engine identities
+           still take the normal recovery path below. */
+        const control = structuredHostKillRefFromRegistry(probe.key);
+        if (control.ok && !runtimeHostSocket() && control.owner.status === "alive" && control.owner.identity
+          && control.owner.identity.pid !== process.pid && processIdentityMayRun(control.owner.identity)
+          && root && terminationIdentityStatus(root) !== "dead") return { outcome: "deferred" };
         let stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
           if (effectStarted) return null;
           const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
@@ -2626,7 +2636,7 @@ const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
     launch receipt proves nothing was dispatched rides it out on this budget
     with a slower backoff, because every round burns a real reservation and the
     admission attempts the spawn layer makes before it records the failure. */
-const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
+const SPAWN_HOST_WAIT_BUDGET_MS = DEPLOY_ADMISSION_BUDGET_MS;
 const SPAWN_HOST_RETRY_MAX_MS = 60_000;
 const SPAWN_RECOVERY_PARK_PREFIX = "stage spawn recovery stopped: ";
 /** How a recovery that spent its budget, rather than met a failure, opens its reason. */
@@ -11103,6 +11113,22 @@ async function deferRetiredLaunchRetry(
       ? await ports.stopStageAgent(target, { automatic: true, recordedIdentity: true, eligible })
       : await stopStageForRecovery(target, ports);
     if (!["stopped", "not-running"].includes(stopped.outcome)) {
+      if (fencedFirstMessage && stopped.outcome === "deferred") {
+        // One persisted deadline per launch, independent of replacement retries
+        // and unchanged when another Viewer takes ownership or restarts.
+        if (attempt.startupOwnerWait?.launchId !== receipt.launchId) {
+          attempt.startupOwnerWait = { launchId: receipt.launchId,
+            deadline: new Date(unixMs(now) + SPAWN_HOST_WAIT_BUDGET_MS).toISOString() };
+        }
+        const remaining = unixMs(attempt.startupOwnerWait.deadline) - unixMs(now);
+        if (remaining <= 0) {
+          await park(pipeline, "failed startup recovery timed out waiting for the starting Viewer; keeping uncommitted work", attempt);
+          return "waiting";
+        }
+        pipeline.stateDetail = `waiting for the starting Viewer to recover the failed startup host until ${attempt.startupOwnerWait.deadline}; keeping uncommitted work`;
+        ports.scheduleTick?.(Math.min(remaining, SPAWN_HOST_RETRY_MAX_MS));
+        return "waiting";
+      }
       if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
       if (stopped.outcome === "unresolved") {
         await park(pipeline, `failed startup recovery could not terminate its recorded host: ${redactBounded(stopped.error, 300)}`, attempt);
@@ -11127,6 +11153,7 @@ async function deferRetiredLaunchRetry(
   if (fencedFirstMessage) {
     const retries = attempt.fencedMessageRetries ?? 0;
     const delay = FENCED_MESSAGE_RETRY_DELAYS_MS[retries]!;
+    delete attempt.startupOwnerWait;
     attempt.fencedMessageRetries = retries + 1;
     attempt.controllerWait = { startedAt: attempt.controllerWait?.startedAt ?? now, rounds: retries + 1,
       retryAfter: new Date(unixMs(now) + delay).toISOString() };
@@ -13169,6 +13196,8 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  /** Internal controller creates may retain a structured creator without a transcript. */
+  creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
   creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
@@ -13304,6 +13333,8 @@ export async function createPipelineFromRequest(
     && (typeof req.src !== "string" || !req.src.trim());
   const creator = options.refreshOf
     ? { lineage: options.refreshOf.lineage }
+    : options.creatorLineage
+    ? { lineage: options.creatorLineage }
     : taskSpawn
     ? taskSpawnCreatorLineage(taskSpawn.params, ports)
     : operatorDraftWithoutLineage
