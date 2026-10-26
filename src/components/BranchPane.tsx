@@ -25,6 +25,7 @@ import { AgentControlStrip } from "./AgentControlStrip";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 import { DeadHostBanner } from "./runtime/DeadHostBanner";
 import { SupersededBanner } from "./runtime/SupersededBanner";
+import { RetiredOrchestratorBanner, useRetiredOrchestrator } from "./orchestrator/RetiredOrchestratorBanner";
 import { FlipRow } from "./FlipRow";
 import { HintScope } from "./Hint";
 import { conversationSpeech } from "./feed/conversationSpeech";
@@ -239,15 +240,17 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
      conversation is never messaged through the legacy pane-bound delivery
      path (finding 1). */
   const { caps, runtime } = useAgentCapabilities(file);
+  const retiredOrchestrator = useRetiredOrchestrator(file, !dormant && !neverStarted);
   /* `useAgentCapabilities` resolves the card once for every consumer below:
      banner, strip, and composer must never tell three liveness stories. */
-  const deadHost = caps.surface === "dead";
+  const deadHost = !retiredOrchestrator && caps.surface === "dead";
   /* A terminally superseded round (issue #383): the banner replaces recovery
      with navigation to the live successor, and the composer unmounts — the
      retired round takes no input unless the operator explicitly forks it. */
   const superseded = caps.surface === "superseded";
   const sendCap = caps.controls.send;
-  const sendBlockedReason = !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
+  const sendBlockedReason = retiredOrchestrator ? t("retiredOrchestrator.sendBlocked")
+    : !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
   /* A surface whose Send is hidden exposes no composer at all (it stands
      down by itself), so the agent's controls stay in their strip there. */
   const composerShown = !(noComposer || superseded || neverStarted) && sendCap.state !== "hidden";
@@ -481,6 +484,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
           />
         ) : null}
         {banner ?? null}
+        {retiredOrchestrator ? <RetiredOrchestratorBanner retirement={retiredOrchestrator} /> : null}
         {/* Dead-host banner (issue #247 §5): sits in the MigrationRibbon slot
             family, between the header and the feed. Owns recovery so the stale
             attention cards and composer stand down below. */}
@@ -525,6 +529,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
               follow
               setFollow={noop}
               compact
+              sendBlockedReason={retiredOrchestrator ? sendBlockedReason : null}
               onLaunchRetry={onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
               stepsMount={stepsMount}
             />
