@@ -2414,7 +2414,11 @@ export class StructuredDeliveryQueue {
           quotaGuard = await this.checking(lane, effect, "revalidating seat quota recovery",
             () => this.port.seatQuotaDispatchGuard!(effect.operationId, effect.conversationId, effect.origin!.project!));
         } catch (error) {
-          await this.settleSendOutcome(effect, host, { error }, settlement);
+          // Preparation has not called the host. Unreadable authority is a
+          // deferred check, with the same key and no uncertain native effect.
+          const refusal = error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError
+            ? error : new StructuredDispatchDeferredError(failureReason(error));
+          await this.settleSendOutcome(effect, host, { error: refusal }, settlement);
           continue;
         }
       }

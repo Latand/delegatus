@@ -179,6 +179,13 @@ function eligible(row: SeatQuotaObligation, observation: SeatQuotaObservation, n
   return row.resetsAt !== null && now >= row.resetsAt * 1000
     || observation.capacity === "available" && observation.observedAt !== null && observation.observedAt > row.capacityObservedAt;
 }
+function quotaRead<T>(read: () => T): T {
+  try { return read(); }
+  catch (error) {
+    if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) throw error;
+    throw new StructuredDispatchDeferredError(error instanceof Error ? error.message : "seat quota authority unreadable");
+  }
+}
 
 /** Reads are outside the store transaction. The final synchronous check is
  * carried into the host's own pre-write authorization callback. */
@@ -193,7 +200,7 @@ export async function seatQuotaDispatchGuard(project: string, ports = defaultSea
   }
   if (state === "unknown") throw new StructuredDispatchDeferredError("seat quota turn evidence unverified");
   if (await stopped(row, ports)) throw new StructuredSendRefusedError("seat quota recovery cancelled by control");
-  const assert = () => {
+  const assert = () => quotaRead(() => {
     const current = readSeatQuotaObligation(project);
     if (!current || current.id !== row.id || !open(current) || !sameSeat(ports.seat(project), row.seat)) {
       throw new StructuredSendRefusedError("seat quota authority changed");
@@ -202,7 +209,7 @@ export async function seatQuotaDispatchGuard(project: string, ports = defaultSea
     if (ports.held(project) || !ports.current(observation) || !eligible(current, observation, ports.now())) {
       throw new StructuredDispatchDeferredError("seat quota recovery evidence changed or capacity exhausted");
     }
-  };
+  });
   assert();
   return assert;
 }
@@ -211,16 +218,17 @@ export async function seatQuotaDispatchGuard(project: string, ports = defaultSea
  * the delivery layer proved never executed. An origin tag alone grants none. */
 export async function prepareSeatQuotaDispatch(operationId: string, conversationId: string, project: string): Promise<() => void> {
   const guard = await seatQuotaDispatchGuard(project);
-  const assert = () => {
+  const assert = () => quotaRead(() => {
     guard();
     const row = readSeatQuotaObligation(project)!;
     const snapshot = agentRegistry().deliverySnapshotForOperation(operationId);
     const delivery = Object.values(snapshot.heldDeliveries).find(item => item.command.operationId === operationId);
-    if (row.seat.conversationId !== conversationId || delivery?.clientMessageId !== row.id
+    if (!delivery) throw new StructuredDispatchDeferredError("seat quota delivery identity unavailable");
+    if (row.seat.conversationId !== conversationId || delivery.clientMessageId !== row.id
       || delivery.conversationId !== conversationId || delivery.command.origin?.role !== SEAT_QUOTA_RECOVERY_ROLE) {
       throw new StructuredSendRefusedError("seat quota delivery identity changed");
     }
-  };
+  });
   assert();
   return assert;
 }

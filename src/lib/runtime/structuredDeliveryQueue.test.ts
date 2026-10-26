@@ -3412,8 +3412,9 @@ test.each(["unchanged", "active", "claim-cancelled", "unreadable", "post-claim-c
 });
 
 
-test.each(["current", "revoked", "no-guard", "unreadable", "host-await"] as const)("seat reset recovery checks authority after claim and at native write: %s", async scenario => {
+test.each(["current", "revoked", "no-guard", "unreadable", "read-error", "host-await"] as const)("seat reset recovery checks authority after claim and at native write: %s", async scenario => {
   let status = "queued", sends = 0, guardCalls = 0;
+  let unavailable = scenario === "read-error";
   let revoked = scenario === "revoked";
   const queue = new StructuredDeliveryQueue({
     effects: async () => status === "queued" ? [{ id: "effect:seat-reset", kind: "runtime.send", eventSeq: 1,
@@ -3424,6 +3425,7 @@ test.each(["current", "revoked", "no-guard", "unreadable", "host-await"] as cons
     transition: async (_operation, next) => { status = next; },
     ...(scenario === "no-guard" ? {} : { seatQuotaDispatchGuard: async (id: string, conversation: string, project: string) => {
       expect([id, conversation, project, status]).toEqual(["seat-reset", "conversation-one", "fixture", "delivering"]);
+      if (unavailable) throw new Error("authority store unavailable");
       if (scenario === "unreadable") throw new StructuredDispatchDeferredError("evidence unavailable");
       const guard = () => { guardCalls++; if (revoked) throw new StructuredSendRefusedError("seat revoked"); };
       guard(); return guard;
@@ -3436,9 +3438,13 @@ test.each(["current", "revoked", "no-guard", "unreadable", "host-await"] as cons
   }));
   await queue.drain();
   expect(sends).toBe(scenario === "current" ? 1 : 0);
-  if (scenario === "unreadable") expect(status).toBe("queued");
+  if (scenario === "unreadable" || scenario === "read-error") expect(status).toBe("queued");
   else if (scenario !== "current") expect(status).toBe("failed");
   if (scenario === "current" || scenario === "host-await") expect(guardCalls).toBeGreaterThanOrEqual(2);
+  if (scenario === "read-error") {
+    unavailable = false; await queue.drain();
+    expect(sends).toBe(1);
+  }
 });
 
 test.each(["before-claim", "after-claim", "serialized-control", "after-claim-kill", "after-claim-failed-kill",

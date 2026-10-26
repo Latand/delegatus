@@ -141,6 +141,10 @@ test("a late transcript or quota change defers the claimed send without giving i
   const guard = await f.guard();
   f.h.current = false;
   expect(guard).toThrow(StructuredDispatchDeferredError);
+  const current = f.ports.current;
+  f.ports.current = () => { throw new Error("authority read unavailable"); };
+  expect(guard).toThrow(StructuredDispatchDeferredError);
+  f.ports.current = current;
   const id = f.read()!.id;
   f.h.current = true; await f.recover();
   expect(f.h.sent[0]?.clientMessageId).toBe(id);
