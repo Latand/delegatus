@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, PanelRight, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -84,7 +84,6 @@ import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from
 import { Switchboard } from "./Switchboard";
 import {
   buildArchiveBranchGroups,
-  collapsedTrees,
   draftWorkingDirectory,
   isChildConversation,
   OVERVIEW,
@@ -106,7 +105,7 @@ import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
-import { BAR_MENU_ROW, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
+import { BAR_MENU_ROW, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar, type BarFitStep } from "./ProjectBar";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -920,7 +919,6 @@ function ProjectDashboardView({
     [derive, sceneFiles, project, expandedConversations, engineProjection, keepExpandedPaths, baseGroups, nowSeconds],
   );
   const activeRoots = useMemo(() => new Set(groups.map((group) => group.key)), [groups]);
-  const cards = useMemo(() => collapsedTrees(sceneFiles, project, activeRoots), [sceneFiles, project, activeRoots]);
   const quietActiveRoots = useMemo(
     () => quietRootsWithActiveDescendants(sceneFiles, project, activeRoots),
     [sceneFiles, project, activeRoots],
@@ -1058,23 +1056,6 @@ function ProjectDashboardView({
     const extras = [...extra, ...protectedNodes];
     return extras.length ? [...manualNodes, ...extras] : manualNodes;
   }, [ephemeral, groupFiles, files, compactPipelinePaths, deckFlows, project, autoPaths, hiddenSet, manualNodes, pinnedPaths, keepExpandedPaths, nowSeconds]);
-  const liveCount = useMemo(
-    () =>
-      groups.reduce(
-        (sum, group) =>
-          sum +
-          group.columns.reduce(
-            (colSum, column) =>
-              colSum +
-              (column.file.activity === "live" ? 1 : 0) +
-              column.tasks.filter((task) => task.activity === "live").length,
-            0,
-          ),
-        0,
-      ),
-    [groups],
-  );
-  const treeGroups = groups.length;
 
   /* On the phone a conversation is a SCREEN (mobile v2 §3.3): every deliberate
      focus — a board row, an attention jump, a deep link, a spawned draft —
@@ -1657,21 +1638,6 @@ function ProjectDashboardView({
      row is on, so ‹ from it returns there (README §3.3, §4.7). */
   const openPipelineStageConversation = openBoardRow;
 
-  const statusBits: string[] = [];
-  /* Narrow, the bar keeps only the live count: «· N trees» and the quiet line are what the
-     Conversations list below already shows, and the name is the one text that truncates (#1801). */
-  const narrowStatus = liveCount ? t("dash.branchesLive", { count: liveCount }) : null;
-  if (liveCount) {
-    statusBits.push(
-      `${t("dash.branchesLive", { count: liveCount })} · ${t("dash.trees", { count: treeGroups })}`,
-    );
-  } else if (treeGroups) {
-    statusBits.push(t("dash.recentConvos", { count: treeGroups }));
-  }
-  if (cards.length) {
-    statusBits.push(t("dash.quietTrees", { count: cards.length }));
-  }
-
   /* Memoised (#1432): these arrays are SchemeBoard's layout inputs. Rebuilt
      inline they took a fresh identity on every dashboard render — a highlight,
      a clock tick — and every one of those re-laid-out the whole board and
@@ -2109,19 +2075,46 @@ function ProjectDashboardView({
       <ProjectAccounts project={project} appearance="bar" />
     </>
   );
-  const barTrail = (accountsInMenu: boolean, withSearch: boolean, extra?: BarTrailExtra) => (
+  const barTrail = (fit: readonly BarFitStep[], withSearch: boolean, extra?: BarTrailExtra) => {
+    const accountsInMenu = fit.includes("accounts");
+    /* A short row (#1698) gives up the panel group and then `+`; ⋯ carries them as rows, first. */
+    const panelsInMenu = fit.includes("panels");
+    const orchestratorOpen = kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen;
+    const orchestratorDot = kanbanLeaf && kanbanSeat.collapsed && seatSignal ? seatSignal : null;
+    return (
     <>
       <BarPanelToggles
         tail={extra?.panelsTail}
         orchestrator={onToggleOrchestratorPanel ? {
-          open: kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen,
+          open: orchestratorOpen,
           onToggle: kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel,
-          dot: kanbanLeaf && kanbanSeat.collapsed && seatSignal ? { tone: seatSignal.tone, label: seatSignal.label } : null,
+          dot: orchestratorDot ? { tone: orchestratorDot.tone, label: orchestratorDot.label } : null,
         } : null}
       />
       <BarMoreMenu
         rows={(close) => (
           <>
+            {extra && fit.includes("create") ? <BarMenuGroup name="create">{extra.createRows(close)}</BarMenuGroup> : null}
+            {panelsInMenu && (onToggleOrchestratorPanel || extra?.recentRow) ? (
+              <BarMenuGroup name="panels">
+                {onToggleOrchestratorPanel ? (
+                  <button
+                    type="button"
+                    className={BAR_MENU_ROW}
+                    data-bar-more-orchestrator=""
+                    aria-pressed={orchestratorOpen}
+                    onClick={() => { close(); (kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel)(); }}
+                  >
+                    {/* The toggle's own name and a panel's icon: the seat's settings below are the section «Orchestrator», with the bot. */}
+                    <PanelRight className="h-[15px] w-[15px] shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1">{t("orchPanel.toggleAria")}</span>
+                    {orchestratorDot ? <span className="min-w-0 truncate text-[11px] font-normal text-muted">{orchestratorDot.label}</span> : null}
+                    {orchestratorOpen ? <Check className="h-[15px] w-[15px] shrink-0 text-accent" aria-hidden /> : null}
+                  </button>
+                ) : null}
+                {extra?.recentRow?.(close)}
+              </BarMenuGroup>
+            ) : null}
             {withSearch && onOpenSearch ? (
               <BarMenuGroup name="search">
                 <button type="button" className={BAR_MENU_ROW} data-testid="dash-search" onClick={() => { close(); onOpenSearch(); }}>
@@ -2172,7 +2165,8 @@ function ProjectDashboardView({
         )}
       />
     </>
-  );
+    );
+  };
 
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <HeaderMenuSheet title={projectName} project={project} nav={mobileNav} {...mobileMenuEntries()} onClose={close} />;
@@ -2204,23 +2198,29 @@ function ProjectDashboardView({
       {isMobile || (boardReady && kanbanLeaf) ? null : (
         <DashboardBar
           lead={barLead}
-          status={(wide) => (
+          status={(() => {
             /* Issue #696: the header borrows the affirmative idle line only
                when the catalog is actually known. Under a failing fetch it
                names the failure, exactly as the overview board does. */
             /* A reconnect in progress is said quietly (#2071 D7); only a long
-               outage turns this red. */
-            <span data-bar-group="status" data-reach={reach.kind} className={`${wide || !narrowStatus ? "min-w-16 shrink" : "shrink-0"} truncate whitespace-nowrap text-[12px] ${reach.kind === "reconnecting" ? "text-muted" : catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
-              {reach.kind === "reconnecting"
-                ? reachText
-                : catalogFailures > 0
-                ? t("catalog.unreachable")
-                /* Loading never borrows «nothing is running» (#2071 D6). */
-                : !loaded ? t(cached ? "dash.updating" : "common.loadingCap")
-                : (wide ? (statusBits.length ? statusBits.join(" · ") : null) : narrowStatus) ?? (statusBits[0] ?? t("common.nothingRunning"))}
-            </span>
-          )}
-          find={(wide) => onOpenSearch ? (
+               outage turns this red. Until the board draws, the bar says it is
+               loading: who is working is the board's «● N» alone, so the slot
+               never shows another count in other words a moment before (#1954). */
+            const words = reach.kind === "reconnecting"
+              ? reachText
+              : catalogFailures > 0
+              ? t("catalog.unreachable")
+              /* Loading never borrows «nothing is running» (#2071 D6). */
+              : !loaded ? t(cached ? "dash.updating" : "common.loadingCap")
+              : !boardReady ? t("common.loadingCap")
+              : t("common.nothingRunning");
+            return (
+              <span data-bar-group="status" data-bar-whole="" data-reach={reach.kind} title={words} className={`min-w-0 shrink truncate whitespace-nowrap text-[12px] ${reach.kind === "reconnecting" ? "text-muted" : catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
+                {words}
+              </span>
+            );
+          })()}
+          find={onOpenSearch ? (
             <button
               type="button"
               data-testid="dash-search"
@@ -2229,13 +2229,15 @@ function ProjectDashboardView({
               aria-label={t("search.open")}
               title={t("search.open")}
               onClick={onOpenSearch}
-              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_8_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_100000_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Search className="h-[15px] w-[15px] shrink-0" aria-hidden />
-              <span className="min-w-0 truncate">{wide ? t("search.open") : t("dash.searchShort")}</span>
+              {/* The bar's steps choose the words: the full wording, «Search» once the row lost its labels, the icon alone at the last step. */}
+              <span className="min-w-0 truncate" data-fit-label="">{t("search.open")}</span>
+              <span className="min-w-0 truncate" data-fit-short="">{t("dash.searchShort")}</span>
             </button>
           ) : null}
-          trail={(accountsInMenu) => barTrail(accountsInMenu, false)}
+          trail={(fit) => barTrail(fit, false)}
         />
       )}
 
@@ -2531,7 +2533,7 @@ function ProjectDashboardView({
                 onSpawnRetry={retryLaunch}
                 onCloseConversation={(file) => closeNode(file.path)}
                 barLead={barLead}
-                barTrail={(accountsInMenu, extra) => barTrail(accountsInMenu, true, extra)}
+                barTrail={(fit, extra) => barTrail(fit, true, extra)}
                 recentAgents={(close, countSlot) => (
                   <DesktopConversations project={project} enabled={loaded} countSlot={countSlot} onOpen={(file) => { close(); openFullCatalogFile(file); }} />
                 )}

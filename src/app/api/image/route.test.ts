@@ -5,10 +5,15 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 
-const { GET } = await import("./route");
+const { GET: serve } = await import("./route");
+const responses: Response[] = [];
+async function GET(...args: Parameters<typeof serve>) {
+  const response = await serve(...args); responses.push(response); return response;
+}
 
 const PNG_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-image-route-"));
+const savedState = process.env.LLV_STATE_DIR;
 const saved = { home: process.env.HOME, roots: process.env.LLV_EVIDENCE_ROOTS };
 let home = "";
 let evidence = "";
@@ -16,10 +21,15 @@ let evidence = "";
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(sandbox, "home-"));
   evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
-  process.env.HOME = home;
+  process.env.HOME = path.dirname(home);
+  process.env.LLV_STATE_DIR = path.join(home, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
   process.env.LLV_EVIDENCE_ROOTS = evidence;
 });
-afterEach(() => {
+afterEach(async () => {
+  for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
+  if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = saved.home;
   if (saved.roots === undefined) delete process.env.LLV_EVIDENCE_ROOTS;
   else process.env.LLV_EVIDENCE_ROOTS = saved.roots;

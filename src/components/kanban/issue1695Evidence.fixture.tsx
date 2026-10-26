@@ -33,7 +33,7 @@ import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
-import { RulesWindow } from "@/components/roleMemory/LearnedRules";
+import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceConversationPanel } from "@/components/VoiceConversation";
@@ -3451,6 +3451,9 @@ const OLDER_FAILS = params.get("olderfails") === "1";
    good, so what the click took away comes back with the reason. */
 const DISMISS_REFUSED = params.get("dismissrefused") === "1";
 const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&boardhold=1` never answers the board's first read, so the project stays on its loading
+   skeleton and the bar of a leaf without a board, for the header's narrow-window case. */
+const BOARD_HOLD = params.get("boardhold") === "1";
 /* `&settingsrefuse=1`: every write to the voice companion's settings is refused
    with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
 const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
@@ -4034,7 +4037,7 @@ const workerAnswer = (project: string | null) => ({
   project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
-const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/memory/source", "/api/asks-you/key", "/api/team"];
 /* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
    projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
    Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
@@ -4064,6 +4067,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The lane review case answers these from the driver's own server, through
+     the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
+  if (new URLSearchParams(location.search).has("laneReview")
+    && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
+    return serverFetch(url.pathname + url.search, init);
+  }
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
@@ -4116,6 +4125,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* The installation's memory source (memory-source-switch.md §3.4): not chosen, unless the driver answers it under `&header=1`. */
+  if (url.pathname === "/api/memory/source") return json({ choice: null, phase: null });
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
@@ -4397,6 +4408,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    if (BOARD_HOLD) return new Promise<Response>(() => {});
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/view/presence" && method === "POST") {
@@ -5056,6 +5068,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
+/* `&replydelay=MS` answers every read and write MS later, so a driver can show that what it measures
+   waits for the state it needs and never for a guessed time (the header's narrow-window case). */
+const REPLY_DELAY = Number(params.get("replydelay")) || 0;
+if (REPLY_DELAY > 0) {
+  const answer = window.fetch;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    await new Promise((resolve) => setTimeout(resolve, REPLY_DELAY));
+    return answer(input, init);
+  }) as typeof fetch;
+}
+
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
 const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
@@ -5317,7 +5340,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

@@ -806,11 +806,11 @@ test("marker repair and historical publication share one prepared selection", as
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, deferStartupWork: true,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
     f.registry.prepareReadOnlySnapshot = async signal => {
-      if (++preparations > 2) throw new Error("historical publication repeated complete registry preparation per row");
+      if (++preparations > 1) throw new Error("historical publication repeated complete registry preparation per row");
       return original(signal);
     };
     await completeStructuredDeliveryQueueStartup([]);
-    expect(preparations).toBe(2);
+    expect(preparations).toBe(1);
     expect(f.journal.readSession({ conversationId: "conversation_history_39" })).not.toBeNull();
   } finally {
     f.registry.prepareReadOnlySnapshot = original;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import type { FileEntry, PendingQuestion } from "@/lib/types";
@@ -47,6 +48,7 @@ test("a pending answer records one direct operator gesture and excludes internal
     new NextRequest("http://127.0.0.1/api/answer", {
       method: "POST",
       headers: {
+        cookie: `llv_operator=${soloBrowserSession()}`,
         host: "127.0.0.1",
         origin: "http://127.0.0.1",
         "sec-fetch-site": "same-origin",

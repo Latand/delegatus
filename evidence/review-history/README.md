@@ -73,3 +73,9 @@ The S6 fixture and browser checks now use these supported surfaces:
 - `ReviewHistory.dom.test.tsx` opens the archive through the supported RoundDeck control in place of mounting FlowStrip and FlowHub. Its read-only, all-rounds, locale, request and state-preservation assertions remain.
 
 Earlier evidence files describe their original source digests and retired surfaces. [Refresh renders](refresh-rendered.json) record the supported-board campaign, its source and frame digests, and visual inspection. [Refresh checks](refresh-checks.json) record the explicit test paths and their base comparisons. These records keep the historical captures separate from the refresh verification.
+
+### Latest main integration
+
+The subsequent main merge preserves both transcript guards. `BranchPane` retains main's retired-orchestrator send blocker and the archive's disabled launch retry. `LogFeed` accepts both `readOnly` and `sendBlockedReason`; attention controls stay hidden for an archive and while a compact feed's first read loads. The mobile feed DOM test covers editable and archived readers during loading and after arrival.
+
+The shared browser driver keeps the S6 history cases, main's conversation-opening motion case, and main's narrow-header case as separate suites. [Current main checks](current-main-checks.json) and [current main renders](current-main-rendered.json) record the final integration's verification and source digests. The earlier refresh records retain their original snapshot.

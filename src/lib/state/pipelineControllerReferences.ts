@@ -26,7 +26,9 @@ const populate = (source: string, key: string) => {
   const cte = `WITH controller_source AS MATERIALIZED (SELECT json_remove(${source},'$.runs') AS payload,
       json_extract(${source},'$.runs') AS runs),
     controller_runs AS MATERIALIZED (SELECT r.key,
-      json_object('stageId',json_extract(r.value,'$.stageId')) AS metadata,
+      json_object('stageId',json_extract(r.value,'$.stageId'),
+        'lastOperational',(SELECT MAX(CAST(candidate.key AS INTEGER)) FROM json_each(r.value,'$.attempts') candidate
+          WHERE COALESCE(json_extract(candidate.value,'$.historical'),0)=0)) AS metadata,
       json_extract(r.value,'$.attempts') AS attempts FROM controller_source,json_each(runs) r),
     controller_attempts AS MATERIALIZED (SELECT r.key AS run,a.key,a.value AS payload
       FROM controller_runs r,json_each(r.attempts) a),
@@ -34,6 +36,9 @@ const populate = (source: string, key: string) => {
     unconfirmed AS MATERIALIZED (SELECT json_extract(h.value,'$.stageId') AS stageId,json_extract(h.value,'$.attempt') AS n
       FROM controller_source,json_each(payload,'$.unconfirmedHosts') h)`;
   const field = (name: string) => `json_extract(${value},'$.${name}')`;
+  const released = `(COALESCE(json_extract(${attemptValue},'$.historical'),0)=0
+    AND (${field("state")} IN ('completed','closed')
+      OR CAST(a.key AS INTEGER)<json_extract(${runValue},'$.lastOperational')))`;
   const op = field("delivery.operation");
   // Same fail-closed publication custody as pipelineHostHasLiveWork.
   const publishing = `((${op} IS NOT NULL AND (
@@ -55,27 +60,36 @@ const populate = (source: string, key: string) => {
       SELECT CAST(r.key AS INTEGER)*4294967296+CAST(a.key AS INTEGER)+1 AS position,
         json_extract(${runValue},'$.stageId') AS stageId,json_extract(${attemptValue},'$.n') AS n,r.key AS run,a.key AS attempt,
         COALESCE(json_extract(${attemptValue},'$.historical'),0) AS historical,
-        CASE WHEN (json_extract(${attemptValue},'$.verdict') IS NOT NULL OR COALESCE(json_extract(${attemptValue},'$.completedAt'),'')!='')
+        CASE WHEN (${field("state")} IN ('completed','closed') OR ${released}
+          OR json_extract(${attemptValue},'$.verdict') IS NOT NULL OR COALESCE(json_extract(${attemptValue},'$.completedAt'),'')!='')
           AND (COALESCE(json_extract(${attemptValue},'$.conversationId'),'')='' OR json_extract(${attemptValue},'$.conversationId') IS NOT ${field("srcConversationId")})
           AND (COALESCE(json_extract(${attemptValue},'$.agentPath'),'')='' OR json_extract(${attemptValue},'$.agentPath') IS NOT ${field("srcPath")})
-          AND NOT (COALESCE(${field("terminalReap.settledAt")},'')!='' AND ${field("terminalReap.settledAttempts")} IS NULL)
+          AND NOT (COALESCE(${field("terminalReap.settledAt")},'')!='' AND ${field("terminalReap.settledAttempts")} IS NULL
+            AND (json_extract(${attemptValue},'$.verdict') IS NOT NULL OR COALESCE(json_extract(${attemptValue},'$.completedAt'),'')!=''))
           AND NOT EXISTS (SELECT 1 FROM settled WHERE settled.identity=json_extract(${runValue},'$.stageId')||':'||CAST(json_extract(${attemptValue},'$.n') AS INTEGER))
           AND NOT EXISTS (SELECT 1 FROM unconfirmed h WHERE h.stageId=json_extract(${runValue},'$.stageId') AND h.n=json_extract(${attemptValue},'$.n'))
           THEN 1 ELSE 0 END AS terminal,
         COALESCE(json_extract(${attemptValue},'$.conversationId'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.agentPath'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.paneId'),'') AS hostIdentity
       ${attempts} WHERE json_type(${runValue},'$.stageId')='text' AND json_type(${attemptValue},'$.n') IN ('integer','real'))
       SELECT ${key},position,stageId,n,run,attempt,historical,terminal,
-        CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
+        CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY terminal DESC,position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
     ${["unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"].map((field,index) => `UNION ALL
       SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(${hostValue},'$.stageId'),json_extract(${hostValue},'$.attempt'),-1,-1,1,0,0
       FROM controller_source, json_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN json_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
     INSERT INTO pipeline_owner_refs ${cte}
-      SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR ${field("state")} NOT IN ('completed','closed'),0)
+      SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing}) THEN 2
+        WHEN ${field("state")} NOT IN ('completed','closed') THEN 1 ELSE 0 END
       FROM controller_source, ${identities(value,["srcConversationId","srcPath"])} WHERE ids.value IS NOT NULL AND ids.value!=''
     UNION ALL
-      SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR json_extract(${attemptValue},'$.state') IN ('pending','spawning','running','reviewing','committing')
-        OR (json_extract(${attemptValue},'$.verdict') IS NULL AND COALESCE(json_extract(${attemptValue},'$.completedAt'),'')='')
-        OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled'),0)
+      SELECT ${key},ids.key,ids.value,1
+      FROM controller_source, ${identities(value,["srcConversationId","srcPath"])}
+      WHERE (${publishing}) AND ids.value IS NOT NULL AND ids.value!=''
+    UNION ALL
+      SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing})
+        OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled') THEN 1
+        WHEN ${released} THEN -1
+        WHEN json_extract(${attemptValue},'$.state') IN ('pending','spawning','running','reviewing','committing')
+          OR (json_extract(${attemptValue},'$.verdict') IS NULL AND COALESCE(json_extract(${attemptValue},'$.completedAt'),'')='') THEN 1 ELSE 0 END
       ${attempts}, ${identities(attemptValue,["conversationId","agentPath","paneId","launchId","sessionId"])} WHERE ids.value IS NOT NULL AND ids.value!=''
     UNION ALL
       SELECT ${key},'flow',json_extract(${attemptValue},'$.flowId'),0 ${attempts} WHERE json_extract(${attemptValue},'$.flowId') IS NOT NULL ON CONFLICT DO NOTHING;`;
@@ -165,7 +179,9 @@ export function installPipelineControllerReferences(db: Database, directory: str
   db.exec(`CREATE TABLE pipeline_owner_refs (
     row_key TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL, live INTEGER NOT NULL,
     PRIMARY KEY(row_key,kind,identity,live))`);
-
+  // Custody tags: 0 inactive, 1 live, 2 source publication, -1 released
+  // operational attempt. Publication also keeps a live=1 companion so the
+  // preceding release retains it during handover. Only positive tags retain.
   pipelineControllerReferenceIndexes.install(db, directory);
   db.exec("UPDATE pipeline_tick_work SET attempt_cursor=0");
   for (const sql of Object.values(referenceTriggers)) db.exec(sql);
@@ -175,4 +191,14 @@ export function installPipelineControllerReferences(db: Database, directory: str
     const key = literal(row.row_key);
     db.exec(writeInput(`(SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=${key})`,key));
   }
+  // Existing terminal lanes may have settled before an unstamped attempt was
+  // considered. Re-enrol only indexed, outstanding hosts during this fenced
+  // upgrade; preserve the recorded receipts and never scan payloads per tick.
+  db.exec(`UPDATE state_rows SET controller_active=1 WHERE collection='pipelines'
+    AND json_extract(value_json,'$.closeTeardown') IS NULL
+    AND json_extract(value_json,'$.state') IN ('completed','closed')
+    AND row_key IN (SELECT row_key FROM pipeline_attempt_refs WHERE terminal=1 AND firstHost=1)`);
+  db.exec(`INSERT INTO pipeline_tick_work(row_key,row_order,generation)
+    SELECT row_key,row_order,row_revision FROM state_rows WHERE collection='pipelines' AND controller_active=1
+    ON CONFLICT(row_key) DO UPDATE SET dirty=1,due_at=0,attempt_cursor=0`);
 }

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -88,14 +88,16 @@ mock.module("@/hooks/useRuntime", () => ({
   useRuntimeReceiptsForArtifact: () => [],
   useRuntimeFlow: () => null,
 }));
+/* The tail as the feed reads it; a first read is `loading` with no lines yet. */
+let tail: { lines: string[]; loading: boolean; error: string | null } = { lines: TRANSCRIPT, loading: false, error: null };
 mock.module("@/hooks/useLogTail", () => ({
   ...actualLogTail,
   useLogTail: () => ({
-    lines: TRANSCRIPT,
+    lines: tail.lines,
     linesStart: 0,
-    size: TRANSCRIPT.length,
-    loading: false,
-    error: null,
+    size: tail.lines.length,
+    loading: tail.loading,
+    error: tail.error,
     tickTime: null,
     paused: false,
     setPaused: () => undefined,
@@ -114,6 +116,7 @@ const roots = new Set<Root>();
 beforeEach(() => {
   setLocale("en");
   mobile = true;
+  tail = { lines: TRANSCRIPT, loading: false, error: null };
   dom.sessionStorage.clear();
 });
 afterEach(() => {
@@ -288,4 +291,101 @@ test("uk: the strip keeps the existing words", async () => {
   const jump = host.querySelector("[data-feed-jump-strip] button");
   expect(jump?.getAttribute("aria-label")).toBe("Повернутись до живого хвоста");
   expect(jump?.textContent).toContain("вниз");
+});
+
+/* Board task d5e2680a: the phone's chat screen is drawn while a first read
+   loads, so what the read settles on is marked once, for the stylesheet to
+   fade it in where it rests instead of swapping it in for the skeleton. A
+   tail read before paints at once and is never marked. */
+describe("a first read's arrival", () => {
+  function mount(readOnly = false) {
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const root = createRoot(host as unknown as Element);
+    roots.add(root);
+    const show = (feedFile: FileEntry) => flushSync(() => root.render(
+      <LogFeed file={feedFile} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow setFollow={() => undefined} compact readOnly={readOnly} />,
+    ));
+    const content = () => host.querySelector("[data-feed-state]") as unknown as HTMLElement;
+    return { show, content };
+  }
+
+  test("the transcript a skeleton waited for is marked as arrived; the skeleton never is", () => {
+    const { show, content } = mount();
+    tail = { lines: [], loading: true, error: null };
+    show(file);
+    expect(content().dataset.feedState).toBe("loading");
+    expect(content().querySelector('[data-skeleton="feed"]')).toBeTruthy();
+    expect(content().hasAttribute("data-feed-arrived")).toBe(false);
+    tail = { lines: TRANSCRIPT, loading: false, error: null };
+    show(file);
+    expect(content().dataset.feedState).toBe("items");
+    expect(content().querySelector('[data-skeleton="feed"]')).toBeNull();
+    expect(content().hasAttribute("data-feed-arrived")).toBe(true);
+  });
+
+  test.each([
+    { readOnly: false, loading: true, visible: false },
+    { readOnly: false, loading: false, visible: true },
+    { readOnly: true, loading: true, visible: false },
+    { readOnly: true, loading: false, visible: false },
+  ])("reply controls preserve archive and first-read guards: %j", ({ readOnly, loading, visible }) => {
+    const { show, content } = mount(readOnly);
+    tail = { lines: loading ? [] : TRANSCRIPT, loading, error: null };
+    show({ ...file, waitingInput: { since: Date.parse(AT(0)), screenTail: "Proceed? (y/n)", target: "lane5:0.0", menu: null } } as FileEntry);
+    expect(content().querySelector("#question") !== null).toBe(visible);
+  });
+
+  test("a read that fails after the skeleton is marked too", () => {
+    const { show, content } = mount();
+    tail = { lines: [], loading: true, error: null };
+    show(file);
+    tail = { lines: [], loading: false, error: "read failed" };
+    show(file);
+    expect(content().dataset.feedState).toBe("error");
+    expect(content().hasAttribute("data-feed-arrived")).toBe(true);
+  });
+
+  test("a reply card waits for the arrival and fades in with the rows; later rows are not marked", () => {
+    const { show, content } = mount();
+    const waiting = { ...file, waitingInput: { since: Date.parse(AT(0)), screenTail: "Proceed? (y/n)", target: "lane5:0.0", menu: null } } as FileEntry;
+    tail = { lines: [], loading: true, error: null };
+    show(waiting);
+    expect(content().querySelector("#question")).toBeNull();
+    tail = { lines: TRANSCRIPT, loading: false, error: null };
+    show(waiting);
+    expect(content().hasAttribute("data-feed-arrived")).toBe(true);
+    const card = content().querySelector("#question");
+    expect(card).toBeTruthy();
+    expect(card!.hasAttribute("data-feed-enter")).toBe(true);
+    const rows = [...content().querySelectorAll(":scope > [data-feed-key]")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.hasAttribute("data-feed-enter"))).toBe(true);
+    const later = JSON.stringify({ type: "assistant", uuid: "uuid-later", timestamp: AT(3), message: { role: "assistant", content: [{ type: "text", text: "A later reply after the arrival." }] } });
+    tail = { lines: [...TRANSCRIPT, later], loading: false, error: null };
+    show(waiting);
+    const added = [...content().querySelectorAll(":scope > [data-feed-key]")].filter((row) => !rows.includes(row));
+    expect(added.length).toBe(1);
+    expect(added[0]!.hasAttribute("data-feed-enter")).toBe(false);
+  });
+
+  test("a tail read before paints at once, unmarked", () => {
+    const { show, content } = mount();
+    show(file);
+    expect(content().dataset.feedState).toBe("items");
+    expect(content().hasAttribute("data-feed-arrived")).toBe(false);
+  });
+
+  test("switching to another conversation and back does not mark either again", () => {
+    const { show, content } = mount();
+    tail = { lines: [], loading: true, error: null };
+    show(file);
+    tail = { lines: TRANSCRIPT, loading: false, error: null };
+    show(file);
+    expect(content().hasAttribute("data-feed-arrived")).toBe(true);
+    show(conversation("arrival-other"));
+    expect(content().hasAttribute("data-feed-arrived")).toBe(false);
+    show(file);
+    expect(content().hasAttribute("data-feed-arrived")).toBe(false);
+  });
 });

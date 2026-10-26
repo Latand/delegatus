@@ -3,11 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { GET as frameGET } from "@/app/api/artifact/frame/[...rest]/route";
 import { GET as artifactGET } from "@/app/api/artifact/route";
 import { GET as imageGET } from "@/app/api/image/route";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
-import { stateDir } from "@/lib/configDir";
+import { stateDir, statePath } from "@/lib/configDir";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import type { PrototypeDelivery } from "./decision";
 import { settlePrototypeDeliveriesForTests } from "./deliveryWorker";
@@ -32,12 +33,17 @@ const WEBM = Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3,0x42,0x82,0x84]),Bu
 const TASK = "task-prototype";
 function task(id = TASK,project = "project-a") { return { id, project, status: "inbox" as const, placement: "unplaced" as const, text: "Review layout", assignments: [], sources: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }; }
 beforeEach(() => saveTasks([task()]));
-afterEach(async () => { await settlePrototypeDeliveriesForTests(); for (const root of roots.splice(0)) await fs.rm(root,{ recursive: true, force: true }); });
+/** A test that holds a delivery open releases it here too, so a failure inside it cannot hold the settle below. */
+let releaseHeldDelivery: (() => void) | null = null;
+afterEach(async () => { releaseHeldDelivery?.(); releaseHeldDelivery = null; await settlePrototypeDeliveriesForTests(); for (const root of roots.splice(0)) await fs.rm(root,{ recursive: true, force: true }); });
 function request(url: string,body?: unknown) {
-  return new NextRequest(`http://localhost${url}`,{ headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+  return new NextRequest(`http://localhost${url}`,{ headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 async function directory(parent: string,prefix: string) { const root = await fs.realpath(await fs.mkdtemp(path.join(parent,prefix))); roots.push(root); return root; }
 const source = () => directory(process.env.HOME!,"prototype-source-");
+/** Path routes read project folders, worktrees and the stage scratch, never the
+    rest of the home directory: a picture they serve sits in the stage scratch. */
+const routeSource = async () => { await fs.mkdir(statePath("scratch"),{ recursive: true }); return directory(statePath("scratch"),"prototype-route-source-"); };
 async function input(key: string): Promise<PublishPrototypeInput & { variants: NonNullable<PublishPrototypeInput["variants"]> }> {
   const root = await source();
   await fs.writeFile(path.join(root,"new.png"),Buffer.concat([PNG,Buffer.from("inside!!")]));
@@ -185,9 +191,9 @@ test("no path route reads a stored copy, by its own path or through a link, and 
     const id = await publish(await input("path-routes"));
     const media = roundMedia(loadTasks()[0]!.prototypeReviews![0]!).find(entry => entry.mime === "image/png")!;
     const stored = path.join(roundDirectory(id),mediaFilename(media));
-    const link = path.join(await source(),"borrowed.png"); await fs.symlink(stored,link);
-    const folder = path.join(await source(),"round"); await fs.symlink(roundDirectory(id),folder);
-    const neighbour = path.join(await source(),"plain.png"); await fs.writeFile(neighbour,PNG);
+    const link = path.join(await routeSource(),"borrowed.png"); await fs.symlink(stored,link);
+    const folder = path.join(await routeSource(),"round"); await fs.symlink(roundDirectory(id),folder);
+    const neighbour = path.join(await routeSource(),"plain.png"); await fs.writeFile(neighbour,PNG);
     expect((await imageGET(request(`/api/image?path=${encodeURIComponent(neighbour)}`))).status).toBe(200);
     for (const candidate of [stored,link,path.join(folder,mediaFilename(media))]) {
       expect((await imageGET(request(`/api/image?path=${encodeURIComponent(candidate)}`))).status).toBe(403);
@@ -233,7 +239,7 @@ test("a directory swapped for a link to a round while a path route opens its pic
     const stored = await fs.readFile(path.join(roundDirectory(id),mediaFilename(media)));
     expect(stored.includes("inside!!")).toBe(true);
     // An ordinary picture the routes serve, under the stored copy's own name.
-    const allowed = path.join(await source(),mediaFilename(media));
+    const allowed = path.join(await routeSource(),mediaFilename(media));
     await fs.writeFile(allowed,Buffer.concat([PNG,Buffer.from("allowed!")]));
     await swappedUnderEveryPathRoute(allowed,await fs.realpath(roundDirectory(id)),"inside!!");
     // The review's own URL still serves the operator.
@@ -250,7 +256,7 @@ test("a directory swapped for a link out of the roots while a path route opens i
   process.env.HOME = path.join(base,"home"); await fs.mkdir(process.env.HOME);
   process.env.LLV_EVIDENCE_ROOTS = path.join(base,"evidence");
   try {
-    const allowed = path.join(await source(),"shot.png");
+    const allowed = path.join(await routeSource(),"shot.png");
     await fs.writeFile(allowed,Buffer.concat([PNG,Buffer.from("allowed!")]));
     await fs.writeFile(path.join(outside,"shot.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
     expect((await imageGET(request(`/api/image?path=${encodeURIComponent(path.join(outside,"shot.png"))}`))).status).toBe(403);
@@ -304,7 +310,7 @@ test("where the kernel names no open file, a directory swapped twice around the 
   process.env.HOME = path.join(base,"home"); await fs.mkdir(process.env.HOME);
   process.env.LLV_EVIDENCE_ROOTS = path.join(base,"evidence");
   try {
-    const allowed = path.join(await source(),"shot.png");
+    const allowed = path.join(await routeSource(),"shot.png");
     await fs.writeFile(allowed,Buffer.concat([PNG,Buffer.from("allowed!")]));
     await fs.writeFile(path.join(outside,"shot.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
     for (const route of pathRoutes(allowed)) {
@@ -398,6 +404,7 @@ test("a publication's cleanup while a delivery holds its round's lock leaves it 
   const id = await publish(body);
   let sends = 0, sent = false, release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
+  releaseHeldDelivery = () => release();
   const delivery: PrototypeDelivery = {
     recover: async () => sent ? { state: "sent", operationId: "operation-1" } : null,
     send: async () => { sends += 1; await gate; sent = true; return { state: "sent", operationId: "operation-1" }; },
@@ -408,16 +415,22 @@ test("a publication's cleanup while a delivery holds its round's lock leaves it 
   expect((await save()).status).toBe(200);
   for (let n = 0; sends === 0 && n < 500; n += 1) await Bun.sleep(5);
   expect(sends).toBe(1);
-  // Nothing the operator does waits on the delivery that holds the lock.
-  const answers = await Promise.all([save(),reviewGET(request("/review"),TASK,world),reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery)]);
+  // A second save and a read answer at once while the delivery holds the lock.
+  // An explicit resend waits for its delivery verdict (#3023), so it answers
+  // only once the held delivery settles.
+  let retried = false;
+  const retry = reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery).then(response => { retried = true; return response; });
+  const answers = await Promise.all([save(),reviewGET(request("/review"),TASK,world)]);
   for (const response of answers) expect(response.status).toBe(200);
   expect(sends).toBe(1);
+  expect(retried).toBe(false);
   // Another task's publication runs the cleanup while the lock is held.
   await publish({ ...body, taskId: "task-other", clientRequestId: "lock-held-other" });
   const queue = path.join(stateDir(),"prototype-reviews",`${id}.decision.lock.write-locks`);
   expect((await fs.readdir(queue)).length).toBe(1);
   expect(await lockLeftovers()).toEqual([`${id}.decision.lock.write-lock`,`${id}.decision.lock.write-locks`]);
   release();
+  expect((await retry).status).toBe(200);
   await settlePrototypeDeliveriesForTests();
   expect(sends).toBe(1);
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery).toMatchObject({ state: "sent", operationId: "operation-1" });

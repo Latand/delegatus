@@ -10,6 +10,7 @@ import { setSharedMemoryEnabled, sharedMemoryEnabled } from "./settings";
 import { memoryIndex } from "./service";
 import { memorySettingView } from "./view";
 import { GET, PUT } from "@/app/api/memory/settings/route";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 const previous = { ...process.env };
 const now = new Date("2026-10-05T12:00:00Z");
 let root: string;
@@ -82,7 +83,7 @@ for (const broken of ["spend", "pending"]) test(`unreadable ${broken} preserves 
   expect(await (await get()).json()).toEqual({ enabled: true, status: "unavailable" });
   for (const enabled of [false, true]) {
     const response = await PUT(new NextRequest("http://localhost/api/memory/settings", {
-      method: "PUT", headers: { host: "localhost", origin: "http://localhost", "content-type": "application/json" },
+      method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", origin: "http://localhost", "content-type": "application/json" },
       body: JSON.stringify({ project: "fixture-project", enabled }),
     }));
     expect(response.status).toBe(200);
@@ -95,7 +96,7 @@ for (const broken of ["spend", "pending"]) test(`unreadable ${broken} preserves 
 test("failed setting persistence reports a write error", async () => {
   fs.writeFileSync(path.join(root, "shared-memory-settings.json"), "broken");
   const response = await PUT(new NextRequest("http://localhost/api/memory/settings", {
-    method: "PUT", headers: { host: "localhost", origin: "http://localhost" },
+    method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", origin: "http://localhost" },
     body: JSON.stringify({ project: "fixture-project", enabled: false }),
   }));
   expect(response.status).toBe(500);

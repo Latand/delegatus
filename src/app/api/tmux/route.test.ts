@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 const realResources = { ...(await import("@/lib/resources")) };
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -187,10 +188,12 @@ function get(url: string): NextRequest {
   return new NextRequest(url, { headers: { host: "127.0.0.1" } });
 }
 
+/** A Delegatus page's post: it carries the session its navigation opened.
+    Agent and service claims ride beside it and still decide attribution. */
 function post(body: unknown, headers: Record<string, string> = {}): NextRequest {
   return new NextRequest("http://127.0.0.1/api/tmux", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json", ...headers },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -269,9 +272,9 @@ test.each(["interrupt", "kill"].flatMap(action => ["browser", "service", "api-cl
   process.env.LLV_STRUCTURED_HOSTS = "1";
   structuredControlResult = { status: 202, body: { ok: true, structured: true, target: "conversation_stage", operationId: "control-custody", receipt: { operationId: "control-custody", status: "queued" } } };
   setCallerConversationResolverForTests(() => "conversation_agent");
-  const headers: Record<string, string> = caller === "browser" ? { "sec-fetch-site": "same-origin" }
+  const headers: Record<string, string> = caller === "browser" ? { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" }
     : caller === "service" ? { ...internalServiceHeaders("monitor"), "sec-fetch-site": "same-origin" }
-      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {};
+      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : { cookie: "" };
   try {
     const response = await conversationHostPOST(post({ path: PATHNAME, action, operationId: "control-custody", origin: { kind: "operator" } }, headers));
     expect(response.status).toBe(202);
