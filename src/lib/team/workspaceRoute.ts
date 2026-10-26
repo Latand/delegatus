@@ -20,7 +20,11 @@ export function workspaceDenied(): NextResponse<never> {
 /** Read the cookie directly: a member's bearer header never upgrades their role. */
 export function requestWorkspaceScope(request: Request): Scope | null {
   const store = existingTeamStore();
-  if (!store?.hasActiveOwner()) return null;
+  if (!store?.hasActiveOwner()) {
+    if (agentCapabilityClaim(request) === "valid" && conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), callerConversationId(request), store))
+      throw new WorkspaceRefusal("workspace authority is unavailable");
+    return null;
+  }
   if (agentCapabilityClaim(request) === "valid") {
     const principal = conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), callerConversationId(request), store);
     if (!principal) return null;

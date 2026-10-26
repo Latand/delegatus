@@ -13,7 +13,6 @@ export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
  * A missing principal means an installation-owned launch. A bound principal
  * survives revocation and project moves; those can only remove its authority. */
 export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspacePrincipal | null {
-  if (!store) return null;
   const seen = new Set<string>();
   while (id && !seen.has(id)) {
     seen.add(id);

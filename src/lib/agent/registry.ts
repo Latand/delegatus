@@ -1286,6 +1286,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
   return {
     ...(memoryMax !== undefined ? { agentMemoryMaxBytes: memoryMax } : {}),
     ...(memoryRoleParams ? { agentMemoryRoleParams: memoryRoleParams } : {}),
+    ...(current.workspace ?? requested.workspace ? { workspace: current.workspace ?? requested.workspace } : {}),
     cwd: requested.cwd || current.cwd,
     model: requested.model ?? current.model,
     effort: requested.effort ?? current.effort,

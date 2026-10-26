@@ -5,6 +5,7 @@ import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { resolveShortId } from "@/lib/shortIds";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
@@ -56,9 +57,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       replayed: false, code: "workspace_forbidden", error: "workspace access denied", retryable: false });
     try {
       const store = existingTeamStore();
-      if (!store) return service.callTool(tool, input, context);
       const authority = dependencies.attentionAuthority();
-      if (authority.kind === "unidentified" && store.workspaceRows().length) denied();
+      if (authority.kind === "unidentified" && store?.workspaceRows().length) denied();
       const callerId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
       const lookup = dependencies.workspaceConversation ?? ((id: string) => {
         const current = dependencies.registrySnapshot();
@@ -67,6 +67,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       });
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
       if (!principal) return service.callTool(tool, input, context);
+      if (!store) denied();
       if (!PROJECT_TOOLS.has(tool)) denied();
       if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
       const conversationProject = (id: string): string | null => {
@@ -109,6 +110,13 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           else denied();
           return;
         }
+        const identity = ["project", "expectedProject", "projectId", "cwd", "repoDir", "flowId"].includes(key)
+          || CONVERSATIONS.has(key) || TASKS.has(key) || PIPELINES.has(key)
+          || key === "ids" && ["list_tasks", "list_pipelines", "list_flows"].includes(tool);
+        if (identity && value != null && typeof value !== "string") {
+          const list = ["paths", "taskIds", "ids", "finishesTask"].includes(key) && Array.isArray(value);
+          if (!list && !(key === "finishesTask" && typeof value === "boolean")) denied();
+        }
         if (Array.isArray(value)) { for (const item of value) check(key, item); return; }
         if (value && typeof value === "object") { for (const [field, item] of Object.entries(value)) check(field, item); return; }
         if (typeof value !== "string" || !value) return;
@@ -146,11 +154,17 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         }
       };
       assert();
+      let answerProjects: string[] = [];
+      const answerProject = (value: string): boolean => {
+        if (allowed(value)) return true;
+        const resolution = resolveShortId(answerProjects, value);
+        return resolution.kind === "match" && allowed(resolution.value);
+      };
       const projectAnswer = (value: unknown, key = ""): unknown => {
         if (Array.isArray(value)) return value.map(item => projectAnswer(item, key)).filter(item => item !== undefined);
         if (value && typeof value === "object") {
           const row = value as Record<string, unknown>;
-          if (typeof row.project === "string" && !allowed(row.project)) return undefined;
+          if (typeof row.project === "string" && !answerProject(row.project)) return undefined;
           return Object.fromEntries(Object.entries(row).map(([field, item]) => [field, projectAnswer(item, field)]).filter(([, item]) => item !== undefined));
         }
         if (typeof value === "string" && value) {
@@ -163,13 +177,15 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
         const result = await service.callTool(tool, args, context);
         assert();
+        answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;
-          if (!scope?.resolved || !allowed(scope.resolved)) return { ...result, items: [], total: 0, strongTotal: 0, nextCursor: null, stats: undefined };
+          if (!scope?.resolved || !answerProject(scope.resolved)) return { ...result, items: [], total: 0, strongTotal: 0, nextCursor: null, stats: undefined };
           // Corpus counts and duplicate paths describe the whole installation.
-          return { ...result, stats: undefined, items: (result.items as Record<string, unknown>[]).filter(row => allowed(String(row.project))).map(row => ({ ...row, alsoIn: undefined, duplicateCount: undefined })) };
+          return { ...result, stats: undefined, items: (result.items as Record<string, unknown>[]).filter(row => answerProject(String(row.project))).map(row => ({ ...row, alsoIn: undefined, duplicateCount: undefined })) };
         }
-        return result.ok ? projectAnswer(result) as typeof result : result;
+        const answer = result.ok ? projectAnswer(result) : result;
+        return answer === undefined ? refuse() : answer as typeof result;
       });
     } catch (error) {
       if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse();

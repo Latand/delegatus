@@ -5,13 +5,14 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { emptyLaunchProfile, migrationSuccessorLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryFile } from "@/lib/agent/registry";
-import { resetTeamStoreForTests, teamStore, type TeamStore } from "@/lib/team/store";
+import { resetTeamStoreForTests, teamStore, teamStoreFile, type TeamStore } from "@/lib/team/store";
 import { createWorkspace, placeProject } from "@/lib/team/workspaces";
 import { setWorkspaceDefaults } from "@/lib/team/workspaceDefaults";
 import type { Member } from "@/lib/team/contract";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { shortId } from "@/lib/shortIds";
 import { buildPipeline } from "@/lib/pipelines/store";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } from "@/lib/pipelines/engine";
@@ -115,6 +116,18 @@ test("a session stays in its bound workspace when its member also belongs to ano
   expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
 });
 
+test("malformed identity arguments cannot turn a scoped read into an installation-wide read", async () => {
+  for (const value of [{}, [], [own], 1, true]) {
+    for (const tool of ["list_tasks", "list_pipelines", "board_snapshot", "agent_fleet", "search_transcripts", "seat_tick_settings"]) {
+      expect(await call(tool, { project: value })).toMatchObject(REFUSED);
+    }
+    expect(await call("get_conversation", { conversationId: value })).toMatchObject(REFUSED);
+    expect(await call("get_task", { taskId: value })).toMatchObject(REFUSED);
+    expect(await call("pipeline_action", { pipelineId: value, action: "pause" })).toMatchObject(REFUSED);
+  }
+  expect(dispatched).toEqual([]);
+});
+
 test("implicit stage and lesson targets cannot follow an assignment into a foreign project", async () => {
   const foreign = dependencies.getPipelines().pipelines[1]!;
   foreign.runs.push({ stageId: "build", attempts: [{ conversationId: "conversation_member" }] } as never);
@@ -133,8 +146,21 @@ test("transcript search suppresses global fallback and cross-workspace duplicate
   const scoped = await call("search_transcripts", { query: "message", clientRequestId: "search-scoped" });
   expect(scoped.ok).toBe(true);
   if (!scoped.ok) throw new Error(scoped.error);
-  expect(scoped.items).toEqual([{ project: own, snippet: "Our message" }]);
+  expect(scoped.items).toEqual([{ project: shortId(own), snippet: "Our message" }]);
   expect(scoped.stats).toBeUndefined();
+});
+
+test("compact project prefixes cannot disclose rows from a colliding foreign workspace", async () => {
+  const local = `dir-${"a".repeat(32)}`, foreign = `dir-${"a".repeat(8)}${"b".repeat(24)}`;
+  placeProject(store, owner, local, W1); placeProject(store, owner, foreign, W2);
+  searchReply = { items: [{ project: local, snippet: "Our message" }, { project: foreign, snippet: "Foreign secret" }],
+    total: 2, strongTotal: 2, nextCursor: null, projectScope: { resolved: own },
+    stats: { conversationsIndexed: 2, messagesIndexed: 2, fieldsSearched: [], tokenizer: "unicode" } };
+  const compact = await call("search_transcripts", { query: "message" });
+  expect(compact).toMatchObject({ ok: true, items: [] });
+  const full = await call("search_transcripts", { query: "message", full: true, clientRequestId: "search-full" });
+  expect(full).toMatchObject({ ok: true, items: [{ project: local, snippet: "Our message" }] });
+  expect(JSON.stringify(full)).not.toContain("Foreign secret");
 });
 
 test("member collection reads default to their project, and explicit sibling projects remain reachable", async () => {
@@ -178,6 +204,14 @@ test("an unidentified caller cannot use a forged source or member id to obtain i
   dependencies.attentionAuthority = () => ({ kind: "unidentified" });
   rebuild();
   expect(await call("get_task", { taskId: "task_1", src: "conversation_member.jsonl", memberId: owner.id })).toMatchObject(REFUSED);
+});
+
+test("a durable member binding stays fenced when its authority store disappears", async () => {
+  resetTeamStoreForTests();
+  fs.renameSync(teamStoreFile(), path.join(root, "saved-team.sqlite"));
+  expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+  expect(await call("get_task", { taskId: "task_0" })).toMatchObject(REFUSED);
+  expect(dispatched).toEqual([]);
 });
 
 test("membership removal, revocation and project moves refuse saved receipts after reopening the store", async () => {
@@ -240,10 +274,38 @@ test("a held page and caller-supplied identities cannot recover another workspac
 test("a durable member binding follows delegation and migration profiles", () => {
   const profile = emptyLaunchProfile({ workspace: { memberId: member.id, workspaceId: W1 }, parentConversationId: "conversation_member" });
   const restored = JSON.parse(JSON.stringify(profile));
+  expect(migrationSuccessorLaunchProfile(profile).workspace).toEqual(profile.workspace);
   snapshot.conversations.conversation_child = { ...conversation("conversation_child", own, false), generations: [{ launchProfile: restored }] } as never;
   expect(conversationWorkspacePrincipal(snapshot, "conversation_child")).toEqual({ memberId: member.id, workspaceId: W1 });
   delete restored.workspace;
   expect(conversationWorkspacePrincipal(snapshot, "conversation_child")).toEqual({ memberId: member.id, workspaceId: W1 });
+});
+
+test("a real resume preserves its durable workspace instead of accepting a replacement scope", () => {
+  const filename = path.join(root, "resume-registry.json"), sqliteFilename = path.join(root, "resume-registry.sqlite");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const workspace = { memberId: member.id, workspaceId: W1 };
+  const entry = (n: number) => {
+    const sessionId = ["0".repeat(8), "0".repeat(4), `4${"0".repeat(3)}`, `8${"0".repeat(3)}`, String(n).padStart(12, "0")].join("-");
+    return { key: { engine: "codex" as const, sessionId }, artifactPath: path.join(root, `${sessionId}.jsonl`), cwd: root,
+      accountId: "account-a", status: "live" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null };
+  };
+  let id: string;
+  try {
+    const first = registry.beginSpawnRequest({ engine: "codex", cwd: root, accountId: "account-a", launchProfile: emptyLaunchProfile({ cwd: root, workspace, title: "Resume workspace work" }) });
+    if (first.kind !== "created") throw new Error("expected a fresh launch");
+    id = first.receipt.conversationId;
+    expect(registry.settleSpawn(first.receipt.launchId, entry(1)).kind).toBe("settled");
+    const resumed = registry.beginSpawnRequest({ engine: "codex", cwd: root, accountId: "account-a", conversationId: id as `conversation_${string}`, purpose: "resume-successor",
+      launchProfile: emptyLaunchProfile({ cwd: root, workspace: { memberId: owner.id, workspaceId: W2 } }) });
+    if (resumed.kind !== "created") throw new Error("expected a resume launch");
+    expect(resumed.receipt.launchProfile.workspace).toEqual(workspace);
+    expect(registry.settleSpawn(resumed.receipt.launchId, entry(2)).kind).toBe("settled");
+  } finally { registry.close(); }
+  const reader = `import { AgentRegistry } from ${JSON.stringify(path.resolve("src/lib/agent/registry.ts"))}; const r = new AgentRegistry(${JSON.stringify(filename)}, undefined, undefined, {sqliteMode:"sqlite",sqliteFilename:${JSON.stringify(sqliteFilename)}}); console.log(JSON.stringify(r.conversation(${JSON.stringify(id)}).generations.at(-1).launchProfile.workspace)); r.close();`;
+  const child = spawnSync(process.execPath, ["-e", reader], { env: process.env, encoding: "utf8" });
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout.trim())).toEqual(workspace);
 });
 
 test("the production dispatcher enforces the fence for an authenticated capability", async () => {
@@ -291,6 +353,10 @@ test("a member-created pipeline retains its scope, refuses revoked stage launche
   const pipeline = created.pipeline!;
   const workspace = { memberId: member.id, workspaceId: W1 };
   expect(findPipelineRecord(pipeline.id)?.workspace).toEqual(workspace);
+  const reader = `import { findPipelineRecord } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))}; console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(pipeline.id)}).workspace));`;
+  const restored = spawnSync(process.execPath, ["-e", reader], { env: process.env, encoding: "utf8" });
+  expect(restored.status).toBe(0);
+  expect(JSON.parse(restored.stdout.trim())).toEqual(workspace);
   let ready!: () => void, release!: () => void;
   const entered = new Promise<void>(resolve => { ready = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
