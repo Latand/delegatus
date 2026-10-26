@@ -195,6 +195,9 @@ test("named launch and migration accounts cannot escape the workspace pool", asy
   setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-a"] } });
   for (const key of ["accountId", "targetAccountId"]) {
     expect(await call("conversation_migration", { conversationId: "conversation_member", action: "switch", [key]: "account-b" })).toMatchObject(REFUSED);
+    for (const engine of ["claude", "copilot", "unknown"]) {
+      expect(await call("conversation_migration", { conversationId: "conversation_member", action: "switch", engine, [key]: "account-b" })).toMatchObject(REFUSED);
+    }
   }
   expect(await call("spawn_agent", { cwd: root, engine: "codex", accountId: "account-b" })).toMatchObject(REFUSED);
   expect(dispatched).toEqual([]);

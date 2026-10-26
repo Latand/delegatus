@@ -146,7 +146,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         allowed = workspacePrincipalAccess(principal);
         if (!checks.every(check => allowed(check()))) denied();
         const targetEngine = typeof args.conversationId === "string" ? lookup(args.conversationId)?.engine : null;
-        const engine = args.engine ?? targetEngine;
+        const engine = targetEngine ?? args.engine;
         for (const key of ["account", "accountId", "targetAccountId"]) if (typeof args[key] === "string" && (engine === "claude" || engine === "codex")) {
           const targetProject = typeof args.conversationId === "string" ? conversationProject(args.conversationId) : project;
           const pool = allowedAccountIdsForProject(typeof args.project === "string" ? args.project : targetProject, engine);
