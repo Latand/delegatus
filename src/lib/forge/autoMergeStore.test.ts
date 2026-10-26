@@ -1100,7 +1100,7 @@ test("a newer delivery owner retires the completed predecessor merge with its su
   const owner = completedLane("successor");
   const target = { repository: PROJECT, remote: "", branch: "refs/heads/review", pr: 7 };
   old.delivery = { target, disposition: "owner", publish: "disabled", active: false, ownerId: old.id, epoch: 1, journal: [] };
-  olderWithoutMerge.delivery = { target, disposition: "owner", publish: "disabled", active: false, ownerId: olderWithoutMerge.id, epoch: 0, journal: [] };
+  olderWithoutMerge.delivery = { target, disposition: "owner", publish: "disabled", active: false, ownerId: olderWithoutMerge.id, epoch: 1, journal: [] };
   owner.delivery = { target, disposition: "owner", publish: "enabled", active: true, ownerId: owner.id, epoch: 2, journal: [] };
   old.merge = {
     state: "blocked", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
@@ -1145,7 +1145,7 @@ test("a reloaded completed refresh with an exhausted review cannot dispatch its 
   };
   parent.merge = structuredClone(refresh.merge);
   Object.assign(parent.merge, { state: "refreshing", refresh: {
-    attempt: 1, base: "b".repeat(40), head: HEAD, key: "refresh-key", digest: "refresh-digest", requestedAt: iso(T0), pipelineId: refresh.id,
+    attempt: 1, base: "b".repeat(40), head: HEAD, key: "refresh-key", digest: "d".repeat(64), requestedAt: iso(T0), pipelineId: refresh.id,
   } });
   savePipelines([parent, refresh]);
   expect(loadPipelines().find(lane => lane.id === refresh.id)!.merge!.state).toBe("queued");
@@ -1179,7 +1179,7 @@ test("a refresh review that fails at the merge mutation fence refuses dispatch",
       if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: HEAD,
         baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: [] });
       if (args[1]?.includes("/reviews")) return "";
-      if (args.at(-1) === ".protection.required_status_checks.contexts") return "null";
+      if (args[0] === "api" && args[1]?.includes("/branches/")) return "null";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       throw new Error(`unexpected fixture read: ${args.join(" ")}`);
     },
