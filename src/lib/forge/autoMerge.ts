@@ -1278,47 +1278,45 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
   };
 }
 
-/** Fire-and-forget, one run at a time, errors logged and never thrown: the
-    controller calls this at the end of every cycle, beside the forge sweep. */
+/** Fire-and-forget: one ordinary merge sweep, with recovery owned per merge.
+ * The controller calls this beside the forge sweep; failures are logged. */
 export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): void {
+  const ports = productionAutoMergePorts(overrides);
+  // Recovery has per-merge ownership and durable polling reservations. Start
+  // it on every tick, even while ordinary merge reads or task finishes wait.
+  const recovery = sweepPostMerge({
+    ...ports,
+    read: async (lane, ref) => readPostMergeChecks(lane, ref, await requiredContexts(lane.merge!.repository, "main", ports), ports.run),
+    create: async (request, creationRequest, lineage) => {
+      const project = ports.loadPipelines().find(lane => lane.repoDir === request.repoDir)?.project;
+      const creatorLineage = (project ? await ports.activeSeat?.(project) : null) ?? lineage;
+      const result = await (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, { creationRequest, creatorLineage });
+      if (!result.pipeline) throw new Error(result.error ?? "Recovery pipeline creation failed");
+      return { id: result.pipeline.id };
+    },
+    revert: (lane, key, reconcileOnly, claim) => openRevertPr(lane, key, reconcileOnly, ports.run, ports.write, claim),
+    resolveMergeCommit: async lane => {
+      const sha = (await ports.run(["pr", "view", String(lane.merge!.prNumber), "--repo", lane.merge!.repository, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"])).trim();
+      return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
+    },
+    closeRevert: async (lane, number) => {
+      const state = await ports.run(["pr", "view", String(number), "--repo", lane.merge!.repository, "--json", "state", "--jq", ".state"]);
+      if (state.trim() === "OPEN") await ports.write(["pr", "close", String(number), "--repo", lane.merge!.repository], lane.merge!.repository);
+    },
+  })
+    .catch((error) => ports.log?.("[post merge] sweep failed", error))
+    .finally(() => { if (scheduleHost.__llvPostMergeRunning === recovery) scheduleHost.__llvPostMergeRunning = null; });
+  scheduleHost.__llvPostMergeRunning = recovery;
   if (scheduleHost.__llvAutoMergeRunning) return;
-  const now = (overrides.now ?? Date.now)();
+  const now = ports.now();
   if (now - (scheduleHost.__llvAutoMergeStartedAt ?? -Infinity) < MERGE_SCHEDULE_DEBOUNCE_MS) return;
   scheduleHost.__llvAutoMergeStartedAt = now;
-  const ports = productionAutoMergePorts(overrides);
   /* The finish sweep runs after the merge step, so a merge this pass made
      finishes its task in the same pass. */
   const run = sweepAutoMerge(ports)
     .catch((error) => ports.log?.("[auto merge] sweep failed", error))
     .then(() => sweepTaskFinishes(ports))
     .catch((error) => ports.log?.("[task finish] sweep failed", error))
-    .then(() => {
-      // An optional forge read owns its own single-flight promise, so even a
-      // held read cannot delay this pass's task finishes or subsequent passes.
-      if (scheduleHost.__llvPostMergeRunning) return;
-      scheduleHost.__llvPostMergeRunning = sweepPostMerge({
-        ...ports,
-        read: async (lane, ref) => readPostMergeChecks(lane, ref, await requiredContexts(lane.merge!.repository, "main", ports), ports.run),
-        create: async (request, creationRequest, lineage) => {
-          const project = ports.loadPipelines().find(lane => lane.repoDir === request.repoDir)?.project;
-          const creatorLineage = (project ? await ports.activeSeat?.(project) : null) ?? lineage;
-          const result = await (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, { creationRequest, creatorLineage });
-          if (!result.pipeline) throw new Error(result.error ?? "Recovery pipeline creation failed");
-          return { id: result.pipeline.id };
-        },
-        revert: (lane, key, reconcileOnly, claim) => openRevertPr(lane, key, reconcileOnly, ports.run, ports.write, claim),
-        resolveMergeCommit: async lane => {
-          const sha = (await ports.run(["pr", "view", String(lane.merge!.prNumber), "--repo", lane.merge!.repository, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"])).trim();
-          return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
-        },
-        closeRevert: async (lane, number) => {
-          const state = await ports.run(["pr", "view", String(number), "--repo", lane.merge!.repository, "--json", "state", "--jq", ".state"]);
-          if (state.trim() === "OPEN") await ports.write(["pr", "close", String(number), "--repo", lane.merge!.repository], lane.merge!.repository);
-        },
-      })
-        .catch((error) => ports.log?.("[post merge] sweep failed", error))
-        .finally(() => { scheduleHost.__llvPostMergeRunning = null; });
-    })
     .finally(() => { scheduleHost.__llvAutoMergeRunning = null; });
   scheduleHost.__llvAutoMergeRunning = run;
 }

@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { sweepPostMerge, postMergeSeatSignals, openRevertPr, readPostMergeChecks, type PostMergePorts } from "./postMerge";
 
@@ -80,6 +84,111 @@ test("regression: the revert deadline uses the failed run's time across delayed 
     expect(f.lane().merge?.recovery?.firstRedAt).toBe(new Date(0).toISOString());
     expect(f.calls()).toEqual({ createCalls: 1, revertCalls: 1 });
   }
+});
+
+test("regression: first failure observed at 59m30s preserves the sixty-minute deadline after restart", async () => {
+  const f = fixture();
+  f.clock(59 * 60_000 + 30_000);
+  await sweepPostMerge(f.ports);
+  expect(f.calls()).toEqual({ createCalls: 1, revertCalls: 0 });
+  f.restart(); f.clock(60 * 60_000);
+  await sweepPostMerge(f.ports);
+  expect(f.calls()).toEqual({ createCalls: 1, revertCalls: 1 });
+  expect(postMergeSeatSignals([f.lane()], "fixture")).toHaveLength(1);
+});
+
+test("the first-red deadline and effect receipts survive separate recovery processes", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "post-merge-restart-"));
+  try {
+    const file = path.join(dir, "receipt.json");
+    writeFileSync(file, JSON.stringify({ lane: fixture().lane(), creates: 0, reverts: 0 }));
+    const script = `
+      import { sweepPostMerge } from ${JSON.stringify(path.join(import.meta.dir, "postMerge.ts"))};
+      import { readFileSync, writeFileSync } from "node:fs";
+      const file = process.argv[1]; const now = Number(process.argv[2]);
+      const state = JSON.parse(readFileSync(file, "utf8"));
+      const save = () => writeFileSync(file, JSON.stringify(state));
+      await sweepPostMerge({
+        now: () => now, loadPipelines: () => [structuredClone(state.lane)],
+        mutate: async (_id, change) => { const changed = change(state.lane); save(); return changed; },
+        read: async (_lane, ref) => ({ sha: ref, required: ["types"], checks: [{ name: "types", verdict: ref === "abc^1" ? "green" : "red", failedAt: new Date(0).toISOString() }] }),
+        create: async () => { state.creates++; save(); return { id: "fix" }; },
+        revert: async (_lane, _key, reconcileOnly, claim) => {
+          if (!reconcileOnly && await claim()) { state.reverts++; save(); }
+          return 8;
+        },
+      });
+    `;
+    const run = (now: number) => {
+      execFileSync(process.execPath, ["--eval", script, file, String(now)], { env: process.env, timeout: 10_000, stdio: "pipe" });
+      return JSON.parse(readFileSync(file, "utf8")) as { lane: Pipeline; creates: number; reverts: number };
+    };
+    expect(run(59 * 60_000 + 30_000)).toMatchObject({ creates: 1, reverts: 0 });
+    const due = run(60 * 60_000);
+    expect(due).toMatchObject({ creates: 1, reverts: 1 });
+    expect(postMergeSeatSignals([due.lane], "fixture")).toHaveLength(1);
+    expect(run(61 * 60_000)).toMatchObject({ creates: 1, reverts: 1 });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.each(["rejected", "answered"] as const)("regression: held recovery owns only its merge across ticks, then retries when %s", async outcome => {
+  const a = fixture(); const b = fixture();
+  a.lane().id = "held";
+  b.lane().id = "due";
+  b.lane().merge!.prNumber = 9;
+  b.lane().merge!.mergeCommit = "def";
+  b.lane().merge!.recovery = { firstRedAt: new Date(0).toISOString(), failures: [{ name: "types", excerpt: "failed" }], fixPipelineId: "fix-b" };
+  let entered!: () => void; let release!: () => void; let reverted!: () => void;
+  const readEntered = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const revertDone = new Promise<void>(resolve => { reverted = resolve; });
+  let reads = 0; let duplicateFirst = false;
+  const read = a.ports.read;
+  const ports: PostMergePorts = {
+    ...a.ports,
+    loadPipelines: () => [
+      ...(duplicateFirst ? [{ ...structuredClone(a.lane()), merge: { ...a.lane().merge!, prNumber: 10 } }] : []),
+      structuredClone(a.lane()), structuredClone(b.lane()),
+    ],
+    mutate: async (id, change) => {
+      const row = id === "held" ? a.lane() : b.lane();
+      const changed = change(row);
+      if (row.merge?.recovery?.revertPr) reverted();
+      return changed;
+    },
+    read: async (lane, ref) => {
+      if (lane.id === "held") {
+        reads++; entered(); await held;
+        if (outcome === "rejected") throw new Error("read unavailable");
+        return { sha: ref, required: ["types"], checks: [{ name: "types", verdict: "green" }] };
+      }
+      return read(lane, ref);
+    },
+    revert: b.ports.revert,
+  };
+  const first = sweepPostMerge(ports);
+  let next: Promise<void> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await readEntered;
+    duplicateFirst = true;
+    a.clock(60 * 60_000);
+    next = sweepPostMerge(ports);
+    await Promise.race([revertDone, new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error("due recovery did not submit its revert while the other read stayed held")), 2000);
+    })]);
+    expect(postMergeSeatSignals([b.lane()], "fixture")).toHaveLength(1);
+    expect(b.calls().revertCalls).toBe(1);
+    a.clock(61 * 60_000);
+    await sweepPostMerge(ports);
+    expect(reads).toBe(1);
+    release(); await next;
+  } finally {
+    clearTimeout(deadline); release(); await first; await next;
+  }
+  a.clock(62 * 60_000);
+  await sweepPostMerge(ports);
+  expect(reads).toBe(2);
 });
 
 test("regression: cancelling a pending revert emits one durable seat wake", async () => {

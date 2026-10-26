@@ -81,125 +81,152 @@ export function recoveryRequest(lane: Pipeline): CreatePipelineRequest {
   };
 }
 
-/** Receipts live with the automatic merge, so restarting the Viewer cannot
- * reset the first-red clock or allocate another fix lane. */
+const recoveryHost = globalThis as typeof globalThis & { __llvPostMergeLanes?: Map<string, Promise<void>> };
+
+/** One owner per watched PR, including while its merge SHA is being recovered.
+ * Each production forge command has a timeout; ownership lasts until all its
+ * work settles and is removed on success or failure. Other merges and later
+ * controller ticks never join a pending owner's reads. Durable receipts retain
+ * the first-red clock and effect identities across process restarts. */
 export async function sweepPostMerge(ports: PostMergePorts): Promise<void> {
-  const seen = new Set<string>();
+  const owners = recoveryHost.__llvPostMergeLanes ??= new Map();
+  const work: Promise<void>[] = [];
   for (const source of ports.loadPipelines()) {
-    const lane = { ...source, merge: source.merge ? { ...source.merge } : undefined };
-    const merge = lane.merge;
-    if (merge?.state !== "merged" || merge.by !== "auto-merge" || !merge.postMergeWatch || merge.recovery?.resolvedAt || merge.postMergeVerifiedAt || (lane.baseBranch && lane.baseBranch !== "main")) continue;
-    const now = ports.now();
-    if (Date.parse(merge.nextReadAt ?? "") > now) continue;
-    const deadline = Date.parse(merge.recovery?.firstRedAt ?? "") + RED_MAIN_LIMIT_MS;
-    const nextRead = deadline > now ? Math.min(now + 60_000, deadline) : now + 60_000;
-    const admitted = await ports.mutate(lane.id, live => {
-      if (!live.merge || Date.parse(live.merge.nextReadAt ?? "") > now) return false;
-      live.merge.nextReadAt = new Date(nextRead).toISOString();
+    const merge = source.merge;
+    if (merge?.state !== "merged" || merge.by !== "auto-merge" || !merge.postMergeWatch || merge.recovery?.resolvedAt || merge.postMergeVerifiedAt || (source.baseBranch && source.baseBranch !== "main")) continue;
+    const owner = JSON.stringify([merge.repository, merge.prNumber]);
+    const key = merge.mergeCommit ? keyOf(source) : owner;
+    if (owners.has(owner) || owners.has(key) || Date.parse(merge.nextReadAt ?? "") > ports.now()) continue;
+    const keys = new Set([owner, key]);
+    const claimMerge = (mergeKey: string) => {
+      if (owners.has(mergeKey) && owners.get(mergeKey) !== run) return false;
+      owners.set(mergeKey, run);
+      keys.add(mergeKey);
       return true;
-    });
-    if (!admitted) continue;
-    if (!merge.mergeCommit) {
-      try {
-        const sha = await ports.resolveMergeCommit?.(lane);
-        if (!sha) continue;
-        const recorded = await ports.mutate(lane.id, live => {
-          if (!live.merge || live.merge.mergeCommit) return false;
-          live.merge.mergeCommit = sha;
-          return true;
-        });
-        if (!recorded) continue;
-        merge.mergeCommit = sha;
-      } catch (error) { ports.log?.(`[post merge] ${lane.id}: merge receipt read failed`, error); continue; }
-    }
-    const key = keyOf(lane);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    try {
-      const main = await ports.read(lane, "main");
-      if (green(main) && merge.recovery) {
-        await resolveRecovery(lane, key, ports);
-        continue;
-      }
-      let recovery = merge.recovery;
-      if (!recovery) {
-        const landed = await ports.read(lane, merge.mergeCommit);
-        if (green(landed)) {
-          await ports.mutate(lane.id, live => {
-            if (!live.merge || live.merge.mergeCommit !== merge.mergeCommit) return false;
-            live.merge.postMergeVerifiedAt = new Date(ports.now()).toISOString();
-            return true;
-          });
-          continue;
-        }
-        const parent = await ports.read(lane, `${merge.mergeCommit}^1`);
-        const introduced = landed.checks.filter(check => landed.required.includes(check.name) && check.verdict === "red"
-          && parent.checks.some(previous => previous.name === check.name && previous.verdict === "green")
-          && !parent.checks.some(previous => previous.name === check.name && previous.verdict !== "green"));
-        const failures = introduced.map(check => ({ name: redactBounded(check.name, 160), excerpt: redactBounded(check.excerpt ?? "Failed check; log unavailable", 2000) }));
-        if (!failures.length) {
-          const settled = landed.required.length > 0 && landed.required.every(name => {
-            const checks = landed.checks.filter(check => check.name === name);
-            return checks.length > 0 && checks.every(check => check.verdict !== "pending");
-          });
-          const inherited = landed.checks.filter(check => landed.required.includes(check.name) && check.verdict === "red")
-            .every(check => parent.checks.some(previous => previous.name === check.name && previous.verdict === "red"));
-          if (settled && inherited) await ports.mutate(lane.id, live => {
-            if (!live.merge) return false;
-            live.merge.postMergeWatch = false;
-            return true;
-          });
-          continue;
-        }
-        const firstRedAt = Math.min(...introduced.map(check => Date.parse(check.failedAt ?? "")).filter(at => Number.isFinite(at) && at <= ports.now()));
-        if (!Number.isFinite(firstRedAt)) {
-          ports.log?.(`[post merge] ${lane.id}: failed check time unavailable; recovery clock cannot be established`);
-          continue;
-        }
-        const reservation: MergeRecovery = { firstRedAt: new Date(firstRedAt).toISOString(), failures };
-        await ports.mutate(lane.id, live => {
-          if (!live.merge || live.merge.mergeCommit !== merge.mergeCommit || live.merge.recovery) return false;
-          live.merge.recovery = reservation;
-          return true;
-        });
-        recovery = ports.loadPipelines().find(row => row.id === lane.id)?.merge?.recovery;
-      }
-      if (!recovery || recovery.resolvedAt) continue;
-      const current = { ...lane, merge: { ...merge, recovery } };
-      if (!recovery.fixPipelineId) {
-        try {
-          const request = recoveryRequest(current);
-          const result = await ports.create(request, { key, digest: createHash("sha256").update(key).digest("hex") }, {
-            srcPath: lane.srcPath ?? null, srcConversationId: lane.srcConversationId ?? null,
-            ...(lane.srcDeputyConversationId ? { srcDeputyConversationId: lane.srcDeputyConversationId } : {}),
-          });
-          if (result.id) await ports.mutate(lane.id, live => {
-            if (!live.merge?.recovery || live.merge.recovery.fixPipelineId) return false;
-            live.merge.recovery.fixPipelineId = result.id;
-            return true;
-          });
-        } catch (error) { ports.log?.(`[post merge] ${lane.id}: fix creation failed`, error); }
-      }
-      if (!recovery.revertPr && ports.now() - Date.parse(recovery.firstRedAt) >= RED_MAIN_LIMIT_MS) {
-        // Check current main again immediately before the write.
-        if (green(await ports.read(lane, "main"))) {
-          await resolveRecovery(lane, key, ports);
-          continue;
-        }
-        const reconcileOnly = Boolean(recovery.revertSubmittedAt);
-        const number = await ports.revert(current, key, reconcileOnly, () => ports.mutate(lane.id, live => {
-          if (!live.merge?.recovery || live.merge.recovery.revertSubmittedAt || live.merge.recovery.resolvedAt) return false;
-          live.merge.recovery.revertSubmittedAt = new Date(ports.now()).toISOString();
-          return true;
-        }));
-        if (number) await ports.mutate(lane.id, live => {
-          if (!live.merge?.recovery || live.merge.recovery.revertPr) return false;
-          live.merge.recovery.revertPr = number;
-          return true;
-        });
-      }
-    } catch (error) { ports.log?.(`[post merge] ${lane.id}: recovery read or action failed`, error); }
+    };
+    const run: Promise<void> = Promise.resolve().then(() => recoverPostMerge(source, ports, claimMerge))
+      .catch(error => ports.log?.(`[post merge] ${source.id}: recovery failed`, error))
+      .finally(() => { for (const owned of keys) if (owners.get(owned) === run) owners.delete(owned); });
+    for (const owned of keys) owners.set(owned, run);
+    work.push(run);
   }
+  await Promise.all(work);
+}
+
+async function recoverPostMerge(source: Pipeline, ports: PostMergePorts, claimMerge: (key: string) => boolean): Promise<void> {
+  const lane = { ...source, merge: { ...source.merge! } };
+  const merge = lane.merge;
+  const now = ports.now();
+  if (Date.parse(merge.nextReadAt ?? "") > now) return;
+  const deadline = Date.parse(merge.recovery?.firstRedAt ?? "") + RED_MAIN_LIMIT_MS;
+  const nextRead = deadline > now ? Math.min(now + 60_000, deadline) : now + 60_000;
+  const admitted = await ports.mutate(lane.id, live => {
+    if (!live.merge || Date.parse(live.merge.nextReadAt ?? "") > now) return false;
+    live.merge.nextReadAt = new Date(nextRead).toISOString();
+    return true;
+  });
+  if (!admitted) return;
+  if (!merge.mergeCommit) {
+    try {
+      const sha = await ports.resolveMergeCommit?.(lane);
+      if (!sha) return;
+      const recorded = await ports.mutate(lane.id, live => {
+        if (!live.merge || live.merge.mergeCommit) return false;
+        live.merge.mergeCommit = sha;
+        return true;
+      });
+      if (!recorded) return;
+      merge.mergeCommit = sha;
+    } catch (error) { ports.log?.(`[post merge] ${lane.id}: merge receipt read failed`, error); return; }
+  }
+  const key = keyOf(lane);
+  if (!claimMerge(key)) return;
+  try {
+    const main = await ports.read(lane, "main");
+    if (green(main) && merge.recovery) {
+      await resolveRecovery(lane, key, ports);
+      return;
+    }
+    let recovery = merge.recovery;
+    if (!recovery) {
+      const landed = await ports.read(lane, merge.mergeCommit);
+      if (green(landed)) {
+        await ports.mutate(lane.id, live => {
+          if (!live.merge || live.merge.mergeCommit !== merge.mergeCommit) return false;
+          live.merge.postMergeVerifiedAt = new Date(ports.now()).toISOString();
+          return true;
+        });
+        return;
+      }
+      const parent = await ports.read(lane, `${merge.mergeCommit}^1`);
+      const introduced = landed.checks.filter(check => landed.required.includes(check.name) && check.verdict === "red"
+        && parent.checks.some(previous => previous.name === check.name && previous.verdict === "green")
+        && !parent.checks.some(previous => previous.name === check.name && previous.verdict !== "green"));
+      const failures = introduced.map(check => ({ name: redactBounded(check.name, 160), excerpt: redactBounded(check.excerpt ?? "Failed check; log unavailable", 2000) }));
+      if (!failures.length) {
+        const settled = landed.required.length > 0 && landed.required.every(name => {
+          const checks = landed.checks.filter(check => check.name === name);
+          return checks.length > 0 && checks.every(check => check.verdict !== "pending");
+        });
+        const inherited = landed.checks.filter(check => landed.required.includes(check.name) && check.verdict === "red")
+          .every(check => parent.checks.some(previous => previous.name === check.name && previous.verdict === "red"));
+        if (settled && inherited) await ports.mutate(lane.id, live => {
+          if (!live.merge) return false;
+          live.merge.postMergeWatch = false;
+          return true;
+        });
+        return;
+      }
+      const firstRedAt = Math.min(...introduced.map(check => Date.parse(check.failedAt ?? "")).filter(at => Number.isFinite(at) && at <= ports.now()));
+      if (!Number.isFinite(firstRedAt)) {
+        ports.log?.(`[post merge] ${lane.id}: failed check time unavailable; recovery clock cannot be established`);
+        return;
+      }
+      const reservation: MergeRecovery = { firstRedAt: new Date(firstRedAt).toISOString(), failures };
+      await ports.mutate(lane.id, live => {
+        if (!live.merge || live.merge.mergeCommit !== merge.mergeCommit || live.merge.recovery) return false;
+        live.merge.recovery = reservation;
+        const nextReadAt = Date.parse(live.merge.nextReadAt ?? "");
+        live.merge.nextReadAt = new Date(Math.min(Number.isFinite(nextReadAt) ? nextReadAt : Infinity, firstRedAt + RED_MAIN_LIMIT_MS)).toISOString();
+        return true;
+      });
+      recovery = ports.loadPipelines().find(row => row.id === lane.id)?.merge?.recovery;
+    }
+    if (!recovery || recovery.resolvedAt) return;
+    const current = { ...lane, merge: { ...merge, recovery } };
+    if (!recovery.fixPipelineId) {
+      try {
+        const request = recoveryRequest(current);
+        const result = await ports.create(request, { key, digest: createHash("sha256").update(key).digest("hex") }, {
+          srcPath: lane.srcPath ?? null, srcConversationId: lane.srcConversationId ?? null,
+          ...(lane.srcDeputyConversationId ? { srcDeputyConversationId: lane.srcDeputyConversationId } : {}),
+        });
+        if (result.id) await ports.mutate(lane.id, live => {
+          if (!live.merge?.recovery || live.merge.recovery.fixPipelineId) return false;
+          live.merge.recovery.fixPipelineId = result.id;
+          return true;
+        });
+      } catch (error) { ports.log?.(`[post merge] ${lane.id}: fix creation failed`, error); }
+    }
+    if (!recovery.revertPr && ports.now() - Date.parse(recovery.firstRedAt) >= RED_MAIN_LIMIT_MS) {
+      // Check current main again immediately before the write.
+      if (green(await ports.read(lane, "main"))) {
+        await resolveRecovery(lane, key, ports);
+        return;
+      }
+      const reconcileOnly = Boolean(recovery.revertSubmittedAt);
+      const number = await ports.revert(current, key, reconcileOnly, () => ports.mutate(lane.id, live => {
+        if (!live.merge?.recovery || live.merge.recovery.revertSubmittedAt || live.merge.recovery.resolvedAt) return false;
+        live.merge.recovery.revertSubmittedAt = new Date(ports.now()).toISOString();
+        return true;
+      }));
+      if (number) await ports.mutate(lane.id, live => {
+        if (!live.merge?.recovery || live.merge.recovery.revertPr) return false;
+        live.merge.recovery.revertPr = number;
+        return true;
+      });
+    }
+  } catch (error) { ports.log?.(`[post merge] ${lane.id}: recovery read or action failed`, error); }
 }
 
 /** Read the exact commit, including legacy status contexts. Missing checks
