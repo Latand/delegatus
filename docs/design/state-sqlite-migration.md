@@ -104,7 +104,7 @@ unread. Scanner removal performs no task or scan-state migration or deletion.
 | `flows.json`, `pipelines.json`, `pipelines-archive.json` (23 MB), `workflows.json` | Rollback mirrors, written only at demotion. Every retained release has read these collections from SQLite since 2026-08-08 (#956). | #1872 |
 | 28 `agent-registry.json.write-lock.owner.pending-*` directories and `retired-*` symlinks (July) | Left over from the `off`/`dual-write` era; production has been in `sqlite` mode since 2026-07-29 | slice 2 |
 | stray `*.tmp` files (a 6.7 MB `.project-catalog.json…tmp`, nine `viewer-deployment-adapter-process.json.phase…tmp`, and others) | Temp files left by killed writers | slice 10: sweep temp files whose owner PID is dead, the rule the registry already applies (`cleanupStaleTempFiles`) |
-| `resume-panes.json`, `legacy-tmux-migration-complete*` | tmux era; `src/lib/tmux.ts` still references them | left to the tmux removal work, out of scope |
+| `resume-panes.json` | tmux era; `src/lib/tmux.ts` still references them | left to the tmux removal work, out of scope |
 
 ### 2.4 Already SQLite (no move)
 

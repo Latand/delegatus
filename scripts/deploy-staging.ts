@@ -38,9 +38,8 @@ import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "../src/lib
 import { stagingReleaseRecord, STAGING_RELEASE_FILE, type StagingReleaseRecord } from "../src/lib/staging";
 import {
   viewerComposeSnapshotWithoutUnsupportedApiCredentials,
-  viewerCandidateTmuxEnvironment,
   viewerComposeServiceFromConfig,
-  viewerComposeServiceUid,
+  viewerComposeServiceWithExistingTmux,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror } from "../src/runtime-host/canonicalMirror";
 import { viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
@@ -55,7 +54,14 @@ import {
   stagingRuntimeHostDockerArgs,
   stagingStatePaths,
   stagingViewerDockerArgs,
+  type StagingContainerContext,
 } from "../src/runtime-host/stagingContainer";
+
+/** Staging preserves prod's existing host tmux endpoint without changing prod's state. */
+export function stagingContainerContext(input: Omit<StagingContainerContext, "tmux">, prodStateDir: string): StagingContainerContext {
+  const service = viewerComposeServiceWithExistingTmux(prodStateDir, input.service);
+  return { ...input, service, tmux: { tmuxTmpdir: service.environment.TMUX_TMPDIR || "/tmp" } };
+}
 
 /** Prod state families the issue forbids staging from touching. */
 export const PROD_STATE_EVIDENCE_FILES: ReadonlySet<string> = new Set([
@@ -332,14 +338,7 @@ async function main(): Promise<void> {
     catch { fs.rmSync(sourceDir, { recursive: true, force: true }); }
   }
 
-  /* The host tmux supervisor migration marker lives in prod state; reading it
-     here (operator-side) keeps the staging containers on the same tmux
-     transport as prod without the staging instance touching prod state. */
-  const tmux = viewerCandidateTmuxEnvironment(prodStateDir, viewerComposeServiceUid(service), {
-    legacyTmuxExternal: service.environment.LLV_LEGACY_TMUX_EXTERNAL || "0",
-    tmuxTmpdir: service.environment.TMUX_TMPDIR || "/tmp",
-  });
-  const context = { revision, image, service, paths, tmux };
+  const context = stagingContainerContext({ revision, image, service, paths }, prodStateDir);
 
   fs.mkdirSync(stagingStateDir, { recursive: true, mode: 0o700 });
   await containerGone(STAGING_VIEWER_CONTAINER);
