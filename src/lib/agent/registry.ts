@@ -105,7 +105,7 @@ import {
 import {
   SqliteAgentRegistryStore,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
-  registryConversationsForEntryKey, registryHasEntryKeyIndex,
+  registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type RegistryDeliveryCompactionChanges,
   type SqliteRegistryReplacement,
@@ -6225,10 +6225,13 @@ export class AgentRegistry {
       // Linked-task admission also recognizes a generation by its artifact.
       // Keep that existing path fallback without enumerating other hosts.
       const selectedKeys = includeArtifactPath && entry && this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-        ? this.sqliteStore.conversationKeysForHost(entryKey, entry.artifactPath) : undefined;
-      const conversations = includeArtifactPath && entry
-        ? selectedKeys ? selectedKeys.flatMap(id => file.conversations[id] ? [file.conversations[id]!] : [])
-          : Object.values(file.conversations).filter(conversation => conversation.generations.some(generation =>
+        ? this.sqliteStore.conversationKeysForHost(entryKey, entry.artifactPath) : registryConversationKeysForEntryKey(file, entryKey);
+      const selectedRows = selectedKeys ? new Map(selectedKeys.flatMap(id => {
+        const conversation = file.conversations[id];
+        return conversation ? [[id, conversation] as const] : [];
+      })) : undefined;
+      const conversations = selectedRows ? [...selectedRows.values()] : includeArtifactPath && entry
+        ? Object.values(file.conversations).filter(conversation => conversation.generations.some(generation =>
             (conversation.engine === key.engine && generation.id === key.sessionId) || generation.path === entry.artifactPath))
         : registryConversationsForEntryKey(file, entryKey);
       // Admission's path fallback chooses in collection order. Insert those
@@ -6238,8 +6241,12 @@ export class AgentRegistry {
         const canonical = resolveConversationAlias(file, conversation.id);
         for (const id of conversationIdsResolvingTo(file, canonical)) {
           if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;
-          if (file.conversations[id] && !result.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
-          if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+          if (!result.conversations[id]) {
+            const current = selectedRows?.get(id) ?? file.conversations[id];
+            if (current) result.conversations[id] = clone(current);
+          }
+          const memberships = file.memberships[id];
+          if (memberships) result.memberships[id] = clone(memberships);
         }
       }
       return result;
@@ -10995,6 +11002,13 @@ export class AgentRegistry {
       .sort(compareDeliveryAdmission));
   }
 
+  /** Startup selects only unsettled outcomes; each operation is re-read
+      before its existing settlement guard runs. */
+  terminalDeliveryCandidates(): HeldDelivery[] {
+    return this.readKeyed(file => clone(registryRowsMatching(file, "heldDeliveries", "state", ["delivery-uncertain", "failed"])),
+      { skipColdKeyInitialization: true });
+  }
+
   terminalizeHeldDelivery(id: string, reason: string): HeldDelivery {
     return this.mutate((file) => {
       const delivery = file.heldDeliveries[id];
@@ -11069,10 +11083,9 @@ export class AgentRegistry {
       reservations its mutation would end, so the mutation alone can wait for
       the lock off the loop (docs/design/delivery-progress-and-drain.md, C0). */
   deadSupersededHeldDeliveryCandidates(): string[] {
-    const snapshot = this.readOnlySnapshot();
-    return Object.values(snapshot.heldDeliveries)
+    return this.readKeyed(snapshot => registryRowsMatching(snapshot, "heldDeliveries", "state", "held")
       .filter((delivery) => heldDeliveryTargetsDeadSupersededSession(snapshot, delivery, this.ownerAlive))
-      .map((delivery) => delivery.id);
+      .map((delivery) => delivery.id), { skipColdKeyInitialization: true });
   }
 
   /** The mutation half: each candidate is checked again inside the transaction. */
@@ -11919,6 +11932,13 @@ export function agentRegistry(): AgentRegistry {
   registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
     new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
   return registryProcessState.__llvAgentRegistry;
+}
+
+/** Open the entire constructor under one asynchronous lock deadline.
+    A failed constructor closes its connection and leaves the singleton unset. */
+export async function prepareAgentRegistry(signal?: AbortSignal, open: () => AgentRegistry = agentRegistry): Promise<AgentRegistry> {
+  return waitForStateLock("registry.prepare.open", () =>
+    stateLockAttempt("registry.prepare.open", open), { signal });
 }
 
 /** Open the cold session facade and answer from keyed rows. The one admitted
