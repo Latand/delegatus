@@ -5840,7 +5840,7 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     const browser = await chromium.launch(LAUNCH);
     const readings: Record<string, unknown>[] = [];
     const failures: string[] = [];
-    /* The words that tell the variants apart, per language and state. */
+    /* The card text that tells the variants apart, per language and state. */
     const headings = new Map<string, Set<string>>();
     /* Latin words a Ukrainian frame may carry: names, code tokens and units; everything else is a fallback to English. */
     const LATIN_ALLOWED = /^(?:Telegram|Delegatus|Orbit|Reports|HTML|SHA-256|handoff|codex|json)$/;
@@ -5873,6 +5873,23 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
               send: inside(document.querySelector("[data-proto-send]")),
               refuse: inside(document.querySelector("[data-proto-refuse]")),
               caption: document.querySelector("[data-proto-caption]")?.textContent?.trim() ?? "",
+              /* The file that would really go (the requested name is a link to it), whole on the first screen. */
+              realFile: (() => {
+                for (const element of document.querySelectorAll("[data-proto-real-file]")) {
+                  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const at = walker.currentNode.textContent?.indexOf("auth.json") ?? -1;
+                    if (at < 0) continue;
+                    const range = document.createRange();
+                    range.setStart(walker.currentNode, at);
+                    range.setEnd(walker.currentNode, at + "auth.json".length);
+                    const box = range.getBoundingClientRect();
+                    return { top: Math.round(box.top), bottom: Math.round(box.bottom), whole: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth };
+                  }
+                }
+                return null;
+              })(),
+              cardText: (document.querySelector("[data-proto-card]") as HTMLElement | null)?.innerText ?? "",
             };
           });
           if (firstScreen.scrollTop !== 0) failures.push(`${name}: opened scrolled`);
@@ -5881,9 +5898,15 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
             if (!firstScreen.send?.whole || !firstScreen.refuse?.whole) failures.push(`${name}: a decision button is off the first screen (${JSON.stringify([firstScreen.send, firstScreen.refuse])})`);
           } else if (firstScreen.send || firstScreen.refuse) failures.push(`${name}: a used-up confirmation still offers a decision`);
           if (!firstScreen.caption.includes(String(variant))) failures.push(`${name}: the caption does not number the variant`);
+          if (!firstScreen.realFile?.whole) failures.push(`${name}: the real file (auth.json) is not named on the first screen (${JSON.stringify(firstScreen.realFile)})`);
+          /* One fact, one sentence: no sentence of the card is said twice. */
+          const sentences = firstScreen.cardText.split(/(?<=[.?!:])\s+|\n+/).map((text) => text.trim().toLowerCase()).filter((text) => text.length > 12);
+          const repeated = sentences.filter((text, index) => sentences.indexOf(text) !== index);
+          const privateKey = (firstScreen.cardText.match(lang === "uk" ? /приватний ключ/gi : /private key/gi) ?? []).length;
+          if (repeated.length || privateKey > 1) failures.push(`${name}: a fact is said twice: ${repeated.join(" | ") || `private key ×${privateKey}`}`);
           const key = `${lang}-${state === "sent" ? "sent" : "pending"}`;
           if (!headings.has(key)) headings.set(key, new Set());
-          headings.get(key)!.add(firstScreen.headingText);
+          headings.get(key)!.add(firstScreen.cardText);
           if (state === "details") {
             await page.click("[data-proto-details] button", { timeout: 60_000 });
             await page.waitForSelector("[data-mobile2-menu-body]", { timeout: 60_000 });
@@ -5942,11 +5965,53 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
                 if (Math.min(box.width, box.height) < (coarse ? 44 : 24)) small.push(`${(control.textContent ?? control.getAttribute("aria-label") ?? "").trim()} ${Math.round(box.width)}×${Math.round(box.height)}`);
               }
             }
+            /* A paragraph never ends on a lone short word. */
+            const orphans: string[] = [];
+            for (const block of document.querySelectorAll<HTMLElement>("[data-proto-caption], [data-proto-card] :is(h1, p, li, dd)")) {
+              const words: Array<{ text: string; top: number }> = [];
+              const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+                  const range = document.createRange();
+                  range.setStart(node, match.index!);
+                  range.setEnd(node, match.index! + match[0].length);
+                  const rect = range.getClientRects()[0];
+                  if (rect) words.push({ text: match[0], top: Math.round(rect.top) });
+                }
+              }
+              const lines = [...new Set(words.map((word) => word.top))];
+              if (lines.length < 2) continue;
+              const last = words.filter((word) => word.top === lines.at(-1));
+              const tail = last.map((word) => word.text).join(" ");
+              if (last.length === 1 && tail.length < 10 || last.length === 2 && tail.length < 11) orphans.push(`${tail} (${block.textContent?.trim().slice(0, 40)}…)`);
+            }
+            /* A file name in a sentence stays on one line. */
+            for (const name of document.querySelectorAll("[data-proto-name]")) if (name.getClientRects().length > 1) orphans.push(`${name.textContent} broken across lines`);
+            /* Both decision labels read against their own fill: 4.5:1 or more. */
+            const channel = (value: number) => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+            const luminance = (css: string) => { const [r, g, b] = (css.match(/[\d.]+/g) ?? []).map(Number); return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b); };
+            const fill = (element: Element) => {
+              for (let node: Element | null = element; node; node = node.parentElement) {
+                const value = getComputedStyle(node).backgroundColor;
+                if (!/^rgba\(.*,\s*0\)$/.test(value) && value !== "transparent") return value;
+              }
+              return "rgb(255, 255, 255)";
+            };
+            const contrast: Record<string, number> = {};
+            for (const control of document.querySelectorAll("[data-proto-send], [data-proto-refuse]")) {
+              const [a, b] = [luminance(getComputedStyle(control).color), luminance(fill(control))].sort((x, y) => y - x);
+              contrast[(control.textContent ?? "").trim()] = Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100;
+            }
             const main = document.querySelector("main")!;
             const card = document.querySelector("[data-proto-card]")!.getBoundingClientRect();
+            const caption = document.querySelector("[data-proto-caption]")!.getBoundingClientRect();
             const popoverBox = popover?.getBoundingClientRect();
             return {
-              texts, offscreen, clipped, cut, small, covered,
+              texts, offscreen, clipped, cut, small, covered, orphans, contrast,
+              gap: Math.round(card.top - caption.bottom),
+              popoverInCard: popoverBox ? popoverBox.top >= card.top + 4 && popoverBox.bottom <= card.bottom && popoverBox.left >= card.left && popoverBox.right <= card.right : null,
+              detailsRow: document.querySelector("[data-proto-details] button")?.textContent?.trim() ?? "",
               overflow: main.scrollWidth - main.clientWidth,
               cardWidth: Math.round(card.width),
               viewport: { width: innerWidth, height: innerHeight },
@@ -5962,6 +6027,11 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
           if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
           if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
           if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
+          if (reading.popoverInCard === false) failures.push(`${name}: the popover crosses or touches the card's edge (${JSON.stringify(reading.popover)})`);
+          if (reading.gap > 16) failures.push(`${name}: ${reading.gap} px of empty band between the caption and the card`);
+          if (/\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row carries a number: ${reading.detailsRow}`);
+          if (reading.orphans.length) failures.push(`${name}: a line ends on a lone word: ${reading.orphans.join(" | ")}`);
+          for (const [label, ratio] of Object.entries(reading.contrast)) if (ratio < 4.5) failures.push(`${name}: «${label}» reads at ${ratio}:1`);
           if (state === "details" && !reading.detailsOpen) failures.push(`${name}: the fold did not open`);
           if (state === "pending" && reading.detailsOpen) failures.push(`${name}: the fold opened by itself`);
           if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
@@ -5976,7 +6046,7 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
         } finally { await context.close(); }
       }
     } finally { await browser.close(); served.stop(); }
-    for (const [key, words] of headings) if (words.size < 3 && !only.length) failures.push(`${key}: the variants share a heading: ${[...words].join(" | ")}`);
+    for (const [key, texts] of headings) if (texts.size < 3 && !only.length) failures.push(`${key}: two variants read the same: ${[...texts].join(" | ")}`);
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 600_000);

@@ -51,7 +51,8 @@ const REQUEST = {
   id: "fc_7k2m9q4r1z",
   digest: "9f2c41a7d3b85e60".repeat(4),
   chatId: "-1002233445566",
-  chatTitle: "Orbit Reports",
+  /* A no-break space keeps the chat's name on one line. */
+  chatTitle: "Orbit\u00a0Reports",
   topicId: 7,
   replyToMessageId: 42,
   format: "html" as const,
@@ -71,9 +72,18 @@ const REQUEST = {
   codes: ["document_forbidden_path", "document_outside_roots", "document_secret"],
 };
 
+/* The requested name is a link: the bytes that would go are another file's,
+   and that is the deciding fact, so every variant names the real file on the
+   first screen in plain words, and Details keeps both full paths. */
+const REAL_FILE = REQUEST.file.resolvedPath.split("/").slice(-2).join("/");
+
+/* A file name never breaks at its hyphen or slash: each one in a sentence is kept on one line. */
+const NAMES = new RegExp("(" + [REQUEST.file.filename, REAL_FILE].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")");
+const named = (text: string): ReactNode => text.split(NAMES).map((part, index) => (index % 2 ? <span key={index} data-proto-name className="whitespace-nowrap">{part}</span> : part));
+
 const WARNINGS = [
   L("The file is inside the hidden folder .codex.", "Файл лежить у прихованій теці .codex."),
-  L("It is outside the folders sends are allowed from (handoff).", "Він поза теками, з яких дозволено надсилати (handoff)."),
+  L("It is outside the folders files may be sent from (handoff).", "Він поза теками, з яких дозволено надсилати (handoff)."),
   L("It looks like it holds a private key (line 1).", "Схоже, у ньому приватний ключ (рядок 1)."),
 ];
 const MINUTES_LEFT = Math.ceil((Date.parse(REQUEST.expiresAt) - NOW_MS) / 60_000);
@@ -92,15 +102,20 @@ const TONE = {
   primary: "border-brand bg-brand text-on-brand hover:enabled:opacity-90 focus-visible:ring-accent/40",
   warning: "border-warning bg-card text-warning focus-visible:ring-warning/40",
 } as const;
-/* The permission prompt's pair (PermissionActions, touch size). */
-const PERMISSION = "inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-3 text-ui font-semibold text-white disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+/* The permission prompt's pair (PermissionActions, touch size), toned for a
+   flagged send: refusing is the product's primary, allowing carries the
+   warning fill, and both labels take the same light-on-dark or dark-on-light
+   treatment (the dark theme's controls sheet sets text-white on bg-warning to
+   the canvas colour). */
+const PERMISSION = "inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-3 text-ui font-semibold disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 /* ---------- the pieces every variant shares ---------- */
 
 /* The request's state is a dot with a short popover (the operator's standing
    rule): the word and the deadline live in the popover, the heading says the
-   state in words, so colour is never alone. The popover opens into the band
-   above the card, where nothing is written. */
+   state in words, so colour is never alone. The popover opens to the left of
+   the dot, centred on the card's first row, where nothing is written: two
+   lines in the phone's 44 px row, one line in the pointer's 24 px row. */
 function StatusDot({ state }: { state: "pending" | "sent" }) {
   const [open, setOpen] = useState(false);
   const host = useRef<HTMLDivElement>(null);
@@ -115,7 +130,7 @@ function StatusDot({ state }: { state: "pending" | "sent" }) {
   const word = state === "pending" ? L("Awaiting your decision", "Очікує вашого рішення") : L("Sent", "Надіслано");
   const detail = state === "pending"
     ? L(`${MINUTES_LEFT} min left, until ${clock(REQUEST.expiresAt)}`, `ще ${MINUTES_LEFT} хв, до ${clock(REQUEST.expiresAt)}`)
-    : L(`At ${clock(REQUEST.decidedAt)}, this confirmation is used up`, `О ${clock(REQUEST.decidedAt)}, це підтвердження використано`);
+    : L(`at ${clock(REQUEST.decidedAt)}`, `о ${clock(REQUEST.decidedAt)}`);
   return (
     <div ref={host} className="relative shrink-0" data-proto-new>
       <button
@@ -129,7 +144,7 @@ function StatusDot({ state }: { state: "pending" | "sent" }) {
         <span aria-hidden className={`h-2 w-2 rounded-full ${state === "pending" ? "bg-warning" : "bg-success"}`} />
       </button>
       {open ? (
-        <div role="dialog" aria-label={word} data-proto-popover className="absolute bottom-full right-0 z-10 mb-1 w-max max-w-[260px] rounded-surface border border-border bg-raised px-3 py-2 shadow-2">
+        <div role="dialog" aria-label={word} data-proto-popover className="absolute right-full top-1/2 z-10 mr-1 flex w-max max-w-[220px] -translate-y-1/2 flex-col rounded-surface border border-border bg-raised px-3 py-2 shadow-2 sm:max-w-none sm:flex-row sm:items-baseline sm:gap-2 sm:whitespace-nowrap">
           <p className="text-ui font-semibold text-primary">{word}</p>
           <p className="text-label text-muted">{detail}</p>
         </div>
@@ -138,12 +153,13 @@ function StatusDot({ state }: { state: "pending" | "sent" }) {
   );
 }
 
-/* The card's first row: where this came from, and the state. */
+/* The card's first row: where this came from, and the state. The row stays
+   short so the state's popover has room beside the dot. */
 function Kicker({ state }: { state: "pending" | "sent" }) {
   return (
     <div className="flex min-h-6 items-center gap-2" data-proto-new>
       <Send className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-label font-semibold text-secondary">{L("Telegram · an agent's request", "Telegram · запит від агента")}</span>
+      <span className="min-w-0 flex-1 truncate text-label font-semibold text-secondary">Telegram</span>
       <StatusDot state={state} />
     </div>
   );
@@ -152,31 +168,36 @@ function Kicker({ state }: { state: "pending" | "sent" }) {
 /* Hashes, ids, paths and detector codes, behind one closed row (the sheet's own fold). */
 function Details() {
   const [open, setOpen] = useState(false);
-  const rows: Array<[string, string]> = [
-    [L("Requested path", "Запитаний шлях"), REQUEST.file.path],
-    [L("Resolved file", "Фактичний файл"), REQUEST.file.resolvedPath],
-    ["SHA-256", REQUEST.file.sha256],
-    [L("Size", "Розмір"), `${REQUEST.file.bytes} ${L("bytes", "байт")}`],
-    [L("Chat", "Чат"), `${REQUEST.chatTitle} · ${REQUEST.chatId}`],
-    [L("Topic", "Тема"), String(REQUEST.topicId)],
-    [L("Reply to message", "Відповідь на повідомлення"), String(REQUEST.replyToMessageId)],
-    [L("Caption", "Підпис"), REQUEST.caption],
-    [L("Caption format", "Формат підпису"), "HTML"],
-    [L("Silent delivery", "Без сповіщення"), L("yes", "так")],
-    [L("Allowed folders", "Дозволені теки"), REQUEST.roots.join(", ")],
-    [L("Detector codes", "Коди детекторів"), REQUEST.codes.join(", ")],
-    [L("Requested", "Запит"), `${day(REQUEST.createdAt)}, ${clock(REQUEST.createdAt)} · ${REQUEST.id}`],
-    [L("Valid until", "Діє до"), `${day(REQUEST.expiresAt)}, ${clock(REQUEST.expiresAt)}`],
-    [L("Digest", "Дайджест"), REQUEST.digest],
+  /* The third field marks a code value (a path, hash, id or detector code),
+     the only kind set in the code font; words, dates and numbers stay in the body font. */
+  const rows: Array<[string, string, boolean]> = [
+    [L("Requested path", "Запитаний шлях"), REQUEST.file.path, true],
+    [L("Resolved file", "Фактичний файл"), REQUEST.file.resolvedPath, true],
+    ["SHA-256", REQUEST.file.sha256, true],
+    [L("Size", "Розмір"), `${new Intl.NumberFormat(LOCALE_TAG).format(REQUEST.file.bytes)} ${L("bytes", "байт")}`, false],
+    [L("Chat", "Чат"), REQUEST.chatTitle, false],
+    [L("Chat id", "Ідентифікатор чату"), REQUEST.chatId, true],
+    [L("Topic", "Тема"), String(REQUEST.topicId), false],
+    [L("Reply to message", "Відповідь на повідомлення"), String(REQUEST.replyToMessageId), false],
+    [L("Caption", "Підпис"), REQUEST.caption, false],
+    [L("Caption format", "Формат підпису"), "HTML", false],
+    [L("Silent delivery", "Без сповіщення"), L("Yes", "Так"), false],
+    [L("Allowed folders", "Дозволені теки"), REQUEST.roots.join(", "), true],
+    [L("Detector codes", "Коди детекторів"), REQUEST.codes.join(", "), true],
+    [L("Requested", "Запит"), `${day(REQUEST.createdAt)}, ${clock(REQUEST.createdAt)}`, false],
+    [L("Request id", "Ідентифікатор запиту"), REQUEST.id, true],
+    [L("Valid until", "Діє до"), `${day(REQUEST.expiresAt)}, ${clock(REQUEST.expiresAt)}`, false],
+    [L("Digest", "Дайджест"), REQUEST.digest, true],
   ];
   return (
-    <div className="-mx-4 border-t border-border pt-1 sm:-mx-5" data-proto-new data-proto-details>
-      <MobileSheetFold id="details" title={translate(LANG, "kanban.details")} value={rows.length} open={open} onToggle={() => setOpen((value) => !value)}>
+    /* The rule spans the card; the fold's own 16 px inset plus 4 px meets the card's 20 px text column at sm. */
+    <div className="-mx-4 border-t border-border pt-1 sm:-mx-5 sm:px-1" data-proto-new data-proto-details>
+      <MobileSheetFold id="details" title={translate(LANG, "kanban.details")} open={open} onToggle={() => setOpen((value) => !value)}>
         <dl className="flex flex-col gap-2 py-2 pl-3 pr-4">
-          {rows.map(([label, value]) => (
+          {rows.map(([label, value, code]) => (
             <div key={label} className="min-w-0">
               <dt className="text-label text-muted">{label}</dt>
-              <dd className="font-mono text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere]">{value}</dd>
+              <dd data-proto-code={code ? "" : undefined} className={`${code ? "font-mono" : ""} text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere]`}>{value}</dd>
             </div>
           ))}
         </dl>
@@ -197,12 +218,13 @@ function Variant1({ state }: { state: "pending" | "sent" }) {
       <Kicker state={state} />
       {state === "pending" ? (
         <>
-          <h1 className="text-title font-bold leading-snug text-primary" data-proto-new data-proto-heading>
-            {L(`Send ${REQUEST.file.filename} to ${REQUEST.chatTitle}?`, `Надіслати ${REQUEST.file.filename} у ${REQUEST.chatTitle}?`)}
+          <h1 className="text-title font-bold leading-snug text-balance text-primary" data-proto-new data-proto-heading>
+            {named(L(`Send ${REQUEST.file.filename} to ${REQUEST.chatTitle}?`, `Надіслати ${REQUEST.file.filename} у ${REQUEST.chatTitle}?`))}
           </h1>
-          <p className="text-body text-secondary" data-proto-new>
-            {L("Delegatus held the send over three warnings. Approval sends the file once.", "Delegatus зупинив надсилання через три застереження. Підтвердження надсилає файл один раз.")}
-          </p>
+          <div className="flex flex-col gap-1 text-body" data-proto-new>
+            <p className="text-primary text-balance" data-proto-real-file>{named(L(`It is a link to ${REAL_FILE}, and that is the file that would go.`, `Це посилання на ${REAL_FILE}, тож піде саме цей файл.`))}</p>
+            <p className="text-secondary">{L("Delegatus paused this send because of three warnings.", "Delegatus зупинив надсилання через три застереження.")}</p>
+          </div>
           <div className="flex flex-wrap gap-2" data-proto-new data-proto-actions>
             <button type="button" data-proto-send className={`${BUTTON} ${TONE.primary}`}>{L("Send once", "Надіслати один раз")}</button>
             <button type="button" data-proto-refuse className={`${BUTTON} ${TONE.secondary}`}>{L("Don't send", "Не надсилати")}</button>
@@ -217,12 +239,13 @@ function Variant1({ state }: { state: "pending" | "sent" }) {
         </>
       ) : (
         <>
-          <h1 className="text-title font-bold leading-snug text-primary" data-proto-new data-proto-heading>
+          <h1 className="text-title font-bold leading-snug text-balance text-primary" data-proto-new data-proto-heading>
             {L(`Sent to ${REQUEST.chatTitle}`, `Надіслано у ${REQUEST.chatTitle}`)}
           </h1>
-          <p className="text-body text-secondary" data-proto-new>
-            {L(`${REQUEST.file.filename} went out at ${clock(REQUEST.decidedAt)}. This confirmation is used up.`, `${REQUEST.file.filename} надіслано о ${clock(REQUEST.decidedAt)}. Це підтвердження використано.`)}
-          </p>
+          <div className="flex flex-col gap-1 text-body text-secondary" data-proto-new>
+            <p data-proto-real-file>{named(L(`At ${clock(REQUEST.decidedAt)} Delegatus sent ${REAL_FILE}, which ${REQUEST.file.filename} links to.`, `О ${clock(REQUEST.decidedAt)} надіслано ${REAL_FILE}, на який вказує ${REQUEST.file.filename}.`))}</p>
+            <p>{L("This confirmation is used up.", "Це підтвердження використано.")}</p>
+          </div>
         </>
       )}
       <Details />
@@ -238,15 +261,17 @@ function Variant2({ state }: { state: "pending" | "sent" }) {
       <Kicker state={state} />
       {state === "pending" ? (
         <>
-          <h1 className="flex items-start gap-2 text-title font-bold leading-snug text-primary" data-proto-new data-proto-heading>
+          <h1 className="flex items-start gap-2 text-title font-bold leading-snug text-balance text-primary" data-proto-new data-proto-heading>
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
             <span>{L("This file looks like it holds a private key", "Схоже, у цьому файлі приватний ключ")}</span>
           </h1>
-          <p className="text-body text-secondary" data-proto-new>
-            {L(`An agent wants to send ${REQUEST.file.filename} to ${REQUEST.chatTitle}. Delegatus held it because:`, `Агент хоче надіслати ${REQUEST.file.filename} у ${REQUEST.chatTitle}. Delegatus зупинив надсилання, бо:`)}
-          </p>
+          <div className="flex flex-col gap-1 text-body text-secondary" data-proto-new>
+            <p data-proto-real-file>{named(L(`An agent wants to send ${REQUEST.file.filename} to ${REQUEST.chatTitle}, and it is a link to ${REAL_FILE}.`, `Агент хоче надіслати ${REQUEST.file.filename} у ${REQUEST.chatTitle}, а це посилання на ${REAL_FILE}.`))}</p>
+            <p>{L("Two more reasons Delegatus paused it:", "Ще дві причини, чому Delegatus зупинив надсилання:")}</p>
+          </div>
+          {/* The heading already says the private key; the list holds the other two reasons. */}
           <ul className="flex flex-col gap-1.5 text-body text-primary" data-proto-new>
-            {WARNINGS.map((text) => (
+            {WARNINGS.slice(0, 2).map((text) => (
               <li key={text} className="flex items-start gap-2">
                 <span aria-hidden className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
                 <span>{text}</span>
@@ -260,13 +285,14 @@ function Variant2({ state }: { state: "pending" | "sent" }) {
         </>
       ) : (
         <>
-          <h1 className="flex items-start gap-2 text-title font-bold leading-snug text-primary" data-proto-new data-proto-heading>
+          <h1 className="flex items-start gap-2 text-title font-bold leading-snug text-balance text-primary" data-proto-new data-proto-heading>
             <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
             <span>{L(`Sent anyway to ${REQUEST.chatTitle}`, `Усе одно надіслано у ${REQUEST.chatTitle}`)}</span>
           </h1>
-          <p className="text-body text-secondary" data-proto-new>
-            {L(`You approved ${REQUEST.file.filename} at ${clock(REQUEST.decidedAt)} despite three warnings. This confirmation is used up.`, `Ви підтвердили ${REQUEST.file.filename} о ${clock(REQUEST.decidedAt)} попри три застереження. Це підтвердження використано.`)}
-          </p>
+          <div className="flex flex-col gap-1 text-body text-secondary" data-proto-new>
+            <p data-proto-real-file>{named(L(`At ${clock(REQUEST.decidedAt)} you approved ${REAL_FILE}, which ${REQUEST.file.filename} links to, despite three warnings.`, `О ${clock(REQUEST.decidedAt)} ви підтвердили ${REAL_FILE}, на який вказує ${REQUEST.file.filename}, попри три застереження.`))}</p>
+            <p>{L("This confirmation is used up.", "Це підтвердження використано.")}</p>
+          </div>
         </>
       )}
       <Details />
@@ -277,12 +303,14 @@ function Variant2({ state }: { state: "pending" | "sent" }) {
 /* ---------- variant 3: the feed's permission prompt, with the file as an attachment row ---------- */
 
 function Variant3({ state }: { state: "pending" | "sent" }) {
+  /* The attachment row names the requested file, then the file it links to, then size and destination. */
   const fileRow = (
-    <div className="flex items-center gap-2.5 rounded-control border border-border bg-card px-3 py-2" data-proto-new>
-      <FileJson className="h-5 w-5 shrink-0 text-secondary" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-body font-semibold text-primary">{REQUEST.file.filename}</p>
-        <p className="truncate text-ui text-muted">{L(`${size(REQUEST.file.bytes)} · to ${REQUEST.chatTitle}`, `${size(REQUEST.file.bytes)} · у ${REQUEST.chatTitle}`)}</p>
+    <div className="flex items-start gap-2.5 rounded-control border border-border bg-card px-3 py-2" data-proto-new>
+      <FileJson className="mt-0.5 h-5 w-5 shrink-0 text-secondary" aria-hidden />
+      <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+        <p className="text-body font-semibold text-primary">{REQUEST.file.filename}</p>
+        <p className="text-ui text-primary" data-proto-real-file>{named(L(`a link to ${REAL_FILE}`, `посилання на ${REAL_FILE}`))}</p>
+        <p className="text-ui text-muted">{state === "pending" ? L(`${size(REQUEST.file.bytes)} · to ${REQUEST.chatTitle}`, `${size(REQUEST.file.bytes)} · у ${REQUEST.chatTitle}`) : size(REQUEST.file.bytes)}</p>
       </div>
     </div>
   );
@@ -297,11 +325,11 @@ function Variant3({ state }: { state: "pending" | "sent" }) {
           </div>
           <div className="flex flex-col gap-3">
             {fileRow}
-            <h1 className="text-title font-semibold leading-snug text-primary" data-proto-heading>{L("Let the agent send it?", "Дозволити агентові надіслати його?")}</h1>
+            <h1 className="text-title font-semibold leading-snug text-balance text-primary" data-proto-heading>{L("Let the agent send it?", "Дозволити агентові надіслати його?")}</h1>
             <Sentences>{WARNINGS.map((text) => <p key={text}>{text}</p>)}</Sentences>
             <div className="flex gap-2" data-proto-actions>
-              <button type="button" data-proto-send className={`${PERMISSION} bg-success`}><Check className="h-4 w-4" aria-hidden />{translate(LANG, "attention.permissionAllowOnce")}</button>
-              <button type="button" data-proto-refuse className={`${PERMISSION} bg-danger`}><X className="h-4 w-4" aria-hidden />{translate(LANG, "attention.permissionDeny")}</button>
+              <button type="button" data-proto-send className={`${PERMISSION} bg-warning text-white`}><Check className="h-4 w-4" aria-hidden />{translate(LANG, "attention.permissionAllowOnce")}</button>
+              <button type="button" data-proto-refuse className={`${PERMISSION} bg-brand text-on-brand`}><X className="h-4 w-4" aria-hidden />{translate(LANG, "attention.permissionDeny")}</button>
             </div>
           </div>
         </section>
@@ -313,7 +341,10 @@ function Variant3({ state }: { state: "pending" | "sent" }) {
           </div>
           <div className="flex flex-col gap-3">
             {fileRow}
-            <h1 className="text-title font-semibold leading-snug text-primary" data-proto-heading>{L("Sent. This confirmation is used up.", "Надіслано. Це підтвердження використано.")}</h1>
+            <div className="flex flex-col gap-1">
+              <h1 className="text-title font-semibold leading-snug text-balance text-primary" data-proto-heading>{L(`Sent to ${REQUEST.chatTitle}`, `Надіслано у ${REQUEST.chatTitle}`)}</h1>
+              <p className="text-body text-secondary">{L("This confirmation is used up.", "Це підтвердження використано.")}</p>
+            </div>
           </div>
         </section>
       )}
@@ -330,13 +361,12 @@ function Page() {
   const Variant = VARIANTS[VARIANT];
   useEffect(() => { document.body.dataset.protoReady = "1"; }, []);
   return (
-    <main data-proto-page className="h-dvh overflow-y-auto bg-canvas px-4 pb-6 pt-4 text-primary sm:px-8 sm:pt-6">
+    <main data-proto-page className="h-dvh overflow-y-auto bg-canvas px-4 pb-6 pt-4 text-primary text-pretty sm:px-8 sm:pt-6">
       <div className="mx-auto max-w-xl">
         <p data-proto-caption className="text-ui font-semibold text-secondary">
           {L(`Variant ${VARIANT} · ${VARIANT_NAME[VARIANT]}`, `Варіант ${VARIANT} · ${VARIANT_NAME[VARIANT]}`)}
         </p>
-        {/* The band under the caption is where the status popover opens. */}
-        <article data-proto-card className="mt-16 flex flex-col gap-4 rounded-surface border border-border bg-card px-4 pb-1 pt-3 shadow-1 sm:px-5 sm:pt-4">
+        <article data-proto-card className="mt-3 flex flex-col gap-4 rounded-surface border border-border bg-card px-4 pb-1 pt-3 shadow-1 sm:px-5 sm:pt-4">
           <Variant state={STATE} />
         </article>
       </div>
