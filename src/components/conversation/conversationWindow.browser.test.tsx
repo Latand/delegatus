@@ -5809,3 +5809,175 @@ describe("owner confirmation of one Telegram file send", () => {
     fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
   }, 120_000);
 });
+
+/* docs/design/telegram-file-confirmation/prototype: three numbered variants of
+   the owner's file-send confirmation, redrawn on the product's components after
+   the visual audit ranked the page worst. The fixture lives beside the design
+   doc with a stylesheet of its own (the product's plus that directory as a
+   Tailwind source), which this block compiles and serves in place of
+   globals.css. Each frame is one variant, width, language, theme and state;
+   the opened states press the page's own controls. Frames and readings go to
+   .artifacts/telegram-file-confirmation-prototype/. Gated by
+   LLV_TELEGRAM_FILE_PROTOTYPE=1 beside the driver's own gate, so a plain driver
+   run skips it. */
+describe("telegram file confirmation prototype (docs/design/telegram-file-confirmation/prototype)", () => {
+  const prototypeTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1" && process.env.LLV_TELEGRAM_FILE_PROTOTYPE === "1");
+  prototypeTest("three variants at 390, 820 and 1440, en and uk, light and dark, pending, details, status and sent", async () => {
+    const out = path.resolve(".artifacts/telegram-file-confirmation-prototype");
+    /* LLV_PROTO_FRAMES=variant-2-390-uk,sent renders only the frames whose
+       name contains one of the terms (a fix round's re-look). */
+    const only = (process.env.LLV_PROTO_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    if (!only.length) fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const dir = "docs/design/telegram-file-confirmation/prototype";
+    const postcss = (await import("postcss")).default;
+    const tailwind = (await import("@tailwindcss/postcss")).default;
+    const css = await postcss([tailwind()]).process(fs.readFileSync(`${dir}/prototype.css`, "utf8"), { from: path.resolve(`${dir}/prototype.css`) });
+    const served = await serveEvidenceFixture(out, `${dir}/prototype.fixture.tsx`, {
+      "/style.css": () => new Response(css.css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    /* The words that tell the variants apart, per language and state. */
+    const headings = new Map<string, Set<string>>();
+    /* Latin words a Ukrainian frame may carry: names, code tokens and units; everything else is a fallback to English. */
+    const LATIN_ALLOWED = /^(?:Telegram|Delegatus|Orbit|Reports|HTML|SHA-256|handoff|codex|json)$/;
+    const frames: Array<{ variant: 1 | 2 | 3; width: number; lang: "uk" | "en"; theme: "light" | "dark"; state: "pending" | "details" | "status" | "sent" }> = [];
+    for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) for (const variant of [1, 2, 3] as const) {
+      for (const state of ["pending", "details", "status", "sent"] as const) frames.push({ variant, width, lang, theme, state });
+    }
+    for (const lang of ["uk", "en"] as const) for (const variant of [1, 2, 3] as const) frames.push({ variant, width: 820, lang, theme: "light", state: "pending" });
+    try {
+      for (const { variant, width, lang, theme, state } of frames) {
+        const name = `variant-${variant}-${width}-${lang}-${theme}-${state}`;
+        if (!wanted(name)) continue;
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?variant=${variant}&lang=${lang}&theme=${theme}&state=${state === "sent" ? "sent" : "pending"}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.waitForSelector("body[data-proto-ready]", { timeout: 180_000, state: "attached" });
+          await page.evaluate(() => document.fonts.ready);
+          /* Before any press or scroll: the decision and both of its answers are on the first screen. */
+          const firstScreen = await page.evaluate(() => {
+            const inside = (element: Element | null) => {
+              if (!element) return null;
+              const box = element.getBoundingClientRect();
+              return { top: Math.round(box.top), bottom: Math.round(box.bottom), whole: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth };
+            };
+            return {
+              scrollTop: document.querySelector("main")!.scrollTop,
+              heading: inside(document.querySelector("[data-proto-heading]")),
+              headingText: document.querySelector("[data-proto-heading]")?.textContent?.trim() ?? "",
+              send: inside(document.querySelector("[data-proto-send]")),
+              refuse: inside(document.querySelector("[data-proto-refuse]")),
+              caption: document.querySelector("[data-proto-caption]")?.textContent?.trim() ?? "",
+            };
+          });
+          if (firstScreen.scrollTop !== 0) failures.push(`${name}: opened scrolled`);
+          if (!firstScreen.heading?.whole) failures.push(`${name}: the heading is not on the first screen`);
+          if (state !== "sent") {
+            if (!firstScreen.send?.whole || !firstScreen.refuse?.whole) failures.push(`${name}: a decision button is off the first screen (${JSON.stringify([firstScreen.send, firstScreen.refuse])})`);
+          } else if (firstScreen.send || firstScreen.refuse) failures.push(`${name}: a used-up confirmation still offers a decision`);
+          if (!firstScreen.caption.includes(String(variant))) failures.push(`${name}: the caption does not number the variant`);
+          const key = `${lang}-${state === "sent" ? "sent" : "pending"}`;
+          if (!headings.has(key)) headings.set(key, new Set());
+          headings.get(key)!.add(firstScreen.headingText);
+          if (state === "details") {
+            await page.click("[data-proto-details] button", { timeout: 60_000 });
+            await page.waitForSelector("[data-mobile2-menu-body]", { timeout: 60_000 });
+            /* The whole fold in one frame: the window grows to the page instead of scrolling it. */
+            const height = await page.evaluate(() => document.querySelector("main")!.scrollHeight);
+            await page.setViewportSize({ width, height: Math.max(viewport.height, height) });
+          }
+          if (state === "status") {
+            await page.click("[data-proto-status]", { timeout: 60_000 });
+            await page.waitForSelector("[data-proto-popover]", { timeout: 60_000 });
+          }
+          await page.waitForTimeout(250);
+          const reading = await page.evaluate((coarse) => {
+            const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+            const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+            const clipped: string[] = [];
+            const offscreen: string[] = [];
+            const cut: string[] = [];
+            const small: string[] = [];
+            const covered: string[] = [];
+            const texts: string[] = [];
+            const popover = document.querySelector("[data-proto-popover]");
+            for (const element of document.querySelectorAll<HTMLElement>("[data-proto-card], [data-proto-caption]")) {
+              const clippers: DOMRect[] = [];
+              for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clippers.push(node.getBoundingClientRect());
+              }
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const text = node.textContent?.trim();
+                if (!text) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  texts.push(text);
+                  if (!within(rect, screen)) offscreen.push(text);
+                  else if (clippers.some((box) => !within(rect, box))) clipped.push(text);
+                  /* The popover stands beside the words, never on them. */
+                  if (popover && !popover.contains(node)) {
+                    for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+                      const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+                      if (hit && popover.contains(hit)) covered.push(text);
+                    }
+                  }
+                }
+              }
+              /* No line ends in an ellipsis. */
+              for (const node of element.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) cut.push(node.textContent?.trim() ?? "");
+              /* Every control is reachable: 44 px under a finger, 24 under a pointer. */
+              for (const control of element.querySelectorAll<HTMLElement>("button")) {
+                const box = control.getBoundingClientRect();
+                if (box.width === 0 || box.height === 0) continue;
+                if (Math.min(box.width, box.height) < (coarse ? 44 : 24)) small.push(`${(control.textContent ?? control.getAttribute("aria-label") ?? "").trim()} ${Math.round(box.width)}×${Math.round(box.height)}`);
+              }
+            }
+            const main = document.querySelector("main")!;
+            const card = document.querySelector("[data-proto-card]")!.getBoundingClientRect();
+            const popoverBox = popover?.getBoundingClientRect();
+            return {
+              texts, offscreen, clipped, cut, small, covered,
+              overflow: main.scrollWidth - main.clientWidth,
+              cardWidth: Math.round(card.width),
+              viewport: { width: innerWidth, height: innerHeight },
+              popover: popoverBox ? { top: Math.round(popoverBox.top), bottom: Math.round(popoverBox.bottom), left: Math.round(popoverBox.left), right: Math.round(popoverBox.right), text: popover!.textContent } : null,
+              detailsOpen: Boolean(document.querySelector("[data-mobile2-menu-body]")),
+              background: getComputedStyle(main).backgroundColor,
+            };
+          }, phone);
+          if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
+          if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
+          if (reading.cut.length) failures.push(`${name}: ellipsis: ${reading.cut.join(" | ")}`);
+          if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
+          if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
+          if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
+          if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
+          if (state === "details" && !reading.detailsOpen) failures.push(`${name}: the fold did not open`);
+          if (state === "pending" && reading.detailsOpen) failures.push(`${name}: the fold opened by itself`);
+          if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
+          /* A Ukrainian frame says everything in Ukrainian: a Latin word outside the names and code tokens is a silent English fallback. */
+          const latin = lang === "uk"
+            ? reading.texts.flatMap((text) => text.split(/[\s·,;:()?!«»"]+/)).filter((word) => /^[A-Za-z][A-Za-z-]*$/.test(word) && !LATIN_ALLOWED.test(word))
+            : [];
+          if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          await page.screenshot({ path: path.join(out, `${name}.png`) });
+          readings.push({ frame: name, variant, width, lang, theme, state, firstScreen, ...reading, texts: undefined, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    for (const [key, words] of headings) if (words.size < 3 && !only.length) failures.push(`${key}: the variants share a heading: ${[...words].join(" | ")}`);
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
