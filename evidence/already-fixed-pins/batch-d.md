@@ -11,11 +11,11 @@ First drafts came from Codex Cloud. All eight nonempty cloud diffs applied clean
 | #2254 | Dropped | 0 → 0 | Removing the actual severity-only finding guard leaves this draft green. The existing bare-severity test fails under the same revert. |
 | #2225 | Dropped | 0 → 0 | Reverting the contender callback to end immediately leaves the extracted helper test green; it never executes that callback. The helper extraction was removed. |
 | #2218 | Kept | 0 → 1 | Size/mtime-only catalog updates retain relationship and branch-group identities and topology. |
-| #2209 | Kept | 0 → 1 | Finish-chain CSS retains wrapping and its 4 px row gap. |
+| #2209 | Dropped | Invalid control | The draft checks finish-flag wrapping, which the issue explicitly says already works. Its assertions also hold for the pre-issue stylesheet at `8399068aa`. It never checks the reported ordinary narrow row or its container rules. |
 
-Each arrow gives the test exit on current code, then with the protected behavior removed. Every temporary source change ran in a disposable clone and was restored byte-for-byte; all eight revert controls were repeated during the refresh. The code diff contains tests and test-fixture changes.
+Each arrow gives the test exit on current code, then with the protected behavior removed. Every temporary source change ran in a disposable clone and was restored byte-for-byte. The earlier #2209 control removed an unrelated, pre-existing finish-flag rule; its failure does not establish coverage of the reported defect. The code diff contains tests and test-fixture changes.
 
-#2695 remains open: this pin exercises admission and explicit queue drains against an idle fake engine host. Scheduler activation, hourly wake cadence, the two historical silence windows, and withheld-wake visibility remain outside its evidence. The journal pin covers the warm-start SQL contract; the dashboard pin covers model reuse; the finish-chain pin covers stylesheet declarations.
+#2695 remains open: this pin exercises admission and explicit queue drains against an idle fake engine host. Scheduler activation, hourly wake cadence, the two historical silence windows, and withheld-wake visibility remain outside its evidence. The journal pin covers the warm-start SQL contract; the dashboard pin covers model reuse. #2209 is dropped without an already-fixed claim for ordinary narrow rows.
 
 Kept references for the pull request body:
 
@@ -23,13 +23,12 @@ Kept references for the pull request body:
 - Refs #2459 — already fixed on main, pinned (warm receipt migration and index retention).
 - Refs #2424 — already fixed on main, pinned (accepted-head privacy ordering and refusal).
 - Refs #2218 — already fixed on main, pinned (metadata-only model reuse).
-- Refs #2209 — already fixed on main, pinned (finish-chain wrapping declarations).
 
 ## Refresh and paired verification (2026-10-26)
 
 Captured main: `0728b67c411f29e65b446cf6f4fd591a0c0bb819`. The unfinished older merge was preserved as a private snapshot and recreated against this revision. The only conflict was the native-compaction fixture's overlapping timeout repair: main already contains the broader repair, so the resolved file matches main exactly. There were no semantic conflicts. A final fetch confirmed main had not moved.
 
-The final diff against main contains only five pin tests, publication-test fixture support, and this report. No workflow changes were authored. The five retained files are also exactly the hook's touched-test selection. Their identical assertions were run against main using an overlay containing only those test files and their fixture support; production source on main was unchanged. Both sides passed 142 tests, with 10 skips and no failures. The branch typecheck passed. The tested source snapshot was exported from merged tree `486a8fe5e73edd9298ccd0237a964aa48c0bf177`; subsequent edits change this report only.
+Before the #2209 review correction below, the refresh diff contained five pin tests, publication-test fixture support, and this report. No workflow changes were authored. Those five files were exactly the hook's touched-test selection. Their identical assertions were run against main using an overlay containing only those test files and their fixture support; production source on main was unchanged. Both sides passed 142 tests, with 10 skips and no failures. The branch typecheck passed. That superseded source snapshot was exported from merged tree `486a8fe5e73edd9298ccd0237a964aa48c0bf177`. The final diff retains four pins.
 
 Every heavy command ran locally under the stage-provided `gate-slot.sh`, sequentially. Each child used `checkEnvironment` then `isolatedEnvironment`, with fresh HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, TMPDIR, LLV_STATE_DIR and engine roots; the Viewer control URL was a closed loopback port. Tests used `bun run test` (60-second default) and the repository preload. Each file ran under `setsid --wait` with closed stdin. The first batch completed all 26 commands; its only unexpected exits were the two native-launcher selection errors below. The corrected native batch adds two whole-file observations.
 
@@ -56,7 +55,7 @@ The `current` and `revert` draft rows reintroduce dropped drafts only in scratch
 | revert-2459 | `bun run test src/runtime-host/journalStartup.test.ts --test-name-pattern 'warm startup skips'` | 1 |
 | revert-2424 | `bun run test src/lib/pipelines/engine.settlement.test.ts --test-name-pattern '#2424'` | 1 |
 | revert-2218 | `bun run test src/components/projectDashboardDerivation.test.ts --test-name-pattern '#2218'` | 1 |
-| revert-2209 | `bun run test src/components/pipelines/pipelineBlockModel.test.ts --test-name-pattern '#2209'` | 1 |
+| rejected-control-2209 | `bun run test src/components/pipelines/pipelineBlockModel.test.ts --test-name-pattern '#2209'` | 1 (unrelated finish-flag rule removed; invalid issue evidence) |
 | draft-current-2516 | `bun run test src/lib/links/self.test.ts --test-name-pattern 'address check accepts the public Host'` | 0 |
 | draft-revert-2516 | `bun run test src/lib/links/self.test.ts --test-name-pattern 'address check accepts the public Host'` | 0 |
 | existing-revert-2516 | `bun run test src/lib/links/self.test.ts --test-name-pattern 'port of its own'` | 1 |
@@ -68,7 +67,7 @@ The `current` and `revert` draft rows reintroduce dropped drafts only in scratch
 | head-native-direct | `NATIVE_CODEX_QUEUE_TEST_BINARY="$CODEX_NATIVE" bun run test src/lib/runtime/nativeQueueCompaction.integration.test.ts` | 0 |
 | base-native-direct | `NATIVE_CODEX_QUEUE_TEST_BINARY="$CODEX_NATIVE" bun run test src/lib/runtime/nativeQueueCompaction.integration.test.ts` | 0 |
 
-`CODEX_LAUNCHER` and `CODEX_NATIVE` denote the cached package launcher and direct native executable for Codex 0.162.1. A revert exit of 1 is the expected named assertion failure, not an infrastructure failure. The five retained revert failures each name their added test; no temporary source mutation remains.
+`CODEX_LAUNCHER` and `CODEX_NATIVE` denote the cached package launcher and direct native executable for Codex 0.162.1. The four retained revert exits of 1 name their added assertions. The rejected #2209 control provides no issue-specific regression evidence. No temporary source mutation remains.
 
 ## Intake and administrative commands
 
@@ -105,4 +104,24 @@ All eight cloud diffs were nonempty. These intake results were retained from the
 
 The superseded-tree admission was canceled by its recorded process identity after the merge target changed; its queued wrapper exited and left no test verdict. No push or issue comment was made.
 
-The completion report records the hook-enabled merge commit, its hook verdicts, and the final ancestor/clean-tree checks.
+The completion report records the hook verdicts and final ancestor/clean-tree checks.
+
+## Review correction: drop #2209 (2026-10-26)
+
+The issue reports ordinary chain rows on narrow desktop cards and explicitly identifies finish-flag wrapping as existing behavior. The Cloud draft asserts only the finish-flag selector. The pre-issue stylesheet at `8399068aa` already contains both declarations it requires, so deleting that selector is an invalid revert control for this issue.
+
+Removed the eight-line draft from `src/components/pipelines/pipelineBlockModel.test.ts`; the file now matches captured main `0728b67c411f29e65b446cf6f4fd591a0c0bb819` exactly. Four pins remain: #2695, #2459, #2424 and #2218. Four drafts are dropped: #2516, #2254, #2225 and #2209. The drop makes no claim that the ordinary-row defect is fixed.
+
+Fresh verification used a detached clone of starting revision `c7e8acda346f47989412aabf04a59769d57aafd8` with the draft removed. Commands ran sequentially through the stage-provided local `gate-slot.sh`, using `checkEnvironment` then `isolatedEnvironment` for each child, `setsid --wait`, closed stdin and a closed Viewer control URL. The saved draft and pre-issue CSS were restored only for the rejected-draft control, then replaced byte-for-byte by the final files. All tested source and fixture bytes match the assigned checkout; subsequent edits affect this report only.
+
+| Check | Command inside the admitted wrapper | Result |
+| --- | --- | --- |
+| Rejected draft with CSS from `8399068aa` | `bun run test src/components/pipelines/pipelineBlockModel.test.ts --test-name-pattern '#2209'` | Exit 0, 1 pass: confirms the draft accepts the pre-issue stylesheet. |
+| Final model file | `bun run test src/components/pipelines/pipelineBlockModel.test.ts` | Exit 0, 9 pass. |
+| Retained #2695 | `bun run test src/lib/monitor/seatTickController.idleDelivery.test.ts` | Exit 0, 1 pass. |
+| Retained #2459 | `bun run test src/runtime-host/journalStartup.test.ts` | Exit 0, 12 pass. |
+| Retained #2424 | `bun run test src/lib/pipelines/engine.settlement.test.ts` | Exit 0, 102 pass, 10 existing skips. |
+| Retained #2218 | `bun run test src/components/projectDashboardDerivation.test.ts` | Exit 0, 17 pass. |
+| Types | `bun x tsc --noEmit --incremental false` | Exit 0. |
+
+All seven commands completed with exit 0. The five final test files total 141 passes, 10 existing skips and no failures; the rejected-draft control adds one separate pass. A final fetch confirmed captured main was unchanged and remained an ancestor of the branch. Whitespace checks passed. The commit uses the launch-provided hooks, with their privacy and lint verdicts recorded in the completion report.

@@ -87,14 +87,6 @@ test("one tone map: STAGE_TONE, the mark's shape and the stylesheet agree for ev
   expect(board).not.toMatch(/\.kb \.tone-(active|review|ok|bad|needs) \.pdot \{ background: var\(--color-/);
 });
 
-test("a chain carrying the finish flag wraps before its pills can be squeezed under the PR chip (#2209)", () => {
-  const css = readFileSync(new URL("./pipelineBlock.css", import.meta.url), "utf8");
-  const rule = css.match(/\.pblock \.pb-chain\.has-finish\s*\{([^}]*)\}/)?.[1];
-  expect(rule).toBeDefined();
-  expect(rule).toMatch(/flex-wrap:\s*wrap\s*;/);
-  expect(rule).toMatch(/row-gap:\s*4px\s*;/);
-});
-
 function parked(overrides: Partial<Pipeline> = {}): Pipeline {
   return {
     id: "p", task: "Stop repeated downloads", state: "needs_decision",
