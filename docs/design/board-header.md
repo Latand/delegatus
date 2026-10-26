@@ -186,3 +186,44 @@ The operator rejected every redesign of the old Tasks panel and asked for it to 
 - a task link from another project still switches the dashboard and frames the card.
 
 The stored `taskPanelOpen` flag stays in the board schema so stored boards and tabs of an older build keep loading; nothing reads it. The phone never mounted this panel and keeps its own task sheet.
+
+## A 640–700 px window (#1698, #1954; 2026-10-23)
+
+At a 640 px window the project rail leaves the bar 392 px. Measured before this
+change in the kanban driver (`kanbanBoard.browser.test.tsx`, «the board header
+fits a narrow 640–700 px window»): with every step taken the row still needed
+406 px, the page scrolled 14 px sideways, the needs-you chip's count lay past
+the window's edge, and the search, at its 64 px floor, showed «Fi».
+
+Two steps now come between `tight` and `find`, in this order:
+
+| Step | The row gives up | Where it goes |
+|---|---|---|
+| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» and with a panel icon, where the section keeps the bot (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor standing where ⋯ stands, as tall and wide as ⋯, so the list opens under the row's controls and ends at ⋯'s right edge. Opened from ⋯ it takes the focus (its ✕ first, then its agents by Tab), and Escape or ✕ hands the focus back to ⋯. A list open while the window narrows past this step stays open, and the focus its folded icon held moves to its ✕. |
+| `create` | `+` | two rows of ⋯ at its top, the `+` menu's own: New task, New agent |
+
+`tight` also drops the spacer, whose width is zero by then, and with it two
+gaps. At `find` the field keeps its icon and loses its placeholder rather than
+showing a cut word; its name and tooltip say «Find a task». At 640 and 700 px
+the row then holds the name, «● N», the search with its whole placeholder and
+the filter, ⋯ and the needs-you chip.
+
+The status line's words (a reconnect, the failure line, «updating…») count as
+whole texts beside the name (`data-bar-whole`): a step is taken before they are
+cut, and past the last step they end with an ellipsis, the line in the tooltip.
+
+The bar of a leaf without a board (the loading skeleton, the empty project)
+keeps its width policy: under 1700 px it takes `accounts` and `labels` whatever
+room it has, so a normal desktop window draws it as before. A shorter row then
+gives way by the board's rule (`useBarFit`) through the further steps; it has no
+`+`. Its trail stays at the row's right end at every step (at `tight` the trail
+takes `margin-left: auto`, since the spacer is gone and the find slot is no
+longer elastic at its last step), and once the word is «Search» the find slot
+may shrink to 96 px before the chip, the gaps or the panel group give anything up. Its find slot shows «Search your messages», «Search» after `labels`, the
+icon alone at `find`.
+
+That bar also stopped saying «N branches running · N trees» (#1954): the desktop
+has one view, so that line only ever showed for a moment before the board drew,
+with another count in other words than the board's «● N». It now says it is
+loading until the board draws, and «nothing is running right now» on a project
+with nothing in it. The four keys it used are deleted.

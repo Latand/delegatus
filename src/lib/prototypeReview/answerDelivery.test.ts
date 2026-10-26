@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import fs from "node:fs";
 import path from "node:path";
 import * as settlement from "@/lib/runtime/sendSettlement";
@@ -509,7 +510,7 @@ test.each(["seat", "task"])("explicit %s resend returns an uncertainty explanati
   const p = ports();
   p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
   let sends = 0; p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
-  const req = new NextRequest("http://localhost/api/projects/decisions", { method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify({ project: "project-a", reviewId: ID, retry: true }) });
+  const req = new NextRequest("http://localhost/api/projects/decisions", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "content-type": "application/json" }, body: JSON.stringify({ project: "project-a", reviewId: ID, retry: true }) });
   const response = kind === "seat" ? await decisionsPOST(req, p.world, p.delivery) : await reviewPOST(req, "task-a", p.world, p.delivery, p.now);
   expect(response.status).toBe(409);
   expect((await response.json()).error).toContain("ризик дублювання");
@@ -533,7 +534,7 @@ test.each(["sent", "pending", "failed", "no-orchestrator"] as const)("explicit r
   if (outcome === "no-orchestrator") mutateSeatRound(ID, r => { r.decision!.delivery.conversationId = null; });
   p.delivery.recover = async () => null;
   let sends = 0; p.delivery.send = async saved => { sends++; expect(saved.delivery.conversationId).toBe("conversation_current"); return { state: outcome === "no-orchestrator" ? "failed" : outcome, operationId: "operation-current" }; };
-  const req = () => new NextRequest("http://localhost/api/projects/decisions", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ project: "project-a", reviewId: ID, retry: true }) });
+  const req = () => new NextRequest("http://localhost/api/projects/decisions", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost" }, body: JSON.stringify({ project: "project-a", reviewId: ID, retry: true }) });
   const response = await decisionsPOST(req(), p.world, p.delivery);
   expect(response.status).toBe(outcome === "failed" ? 503 : outcome === "no-orchestrator" ? 409 : 200);
   expect(sends).toBe(outcome === "no-orchestrator" ? 0 : 1);

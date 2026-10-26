@@ -229,24 +229,45 @@ async function mergeMethod(repository: string, ports: AutoMergePorts): Promise<P
   return method;
 }
 
-/** The base branch's required contexts, read once per repository and base.
-    An unprotected branch answers none. */
+/** Required contexts from classic protection and active branch rulesets.
+    Only successful, validated reads may populate the cache. */
 async function requiredContexts(repository: string, base: string, ports: AutoMergePorts): Promise<string[]> {
   const facts = repositoryFacts().get(repository);
   const cached = facts?.required.get(base);
   if (cached && ports.now() - cached.readAt < REPOSITORY_FACTS_TTL_MS) return cached.contexts;
-  const raw = await ports.run(["api", `repos/${repository}/branches/${base}`, "--jq", ".protection.required_status_checks.contexts"]);
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw.trim() || "null");
-  } catch {
-    parsed = null;
+  const branch = encodeURIComponent(base);
+  const raw = await ports.run(["api", `repos/${repository}/branches/${branch}`, "--jq",
+    "[.protection.required_status_checks | (.contexts[]?, .checks[]?.context)]"]);
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string" || !item)) {
+    throw new Error("gh returned invalid classic required checks");
   }
-  const contexts = Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  // This endpoint returns active rules, including inherited rulesets; do not
+  // enumerate repository rulesets (which would miss inherited requirements).
+  // Keep each page intact (including an empty array) on gh 2.45, which has
+  // --paginate and --jq but no --slurp. Validate every page before caching.
+  const rulesRaw = await ports.run(["api", `repos/${repository}/rules/branches/${branch}`, "--paginate", "--jq", "@json"]);
+  const pages = rulesRaw.split("\n").filter((line) => line.trim()).map((line): unknown => JSON.parse(line));
+  if (pages.length === 0) throw new Error("gh returned invalid branch rules");
+  const contexts = new Set<string>(parsed);
+  for (const page of pages) {
+    if (!Array.isArray(page)) throw new Error("gh returned invalid branch rules page");
+    for (const rule of page) {
+      if (!rule || typeof rule !== "object" || typeof rule.type !== "string") throw new Error("gh returned invalid branch rule");
+      if (rule.type !== "required_status_checks") continue;
+      const checks: unknown = rule.parameters?.required_status_checks;
+      if (!Array.isArray(checks)) throw new Error("gh returned invalid ruleset required checks");
+      for (const check of checks) {
+        if (!check || typeof check.context !== "string" || !check.context) throw new Error("gh returned invalid ruleset context");
+        contexts.add(check.context);
+      }
+    }
+  }
+  const names = [...contexts];
   const entry = facts ?? { method: "squash" as const, required: new Map(), readAt: -Infinity };
-  entry.required.set(base, { contexts, readAt: ports.now() });
+  entry.required.set(base, { contexts: names, readAt: ports.now() });
   repositoryFacts().set(repository, entry);
-  return contexts;
+  return names;
 }
 
 export function resetAutoMergeForTests(): void {
@@ -673,7 +694,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
   const current = ports.loadPipelines().find((pipeline) => pipeline.id === read.id);
   if (!current?.merge) return;
   await commit(ports, current, (live) => {
-    if (after?.state === "MERGED" || (!failure && !after)) {
+    if (after?.state === "MERGED") {
       live.state = "merged";
       live.by = "auto-merge";
       live.mergedHead = after?.headRefOid ?? view!.headRefOid;

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -69,7 +70,7 @@ test("pipeline collection route mirrors flow GET and POST shapes", async () => {
   expect(await (await GET(collectionRequest())).json()).toEqual({ pipelines: [] });
   const request = new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({
       task: "ship",
       src: creatorPath,
@@ -127,7 +128,7 @@ test("pipeline POST without baseRef answers at once with the base unresolved (#1
   const unregister = registerPipelineTick(async () => {});
   const request = new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({
       task: "answer before the fetch",
       src: creatorPath,
@@ -153,7 +154,7 @@ test("pipeline POST returns a persisted draft id for autoStart false", async () 
   const unregister = registerPipelineTick(async () => { ticks += 1; });
   const request = new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({
       task: "review before start",
       src: creatorPath,
@@ -179,6 +180,7 @@ test("same-origin desktop and mobile global actions create an operator draft wit
   const request = new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
     headers: {
+      cookie: `llv_operator=${soloBrowserSession()}`,
       host: "127.0.0.1",
       origin: "http://127.0.0.1",
       "sec-fetch-site": "same-origin",
@@ -205,20 +207,20 @@ test("same-origin desktop and mobile global actions create an operator draft wit
 });
 
 test("pipeline POST rejects malformed JSON", async () => {
-  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", { method: "POST", headers: { host: "127.0.0.1" }, body: "{" }));
+  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" }, body: "{" }));
   expect(response.status).toBe(400);
 });
 
 test("pipeline POST rejects non-object JSON", async () => {
   for (const body of ["null", "[]"]) {
-    const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", { method: "POST", headers: { host: "127.0.0.1" }, body }));
+    const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" }, body }));
     expect(response.status).toBe(400);
   }
 });
 
 test("pipeline POST refuses the state directory with its safety reason", async () => {
   const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
-    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ task: "blocked", src: creatorPath, repoDir: process.env.LLV_STATE_DIR, autoStart: false, stages: [] }),
   }));
   expect(response.status).toBe(403);
@@ -232,7 +234,7 @@ test("pipeline POST creates a draft in a plain folder and returns its initializa
   const folder = fs.mkdtempSync(path.join(sandbox, "board-project-"));
   fs.writeFileSync(path.join(folder, "readme.txt"), "Project\n");
   const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
-    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ task: "New project", src: creatorPath, repoDir: folder, autoStart: false, stages: [] }),
   }));
   expect(response.status).toBe(201);
@@ -241,4 +243,19 @@ test("pipeline POST creates a draft in a plain folder and returns its initializa
   expect(body.repositoryInitialization.defaultIgnorePatterns).toContain(".env*");
   expect(body.pipeline.state).toBe("draft");
   expect(body.pipeline.delivery.target.remote).toBe("");
+});
+
+
+test("a cookie-free pipeline create cannot admit private home roots", async () => {
+  const { loadPipelines } = await import("@/lib/pipelines/store");
+  const before = loadPipelines().map(pipeline => pipeline.id);
+  const privateRoot = path.join(sandbox, ".config");
+  fs.mkdirSync(privateRoot, { recursive: true });
+  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ task: "Untrusted root", src: creatorPath, repoDir: privateRoot, autoStart: false, stages: [] }),
+  }));
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ error: expect.stringContaining("verified session") });
+  expect(loadPipelines().map(pipeline => pipeline.id)).toEqual(before);
 });

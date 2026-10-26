@@ -1,3 +1,4 @@
+import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
 import type { QuotaEngine } from "./quotaPolicy";
@@ -233,13 +234,6 @@ export interface ProviderReceipt {
   host: GenerationHostEvidence;
 }
 
-function sameProcessIdentity(
-  left: { pid: number; startIdentity: string | null },
-  right: { pid: number; startIdentity: string | null },
-): boolean {
-  return left.pid === right.pid && left.startIdentity === right.startIdentity;
-}
-
 export function sameGenerationHostEvidence(left: GenerationHostEvidence, right: GenerationHostEvidence): boolean {
   if (left.kind !== right.kind || left.identity !== right.identity || left.epoch !== right.epoch) return false;
   const leftTmux = left.tmuxHost;
@@ -247,11 +241,11 @@ export function sameGenerationHostEvidence(left: GenerationHostEvidence, right: 
   if (!leftTmux || !rightTmux) return leftTmux === rightTmux;
   return leftTmux.kind === rightTmux.kind
     && leftTmux.endpoint === rightTmux.endpoint
-    && sameProcessIdentity(leftTmux.server, rightTmux.server)
+    && sameRecordedProcessIdentity(leftTmux.server, { pid: rightTmux.server.pid, startIdentity: rightTmux.server.startIdentity })
     && leftTmux.paneId === rightTmux.paneId
-    && sameProcessIdentity(leftTmux.panePid, rightTmux.panePid)
+    && sameRecordedProcessIdentity(leftTmux.panePid, { pid: rightTmux.panePid.pid, startIdentity: rightTmux.panePid.startIdentity })
     && leftTmux.windowName === rightTmux.windowName
-    && sameProcessIdentity(leftTmux.agent, rightTmux.agent)
+    && sameRecordedProcessIdentity(leftTmux.agent, { pid: rightTmux.agent.pid, startIdentity: rightTmux.agent.startIdentity })
     && leftTmux.argv.length === rightTmux.argv.length
     && leftTmux.argv.every((argument, index) => argument === rightTmux.argv[index]);
 }

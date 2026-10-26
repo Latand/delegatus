@@ -115,3 +115,39 @@ test("a child emitting the service's real MCP timing format passes", async () =>
   expect(stderr).toContain("serviceTotalMs=2100");
   assertStateChildSuccess(code, stderr);
 });
+
+
+test("complete registry wait diagnostics from the real recorder pass after a successful child exit", async () => {
+  const child = Bun.spawn([process.execPath, "--eval", `
+    const { recordBlockingWait, BLOCKING_WAIT_LOG_MS } = await import(${JSON.stringify(path.join(import.meta.dir, "../blockingWaits.ts"))});
+    for (const site of ["registry-lock", "registry-revision-retry", "registry-lock-async"]) {
+      recordBlockingWait({ site, durationMs: BLOCKING_WAIT_LOG_MS,
+        synchronous: site !== "registry-lock-async", subject: "registry-fixture" });
+    }
+    process.stdout.write(JSON.stringify({ completedWrites: 1 }));
+  `], { stdout: "pipe", stderr: "pipe" });
+  const [code, output, errors] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  expect(errors.split("\n").filter(Boolean)).toHaveLength(3);
+  assertStateChildSuccess(code, errors);
+  expect(JSON.parse(output)).toEqual({ completedWrites: 1 });
+});
+
+test("registry timing cannot conceal refusal, malformed records, unexpected output or failed exits", () => {
+  const sample = { site: "registry-lock", callSite: "src/lib/agent/registry.sqliteChild.ts:1:1",
+    durationMs: 250, synchronous: true, role: "unowned", subject: "registry-fixture",
+    label: null, operationId: null, at: "2026-01-01T00:00:00.000Z" };
+  const line = (value: unknown) => `[blocking-wait] ${JSON.stringify(value)}\n`;
+  assertStateChildSuccess(0, line(sample));
+  for (const value of [
+    { ...sample, refused: true }, { ...sample, deferred: true }, { ...sample, error: "failed" },
+    { ...sample, site: "snapshot-collect" }, { ...sample, durationMs: 249 },
+    { ...sample, durationMs: -1 }, { ...sample, durationMs: "250" },
+    { ...sample, callSite: "" }, { ...sample, callSite: null },
+    { ...sample, at: "invalid" }, { ...sample, synchronous: "true" },
+  ]) expect(() => assertStateChildSuccess(0, line(value))).toThrow();
+  expect(() => assertStateChildSuccess(0, line(sample) + "unexpected warning\n")).toThrow();
+  expect(() => assertStateChildSuccess(1, line(sample))).toThrow();
+  expect(() => assertStateChildSuccess(null, line(sample))).toThrow();
+});

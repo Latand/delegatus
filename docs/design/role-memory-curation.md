@@ -9,6 +9,17 @@ outside the repository under
 `$HOME/.local/share/delegatus-evidence/role-memory-quality/`. No rule text
 from the live store appears here; the examples are invented.
 
+**Correction amendment, 2026-10-22.** Rules with `operatorCorrection:true`
+are identifiable in curator reads. The pass agenda lists the count of pending
+corrections per scope and puts those scopes first; scope pages put pending
+correction entries first before pagination. Review them before ordinary lessons
+and decide integrate (keep/order or merge), rewrite, or drop (archive with a
+reason). Existing scope history records the decision; editorial operations
+retain their notes and Undo. Clean roles can submit explicit correction lessons
+without receiving automatic memory. The curator can use `leave_lesson` with
+`correction:true` for a correction of its own work. These exceptions supersede
+the original blanket write refusals below.
+
 **Timer amendment, 2026-10-17.** The current timer contract is documented in
 [Role memory curator timer](../verification/role-memory-curator.md). Each project
 has an independent `curation` switch and an interval of 1–168 hours (default 6)

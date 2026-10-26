@@ -285,6 +285,8 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     unreachableSince: isoOrNull(raw.unreachableSince),
     unreachableBacklogSince: isoOrNull(raw.unreachableBacklogSince),
     lastCheckAt: isoOrNull(raw.lastCheckAt),
+    localFinishedLaneCursor: typeof raw.localFinishedLaneCursor === "string" && raw.localFinishedLaneCursor.length <= 200
+      ? raw.localFinishedLaneCursor : null,
     lastWakeAt: isoOrNull(raw.lastWakeAt),
     lastWakeReasons: (Array.isArray(raw.lastWakeReasons) ? raw.lastWakeReasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
@@ -407,6 +409,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     diskPressureShown: row.diskPressureShown,
     ...(row.memoryProblemCreditOwed ? { memoryProblemCreditOwed: row.memoryProblemCreditOwed } : {}),
     eventsThrough: row.eventsThrough,
+    localFinishedLaneCursor: row.localFinishedLaneCursor ?? null,
     lastWakeAt: row.lastWakeAt,
     ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
     ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),

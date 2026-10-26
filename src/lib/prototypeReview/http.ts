@@ -168,9 +168,10 @@ export async function reviewGET(request: NextRequest,taskId: string,world: Proto
 }
 export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery,now: () => number = Date.now): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
+  // A team install asks a missing or lapsed member session to sign in first.
+  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   const operator = directOperatorActivityAuthority(request);
   if (!operator.ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return NextResponse.json({ error: "only the operator may decide prototypes" },{ status: 403 });
-  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const caller = world.caller(request);
     if (caller.conversationId) throw new PrototypeError("only the operator may decide prototypes",403);
@@ -214,9 +215,10 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
     as the review window. The answer is the column's next read. */
 export async function decisionsPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
+  // A team install asks a missing or lapsed member session to sign in first.
+  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   const operator = directOperatorActivityAuthority(request);
   if (!operator.ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return NextResponse.json({ error: "only the operator may decide prototypes" },{ status: 403 });
-  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const caller = world.caller(request);
     if (caller.conversationId) throw new PrototypeError("only the operator may decide prototypes",403);

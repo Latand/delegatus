@@ -1,3 +1,4 @@
+import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId } from "@/lib/projects/settings";
@@ -315,6 +316,8 @@ export interface PipelinePorts {
     "prompt": string;
     parentPath: string | null;
     clientAttemptId: string;
+    /** Per-call monotonic cutoff derived from the persisted controller wait. */
+    spawnAdmissionDeadline?: number;
     membership: DurableMembershipInput;
     /** Pipeline creator (#393): the container acts for the conversation that
         created it, so reviewer-isolation and depth admission key on this —
@@ -422,7 +425,7 @@ export interface PipelinePorts {
   conversationHostProcess?(conversationId: string): Promise<{ state: "alive" | "gone" | "unknown"; pid: number | null }>;
   /** How the conversation's recorded host ended, in one clause, when the host
       recorded it (#2790). Null for a running host and for one that recorded none. */
-  conversationHostEnded?(conversationId: string): string | null;
+  conversationHostEnded?(conversationId: string, launchId?: string | null): string | null;
   /** The newest turn a Viewer release or restart cut for this conversation, as
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
@@ -733,6 +736,12 @@ async function spawnPipelineAgent(
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
   preparePrompt?: () => Promise<string>,
 ): Promise<PipelineStageSpawn> {
+  // Account/parent lookups and registry admission spend the same cutoff.
+  const deadline = input.spawnAdmissionDeadline ?? Infinity;
+  const assertAdmissionCurrent = () => {
+    if (performance.now() >= deadline) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+  };
+  assertAdmissionCurrent();
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
   // Filter after the reservation and Git setup, immediately before dispatch.
@@ -742,13 +751,14 @@ async function spawnPipelineAgent(
      outside it is refused, and an allowed set with no capacity left is
      REPORTED. Neither case falls back onto an account the project forbids;
      the throw parks the stage with the reason on the record. */
-  const desiredTier = input.role.serviceTier;
+  const automaticTierPreference = input.role.serviceTierSource === "role-default" ? input.role.preferredServiceTier : undefined;
+  const desiredTier = input.role.serviceTier ?? automaticTierPreference;
   let serviceTier = desiredTier ?? null;
   const accounts = input.role.engine === "codex" ? listCodexAccounts() : [];
   const pool = allowedAccountIdsForProject(input.project, input.role.engine);
   const candidates = accounts.filter(account => (pool === null || pool.includes(account.id))
     && (!input.requestedAccountId || account.id === input.requestedAccountId));
-  const offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
+  let offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
   const required = input.role.serviceTierSource !== "role-default";
   if (offers && !offers.offering.length) {
     if (required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, input.role.model!, desiredTier!, input.requestedAccountId));
@@ -760,10 +770,32 @@ async function spawnPipelineAgent(
     ...((input.unavailableAccountIds?.length || (serviceTier && offers?.lacking.length))
       ? { unavailableIds: [...input.unavailableAccountIds ?? [], ...(serviceTier ? offers?.lacking ?? [] : [])] } : {}),
   };
-  let resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, request);
-  if (resolution.kind !== "available" && serviceTier && !required) {
-    serviceTier = null;
-    resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, { ...request, unavailableIds: input.unavailableAccountIds ?? [] });
+  let resolution;
+  if (automaticTierPreference && input.role.engine === "codex" && input.role.model) {
+    const preference = automaticTierPreference;
+    const ordered = preference === "ultrafast" ? ["ultrafast", "priority"] : [preference];
+    const preferredOffers = ordered.map(tier => ({ tier, offers: tierOffers(candidates, input.role.model!, tier) }));
+    const hasPriority = preferredOffers.some(({ tier, offers }) => tier === "priority" && offers.offering.length > 0);
+    const attempts = preferredOffers.filter(({ offers }) => offers.offering.length > 0);
+    if (!hasPriority) attempts.push({ tier: "standard", offers: tierOffers(candidates, input.role.model, "standard") });
+    resolution = { kind: "exhausted" as const, resetsAt: null, allowedAccountIds: candidates.map(account => account.id) };
+    for (const choice of attempts) {
+      serviceTier = choice.tier;
+      offers = choice.offers;
+      const attemptRequest = { ...request,
+        unavailableIds: [...input.unavailableAccountIds ?? [], ...choice.offers.lacking],
+      };
+      resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, attemptRequest);
+      if (resolution.kind === "available") break;
+      if (choice.tier === "ultrafast" && (resolution.kind === "exhausted" || resolution.kind === "unavailable")) continue;
+      break;
+    }
+  } else {
+    resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, request);
+    if (resolution.kind !== "available" && serviceTier && !required) {
+      serviceTier = null;
+      resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, { ...request, unavailableIds: input.unavailableAccountIds ?? [] });
+    }
   }
   if (resolution.kind !== "available") {
     throw new ProjectAccountRefusedError(resolution, input.role.engine, input.project,
@@ -855,9 +887,10 @@ async function spawnPipelineAgent(
       supersedes,
       supersedesReason: "stage-retry",
     }, () => {
+      assertAdmissionCurrent();
       // A writer retry must recheck the drain before creating its receipt.
       if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
-    });
+    }, { deadline });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
   try {
     await onReserved({
@@ -914,6 +947,7 @@ async function spawnPipelineAgent(
         accountId: begun.receipt.accountId ?? account.accountId });
       return filtered;
     });
+    assertAdmissionCurrent();
   } catch (error) {
     await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage Git guard preparation or activation recheck failed before dispatch");
     throw error;
@@ -930,6 +964,7 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
+      authorize: assertAdmissionCurrent,
     });
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
@@ -1521,6 +1556,7 @@ async function stopStageHostByRecordedIdentity(
     ?? registry.readOnlySnapshot().entries[sessionKeyId(probe.key)]?.structuredTerminationSurvivors ?? [];
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
+    stopOrigin: { path: "pipeline-stage-stop", operationId: `${target.launchId}:${target.stageId}:${target.attempt}` },
     retainedSurvivors,
     authorize,
     onFirstEffect: () => {
@@ -1674,6 +1710,14 @@ export function defaultPipelinePorts(
   let flowSnapshot: Flow[] | null = null;
   let interruptions: InterruptionObligation[] | null = null;
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
+  const exitStatusPending = (conversationId: string): boolean => {
+    const current = snapshot();
+    const conversation = current.conversations[conversationId as ViewerConversationId];
+    const generation = conversation?.generations.at(-1);
+    const entry = conversation && generation ? current.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] : null;
+    const identity = entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process;
+    return Boolean(identity && hostExitWriterPending(identity) && processIdentityStatus(identity) === "dead");
+  };
   /* The newest cut recorded for a conversation; the store lists oldest first. */
   const newestCut = (conversationId: string): InterruptionObligation | null => {
     if (!conversationId.startsWith("conversation_")) return null;
@@ -2185,6 +2229,7 @@ export function defaultPipelinePorts(
       if (sessions.some(session => !["dead", "unhosted", "conflict"].includes(session.host)
         && (session.turn === "running" || session.turn === "interrupt_requested" || session.attentionIds.length > 0))) return true;
       if (sessions.every(session => ["dead", "unhosted", "conflict"].includes(session.host))) {
+        if (exitStatusPending(conversationId)) return null;
         /* A host may be adopted again during this controller pass. Do not let
            affirmative death evidence poison later liveness checks in the tick. */
         runtimeReads.reset();
@@ -2202,6 +2247,7 @@ export function defaultPipelinePorts(
         const session = await runtimeReads.session(client, conversationId);
         if (!session || session.attentionIds.length > 0 || session.host === "conflict") return null;
         if (session.host === "dead" || session.host === "unhosted") {
+          if (exitStatusPending(conversationId)) return null;
           const conversation = registry.conversation(conversationId as ViewerConversationId);
           const generation = conversation?.generations.at(-1);
           if (conversation?.engine === "codex" && generation) {
@@ -2240,7 +2286,7 @@ export function defaultPipelinePorts(
       if (!key) return undefined;
       const entry = current.entries[sessionKeyId(key)];
       if (!entry) return generation.createdAt;
-      if (entry.status === "dead" || entry.status === "unhosted") return entry.updatedAt;
+      if (entry.status === "dead" || entry.status === "unhosted") return exitStatusPending(conversationId) ? undefined : entry.updatedAt;
       /* A row that still reads live proves nothing about the process behind it:
          a redeploy leaves the pid of a host that no longer exists, and a host
          relaunched over a severed turn can sit forever with nothing to run
@@ -2253,9 +2299,8 @@ export function defaultPipelinePorts(
         ...dependencies.liveness,
         snapshot: current,
       });
-      return liveness?.state === "severed" && liveness.since !== null
-        ? new Date(liveness.since).toISOString()
-        : null;
+      if (liveness?.state !== "severed" || liveness.since === null) return null;
+      return exitStatusPending(conversationId) ? undefined : new Date(liveness.since).toISOString();
     },
     conversationHostProcess: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return { state: "unknown", pid: null };
@@ -2273,20 +2318,28 @@ export function defaultPipelinePorts(
       /* The process is asked before the row: a terminal row can stand over a
          live engine process (#2790). */
       if (proven) return { state: "alive", pid };
+      if (exitStatusPending(conversationId)) return { state: "unknown", pid };
       if (entry.status === "dead" || entry.status === "unhosted") return { state: "gone", pid };
       if (!host.expected) return { state: "unknown", pid };
       if (!host.present) return { state: "gone", pid };
       if (host.observedIdentity === null || host.expected.startIdentity === null) return { state: "unknown", pid };
       return { state: host.observedIdentity === host.expected.startIdentity ? "alive" : "gone", pid };
     },
-    conversationHostEnded: (conversationId) => {
+    conversationHostEnded: (conversationId, launchId) => {
       if (!conversationId.startsWith("conversation_")) return null;
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
       const generation = conversation?.generations.at(-1);
-      if (conversation?.engine !== "claude" || !generation) return null;
-      const ended = current.entries[sessionKeyId({ engine: "claude", sessionId: generation.id })]?.structuredHost?.ended;
-      return ended ? claudeHostEndText(ended) : null;
+      const receipt = launchId ? registry.spawnReceipt(launchId) : null;
+      if (launchId && (!receipt?.key || !receipt.conversationId
+        || registry.canonicalConversationId(receipt.conversationId) !== registry.canonicalConversationId(conversationId as ViewerConversationId))) return null;
+      const key = receipt?.key ?? (conversation && generation ? { engine: conversation.engine, sessionId: generation.id } : null);
+      if (!key) return null;
+      const entry = current.entries[sessionKeyId(key)];
+      const ended = entry?.structuredHost?.ended;
+      const pending = launchId ? entry?.pendingHostExits?.find(item => item.launchId === launchId) : null;
+      const evidence = receipt?.hostExit ?? readHostExit(pending?.process ?? entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
+      return [hostExitText(evidence), ended ? claudeHostEndText(ended) : null].filter(Boolean).join("; ");
     },
     conversationInterruption: (conversationId) => {
       const cut = newestCut(conversationId);
@@ -5966,15 +6019,16 @@ function rerunHostLostReadOnlyStage(
   const attempts = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts ?? [];
   let lost = 0;
   for (const earlier of attempts.slice(0, attempts.indexOf(attempt)).reverse()) {
-    if (earlier.error !== HOST_LOST_READ_ONLY_RERUN) break;
+    if (!earlier.error?.startsWith(HOST_LOST_READ_ONLY_RERUN)) break;
     lost += 1;
   }
   if (lost >= HOST_LOST_READ_ONLY_RERUNS) return false;
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  attempt.error = HOST_LOST_READ_ONLY_RERUN;
+  const exit = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostExitText(null) : hostExitText(null);
+  attempt.error = `${HOST_LOST_READ_ONLY_RERUN}; ${exit}`;
   pipeline.state = "running";
-  pipeline.stateDetail = HOST_LOST_READ_ONLY_RERUN;
+  pipeline.stateDetail = attempt.error;
   setCursorState(pipeline, stage.id, "pending");
   return true;
 }
@@ -6191,7 +6245,9 @@ async function replaceInterruptedStageAttempt(
      Each new service boot or recorded deploy cut owes its own replacement. */
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined && !interruption.cut) {
-      await park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
+      const exit = interruption.kind === "dead" && !interruption.restarted
+        ? `; ${attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostExitText(null) : hostExitText(null)}` : "";
+      await park(pipeline, `${secondInterruptionParkDetail(attempt.restartContext?.cause, interruption)}${exit}`, attempt);
       await persist();
       return true;
     }
@@ -6212,8 +6268,9 @@ async function replaceInterruptedStageAttempt(
     ...(promptBoundary === undefined ? {} : { promptBoundary }), ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   await persist();
   if (restartCutHoldsStageRecovery(attempt, ports)) return true;
-  /* Read before the stop: ending the host retires the row that recorded it. */
-  const hostEnded = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? null : null;
+  /* Capture the existing cause, then refresh the retained exit receipt once
+     teardown has settled and supplied its final status and stop sender. */
+  const hostEnded = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? null : null;
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
   /* A withdrawn stop did nothing, so it leaves no reservation behind either;
      whatever the transcript holds by now is read by the ordinary paths. */
@@ -6296,7 +6353,7 @@ async function replaceInterruptedStageAttempt(
      stream was gone while its process kept running (#2790). */
   const orphanStopped = cause === "host-lost" && ended?.kind === "dead";
   await startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports,
-    { hostEnded, orphanStopped });
+    { hostEnded: attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostEnded : hostEnded, orphanStopped });
   await persist();
   return true;
 }
@@ -6329,7 +6386,7 @@ async function startReplacementAttempt(
 ): Promise<void> {
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  const why = cause === "host-lost" && lost.hostEnded ? ` (${lost.hostEnded})` : "";
+  const why = cause === "host-lost" ? ` (${lost.hostEnded ?? hostExitText(null)})` : "";
   const orphan = lost.orphanStopped ? "; its agent process was still running and Delegatus stopped it by its recorded identity" : "";
   attempt.error = `${INTERRUPTION_WORDS[cause].error}${why}${orphan}; replaced by a fresh stage attempt`;
   attempt.restartRecovery ??= { ...recovery };
@@ -7091,10 +7148,24 @@ async function spawnRunStage(
       }
       await persist();
       try {
+        // Fenced-message retries spend a persisted count.
+        // Their backoff record has no lane deadline to carry into admission.
+        const wait = attempt.fencedMessageRetries && attempt.controllerWait?.budgetMs === undefined
+          ? undefined : attempt.controllerWait;
+        const budgetMs = wait ? wait.budgetMs ?? SPAWN_CONTROLLER_WAIT_BUDGET_MS : SPAWN_HOST_WAIT_BUDGET_MS;
+        const remainingMs = unixMs(wait?.startedAt ?? activationNow) + budgetMs - unixMs(ports.now());
+        const spawnAdmissionDeadline = performance.now() + Math.max(0, remainingMs);
+        if (remainingMs <= 0) {
+          const failure = pipeline.stateDetail?.match(/^stage spawn deferred: (.*); retry at /)?.[1];
+          throw failure && (isTransientStructuredSpawnFailure(failure) || isLaunchAdmissionContention(new Error(failure))) ? new Error(failure)
+            : wait && budgetMs === SPAWN_CONTROLLER_WAIT_BUDGET_MS ? new Error("structured delivery controller is unavailable")
+            : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+        }
         assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
         spawned = await ports.spawnAgent({
           ...spawnInput,
           clientAttemptId: callId,
+          spawnAdmissionDeadline,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
           ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
@@ -7118,7 +7189,7 @@ async function spawnRunStage(
            not a rejected launch, so it gets the wall-clock wait budget; every
            other transient keeps the two immediate handshake retries (#1056),
            which stay well inside the controller's phase deadline. */
-        const accountMutationContention = isAccountMutationContention(message);
+        const accountMutationContention = isAccountMutationContention(message) || message.includes(REGISTRY_WRITER_BUSY);
         const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
         /* #1750: an unverified delivery must never take the immediate
            handshake retries below — those re-dispatch the prompt on sight.
@@ -11122,7 +11193,7 @@ function syncControllerWaitStateDetail(
   failure: string | null,
 ): void {
   const retryAfter = attempt.controllerWait?.retryAfter;
-  if (failure !== null && (isAccountMutationContention(failure) || isRuntimeHostUnavailableSpawnFailure(failure) || isPrepublicationSpawnFailure(failure)) && retryAfter !== undefined) {
+  if (failure !== null && (isAccountMutationContention(failure) || failure.includes(REGISTRY_WRITER_BUSY) || isRuntimeHostUnavailableSpawnFailure(failure) || isPrepublicationSpawnFailure(failure)) && retryAfter !== undefined) {
     pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(failure)}; retry at ${retryAfter}`;
   } else if (pipeline.stateDetail?.startsWith("stage spawn deferred: ")) {
     pipeline.stateDetail = null;
@@ -11163,6 +11234,7 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
   if (failure.startsWith("Codex callback ")) return isRuntimeHostUnavailableSpawnFailure(failure);
   return failure === SEND_LOST_REASON || isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
+    || failure.includes(REGISTRY_WRITER_BUSY)
     || isRuntimeHostUnavailableSpawnFailure(failure)
     || isUnverifiedDeliverySpawnFailure(failure)
     || isPrepublicationSpawnFailure(failure)
@@ -11185,6 +11257,7 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
 function spawnWaitBudget(failure: string): { budgetMs: number; retryMaxMs: number } | undefined {
   return isRuntimeHostUnavailableSpawnFailure(failure)
     || isAccountMutationContention(failure)
+    || failure.includes(REGISTRY_WRITER_BUSY)
     || isUnverifiedDeliverySpawnFailure(failure)
     || isPrepublicationSpawnFailure(failure)
     ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
@@ -12586,6 +12659,9 @@ export function normalizeStages(
     if (stage.serviceTier !== undefined && stage.serviceTier !== null && typeof stage.serviceTier !== "string") {
       violations.push({ field: at("serviceTier"), message: "serviceTier must be a string or null", expected: "Codex catalog tier id, null to inherit" });
     }
+    if (stage.preferredServiceTier !== undefined && (typeof stage.preferredServiceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(stage.preferredServiceTier))) {
+      violations.push({ field: at("preferredServiceTier"), message: "preferredServiceTier must be a catalog tier id", expected: "Codex catalog tier id for automatic selection" });
+    }
     if (!validAgentMemoryMax(stage.agentMemoryMaxBytes)) {
       violations.push({ field: at("agentMemoryMaxBytes"), message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", expected: "integer bytes from 1 GiB through 1 TiB, null to inherit" });
     }
@@ -12648,6 +12724,7 @@ export function normalizeStages(
       ...(stage.model !== undefined ? { model: typeof stage.model === "string" ? stage.model.trim() || null : null } : {}),
       ...(stage.effort !== undefined ? { effort: typeof stage.effort === "string" ? stage.effort.trim() || null : null } : {}),
       ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+      ...(stage.preferredServiceTier !== undefined ? { preferredServiceTier: stage.preferredServiceTier } : {}),
       ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
       ...(stage.access !== undefined ? { access: stage.access } : {}),
       ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
@@ -12740,6 +12817,7 @@ function draftStageInputs(stages: PipelineStage[]): PipelineStageInput[] {
     ...(stage.model !== undefined ? { model: stage.model } : {}),
     ...(stage.effort !== undefined ? { effort: stage.effort } : {}),
     ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+    ...(stage.preferredServiceTier !== undefined ? { preferredServiceTier: stage.preferredServiceTier } : {}),
     ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
     ...(stage.access !== undefined ? { access: stage.access } : {}),
     ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
@@ -15513,6 +15591,7 @@ export async function patchPipeline(
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
             serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
+            preferredServiceTier: resetRuntime ? undefined : target.preferredServiceTier,
             /* A read-only-locked role takes no access from the stage it replaces. */
             access: isReadOnlyLockedRole(roleRef?.roleId) ? undefined : target.access,
           },
@@ -15534,6 +15613,7 @@ export async function patchPipeline(
         target.model = resolved.role.model;
         target.effort = resolved.role.effort;
         target.serviceTier = req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier;
+        target.preferredServiceTier = resolved.role.preferredServiceTier;
         target.access = resolved.role.access;
         /* Belt-and-braces: resolvePipelineRole already enforces these bounds, but
            re-check so a future resolver change can never persist a poisoned record. */

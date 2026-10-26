@@ -89,7 +89,7 @@ const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "
 
 /** A fake GitHub: pull requests, commits, the base's required contexts, and
     legacy update receipts; any new GitHub branch update is refused. */
-function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
+function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; classicRead?: string; rulesRead?: string; rulesRefusal?: boolean; queuedMerge?: "unreadable" | "open" | "malformed"; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
   let clock = T0;
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -100,12 +100,18 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let mergeRefusal: string | null = null;
+  let failConfirmation = false;
   let afterMutation: ((pipeline: Pipeline) => Promise<void>) | null = null;
   const fail = (stderr: string) => Object.assign(new Error("Command failed: gh"), { stderr });
 
   const run = async (args: string[]): Promise<string> => {
     calls.push(args);
     if (args[0] === "pr" && args[1] === "view") {
+      if (failConfirmation) {
+        failConfirmation = false;
+        if (options.queuedMerge === "malformed") return "{}";
+        throw fail("confirmation unavailable");
+      }
       const pr = prs.get(Number(args[2]))!;
       return JSON.stringify({
         state: pr.state,
@@ -135,7 +141,12 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (pr.reviewRead === "refused") throw fail("reviews unavailable");
       return pr.reviewRead ?? (pr.reviews ?? []).map((review) => JSON.stringify({ reviewer: review.user.login, isBot: review.user.type === "Bot", state: review.state })).join("\n");
     }
-    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return JSON.stringify(options.required ?? []);
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/rules/branches/`)) {
+      expect(args.slice(2)).toEqual(["--paginate", "--jq", "@json"]);
+      if (options.rulesRefusal) throw fail("branch rules unavailable");
+      return options.rulesRead ?? "[]";
+    }
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return options.classicRead ?? JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
     if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
@@ -148,7 +159,8 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (mergeRefusal) throw fail(mergeRefusal);
       const match = args[args.indexOf("--match-head-commit") + 1];
       if (match !== pr.head) throw fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)");
-      pr.state = "MERGED";
+      if (options.queuedMerge === "unreadable" || options.queuedMerge === "malformed") failConfirmation = true;
+      else if (!options.queuedMerge) pr.state = "MERGED";
       return "";
     }
     throw new Error(`unexpected gh ${args.join(" ")}`);
@@ -657,6 +669,145 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B], mergedHead: HEAD_B });
     expect(h.updates()).toHaveLength(0);
+  });
+
+  test.each(["unreadable", "open", "malformed"] as const)("an accepted queue request with %s confirmation stays merging until landing is proved", async queuedMerge => {
+    const h = harness({ queuedMerge, lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.prs.get(11)!.state).toBe("OPEN");
+    expect(h.merge("L1")).toMatchObject({ state: "merging", mergedAt: null });
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(MERGE_POLL_MS * 2, () => h.merge("L1")?.state === "merged");
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test.each(["[]", "[]\n[]\n", "[{\"type\":\"pull_request\"}]\n[]"])("empty requirements allow a settled PR to merge: %s", async (rulesRead) => {
+    const h = harness({ rulesRead, lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.run(MERGE_SETTLE_MS * 2, () => h.merge("L1")?.state === "merged");
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test.skipIf(!Bun.which("gh"))("required-check arguments are accepted by the installed GitHub CLI offline", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.sweep();
+    const reads = h.calls.filter(args => args[0] === "api" && args[1]?.includes("/branches/"));
+    expect(reads).toHaveLength(2);
+    for (const args of reads) {
+      // --help validates real flags without credentials or a network request.
+      expect(execFileSync("gh", [...args, "--help"], { encoding: "utf8", timeout: 5_000 })).toContain("--jq");
+    }
+  });
+
+  test.skipIf(!Bun.which("gh"))("GitHub CLI emits compact page records for empty and inherited branch rules", async () => {
+    const pages: unknown[] = [
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ruleset-ci" }] } }],
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "inherited-ci" }] } }],
+    ];
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(url.pathname + (url.searchParams.has("page") ? "?page=2" : ""));
+        const index = url.searchParams.has("page") ? 1 : 0;
+        return Response.json(url.pathname === "/empty" ? [] : pages[index], {
+          headers: url.pathname !== "/empty" && index === 0
+            ? { Link: `<${url.origin}/rules?page=2>; rel="next"` } : {},
+        });
+      },
+    });
+    try {
+      const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+      const run = h.ports.run;
+      h.ports.run = async (args) => {
+        if (!args[1]?.includes("/rules/branches/")) return run(args);
+        // A fixed inert token satisfies gh's auth preflight; only our listener is used.
+        const child = Bun.spawn(["gh", "api", `${server.url}${requests.length === 0 ? "empty" : "rules"}`, ...args.slice(2)], {
+          env: { ...process.env, GH_TOKEN: "offline", GH_ENTERPRISE_TOKEN: "offline", GITHUB_TOKEN: "", GITHUB_ENTERPRISE_TOKEN: "", NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" },
+          stdout: "pipe", stderr: "pipe", timeout: 5_000,
+        });
+        const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+        return stdout;
+      };
+      await h.run(MERGE_SETTLE_MS * 2, () => h.merge("L1")?.state === "merged");
+      expect(h.merge("L1")?.state).toBe("merged");
+      expect(requests).toEqual(["/empty"]);
+      resetAutoMergeForTests();
+      const inherited = harness({ lanes: [lane("L2")], prs: [openPr(12)] });
+      const original = inherited.ports.run;
+      inherited.ports.run = args => args[1]?.includes("/rules/branches/") ? h.ports.run(args) : original(args);
+      await inherited.sweep();
+      expect(inherited.merge("L2")?.reason).toBe("waiting for ruleset-ci, inherited-ci");
+      expect(requests).toEqual(["/empty", "/rules", "/rules?page=2"]);
+      inherited.prs.get(12)!.checks = [green("ci"), green("ruleset-ci"), green("inherited-ci")];
+      await inherited.run(MERGE_SETTLE_MS * 2, () => inherited.merge("L2")?.state === "merged");
+      expect(inherited.merge("L2")?.state).toBe("merged");
+      resetAutoMergeForTests();
+      pages[1] = {};
+      const broken = harness({ lanes: [lane("L3")], prs: [openPr(13)] });
+      const brokenRun = broken.ports.run;
+      broken.ports.run = args => args[1]?.includes("/rules/branches/") ? h.ports.run(args) : brokenRun(args);
+      await broken.run(MERGE_SETTLE_MS * 2);
+      expect(broken.merge("L3")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+      expect(broken.merges()).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("active ruleset contexts across pages hold a CLEAN PR until every check arrives", async () => {
+    const h = harness({ required: ["ci"], rulesRead: [
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ci" }, { context: "ruleset-ci" }] } }],
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "inherited-ci" }] } }],
+    ].map(page => JSON.stringify(page)).join("\n"), lanes: [lane("L1")], prs: [openPr(11, { base: "release/next" })] });
+    await h.run(MERGE_SETTLE_MS * 2);
+    expect(h.merges()).toEqual([]);
+    expect(h.merge("L1")).toMatchObject({ state: "waiting-checks", reason: "waiting for ruleset-ci, inherited-ci" });
+    expect(h.calls).toContainEqual(["api", `repos/${REPO}/rules/branches/release%2Fnext`, "--paginate", "--jq", "@json"]);
+    expect(h.calls.some(args => args[1] === `repos/${REPO}/branches/release%2Fnext`)).toBe(true);
+    h.prs.get(11)!.checks = [green("ci"), green("ruleset-ci"), pending("inherited-ci")];
+    await h.run(MERGE_POLL_MS * 2);
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.checks = [green("ci"), green("ruleset-ci"), green("inherited-ci")];
+    await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merge("L1")?.state).toBe("merged");
+  });
+
+  for (const invalid of [
+    { classicRead: "not-json" }, { classicRead: "null" }, { classicRead: '["ci",42]' },
+    { rulesRead: "not-json" }, { rulesRead: "" }, { rulesRead: "  \n" }, { rulesRead: "{}" }, { rulesRead: "[{}]" }, { rulesRead: "[null]" },
+    { rulesRead: "[]\nnot-json" }, { rulesRead: "[]\nnull" },
+    { rulesRefusal: true },
+    { rulesRead: '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}]\n{}' },
+    { rulesRead: '[{"type":"required_status_checks","parameters":{}}]' },
+    { rulesRead: '[{"type":"required_status_checks","parameters":{"required_status_checks":[{}]}}]' },
+  ]) {
+    test(`invalid required-check discovery fails closed: ${JSON.stringify(invalid)}`, async () => {
+      const h = harness({ ...invalid, lanes: [lane("L1")], prs: [openPr(11)] });
+      await h.run(MERGE_SETTLE_MS * 2);
+      expect(h.merges()).toEqual([]);
+      expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+    });
+  }
+
+  test("failed discovery is read again after recovery without caching partial requirements", async () => {
+    const options = { rulesRead: '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ruleset-ci"}]}}]\n{}',
+      lanes: [lane("L1")], prs: [openPr(11)] };
+    const h = harness(options);
+    await h.sweep();
+    expect(h.merge("L1")?.readFailures).toBe(1);
+    expect(h.merges()).toEqual([]);
+    options.rulesRead = "[]";
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.calls.filter(args => args[1]?.includes("/rules/branches/"))).toHaveLength(2);
+    expect(h.calls).toContainEqual(["api", `repos/${REPO}/branches/main`, "--jq",
+      "[.protection.required_status_checks | (.contexts[]?, .checks[]?.context)]"]);
   });
 
   test("a rollup missing a required context waits until it arrives", async () => {

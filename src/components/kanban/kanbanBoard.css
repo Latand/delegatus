@@ -107,7 +107,12 @@
 .kb .bar[data-bar="project"] .bar-lead { flex-shrink: 1; min-width: 48px; }
 /* The panel toggles and the ⋯ menu are two groups: 16 px apart, like every other pair of groups. */
 .kb .bar[data-bar="project"] .bar-trail { gap: 16px; }
-.kb .bar[data-bar="project"] .summary { white-space: nowrap; flex-shrink: 0; }
+/* The status keeps its dot and count whole; its words (a reconnect, a failure, «updating») stay
+   whole while a step is left (`data-bar-whole`) and then end with an ellipsis, the whole line in
+   the tooltip. Its automatic minimum keeps the count and one word. */
+.kb .bar[data-bar="project"] .summary { white-space: nowrap; flex-shrink: 1; }
+.kb .bar[data-bar="project"] .summary > :is(.dot, .num) { flex-shrink: 0; }
+.kb .bar[data-bar="project"] .summary > [data-bar-whole] { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .bar[data-bar="project"] .grow { flex: 1 1 0; min-width: 0; }
 /* The find group: the field and the one filter, joined into one control. The search gives way
    first, down to the 144 px that keep «Знайти задачу» whole, and the project name only after it.
@@ -149,14 +154,39 @@
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-attention-count]:has([data-attention-dot]):not([aria-expanded="true"]):hover { background: color-mix(in srgb, var(--color-warning) 24%, var(--surface-card)); }
 
 /* What the bar gives up, step by step (`BAR_FIT_STEPS`). The bar of a leaf without a board
-   (`[data-project-bar]`) takes the first two from its width. */
+   (`[data-project-bar]`) takes the same steps by the same rule; it has no `+` to give up. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="accounts"] [data-bar-group="where"] > :not(h1) { display: none; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-fit-label] { display: none; }
+[data-project-bar]:not([data-fit~="labels"]) [data-fit-short] { display: none; }
+/* With the word shortened to «Search», the leaf's find slot may shrink to what holds that word
+   before the chip, the groups' gaps or the panel group give anything up. */
+[data-project-bar][data-fit~="labels"] [data-testid="dash-search"] { min-width: 96px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
-.kb .bar[data-bar="project"][data-fit~="chip"] [data-attention-chip-label] { display: none; }
-.kb .bar[data-bar="project"][data-fit~="tight"], .kb .bar[data-bar="project"][data-fit~="tight"] .bar-trail { gap: 8px; }
-/* The last step, on a window narrower than the board is made for: the field may go under its placeholder. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-chip-label] { display: none; }
+/* Tight, the groups stand 8 px apart, and the spacer goes with its two gaps. The board's search
+   fills what the spacer would hold; the leaf bar's find slot does not (at its last step it is a
+   32 px icon), so there the trail is pushed to the right edge instead, as at every other step. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"],
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-group="trail"] { gap: 8px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-spacer] { display: none; }
+[data-project-bar][data-fit~="tight"] [data-bar-group="trail"] { margin-left: auto; }
+/* A 640–700 px window (#1698): the panel group's segments leave for rows of ⋯. The recent agents'
+   segment stays as an empty anchor, as tall as the control it held and as wide as ⋯, standing
+   where ⋯ stands, so its list opens under the row's controls and ends at ⋯'s right edge, clear
+   of the name; the group takes back the anchor's width and the gap it would leave. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] { margin-right: -8px; }
+.kb .bar[data-bar="project"][data-fit~="panels"] [data-bar-group="panels"]:has([data-bar-recent]) { margin-right: -40px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] :is([data-orchestrator-toggle], [data-bar-recent-toggle]) { display: none; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-recent] { width: 32px; height: 32px; }
+/* Then `+` leaves for its two rows of ⋯. */
+.kb .bar[data-bar="project"][data-fit~="create"] .bar-slot:has(> [data-bar-group="create"]) { display: none; }
+/* The last step, on a window narrower than the board is made for: the field may go under its
+   placeholder, and the placeholder goes rather than show a cut word; the icon, the name and the
+   tooltip say what the field is. The other leaves' message search keeps its icon alone. */
 .kb .bar[data-bar="project"][data-fit~="find"] .bar-find .search { min-width: 64px; }
+.kb .bar[data-bar="project"][data-fit~="find"] .bar-find .search input::placeholder { color: transparent; }
+[data-project-bar][data-fit~="find"] [data-testid="dash-search"] { flex: 0 0 32px; min-width: 32px; padding: 0; justify-content: center; }
+[data-project-bar][data-fit~="find"] [data-testid="dash-search"] [data-fit-short] { display: none; }
 
 /* The Overview's bar, as it was before #1801 (that lane was the project board only). The
    Viewer's attention island is fixed to the top-right corner just under the header row, over
@@ -887,6 +917,7 @@
      second click mid-way reverses from where the box is.
    - The Stages sheet rises 8 px and fades in, and its scrim fades. The sheet
      unmounts on close, so the exit is instant.
+   - The agent window fades in where it stands; its exit is instant.
    A pressed button is 4 % smaller, so a press that began near its edge could
    end past it and the click would land on what is behind. While it is held,
    an invisible layer keeps its whole unpressed box: 2 % of each side plus the
@@ -902,6 +933,12 @@
     transition: height var(--motion-base) var(--ease-standard), content-visibility var(--motion-base) allow-discrete;
   }
   .kb .card .history[open]::details-content, .kb .draft-added[open]::details-content { height: auto; }
+  /* The agent window fades in, its field and scrim with it, once its reader
+     has come to rest (useReaderReady): opacity only, at its final box, so
+     nothing in it moves while it appears. A switch or a close inside the open
+     window keeps it on screen and does not fade it again. */
+  .kb .agent-window-layer[data-agent-window] > * { animation: kb-conversation-in var(--motion-base) var(--ease-standard); }
+  @keyframes kb-conversation-in { from { opacity: 0; } to { opacity: 1; } }
   .kb .gsheet-scrim { transition: opacity var(--motion-base) var(--ease-standard); }
   .kb .gsheet { transition: translate var(--motion-slow) var(--ease-standard), opacity var(--motion-base) var(--ease-standard); }
   @starting-style {
