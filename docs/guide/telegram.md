@@ -79,8 +79,10 @@ answers with.
 - **Full agent for the owner**, off by default on each target, runs the relay
   owner's requests with full access. With Codex Cloud and a repository
   environment configured for the target project, work runs there. Otherwise
-  it uses an ordinary local agent in the project directory. These turns use
-  the target's time cap, even after the service's request window closes.
+  it uses an ordinary local agent in the verified project repository. An
+  unavailable or deleted repository returns a configuration failure. These
+  turns share one target time cap across tool rounds and local fallback,
+  even after the service's request window closes.
   A late answer arrives as a new text message replying
   to your original message in the same topic. Files are omitted with a note.
   Delivery requires the service's owner delivery context and clone send route;

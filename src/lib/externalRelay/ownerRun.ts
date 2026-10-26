@@ -1,4 +1,7 @@
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
+import { projectRootForCwd } from "@/lib/scanner/describe";
+import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { ExternalRelayError } from "./client";
 import { answerCapabilities, checkedAnswerV2, formatSection, richAnswerInstructions } from "./answerV2";
 import { sealOwnerAnswer, ownerAnswerDrops } from "./ownerAnswer";
@@ -36,6 +39,22 @@ import { hostlessConversationEvidence } from "@/lib/runtime/hostlessRegistryEvid
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 
 export type OwnerSpawnedTurn = SpawnedTurn & { continuation?: { operationId: string } };
+export class CloudOwnerDirectoryError extends Error {
+  constructor() { super("Codex Cloud owner local fallback requires a configured project directory"); }
+}
+/** Revalidate cached candidates at admission; a deleted checkout grants no cwd. */
+export function cloudOwnerDirectory(project: string | null, selected?: string): string {
+  for (const cwd of selected ? [selected] : project ? projectDirectoryCandidates(project) : []) {
+    try {
+      const physical = fs.realpathSync(cwd);
+      const root = projectRootForCwd(physical);
+      const identity = root ? projectIdentityFromRepositoryRoot(root) : null;
+      if (fs.statSync(physical).isDirectory() && identity && canonicalProject(identity.project) === canonicalProject(project!)) return physical;
+    }
+    catch { /* Try the next recorded checkout of this project. */ }
+  }
+  throw new CloudOwnerDirectoryError();
+}
 export class OwnerContinuationRefused extends Error {
   constructor(public readonly reason: "busy" | "unavailable") { super(`owner continuation ${reason}`); }
 }
@@ -661,6 +680,7 @@ export function continueOwnerAgent(input: OwnerRunInput & { conversationId: stri
 }
 export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   const ports = input.ports ?? productionPorts;
+  const localTarget = input.target.engine === "codex-cloud" ? { ...input.target, engine: "codex" as const } : input.target;
   const started = Date.now();
   const turn: OwnerSpawnedTurn = { clientAttemptId: `relay-owner-${input.request.request_id}`, claimedAt: new Date(started).toISOString(), ...(input.continuation ? { conversationId: input.continuation.conversationId, continuation: { operationId: `relay-owner-${input.request.request_id}` } } : {}) };
   // Keep attribution independently of subsequent ledger reads and writes.
@@ -807,7 +827,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         await input.onConversation(turn.conversationId!);
         await changeRunAsync(input.request.request_id, r => ({ ...r, conversationId: turn.conversationId!, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation } }), Date.now() + 5000);
         authorize();
-        const sent = await withViewerOperation("relay.owner-continuation.send", () => ports.continue?.(turn, input.continuation!.prompt + (input.inboundContext ? "\n" + input.inboundContext : ""), input.target, authorize));
+        const authorizeContinuation = () => { authorize(); if (input.target.engine === "codex-cloud") cloudOwnerDirectory(input.target.project); };
+        const sent = await withViewerOperation("relay.owner-continuation.send", () => ports.continue?.(turn, input.continuation!.prompt + (input.inboundContext ? "\n" + input.inboundContext : ""), localTarget, authorizeContinuation));
         if (!sent || !sent.ok) {
           // Only a proven refusal before reservation permits fallback or retry.
           if ((!sent || sent.admission === "refused") && !stopped) {
@@ -823,12 +844,15 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         await changeRunAsync(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation, admissionComplete: true } }), Date.now() + 5000);
         launched = { status: 202, body: { conversationId: turn.conversationId, initialMessage: sent.outcome === "delivered" ? "delivered" : "queued" } };
       } else {
+        const cwd = input.target.engine === "codex-cloud" ? cloudOwnerDirectory(input.target.project)
+          : (input.target.project ? projectDirectoryCandidates(input.target.project, 1)[0] : null) ?? os.homedir();
+        const authorizeLaunch = () => { authorize(); if (input.target.engine === "codex-cloud") cloudOwnerDirectory(input.target.project, cwd); };
         launched = await ports.launch({
-          engine: input.target.engine === "codex-cloud" ? "codex" : input.target.engine, model: input.target.model, effort: input.target.effort,
-          cwd: (input.target.project ? projectDirectoryCandidates(input.target.project, 1)[0] : null) ?? os.homedir(), prompt: ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes) + (input.inboundContext ? "\n" + input.inboundContext : ""),
+          engine: localTarget.engine, model: input.target.model, effort: input.target.effort,
+          cwd, prompt: ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes) + (input.inboundContext ? "\n" + input.inboundContext : ""),
           title: `Relay · ${input.target.name}`, clientAttemptId: turn.clientAttemptId, accountId: input.accountId,
           mcpServers: ["viewer"], plugins: [], notifyLauncher: false,
-        }, authorize);
+        }, authorizeLaunch);
       }
       admitted = true;
       const id = launched.body.conversationId;

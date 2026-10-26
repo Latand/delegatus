@@ -3424,11 +3424,19 @@ answer environment configuration id). A target can override the latter with
 mapping project keys to repository environment configuration ids. Repository
 bindings take precedence over the general answer environment. Owner requests
 use full access in that repository environment; without a project environment
-configuration they use the local project directory.
+configuration they use the verified local project repository. A missing,
+deleted or reassigned checkout refuses local execution with a configuration
+failure. The transport resolves the configured environment's repository cwd,
+sends both in `environments`, and verifies the returned environment instance,
+configuration and cwd before starting a turn.
 
 Cloud admission does not consult local account capacity. A confirmed Cloud
 refusal or exhausted limit invokes the local path once per request. A lost
 connection after a turn starts does not prove failure and cannot duplicate an
 owner task. An interrupted turn must report terminal status before fallback.
+One execution deadline covers all owner tool rounds and local fallback,
+including waits for service tools. Structured owner replies pass through the
+same output scrubber as transcript answers before history or delivery. If
+scrubbing changes the text, its original mention offsets are discarded.
 The Cloud transport is isolated in `src/lib/externalRelay/cloud.ts`; tests
 replace it with a fake and never connect to Cloud.

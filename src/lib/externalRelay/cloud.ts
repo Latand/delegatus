@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/ephemeral";
+import { resolveHostedCloudEnvironment } from "@/lib/pipelines/cloudHostedClient";
 
 export const CLOUD_MODEL = "gpt-6.1-sol";
 export type CloudRequest = {
@@ -10,6 +11,7 @@ export type CloudRequest = {
   effort?: string | null;
   timeoutMs: number;
   signal: AbortSignal;
+  authorize?(): void;
   onProgress?: (observation: { queued?: boolean; writingAnswer?: boolean }) => void;
 };
 /** A rejected call is safe to retry locally only when no Cloud turn remains running. */
@@ -24,11 +26,14 @@ type CloudSocket = {
   close(): void;
   on(event: "open" | "close" | "error" | "message", listener: (data: unknown) => void): unknown;
 };
-export function createCloudTransport(connect: (endpoint: string, headers: Record<string, string>) => CloudSocket): CloudTransport {
+export function createCloudTransport(connect: (endpoint: string, headers: Record<string, string>) => CloudSocket,
+  resolveEnvironment: (request: CloudRequest) => Promise<string> = request => resolveHostedCloudEnvironment(request.environmentId,
+    { token: process.env.LLV_CODEX_CLOUD_TOKEN ?? "" }, { signal: request.signal, assertCurrent: () => request.signal.throwIfAborted() })): CloudTransport {
   return async request => {
     const endpoint = process.env.LLV_CODEX_CLOUD_URL;
     if (!request.environmentId || !endpoint || !/^wss:\/\//.test(endpoint)) throw new CloudFailure(true);
     return new Promise<string>((resolve, reject) => {
+      const resolutionAbort = new AbortController();
       let socket: CloudSocket;
       try { socket = connect(endpoint, process.env.LLV_CODEX_CLOUD_TOKEN
         ? { Authorization: `Bearer ${process.env.LLV_CODEX_CLOUD_TOKEN}` } : {}); }
@@ -40,11 +45,13 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true; clearTimeout(timer); clearTimeout(admissionTimer); clearTimeout(cancelTimer); request.signal.removeEventListener("abort", cancel);
+        resolutionAbort.abort();
         for (const call of pending.values()) call.reject(error ?? new CloudFailure(false));
         pending.clear(); socket.close();
         if (error) reject(error); else resolve(output);
       };
       const rpc = (method: string, params: object) => new Promise<Record<string, unknown>>((yes, no) => {
+        if (settled) { no(new CloudFailure(!started)); return; }
         const id = ++sequence; pending.set(id, { resolve: yes, reject: no });
         socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
       });
@@ -83,9 +90,14 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
         try {
           await rpc("initialize", { clientInfo: { name: "delegatus-relay", version: "1" }, capabilities: {} });
           socket.send(JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} }));
+          const cwd = await resolveEnvironment({ ...request, signal: AbortSignal.any([request.signal, resolutionAbort.signal]) });
+          if (settled) return;
+          request.signal.throwIfAborted();
+          request.authorize?.();
+          if (!cwd.startsWith("/") || cwd.includes("\0")) throw new CloudFailure(true);
           const response = await rpc("thread/start", {
             model: CLOUD_MODEL, approvalPolicy: "never", serviceTier: "ultrafast",
-            environmentConfigId: request.environmentId,
+            environments: [{ environmentConfigId: request.environmentId, cwd }], deferredEnvironment: true,
             sandbox: request.fullAccess ? "danger-full-access" : "read-only",
             config: { ...(request.effort ? { model_reasoning_effort: request.effort } : {}), ...(request.fullAccess ? {} : {
               ...Object.fromEntries(["shell_tool", "unified_exec", "apps", "plugins", "goals", "memories", "browser_use", "computer_use", "sleep_tool", "view_image", "image_generation", "multi_agent"].map(feature => [`features.${feature}`, false])),
@@ -95,9 +107,15 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
               "tools.experimental_request_user_input.enabled": false, web_search: "live", mcp_servers: {},
             }) },
           });
-          threadId = (response.thread as { id?: string } | undefined)?.id;
-          if (!threadId) throw new CloudFailure(true);
+          const thread = response.thread as { id?: string; environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined;
+          threadId = thread?.id;
+          const environment = Array.isArray(thread?.environments) ? thread.environments[0] : undefined;
+          if (typeof threadId !== "string" || !threadId || thread?.environments?.length !== 1 || !environment
+            || environment.environmentConfigId != null && environment.environmentConfigId !== request.environmentId
+            || typeof environment.environmentId !== "string" || !environment.environmentId.startsWith("ccarenv_")
+            || environment.cwd !== cwd) throw new CloudFailure(true);
           request.signal.throwIfAborted();
+          request.authorize?.();
           clearTimeout(admissionTimer);
           started = true;
           const turn = await rpc("turn/start", { threadId, input: [{ type: "text", text: request.prompt }], ...(request.schema ? { outputSchema: request.schema } : {}) });
@@ -116,7 +134,6 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
   local(): Promise<EphemeralAgentRun>;
   onFallback?(): void;
   decode?(text: string): unknown;
-  authorize?(): void;
 }): EphemeralAgentRun {
   const abort = new AbortController();
   const started = Date.now();
@@ -134,6 +151,8 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
     } catch (error) {
       if (abort.signal.aborted) return { status: "cancelled", answer: null, durationMs: Date.now() - started, code: null, signal: null };
       if (!(error instanceof CloudFailure) || !error.confirmed) throw error;
+      if (Date.now() >= started + input.timeoutMs) return { status: "timeout", answer: null, durationMs: Date.now() - started, code: null, signal: null };
+      input.authorize?.();
       input.onFallback?.();
       local = await input.local();
       if (abort.signal.aborted) local.cancel();
@@ -147,7 +166,7 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
 export function cloudEnvironment(target: { project: string | null; cloudEnvironmentId?: string | null }, owner = false): string | null {
   if (target.project) {
     const bindings = JSON.parse(process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS ?? "{}") as Record<string, unknown>;
-    const bound = bindings[target.project];
+    const bound = Object.hasOwn(bindings, target.project) ? bindings[target.project] : undefined;
     if (typeof bound === "string" && bound) return bound;
   }
   if (owner) return target.project ? target.cloudEnvironmentId || null : null;

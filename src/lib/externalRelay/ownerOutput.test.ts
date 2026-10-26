@@ -114,3 +114,15 @@ test.each(["/home_password", "/UsersSecret", "/rootAccessToken", String.raw`/hom
     expect(output).toContain("[redacted]");
   },
 );
+
+test("owner output withholds base64 and escaped base64 copies of known credentials", () => {
+  const credential = ["synthetic", "owner", "credential"].join("-");
+  for (const encoding of ["base64", "base64url"] as const) {
+    const value = Buffer.from(credential).toString(encoding);
+    const escaped = Array.from(value, c => `%${c.charCodeAt(0).toString(16)}`).join("");
+    for (const text of [value, escaped]) {
+      expect(scrubOwnerOutput(`Value: ${text}`, [credential])).not.toContain(value);
+      expect(scrubOwnerOutput(`Value: ${text}`, [credential])).not.toContain(text);
+    }
+  }
+});
