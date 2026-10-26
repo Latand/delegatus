@@ -36,3 +36,65 @@ test("a readable empty deployment ledger does not hold the timer", () => {
   const answer = boardMaintenanceAnswer(PROJECT, input().settings, realLedgerPorts);
   expect(answer.waitingOn).toBeNull();
 });
+
+test("window read exposes the next controller wake after a missed weekend and DST change", () => {
+  held = sandbox();
+  const settings = input().settings;
+  settings.maintenance.window = { timeZone: "Europe/Paris", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now, lastCheckAt: new Date(now).toISOString() })).toMatchObject({
+    waitingOn: "window", nextRunAt: "2026-10-26T08:00:00.000Z", missedWindowPolicy: "skip-and-coalesce", window: settings.maintenance.window,
+  });
+});
+
+test("next wake follows Casablanca's permanent UTC rules under the pinned runtime", () => {
+  held = sandbox();
+  const settings = input().settings;
+  settings.maintenance.window = { timeZone: "Africa/Casablanca", weekdays: [7], startHour: 2, endHour: 3 };
+  const now = Date.parse("2026-10-25T00:00:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now, lastCheckAt: new Date(now).toISOString() })).toMatchObject({
+    waitingOn: "window", nextRunAt: "2026-10-25T02:00:00.000Z",
+  });
+  const open = Date.parse("2026-10-25T02:30:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now: open, lastCheckAt: new Date(open).toISOString() })).toMatchObject({
+    waitingOn: null, nextRunAt: "2026-10-25T02:35:00.000Z",
+  });
+});
+
+test("next wake skips a missing weekly hour and aligns fractional-offset openings to controller checks", () => {
+  held = sandbox();
+  const settings = input().settings;
+  settings.maintenance.window = { timeZone: "Europe/Paris", weekdays: [7], startHour: 2, endHour: 3 };
+  const now = Date.parse("2026-03-22T02:00:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now, lastCheckAt: new Date(now).toISOString() }).nextRunAt).toBe("2026-04-05T00:00:00.000Z");
+  settings.maintenance.window = { timeZone: "Asia/Kathmandu", weekdays: [1], startHour: 9, endHour: 10 };
+  const monday = Date.parse("2026-10-26T03:13:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now: monday, lastCheckAt: new Date(monday).toISOString() }).nextRunAt).toBe("2026-10-26T03:18:00.000Z");
+});
+
+test("no estimate is promised when every bounded controller check misses the window", () => {
+  held = sandbox();
+  const settings = input().settings;
+  settings.maintenance.window = { timeZone: "Etc/UTC", weekdays: [1], startHour: 9, endHour: 10 };
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now, lastCheckAt: new Date(now).toISOString(), checkIntervalMs: 7 * 86_400_000 })).toMatchObject({ waitingOn: "window", nextRunAt: null });
+});
+
+test("compact MCP reads keep configured window facts and omit empty window metadata", () => {
+  held = sandbox();
+  const settings = input().settings;
+  settings.maintenance.window = { timeZone: "Etc/UTC", weekdays: [3], startHour: 12, endHour: 13 };
+  const compact = boardMaintenanceAnswer(PROJECT, settings, { ...ports, verbose: false });
+  expect(compact).toMatchObject({ window: settings.maintenance.window, missedWindowPolicy: "skip-and-coalesce", nextRunAt: new Date(NOW + 300000).toISOString() });
+  expect(compact).toMatchObject({ defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168 });
+  for (const full of [boardMaintenanceAnswer(PROJECT, settings, ports), boardMaintenanceAnswer(PROJECT, settings, { ...ports, verbose: true })]) {
+    expect(full).toMatchObject({ defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, window: settings.maintenance.window, missedWindowPolicy: "skip-and-coalesce" });
+  }
+  settings.maintenance.window = null;
+  const unrestricted = boardMaintenanceAnswer(PROJECT, settings, { ...ports, verbose: false });
+  expect(unrestricted).not.toHaveProperty("window");
+  expect(unrestricted).not.toHaveProperty("missedWindowPolicy");
+  for (const full of [boardMaintenanceAnswer(PROJECT, settings, ports), boardMaintenanceAnswer(PROJECT, settings, { ...ports, verbose: true })]) {
+    expect(full).toMatchObject({ window: null, missedWindowPolicy: "skip-and-coalesce", defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168 });
+  }
+});
