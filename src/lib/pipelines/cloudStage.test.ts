@@ -11,16 +11,18 @@ const reserved: CloudStageAttempt = { phase: "reserved", environmentId: "fixture
   polls: 0, taskId: null, taskUrl: null, model: null };
 const reference = { taskId: "current-task-1", taskUrl: "https://example.com/cloud/current-task-1" };
 
-test("only explicit cloud models and read-only reviewer/verifier stages are admitted", () => {
+test("explicit cloud models support reviewer, verifier and writable builder stages", () => {
   expect(cloudStageConfigurationError(stage)).toBeNull();
   expect(cloudStageConfigurationError({ ...stage, effectiveRole: { ...stage.effectiveRole, roleId: "verifier" } })).toBeNull();
   expect(cloudStageConfigurationError({ ...stage, runtime: undefined, model: undefined })).toBeNull();
   for (const model of [undefined, null, "", " ", "different-model"]) {
     expect(cloudStageConfigurationError({ ...stage, model })).toContain("explicit stage model");
   }
+  expect(cloudStageConfigurationError({ ...stage, effectiveRole: { ...stage.effectiveRole, roleId: "builder", access: "read-write" } })).toBeNull();
+  expect(cloudStageConfigurationError({ ...stage, runtime: "local" })).toBeNull();
   for (const effectiveRole of [{ ...stage.effectiveRole, roleId: "builder" as const },
     { ...stage.effectiveRole, engine: "claude" as const }, { ...stage.effectiveRole, access: "read-write" as const }]) {
-    expect(cloudStageConfigurationError({ ...stage, effectiveRole })).toContain("read-only");
+    expect(cloudStageConfigurationError({ ...stage, effectiveRole })).toContain("Codex reviewer");
   }
   expect(cloudStageConfigurationError({ ...stage, outputs: ["review.md"] })).toContain("without worktree outputs");
 });
@@ -49,9 +51,16 @@ test("backoff is deterministic and bounded", () => {
 
 describe("durable cloud attempts", () => {
   test("reserved, polling, completed and failed states round-trip", () => {
-    for (const value of [reserved, { ...reserved, ...reference, phase: "polling", polls: 3 },
+    for (const value of [reserved, { ...reserved, phase: "submitting", submissionUnresolved: true },
+      { ...reserved, phase: "failed", error: "Cloud model setup refused", submissionUnresolved: false },
+      { ...reserved, ...reference, phase: "polling", polls: 3, submissionUnresolved: false },
       { ...reserved, ...reference, phase: "completed", model: "gpt-6.1-sol", result: { output: "Checked", verdict: { status: "pass", findings: [] } } },
-      { ...reserved, phase: "failed", error: "Cloud unavailable" }]) {
+      { ...reserved, phase: "failed", error: "Cloud unavailable" },
+      { ...reserved, ...reference, phase: "failed", error: "Cloud task timed out", fallbackEligible: true, failureConfirmed: true },
+      { ...reserved, phase: "failed", error: "Cloud unavailable", failures: 3, accountId: "account-a", fallbackEligible: true,
+        fallback: { at: reserved.nextPollAt, reason: "Cloud unavailable" } },
+      { ...reserved, ...reference, phase: "completed", result: { output: "Built", verdict: { status: "pass", findings: [] } },
+        patch: { digest: "b".repeat(64), tree: "c".repeat(40), applying: true, applied: true } }]) {
       expect(isCloudStageAttempt(JSON.parse(JSON.stringify(value)))).toBe(true);
     }
   });
@@ -59,7 +68,8 @@ describe("durable cloud attempts", () => {
     for (const change of [{ phase: "unknown" }, { phase: "polling" }, { phase: "completed", ...reference },
       { phase: "failed" }, { polls: -1 }, { polls: 0.5 }, { headSha: "bad" }, { deadlineAt: "bad" },
       { nextPollAt: "bad" }, { taskId: "id", taskUrl: null }, { model: 3 },
-      { ...reference, taskUrl: "http://example.com/task" }, { result: { verdict: "pass" } }]) {
+      { ...reference, taskUrl: "http://example.com/task" }, { result: { verdict: "pass" } }, { fallback: { at: "bad", reason: "x" } }, { failures: 4 },
+      { patch: { digest: "bad", tree: "a".repeat(40) } }, { fallbackEligible: "yes" }, { failureConfirmed: "yes" }, { submissionUnresolved: "yes" }]) {
       expect(isCloudStageAttempt({ ...reserved, ...change })).toBe(false);
     }
   });
