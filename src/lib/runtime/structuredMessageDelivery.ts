@@ -1526,6 +1526,7 @@ export async function enqueueStructuredMessage(
           request.admissionGuard?.();
           const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
             path: generation.path, conversationId: owner.conversation.id, origin: request.origin,
+            authorityGuard: request.recoveryAuthorityGuard,
           }, { registry, client });
           if (!recovered) return continuationRefused("the conversation cannot be resumed");
           if (recovered.hold) return continuationRefused("the recovered host's account is parked");

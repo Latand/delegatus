@@ -4884,7 +4884,8 @@ test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut 
   let missing = stateAtRestart === "missing";
   const restartedClient = { ...client, readSession: async () => missing ? null : journal.readSession({ conversationId: conversation.id }) } as RuntimeHostClient;
   const request = { path: artifactPath, conversationId: conversation.id,
-    clientMessageId: "stage-provider-second-cut", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" } };
+    clientMessageId: "stage-provider-second-cut", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" },
+    recoveryAuthorityGuard: () => { expect(state.eligible).toBe(true); } };
   const dependencies = {
     enabled: () => true, registry: () => registry, client: () => restartedClient, kick: () => {},
     idleContinuationAllowed: () => state.eligible,
@@ -4893,7 +4894,9 @@ test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut 
       if (stateAtRestart !== "republish") return false;
       Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish(); return true;
     },
-    recover: async () => {
+    recover: async (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => {
+      expect(input.authorityGuard).toBe(request.recoveryAuthorityGuard);
+      input.authorityGuard?.();
       recoveries++; missing = false;
       Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish();
       return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;

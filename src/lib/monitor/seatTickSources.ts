@@ -12,6 +12,7 @@ import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { recoverSeatQuota } from "./seatQuotaRecovery";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
@@ -495,6 +496,7 @@ export interface SeatTickSources {
       the panel itself reads. Absent: none. */
   workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[]>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
+  recoverQuota?: (project: string) => Promise<boolean>;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
@@ -720,6 +722,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
+    recoverQuota: recoverSeatQuota,
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */

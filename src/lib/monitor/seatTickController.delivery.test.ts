@@ -1,6 +1,14 @@
 import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, emptySeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
 import type { HostState, SeatTickOutstandingWake, SeatTickRunRecord, AgentLivenessRecord, ConversationMessage, DeliveryOutcome, ChildFixture } from "./seatTickController.fixture";
 
+test("an authoritative seat quota obligation withholds ordinary agenda delivery", async () => {
+  const rig = harness({ pipelines: OPEN_LANE });
+  let checked = 0;
+  rig.deps.sources!.recoverQuota = async project => { expect(project).toBe(PROJECT); checked++; return true; };
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("refused");
+  expect(checked).toBe(1); expect(rig.sent).toEqual([]);
+});
+
 
 /* Running children are observed through a rotating window, so a stall on a
    child beyond the eighth is seen on two consecutive checks and reported —

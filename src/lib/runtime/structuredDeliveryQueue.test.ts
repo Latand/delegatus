@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 afterEach(() => setSystemTime());
 
 import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
-import { StructuredSendRefusedError } from "./engineHost";
+import { StructuredSendRefusedError, StructuredDispatchDeferredError } from "./engineHost";
+import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import {
   CONTROL_SETTLEMENT_WINDOW_MS,
@@ -3410,6 +3411,35 @@ test.each(["unchanged", "active", "claim-cancelled", "unreadable", "post-claim-c
   });
 });
 
+
+test.each(["current", "revoked", "no-guard", "unreadable", "host-await"] as const)("seat reset recovery checks authority after claim and at native write: %s", async scenario => {
+  let status = "queued", sends = 0, guardCalls = 0;
+  let revoked = scenario === "revoked";
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => status === "queued" ? [{ id: "effect:seat-reset", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "seat-reset", conversationId: "conversation-one", text: "continuation", policy: "queue", turnId: null,
+        origin: { kind: "agent", role: SEAT_QUOTA_RECOVERY_ROLE, project: "fixture" }, onlyIfIdle: { revision: 1, writerClaim: "owner:1" } } }] : [],
+    status: async () => ({ status, revision: 1 }) as Awaited<ReturnType<NonNullable<StructuredDeliveryQueuePort["status"]>>>,
+    hostClaim: async () => "owner:1", idleContinuationCurrent: async () => true,
+    transition: async (_operation, next) => { status = next; },
+    ...(scenario === "no-guard" ? {} : { seatQuotaDispatchGuard: async (id: string, conversation: string, project: string) => {
+      expect([id, conversation, project, status]).toEqual(["seat-reset", "conversation-one", "fixture", "delivering"]);
+      if (scenario === "unreadable") throw new StructuredDispatchDeferredError("evidence unavailable");
+      const guard = () => { guardCalls++; if (revoked) throw new StructuredSendRefusedError("seat revoked"); };
+      guard(); return guard;
+    } }),
+  }, () => host(async (_entry, _first, authorize) => {
+    await Promise.resolve();
+    if (scenario === "host-await") revoked = true;
+    authorize?.();
+    sends++; return { outcome: "turn-started", turnId: "seat-resumed" };
+  }));
+  await queue.drain();
+  expect(sends).toBe(scenario === "current" ? 1 : 0);
+  if (scenario === "unreadable") expect(status).toBe("queued");
+  else if (scenario !== "current") expect(status).toBe("failed");
+  if (scenario === "current" || scenario === "host-await") expect(guardCalls).toBeGreaterThanOrEqual(2);
+});
 
 test.each(["before-claim", "after-claim", "serialized-control", "after-claim-kill", "after-claim-failed-kill",
   "after-claim-agent-kill", "after-claim-failed-agent-kill"] as const)("provider continuation dispatch orders cancellation at %s", async timing => {

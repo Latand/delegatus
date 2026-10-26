@@ -1525,6 +1525,15 @@ async function check(
   const sources = new Proxy(sourcePorts, {
     get: (target, key, receiver) => key === "memoryProblems" ? memoryProblems : Reflect.get(target, key, receiver),
   });
+  // Quota continuations own their original request. Ordinary agenda wakes
+  // must not race them or turn a provider failure into a different request.
+  if (await sources.recoverQuota?.(canonical)) {
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
+      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
+      deferred: 0, eventsThrough: 0, delivery: null, detail: "seat quota recovery retains the unanswered request" };
+    appendRecord(record);
+    return record;
+  }
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
