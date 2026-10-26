@@ -1538,7 +1538,7 @@ async function refreshStructuredTranscriptState(
     if (!generation) continue;
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
     const entry = snapshot.entries[hostKey];
-    if ((!hostKeys || hostKeys.has(hostKey)) && entry?.structuredHost && entry.status === "live" && !conversation.supersededBy) {
+    if ((!hostKeys || hostKeys.has(hostKey)) && entry?.structuredHost) {
       const current = reuse ? startupHostSnapshot(registry, entry.key) : snapshot;
       const currentEntry = current.entries[hostKey];
       const currentConversation = current.conversations[conversation.id];
