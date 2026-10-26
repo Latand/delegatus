@@ -2051,6 +2051,21 @@
 .kb .card .card-answer { height: 28px; padding: 0 12px; }
 .kb .card .card-chain { min-width: 0; }
 
+/* The task's summary (variant 3 «Панеллю»): a panel on the well surface, its writer and time in the head, a bold headline, the text and what is left. */
+.task-summary { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-well); }
+.task-summary-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.task-summary-by { margin-left: auto; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-summary-headline { margin: 0; font-size: var(--text-ui); line-height: 17px; font-weight: 600; color: var(--color-primary); overflow-wrap: anywhere; }
+.task-summary-text, .task-summary-left { margin: 0; font-size: var(--text-label); line-height: 16px; color: var(--color-secondary); overflow-wrap: anywhere; }
+.task-summary-left { color: var(--color-muted); }
+.task-summary-left b { font-weight: 600; color: var(--color-secondary); }
+.task-summary.phone { gap: 6px; padding: 10px 12px; border-radius: var(--radius-surface); box-shadow: inset 0 0 0 1px var(--border-default); }
+.task-summary.phone .chronology-head { font-size: var(--text-body); line-height: 18px; font-weight: 600; color: var(--color-primary); }
+.task-summary.phone .task-summary-headline { font-size: var(--text-body); line-height: 18px; }
+.task-summary.phone .task-summary-text, .task-summary.phone .task-summary-left { font-size: var(--text-ui); line-height: 17px; }
+/* The description's label under a summary, pulled toward the description's own line box. */
+.kb .card .desc-head { margin-bottom: -6px; }
+
 /* The expanded card's timeline: time, a mark in the entry's tone, the words. */
 .chronology { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .chronology-head { margin: 0; font-size: var(--text-label); font-weight: 700; line-height: 16px; color: var(--color-secondary); }
@@ -2061,7 +2076,9 @@
 .chronology-entry.tone-ok .chronology-mark { background: var(--color-success); }
 .chronology-entry.tone-bad .chronology-mark { background: var(--color-danger); }
 .chronology-entry.tone-warn .chronology-mark { background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-secondary); }
-.chronology-what { min-width: 0; overflow-wrap: anywhere; }
+/* Every entry's words start at one x; an entry that answers another carries a rule in that gutter. */
+.chronology-what { position: relative; min-width: 0; padding-left: 6px; overflow-wrap: anywhere; }
+.chronology-entry.answers .chronology-what::before { content: ""; position: absolute; left: 1px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--border-strong); }
 .chronology-open { text-align: left; color: inherit; border-radius: 3px; }
 .chronology-open:hover { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
 .chronology-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
@@ -2079,6 +2096,13 @@
 .chronology-link:disabled { cursor: default; opacity: 0.5; }
 .chronology.phone .chronology-acts { gap: 0 18px; }
 .chronology.phone .chronology-link { min-height: 44px; font-size: var(--text-ui); }
+/* A stage's one-line result under its entry, after the reason it ran: the reason muted, the entry it answers a link. */
+.chronology-result { display: block; color: var(--color-secondary); }
+.chronology-why { color: var(--color-muted); }
+/* An inline block whose vertical margin takes its padding back: the target grows, the line does not. */
+.chronology-result .chronology-link { display: inline-block; min-height: 0; line-height: 16px; padding: 3px 0; margin: -3px 0; white-space: nowrap; }
+.chronology.phone .chronology-result { font-size: var(--text-ui); line-height: 18px; }
+.chronology.phone .chronology-result .chronology-link { min-height: 0; line-height: 18px; padding: 13px 0; margin: -13px 0; }
 /* The phone: the time leads the entry's line, and the stop's ⋯ keeps 44 px. */
 .chronology.phone { padding: 8px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); }
 .chronology.phone .chronology-entry { display: flex; align-items: flex-start; gap: 6px; line-height: 18px; font-size: var(--text-ui); }
@@ -2087,8 +2111,10 @@
 .chronology.phone .chronology-menu { flex: none; margin-right: -8px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--color-muted); }
 .chronology.phone .chronology-menu svg { width: 18px; height: 18px; }
 .chronology.phone .chronology-earlier button, .chronology.phone .chronology-detail summary { min-height: 44px; display: inline-flex; align-items: center; }
-/* An entry that opens its conversation is a whole 44 px row on the phone. */
-.chronology.phone .chronology-open { display: flex; align-items: center; width: 100%; min-height: 44px; }
+/* An entry that opens its conversation is a whole 44 px row on the phone; its words sit at the row's top
+   padding, where its time sits too, so a result line under them reads as the same entry. */
+.chronology.phone .chronology-open { display: flex; align-items: flex-start; width: 100%; min-height: 44px; padding-top: 13px; }
+.chronology.phone .chronology-entry:has(> .chronology-what > .chronology-open) .chronology-time { padding-top: 13px; }
 /* ── Task limit spend (docs/design/task-limit-spend.md §7.2, variant 2) ─────
    At the end of the state line, per provider: its engine mark and a scale of
    four cells, filled in the engine's colour; a bar, so it never reads as the

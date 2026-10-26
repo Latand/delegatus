@@ -1,6 +1,7 @@
 "use client";
 
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
 import { ArrowDown, ArrowLeftRight, Bot, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -1157,6 +1158,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 the stages, what agents ask, the task with its agents, and
                 its history. */}
             <div data-phone-task-groups="" className="flex shrink-0 flex-col gap-6">
+              {/* 1. The task's summary, first under the title: how the task works now. */}
+              <TaskSummaryPanel phone summary={task?.summary} pipelines={lanes.map((summary) => summary.pipeline)} nowMs={nowMs} />
               {/* 2a. A task another machine runs: its lanes in the frame a finished
                   lane uses, with the remote surface, drawn by the same block with
                   no control. No sheet opens on them. */}
@@ -1228,7 +1231,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   </button>
                 )}
 
-                <TaskStatusNote note={task.note} nowMs={now * 1000} full />
+                <TaskStatusNote note={noteShownBesideSummary(task.note, task.summary)} nowMs={now * 1000} full />
 
                 {/* The standing tick notice opens the panel that holds the setting it describes. */}
                 {tickNotice ? (

@@ -1839,3 +1839,353 @@ export async function captureTaskDueFrames(browser: Browser, base: string, out: 
   fs.mkdirSync("evidence/task-due-composer", { recursive: true });
   fs.writeFileSync(`evidence/task-due-composer/${phone ? "phone" : "desktop"}.json`, record);
 }
+
+/*
+ * The task's «Summary» panel and the timeline's result lines (the operator's
+ * variant 3 «Панеллю», 2026-10-26), through the product's own board and phone
+ * task screen over `?scenario=task-summary`, whose `/api/files` and
+ * `/api/tasks` this payload answers. One finished task, «t-csv», with three
+ * lanes: a build retried after a lost host, a review that failed and the fix
+ * answering it, a refresh lane after the update from main, and a deploy whose
+ * stage wrote the summary (with what is left); an older agent note it hides.
+ * «t-long» carries the longest summary the limits admit, written by the
+ * orchestrator, a newer note beside it and a running fix that answers its
+ * review. «t-plain» has no summary at all. Every line is in the frame's language.
+ */
+const TASK_SUMMARY_NOW = Date.parse("2026-10-24T13:30:00.000Z");
+
+export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
+  const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
+  const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+  const role = (roleId: string) => ({ roleId, engine: "claude", model: "claude-opus-5-5", effort: "high", access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
+  const stage = (id: string, roleId: string, next: string | null, onFail: unknown = null) => ({ id, kind: "run", role: { roleId }, prompt: "{{task}}", next, onFail, effectiveRole: role(roleId) });
+  type Over = { activatedBy?: { stageId: string; attempt: number; edge: "pass" | "fail" } | null; findings?: string[]; result?: string; error?: string };
+  const attempt = (pipelineId: string, stageId: string, roleId: string, n: number, from: number, to: number | null, state: string, over: Over = {}) => {
+    const status = state === "failed" || over.findings?.length ? "fail" : "pass";
+    const verdict = to === null ? null : { status, findings: over.findings ?? [] };
+    return {
+      n, state, effectiveRole: role(roleId), launchId: `launch-${pipelineId}-${stageId}-${n}`, conversationId: `conversation_${pipelineId}_${stageId}_${n}`,
+      sessionId: null, agentPath: `/sessions/atlas/${pipelineId}-${stageId}-${n}.jsonl`, paneId: null, flowId: null,
+      startedAt: iso(from), completedAt: to === null ? null : iso(to), input: null, activatedBy: over.activatedBy ?? null, output: null, verdict, error: over.error ?? null,
+      report: to === null || over.error ? null : { seq: n, at: iso(to), actor: { kind: "agent", conversationId: `conversation_${pipelineId}_${stageId}_${n}` }, verdict, summary: "", provenance: null, calls: 1, ...(over.result ? { result: over.result } : {}) },
+    };
+  };
+  const lane = (id: string, taskId: string, title: string, created: number, closed: number | null, stages: unknown[], runs: unknown[], over: Record<string, unknown> = {}) => ({
+    id, task: title, taskIds: [taskId], project: "atlas", repoDir: "/repo/atlas", worktreeDir: `/repo/atlas/pipelines/${id}`, branch: `pipeline/${id}`, baseBranch: "main", baseRef: "main",
+    lastPassedCommit: "9f3e1c2a7b5d4e6f8a0b1c2d3e4f5a6b7c8d9e0f", stages, runs, cursor: null, state: closed === null ? "running" : "completed", pausedState: null, stateDetail: null,
+    srcPath: null, srcConversationId: null, createdAt: iso(created), closedAt: closed === null ? null : iso(closed), updatedAt: iso(closed ?? 1), ...over,
+  });
+  const data = {
+    fixResult: L("A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk", "Повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину"),
+    refreshFix: L("Removed the marker; both changes kept, the rate limit and the retry; tests green", "Маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені"),
+  };
+  const fail = (stageId: string, n: number) => ({ stageId, attempt: n, edge: "fail" as const });
+  const pass = (stageId: string, n: number) => ({ stageId, attempt: n, edge: "pass" as const });
+  const pipelines = [
+    lane("p-export", "t-csv", L("CSV export: streaming writes and a retry on 503", "Експорт CSV: потоковий запис і повтор на 503"), 296, 168,
+      [stage("build", "builder", "review"), stage("review", "reviewer", null, { to: "fix", maxRounds: 3 }), stage("fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [
+          attempt("p-export", "build", "builder", 1, 295, 290, "failed", { error: "stage host was lost while its turn was open" }),
+          attempt("p-export", "build", "builder", 2, 289, 256, "passed", { result: L("The writer streams straight into the upload, with no temporary file; the in-memory path is gone", "Запис іде потоком одразу у вивантаження, без тимчасового файлу; шлях через пам’ять вилучено") }),
+        ] },
+        { stageId: "review", attempts: [
+          attempt("p-export", "review", "reviewer", 1, 254, 236, "passed", { activatedBy: pass("build", 2), findings: ["P1 — duplicate rows", "P2 — no retry test", "P2 — no timeout"], result: L("Duplicate rows after a retry, no retry test, no upload timeout", "Дублі рядків після повтору, без тесту на повтор і без таймауту") }),
+          attempt("p-export", "review", "reviewer", 2, 209, 196, "passed", { activatedBy: pass("fix", 1), result: L("No findings; memory stays under 120 MB", "Без зауважень; пам’ять не перевищує 120 МБ") }),
+        ] },
+        { stageId: "fix", attempts: [
+          attempt("p-export", "fix", "builder", 1, 234, 211, "passed", { activatedBy: fail("review", 1), result: data.fixResult }),
+        ] },
+      ],
+      { merge: { state: "merged", by: "auto-merge", repository: "atlas/atlas", prNumber: 412, updates: [{ requestedAt: iso(160), head: null }], requestedAt: iso(166), mergedAt: iso(120), blockedAt: null, reason: null, updatedAt: iso(120) } }),
+    lane("p-refresh", "t-csv", L("Refresh the PR branch", "Оновити гілку PR"), 158, 124,
+      [stage("refresh", "builder", "review"), stage("review", "reviewer", null, { to: "refresh", maxRounds: 2 })],
+      [
+        { stageId: "refresh", attempts: [
+          attempt("p-refresh", "refresh", "builder", 1, 157, 146, "passed", { result: L("Merged main: a conflict in upload.ts with #408, the rate limit", "Влито main: конфлікт в upload.ts з #408, обмеженням швидкості") }),
+          attempt("p-refresh", "refresh", "builder", 2, 139, 134, "passed", { activatedBy: fail("review", 1), result: data.refreshFix }),
+        ] },
+        { stageId: "review", attempts: [
+          attempt("p-refresh", "review", "reviewer", 1, 145, 140, "passed", { activatedBy: pass("refresh", 1), findings: ["P1 — a conflict marker is left"], result: L("A conflict marker is left in upload.ts", "В upload.ts лишився маркер конфлікту") }),
+          attempt("p-refresh", "review", "reviewer", 2, 133, 124, "passed", { activatedBy: pass("refresh", 2), result: L("The conflict resolution is right; nothing else changed", "Розв’язання конфлікту правильне; більше нічого не змінено") }),
+        ] },
+      ],
+      { refreshOf: { pipelineId: "p-export", base: "main" } }),
+    lane("p-deploy", "t-csv", L("Deploy to production", "Розгортання на прод"), 112, 85,
+      [stage("deploy", "deployer", null)],
+      [{ stageId: "deploy", attempts: [attempt("p-deploy", "deploy", "deployer", 1, 110, 85, "passed", { result: L("A check export on production passed without errors", "Контрольний експорт на проді пройшов без помилок") })] }]),
+    lane("p-long", "t-long", L("Search filters keep their state", "Фільтри пошуку зберігають стан"), 60, null,
+      [stage("build", "builder", "review"), stage("review", "reviewer", null, { to: "fix", maxRounds: 2 }), stage("fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [attempt("p-long", "build", "builder", 1, 58, 40, "passed", { result: L("Filters live in the address and come back after a product page", "Фільтри живуть в адресі й повертаються після сторінки товару") })] },
+        { stageId: "review", attempts: [attempt("p-long", "review", "reviewer", 1, 39, 30, "passed", { activatedBy: pass("build", 1), findings: ["P2 — the sort order is lost"], result: L("The sort order is still lost on the way back", "Порядок сортування досі губиться при поверненні") })] },
+        { stageId: "fix", attempts: [attempt("p-long", "fix", "builder", 1, 29, null, "running", { activatedBy: fail("review", 1) })] },
+      ],
+      { cursor: { stageId: "fix", state: "running", input: null, activatedBy: fail("review", 1) } }),
+  ];
+  /* Close to the 120 and 600 characters `stage_report` and `update_task` admit, each ending on a whole word. */
+  const longHeadline = L(
+    "Search filters, the sort order and the page number now survive going back, a reload and a link sent to a colleague",
+    "Фільтри пошуку, сортування й номер сторінки тепер переживають повернення назад, перезавантаження і посилання колезі",
+  );
+  const longText = L(
+    "Every filter the person sets is written into the address as they choose it, so going back from a product page, reloading the tab or opening a link a colleague sent shows the same results in the same order. The page number is kept too, and a filter that no longer exists in the catalogue is dropped quietly instead of emptying the list. Old links without filters open the catalogue as before. The address stays readable: each filter is one short word, and the order of the words never changes what the list shows, so two people comparing links see the same thing. Nothing else changed.",
+    "Кожен фільтр, який людина обирає, одразу записується в адресу, тож повернення зі сторінки товару, перезавантаження вкладки чи посилання від колеги показують ті самі результати в тому самому порядку. Номер сторінки теж зберігається, а фільтр, якого вже немає в каталозі, тихо відкидається, і список не порожніє. Старі посилання без фільтрів відкривають каталог, як і раніше. Адреса лишається читабельною: кожен фільтр — одне коротке слово, а порядок слів не змінює того, що показує список, тож двоє людей, які порівнюють посилання, бачать одне й те саме. Більше нічого не змінено.",
+  );
+  const tasks = [
+    { id: "t-csv", project: "atlas", status: "done", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-csv",
+      text: `${L("CSV export fails on large projects", "Експорт CSV падає на великих проєктах")}\n${L("Past 50k rows the export worker runs out of memory.", "Понад 50 тис. рядків воркер експорту вилітає по пам’яті.")}`,
+      createdAt: iso(300), updatedAt: iso(83), doneAt: iso(83),
+      note: { text: L("Deployed 2.14.1; an 80k-row export passed on production.", "Розгорнуто 2.14.1; експорт 80 тис. рядків на проді пройшов."), author: { kind: "agent", conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(84) },
+      summary: {
+        headline: L("CSV export holds up on large projects", "Експорт CSV витримує великі проєкти"),
+        text: L("The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1 → 2 → 4 s), then a clear error. 80k rows take 6 s; the file format is unchanged.", "Файл пишеться потоком частинами по 5 000 рядків; збій сховища дає три повтори (1 → 2 → 4 с), далі зрозуміла помилка. 80 тис. рядків проходять за 6 с; формат файлу той самий."),
+        left: L("nothing required; an idea: show the export's progress in the UI", "нічого обов’язкового; ідея: показувати прогрес експорту в інтерфейсі"),
+        author: { kind: "stage", pipelineId: "p-deploy", stageId: "deploy", attempt: 1, conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(83),
+      } },
+    { id: "t-long", project: "atlas", status: "assigned", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-long",
+      text: `${L("Search filters lose their state", "Фільтри пошуку губляться")}\n${L("Going back from a product resets them.", "Після повернення з товару скидаються.")}`,
+      createdAt: iso(70), updatedAt: iso(20),
+      summary: { headline: longHeadline, text: longText, author: { kind: "orchestrator", conversationId: "conversation_seat" }, updatedAt: iso(45) },
+      note: { text: L("The fix for the sort order is running.", "Виправлення сортування працює."), author: { kind: "orchestrator", conversationId: "conversation_seat" }, updatedAt: iso(20) } },
+    { id: "t-plain", project: "atlas", status: "inbox", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-plain",
+      text: `${L("Orders page is slow on phones", "Сторінка замовлень повільна на телефоні")}\n${L("Over 3 s on a mid-range phone.", "Понад 3 с на середньому телефоні.")}`,
+      createdAt: iso(200), updatedAt: iso(200) },
+  ];
+  return {
+    tasks,
+    body: { files: [], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/repo/atlas" }, systemHealth: { tmux: { status: "healthy" } } },
+    texts: { ...data, longHeadline, longText },
+  };
+}
+
+/** The driver's answers for `?scenario=task-summary`, in the language the page asks with (`&lang=`). */
+export function taskSummaryResponses(): Record<string, (request: Request) => Response> {
+  const lang = (request: Request) => (new URL(request.headers.get("referer") ?? "http://x/").searchParams.get("lang") === "uk" ? "uk" : "en");
+  return {
+    "/api/files": (request) => Response.json(taskSummaryResponse(lang(request)).body),
+    "/api/tasks": (request) => Response.json({ tasks: taskSummaryResponse(lang(request)).tasks }),
+  };
+}
+
+/** Every text range under `selector` inside `scope`: whole in the window, never cut by a scrolling or
+    clipping ancestor, never ended in an ellipsis. Returns the failures, empty when everything is whole. */
+async function wholeTextFailures(page: Page, scope: string, selector: string): Promise<string[]> {
+  return page.evaluate(({ scope, selector }) => {
+    const failures: string[] = [];
+    for (const element of document.querySelector(scope)?.querySelectorAll<HTMLElement>(selector) ?? []) {
+      const clips: DOMRect[] = [];
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (/(hidden|auto|scroll|clip)/.test(style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+      }
+      if (getComputedStyle(element).textOverflow === "ellipsis" && element.scrollWidth > element.clientWidth + 0.5) failures.push(`ellipsis: ${element.textContent?.slice(0, 40)}`);
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (!text.textContent?.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        if (!rects.length) failures.push(`unrendered: ${text.textContent.slice(0, 40)}`);
+        for (const rect of rects) {
+          const inWindow = rect.left >= -0.5 && rect.top >= -0.5 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5;
+          const inClips = clips.every((clip) => rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5);
+          if (!inWindow || !inClips) { failures.push(`cut: ${text.textContent.slice(0, 40)}`); break; }
+        }
+      }
+    }
+    return failures;
+  }, { scope, selector });
+}
+
+/** Scrolls each match into view in turn and gathers the cut text ranges of all of them. */
+async function wholeEach(page: Page, scope: string, selector: string): Promise<string[]> {
+  const count = await page.locator(`${scope} ${selector}`).count();
+  const failures: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const element = page.locator(`${scope} ${selector}`).nth(index);
+    await element.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+    const marker = `task-summary-check-${index}`;
+    await element.evaluate((node, marker) => node.setAttribute("data-check", marker), marker);
+    failures.push(...await wholeTextFailures(page, scope, `[data-check="${marker}"]`));
+    await element.evaluate((node) => node.removeAttribute("data-check"));
+  }
+  return failures;
+}
+
+export async function captureTaskSummaryFrames(browser: Browser, base: string, out: string, phone: boolean) {
+  const { translate } = await import("@/lib/i18n");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  const widths = phone ? [390, 430] : [1440, 1100, 820];
+  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) {
+    const data = taskSummaryResponse(lang);
+    const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars as never);
+    const viewport = { width, height: phone ? (width === 430 ? 932 : 844) : width === 820 ? 900 : width === 1100 ? 800 : 900 };
+    const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: "reduce", timezoneId: "Europe/Kyiv", ...(phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+    /* The orchestrator's seat starts folded, so the board is what the first screen shows. */
+    await context.addInitScript(({ lang, theme }) => {
+      localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+      localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+    }, { lang, theme });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.clock.setFixedTime(new Date(TASK_SUMMARY_NOW));
+    const name = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}`;
+    try {
+      await page.goto(`${base}?scenario=task-summary&lang=${lang}#p=atlas`);
+      await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+      const scopeOf = (id: string) => (phone ? "[data-phone-task-body]" : `[data-kanban-card="task:${id}"]`);
+      const openTask = async (id: string) => {
+        if (!phone) {
+          const card = page.locator(`${scopeOf(id)}[data-collapsed="0"]`);
+          await card.waitFor({ state: "attached" });
+          /* A narrow board shows one column at a time: its tab brings the card's column. */
+          if (!(await card.isVisible())) await page.locator(`.tabs-nav [data-tab="${data.tasks.find((task) => task.id === id)!.status}"]`).first().click();
+          await card.waitFor();
+          return;
+        }
+        if (await page.locator("[data-phone-task-body]").count()) { await page.locator("[data-mobile2-back]").first().click(); await page.locator("[data-phone-task-body]").waitFor({ state: "detached" }); }
+        await page.locator(`[data-phone-card="task:${id}"]`).click();
+        await page.locator("[data-phone-task-body]").waitFor();
+      };
+      const reading: Record<string, unknown> = { lang, theme, width, phone };
+
+      /* «t-csv»: the stage's summary with what is left, the older note hidden. */
+      await openTask("t-csv");
+      const csv = scopeOf("t-csv");
+      const panel = page.locator(`${csv} [data-task-summary]`);
+      await panel.waitFor();
+      if (!phone) await page.locator(csv).evaluate((node) => node.scrollIntoView({ block: "start", inline: "nearest" }));
+      expect(await panel.locator("[data-task-summary-by]").innerText()).toMatch(new RegExp(`^${word("taskSummary.by", { who: "Deploy", time: "" }).replace(/[·\s]+$/, "")} · \\d{2}:\\d{2}$`));
+      expect(await panel.locator("[data-task-summary-headline]").innerText()).toBe(data.tasks[0]!.summary!.headline);
+      expect(await panel.locator("[data-task-summary-left]").innerText()).toStartWith(word("taskSummary.left"));
+      expect(await page.locator(`${csv} [data-task-note]`).count()).toBe(0);
+      /* On the phone the panel is the first group under the title. */
+      if (phone) expect(await page.locator("[data-phone-task-groups] > :first-child").getAttribute("data-task-summary")).toBe("");
+      else expect(await page.locator(`${csv} [data-describe-head]`).innerText()).toBe(word("mobile2.task.description"));
+      /* Its headline's first line ends on the first screen, before anything scrolls. */
+      const firstLine = await panel.locator("[data-task-summary-headline]").evaluate((node) => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        const rect = [...range.getClientRects()].find((entry) => entry.width > 0)!;
+        return { top: rect.top, bottom: rect.bottom, innerHeight };
+      });
+      expect(firstLine.bottom).toBeLessThanOrEqual(firstLine.innerHeight);
+      const surface = await panel.evaluate((node) => {
+        const probe = document.createElement("div"); probe.style.background = "var(--surface-well)"; document.body.append(probe);
+        const well = getComputedStyle(probe).backgroundColor; probe.remove();
+        return { background: getComputedStyle(node).backgroundColor, well, radius: getComputedStyle(node).borderTopLeftRadius, headlineWeight: getComputedStyle(node.querySelector("[data-task-summary-headline]")!).fontWeight };
+      });
+      expect(surface.background).toBe(surface.well);
+      expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+      expect(Number(surface.headlineWeight)).toBeGreaterThanOrEqual(600);
+      await page.screenshot({ path: path.join(out, `${name}-csv-top.png`) });
+      const summaryCuts = await wholeEach(page, csv, "[data-task-summary] p, [data-task-summary] .task-summary-by");
+
+      /* Its timeline, folded as a returning person first sees it: the refresh lane's start answers the update
+         from main, which «Earlier · N» keeps out of sight; its second refresh answers its review. */
+      const entry = (key: string) => page.locator(`${csv} [data-chronology-entry="${key}"]`);
+      const after = (label: string) => `${word(label === "update" ? "chronology.afterUpdate" : "chronology.answers", { label: label === "update" ? word("chronology.updateLink") : label })}`;
+      const lane = entry("p-refresh:started");
+      await lane.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+      const hiddenBefore = Number(await page.locator(`${csv} section.chronology`).getAttribute("data-chronology-hidden"));
+      expect(hiddenBefore).toBeGreaterThan(0);
+      expect(await entry("p-export:merge:update:0").count()).toBe(0);
+      expect(await lane.locator("[data-chronology-result]").innerText()).toBe(after("update"));
+      expect(await lane.getAttribute("class")).toContain("answers");
+      const refreshFix = entry("p-refresh:refresh:attempt:2");
+      const refreshLine = await refreshFix.locator("[data-chronology-result]").innerText();
+      /* In uk the result goes on in lowercase after the colon; en keeps the capital. */
+      const lower = (text: string) => (lang === "uk" ? text[0]!.toLowerCase() + text.slice(1) : text);
+      expect(refreshLine).toBe(`${after("Review · 1")}: ${lower(data.texts.refreshFix)}`);
+      const rule = await refreshFix.locator(".chronology-what").evaluate((node) => { const style = getComputedStyle(node, "::before"); return { width: style.width, background: style.backgroundColor }; });
+      expect(rule.width).toBe("2px");
+      expect(await entry("p-refresh:review:attempt:2").evaluate((node) => getComputedStyle(node.querySelector(".chronology-what")!, "::before").content)).toBe("none");
+      const link = lane.locator("[data-chronology-answers]");
+      const linkBox = await link.boundingBox();
+      if (phone) expect(linkBox!.height).toBeGreaterThanOrEqual(44);
+      /* The entry's words start on its time's line; its result line follows the open button, which keeps 44 px on the phone, without overlapping it. */
+      const row = await refreshFix.evaluate((node) => {
+        /* Text rects only: an inline-block link's padded box starts above its line. */
+        const lines = (element: Element) => {
+          const rects: DOMRect[] = [];
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          for (let text = walker.nextNode(); text; text = walker.nextNode()) { const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
+          return rects.sort((one, two) => one.top - two.top);
+        };
+        const open = node.querySelector(".chronology-open")!;
+        const box = open.getBoundingClientRect();
+        return { time: lines(node.querySelector(".chronology-time")!)[0]!.top, words: lines(open)[0]!.top, result: lines(node.querySelector("[data-chronology-result]")!)[0]!.top, bottom: box.bottom, target: box.height };
+      });
+      expect(Math.abs(row.words - row.time)).toBeLessThanOrEqual(2);
+      expect(row.result - row.bottom).toBeGreaterThanOrEqual(-0.5);
+      expect(row.result - row.bottom).toBeLessThanOrEqual(4);
+      if (phone) expect(row.target).toBeGreaterThanOrEqual(44);
+      await page.screenshot({ path: path.join(out, `${name}-csv-timeline.png`) });
+      const foldedCuts = await wholeEach(page, csv, "[data-chronology-result]");
+      /* The link opens the fold over the update it names, brings it into view and focuses it. */
+      await link.click();
+      await entry("p-export:merge:update:0").waitFor();
+      await page.waitForFunction(() => document.activeElement?.closest("[data-chronology-entry]")?.getAttribute("data-chronology-entry") === "p-export:merge:update:0");
+      const target = await entry("p-export:merge:update:0").evaluate((node) => { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, innerHeight }; });
+      expect(target.top).toBeGreaterThanOrEqual(0);
+      expect(target.bottom).toBeLessThanOrEqual(target.innerHeight);
+      expect(await page.locator(`${csv} section.chronology`).getAttribute("data-chronology-hidden")).toBe("0");
+      await page.screenshot({ path: path.join(out, `${name}-csv-link.png`) });
+      /* Unfolded: the build retried after its lost host and the fix answering the first review. */
+      const fix = entry("p-export:fix:attempt:1");
+      const fixLine = await fix.locator("[data-chronology-result]").innerText();
+      expect(fixLine).toBe(`${after("Review · 1")}: ${lower(data.texts.fixResult)}`);
+      expect(await entry("p-export:build:attempt:2").locator("[data-chronology-result]").innerText()).toStartWith(`${word("chronology.retryOf", { label: "Build · 1" })}: `);
+      await fix.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+      await page.screenshot({ path: path.join(out, `${name}-csv-unfolded.png`) });
+      const timelineCuts = [...foldedCuts, ...await wholeEach(page, csv, "[data-chronology-result]")];
+      Object.assign(reading, { csv: { by: await panel.locator("[data-task-summary-by]").innerText(), firstLine, surface, refreshLine, fixLine, rule, row, link: linkBox, hiddenBefore, target, summaryCuts, timelineCuts } });
+      expect(summaryCuts).toEqual([]);
+      expect(timelineCuts).toEqual([]);
+
+      /* «t-long»: the longest summary, written by the orchestrator, whole; the newer note shows beside it; the running fix answers its review and has no line yet. */
+      await openTask("t-long");
+      const long = scopeOf("t-long");
+      const longPanel = page.locator(`${long} [data-task-summary]`);
+      await longPanel.waitFor();
+      if (!phone) await page.locator(long).evaluate((node) => node.scrollIntoView({ block: "start", inline: "nearest" }));
+      expect(await longPanel.locator("[data-task-summary-by]").innerText()).toStartWith(word("taskSummary.by", { who: word("taskSummary.who.seat"), time: "" }).replace(/[·\s]+$/, ""));
+      expect(await longPanel.locator("[data-task-summary-text]").innerText()).toBe(data.texts.longText);
+      expect(await page.locator(`${long} [data-task-note]`).count()).toBeGreaterThan(0);
+      const running = page.locator(`${long} [data-chronology-entry="p-long:running:fix:1"]`);
+      expect(await running.locator("[data-chronology-result]").innerText()).toBe(word("chronology.answers", { label: "Review" }));
+      const longFirst = await longPanel.locator("[data-task-summary-headline]").evaluate((node) => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        return [...range.getClientRects()].find((entry) => entry.width > 0)!.bottom <= innerHeight;
+      });
+      expect(longFirst).toBe(true);
+      await page.screenshot({ path: path.join(out, `${name}-long.png`) });
+      const longCuts = await wholeEach(page, long, "[data-task-summary] p, [data-chronology-result]");
+      expect(longCuts).toEqual([]);
+
+      /* «t-plain»: nothing written, nothing drawn. */
+      await openTask("t-plain");
+      const plain = scopeOf("t-plain");
+      await page.locator(plain).first().waitFor();
+      expect(await page.locator(`${plain} [data-task-summary]`).count()).toBe(0);
+      expect(await page.locator(`${plain} [data-describe-head]`).count()).toBe(0);
+      expect(await page.locator(`${plain} [data-chronology-result]`).count()).toBe(0);
+      Object.assign(reading, { long: { by: await page.locator("[data-task-summary-by]").count(), longCuts }, plain: { panel: 0 } });
+      expect(errors).toEqual([]);
+      readings.push(reading);
+    } catch (error) {
+      await page.screenshot({ path: path.join(out, `failure-${name}.png`), fullPage: true }).catch(() => undefined);
+      throw error;
+    } finally { await context.close(); }
+  }
+  const sourceDigests = Object.fromEntries([
+    "src/components/tasks/TaskSummaryPanel.tsx", "src/components/kanban/TaskChronology.tsx", "src/components/kanban/taskChronologyModel.ts",
+    "src/components/kanban/KanbanCard.tsx", "src/components/mobile/MobileTaskScreen.tsx", "src/components/kanban/kanbanBoard.css",
+    "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695BrowserHarness.ts",
+  ].map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+  const record = JSON.stringify({ clock: new Date(TASK_SUMMARY_NOW).toISOString(), sourceDigests, readings }, null, 2) + "\n";
+  fs.writeFileSync(path.join(out, "readings.json"), record);
+  fs.mkdirSync("evidence/task-summary", { recursive: true });
+  fs.writeFileSync(`evidence/task-summary/${phone ? "phone" : "desktop"}.json`, record);
+}

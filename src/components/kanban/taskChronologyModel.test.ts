@@ -118,3 +118,71 @@ test("the fold shows the latest eight behind «Earlier · N», and a stop under 
   /* Eight or fewer never fold. */
   expect(foldChronology(entries.slice(0, 8), false)).toEqual({ hidden: 0, shown: entries.slice(0, 8) });
 });
+
+/* The operator's variant 3 of 2026-10-26: each stage entry carries the one
+   line its report wrote, and an entry that answers another names it. */
+const reported = (result: string, status: "pass" | "fail" = "pass") => ({ verdict: { status, findings: [] }, report: { verdict: { status, findings: [] }, result } });
+const byKey = (entries: readonly ChronologyEntry[], key: string) => entries.find((entry) => entry.key === key);
+
+test("a stage entry carries its report's result line; an entry with none, and a running attempt, carry none", () => {
+  const pipeline = lane("res", {
+    stages: [{ id: "build", kind: "run", next: "review", onFail: null }, { id: "review", kind: "run", next: null, onFail: { to: "build", maxRounds: 2 } }] as unknown as Pipeline["stages"],
+    runs: [
+      { stageId: "build", attempts: [attempt(1, "passed", 10, 20, reported("The writer streams rows"))] },
+      { stageId: "review", attempts: [
+        attempt(1, "passed", 21, 24, { verdict: { status: "fail", findings: ["P1 — one"] }, report: { verdict: { status: "fail", findings: ["P1 — one"] }, result: "   " } }),
+        attempt(2, "running", 30, null, { report: { verdict: { status: "pass", findings: [] }, result: "Not settled yet" } }),
+      ] },
+    ] as unknown as Pipeline["runs"],
+  });
+  const entries = chronology([pipeline]);
+  expect(byKey(entries, "res:build:attempt:1")?.result).toBe("The writer streams rows");
+  /* A blank line is no line. */
+  expect(byKey(entries, "res:review:attempt:1")).not.toHaveProperty("result");
+  expect(byKey(entries, "res:running:review:2")).not.toHaveProperty("result");
+  /* The running attempt repeats the first one's activation: a retry, linked before it has a line. */
+  expect(byKey(entries, "res:running:review:2")?.answers).toEqual({ key: "res:review:attempt:1", kind: "retry" });
+  expect(entries.filter((entry) => entry.answers).map((entry) => entry.key)).toEqual(["res:running:review:2"]);
+});
+
+test("a fix answers its gate's attempt, a retry the attempt before it; a pass-edge activation and a missing target answer nothing", () => {
+  const fail = (n: number) => ({ stageId: "review", attempt: n, edge: "fail" });
+  const pipeline = lane("ans", {
+    stages: [{ id: "build", kind: "run", next: "review", onFail: null }, { id: "review", kind: "run", next: null, onFail: { to: "fix", maxRounds: 3 } }, { id: "fix", kind: "run", next: "review", onFail: null }] as unknown as Pipeline["stages"],
+    runs: [
+      { stageId: "build", attempts: [
+        attempt(1, "failed", 1, 2, { error: "stage host was lost while its turn was open" }),
+        attempt(2, "passed", 3, 9, reported("Built")),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", 10, 12, { activatedBy: { stageId: "build", attempt: 2, edge: "pass" }, ...reported("Three findings", "fail") }),
+        attempt(2, "passed", 20, 22, { activatedBy: { stageId: "fix", attempt: 1, edge: "pass" }, ...reported("No findings") }),
+      ] },
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", 13, 19, { activatedBy: fail(1), ...reported("Повтор продовжує з останньої частини") }),
+        /* Its gate's attempt 9 is in no record: no rule and no link. */
+        attempt(2, "passed", 23, 25, { activatedBy: fail(9), ...reported("Orphan") }),
+      ] },
+    ] as unknown as Pipeline["runs"],
+  });
+  const entries = chronology([pipeline]);
+  expect(byKey(entries, "ans:build:attempt:2")?.answers).toEqual({ key: "ans:build:attempt:1", kind: "retry" });
+  expect(byKey(entries, "ans:fix:attempt:1")?.answers).toEqual({ key: "ans:review:attempt:1", kind: "fix" });
+  expect(byKey(entries, "ans:fix:attempt:1")?.result).toBe("Повтор продовжує з останньої частини");
+  expect(byKey(entries, "ans:review:attempt:2")).not.toHaveProperty("answers");
+  expect(byKey(entries, "ans:fix:attempt:2")).not.toHaveProperty("answers");
+  expect(byKey(entries, "ans:fix:attempt:2")?.result).toBe("Orphan");
+});
+
+test("a refresh lane's start answers its source lane's update from main that came before it, else the merge's queueing", () => {
+  const source = (updates: Array<{ requestedAt: string }>) => lane("src", {
+    state: "completed",
+    merge: { state: "queued", prNumber: 412, requestedAt: at(30), updates } as unknown as Pipeline["merge"],
+  });
+  const refresh = lane("ref", { createdAt: at(50), refreshOf: { pipelineId: "src", base: "main" } });
+  const updated = chronology([source([{ requestedAt: at(40) }, { requestedAt: at(45) }, { requestedAt: at(70) }]), refresh]);
+  expect(byKey(updated, "ref:started")?.answers).toEqual({ key: "src:merge:update:1", kind: "refresh" });
+  expect(byKey(chronology([source([]), refresh]), "ref:started")?.answers).toEqual({ key: "src:merge:queued", kind: "refresh" });
+  /* Its source lane is not on this task: nothing to point at. */
+  expect(byKey(chronology([lane("other", {}), refresh]), "ref:started")).not.toHaveProperty("answers");
+});

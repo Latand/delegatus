@@ -1,4 +1,4 @@
-import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
+import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -13482,4 +13482,22 @@ describe("new task default deadline", () => {
     try { await captureTaskDueFrames(browser, server.base, out, true); }
     finally { await browser.close(); server.stop(); }
   }, 300_000);
+});
+
+/*
+ * The task's «Summary» panel, first under the title on the phone's task
+ * screen, and the timeline's result lines (variant 3 «Панеллю», 2026-10-26)
+ * at 390 and 430, in en and uk, light and dark: `captureTaskSummaryFrames` in
+ * the harness. Frames go to `.artifacts/task-summary/phone/`; the readings to
+ * `evidence/task-summary/phone.json`.
+ */
+describe("task summary panel and result lines", () => {
+  browserTest("summary panel first under the title, result lines and answer links", async () => {
+    const out = path.resolve(".artifacts/task-summary/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", taskSummaryResponses());
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try { await captureTaskSummaryFrames(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
 });

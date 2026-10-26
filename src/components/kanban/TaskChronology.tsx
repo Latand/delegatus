@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { browserZone, clockText, dateTimeText } from "@/components/activity/format";
 import { clearedByText } from "@/components/attention/decision";
@@ -41,6 +41,16 @@ function stageLabel(t: TFunction, entry: ChronologyEntry, pipeline: Pipeline | u
 }
 
 const prText = (pr: number | null | undefined): string => (pr ? `PR #${pr}` : "PR");
+
+/** A stage writes its result as a sentence; joined to a reason by «: », a
+    Ukrainian sentence goes on in lowercase, unless the result opens with a
+    name or an acronym (a second capital, a digit, #). English keeps the capital. */
+export function resultAfterColon(locale: string, result: string): string {
+  return locale === "uk" && /^[А-ЯІЇЄҐ][а-яіїєґ’']/u.test(result) ? result[0]!.toLocaleLowerCase("uk") + result.slice(1) : result;
+}
+
+const MARK = "\u0001";
+const REASON_KEY = { fix: "chronology.answers", retry: "chronology.retryOf", refresh: "chronology.afterUpdate" } as const;
 
 /** One entry in the operator's words. */
 export function chronologyEntryText(t: TFunction, entry: ChronologyEntry, pipeline: Pipeline | undefined): string {
@@ -108,14 +118,52 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
 }) {
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
   if (!entries.length) return null;
   const byId = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
+  const byKey = new Map(entries.map((entry) => [entry.key, entry] as const));
+  const targets = new Set(entries.flatMap((entry) => (entry.answers ? [entry.answers.key] : [])));
   const { hidden, shown } = foldChronology(entries, open);
+  /* An answer's link: the entry it names opens out of the fold, comes into view and takes focus. */
+  const goTo = (key: string) => {
+    if (!shown.some((entry) => entry.key === key)) setOpen(true);
+    requestAnimationFrame(() => {
+      const target = [...(sectionRef.current?.querySelectorAll<HTMLElement>("[data-chronology-entry]") ?? [])].find((element) => element.dataset.chronologyEntry === key);
+      if (!target) return;
+      target.scrollIntoView({ block: "nearest" });
+      (target.querySelector<HTMLElement>(".chronology-open") ?? target).focus({ preventScroll: true });
+    });
+  };
+  /* The stage's one-line result, after the reason it ran when it answers another entry. */
+  const resultLine = (entry: ChronologyEntry): ReactNode => {
+    const answered = entry.answers ? byKey.get(entry.answers.key) : undefined;
+    if (!entry.result && !answered) return null;
+    let why: ReactNode = null;
+    if (entry.answers && answered) {
+      const label = entry.answers.kind === "refresh" ? t("chronology.updateLink") : stageLabel(t, answered, answered.pipelineId ? byId.get(answered.pipelineId) : undefined);
+      const parts = t(REASON_KEY[entry.answers.kind], { label: `${MARK}${MARK}` }).split(MARK);
+      const key = entry.answers.key;
+      why = (
+        <span className="chronology-why">
+          {parts[0]}
+          <button type="button" className="chronology-link" data-chronology-answers={key} aria-label={t("chronology.goToAria", { label })} onClick={() => goTo(key)}>{label}</button>
+          {parts[2] ?? ""}
+        </span>
+      );
+    }
+    return (
+      <span className="chronology-result" data-chronology-result="">
+        {why}
+        {why && entry.result ? ": " : null}
+        {entry.result ? <span>{why ? resultAfterColon(locale, entry.result) : entry.result}</span> : null}
+      </span>
+    );
+  };
   const zone = browserZone();
   const today = new Date(nowMs).toDateString();
   const when = (atMs: number) => (new Date(atMs).toDateString() === today ? clockText(atMs, locale, zone) : dateTimeText(atMs, locale, zone));
   return (
-    <section className={`chronology${phone ? " phone" : ""}`} data-chronology={entries.length} data-chronology-hidden={hidden} aria-label={t("chronology.heading")}>
+    <section ref={sectionRef} className={`chronology${phone ? " phone" : ""}`} data-chronology={entries.length} data-chronology-hidden={hidden} aria-label={t("chronology.heading")}>
       <h4 className="chronology-head">{t("chronology.heading")}</h4>
       <ol>
         {hidden ? (
@@ -133,7 +181,8 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
           return (
             <li
               key={entry.key}
-              className={`chronology-entry${TONE[entry.kind] ? ` tone-${TONE[entry.kind]}` : ""}`}
+              className={`chronology-entry${TONE[entry.kind] ? ` tone-${TONE[entry.kind]}` : ""}${entry.answers ? " answers" : ""}`}
+              tabIndex={targets.has(entry.key) && !conversation ? -1 : undefined}
               data-chronology-entry={entry.key}
               data-chronology-kind={entry.kind}
               data-chronology-stop={entry.stop ? entry.pipelineId ?? "" : undefined}
@@ -144,6 +193,7 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
                 {conversation ? (
                   <button type="button" className="chronology-open" aria-label={t("chronology.openAria", { label: text })} onClick={() => onOpen(conversation)}>{text}</button>
                 ) : <span>{text}</span>}
+                {resultLine(entry)}
                 {entry.detail ? (
                   <details className="chronology-detail" data-chronology-detail="">
                     <summary>{t("chronology.details")}</summary>

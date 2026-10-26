@@ -39,6 +39,7 @@ import { useSeatSignal } from "./kanbanSeatStore";
 import { useTaskChipAttached, useTaskChipsFull, type TaskChip } from "@/components/orchestrator/taskChips";
 import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -506,6 +507,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      end, and how many other lanes are still open. */
   const topLane = livePipelines[0] ?? endedPipelines[0] ?? null;
   const otherOpen = Math.max(0, livePipelines.length - (topLane && livePipelines[0] === topLane ? 1 : 0));
+  /* A summary written after the agent's note says more: the note shows only when newer. */
+  const shownNote = noteShownBesideSummary(card.task?.note, card.task?.summary);
   const chronology = collapsed ? [] : taskChronology({
     taskCreatedAt: card.task?.createdAt ?? null,
     pipelines: card.pipelines.map((summary) => summary.pipeline),
@@ -684,6 +687,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </button>
         </div>
       ) : null}
+      {/* The task's summary, under its state: what a returning person reads first. */}
+      {!collapsed && card.task?.summary ? <TaskSummaryPanel summary={card.task.summary} pipelines={card.pipelines.map((summary) => summary.pipeline)} nowMs={nowMs} /> : null}
       {collapsed && topLane ? (
         <div className="card-chain" data-card-chain={topLane.pipeline.id}>
           <PipelineBlock
@@ -701,7 +706,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
       {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
-      {collapsed ? null : <TaskStatusNote note={card.task?.note} nowMs={nowMs} />}
+      {collapsed ? null : <TaskStatusNote note={shownNote} nowMs={nowMs} />}
       {/* #2059: the task's own links and every pipeline's, deduplicated. The
           closed card draws only its top lane's PR, on its chain row. */}
       {card.task && !collapsed ? (
@@ -722,19 +727,23 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           onCancel={() => props.onCancelEdit(card.id)}
         />
       ) : card.task && (card.description || workspace) ? (
-        <button
-          type="button"
-          className={`desc${card.description ? "" : " placeholder"}`}
-          data-describe={card.id}
-          aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
-          onClick={() => props.onStartEdit(card, "description")}
-        >
-          <span className="clamp">{card.description || t("kanban.addDescription")}</span>
-        </button>
+        <>
+          {/* Under a summary the description carries its label, so it never reads as the summary's last sentence. */}
+          {card.task.summary ? <h4 className="chronology-head desc-head" data-describe-head="">{t("mobile2.task.description")}</h4> : null}
+          <button
+            type="button"
+            className={`desc${card.description ? "" : " placeholder"}`}
+            data-describe={card.id}
+            aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
+            onClick={() => props.onStartEdit(card, "description")}
+          >
+            <span className="clamp">{card.description || t("kanban.addDescription")}</span>
+          </button>
+        </>
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
-      {!collapsed ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} full /> : null}
+      {!collapsed ? <TaskStatusNote note={shownNote} nowMs={nowMs} full /> : null}
       {/* The standing tick notice opens the panel that holds the setting it
           describes. */}
       {!collapsed && card.task && isSeatTickNotice(card.task.text) ? <SeatTickNoticeButton project={card.project} /> : null}

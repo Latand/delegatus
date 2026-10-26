@@ -1,0 +1,664 @@
+{
+  "clock": "2026-10-24T13:30:00.000Z",
+  "sourceDigests": {
+    "src/components/tasks/TaskSummaryPanel.tsx": "87c2a11153826de28d55986a8115ed16f43f671c626b866085ea98e53d7d0d5f",
+    "src/components/kanban/TaskChronology.tsx": "f7d6f65385a2c7de9f44f14e2c2c9c63574bd1bd44bee5cd31a8cf7432837c87",
+    "src/components/kanban/taskChronologyModel.ts": "4398b24cdaecc9baf5a69c95f1a8a6e03cab18b098a34e5ff8119c79460e9e10",
+    "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
+    "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
+    "src/components/kanban/kanbanBoard.css": "c0127fb5bb0058dd9c7c5f1a0625cb6842af94de24df9aa47204c8509dac5445",
+    "src/lib/i18n/en.ts": "505b8a61f59f0104a79cc4bf2787ac49098491a46c2ee670de33ce48ac6d800f",
+    "src/lib/i18n/uk.ts": "8bced401e21c78dfad2827b61424713f52ac9762445b89fcd04ed9a56f643070",
+    "src/components/kanban/issue1695BrowserHarness.ts": "dc89acec3e4d03a12ed8ff7931c334dbbb08b23b68239cd89d7b6cdbe17a27b2"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "time": 662.84375,
+          "words": 662.84375,
+          "result": 678.84375,
+          "bottom": 676.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 1226.828125,
+          "y": 520.84375,
+          "width": 103.953125,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 522,
+          "bottom": 538,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "time": 605.84375,
+          "words": 605.84375,
+          "result": 621.84375,
+          "bottom": 619.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 934.828125,
+          "y": 463.84375,
+          "width": 103.953125,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 752,
+          "bottom": 768,
+          "innerHeight": 800
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "time": 564.84375,
+          "words": 564.84375,
+          "result": 580.84375,
+          "bottom": 578.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 378.828125,
+          "y": 470.84375,
+          "width": 103.953125,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 495,
+          "bottom": 511,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "time": 662.84375,
+          "words": 662.84375,
+          "result": 678.84375,
+          "bottom": 676.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 1226.828125,
+          "y": 520.84375,
+          "width": 103.953125,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 522,
+          "bottom": 538,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "time": 605.84375,
+          "words": 605.84375,
+          "result": 621.84375,
+          "bottom": 619.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 934.828125,
+          "y": 463.84375,
+          "width": 103.953125,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 752,
+          "bottom": 768,
+          "innerHeight": 800
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "time": 564.84375,
+          "words": 564.84375,
+          "result": 580.84375,
+          "bottom": 578.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 378.828125,
+          "y": 470.84375,
+          "width": 103.953125,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 495,
+          "bottom": 511,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "time": 662.84375,
+          "words": 662.84375,
+          "result": 678.84375,
+          "bottom": 676.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 1231.8125,
+          "y": 520.84375,
+          "width": 89.546875,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 867,
+          "bottom": 883,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "time": 605.84375,
+          "words": 605.84375,
+          "result": 621.84375,
+          "bottom": 619.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 939.8125,
+          "y": 463.84375,
+          "width": 89.546875,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 752,
+          "bottom": 768,
+          "innerHeight": 800
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "time": 564.84375,
+          "words": 564.84375,
+          "result": 580.84375,
+          "bottom": 578.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 383.8125,
+          "y": 470.84375,
+          "width": 89.546875,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 495,
+          "bottom": 511,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "time": 662.84375,
+          "words": 662.84375,
+          "result": 678.84375,
+          "bottom": 676.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 1231.8125,
+          "y": 520.84375,
+          "width": 89.546875,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 867,
+          "bottom": 883,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "time": 605.84375,
+          "words": 605.84375,
+          "result": 621.84375,
+          "bottom": 619.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 939.8125,
+          "y": 463.84375,
+          "width": 89.546875,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 752,
+          "bottom": 768,
+          "innerHeight": 800
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "time": 564.84375,
+          "words": 564.84375,
+          "result": 580.84375,
+          "bottom": 578.84375,
+          "target": 16
+        },
+        "link": {
+          "x": 383.8125,
+          "y": 470.84375,
+          "width": 89.546875,
+          "height": 22
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "top": 495,
+          "bottom": 511,
+          "innerHeight": 900
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    }
+  ]
+}

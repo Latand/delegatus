@@ -1,4 +1,4 @@
-import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
+import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
@@ -39491,6 +39491,23 @@ describe("new task default deadline", () => {
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureTaskDueFrames(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+/*
+ * The task's «Summary» panel and the timeline's result lines (variant 3
+ * «Панеллю», 2026-10-26) on the open card at 1440, 1100 and 820, in en and uk,
+ * light and dark: `captureTaskSummaryFrames` in the harness. Frames go to
+ * `.artifacts/task-summary/desktop/`; the readings to `evidence/task-summary/desktop.json`.
+ */
+describe("task summary panel and result lines", () => {
+  browserTest("summary panel, result lines and answer links on the open card", async () => {
+    const out = path.resolve(".artifacts/task-summary/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, taskSummaryResponses());
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskSummaryFrames(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
