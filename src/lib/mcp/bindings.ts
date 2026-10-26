@@ -135,7 +135,7 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
-import { issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
+import { ISSUE_REPORT_RESPONSE_RULE, issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS } from "@/lib/issueReports/scrub";
@@ -2083,7 +2083,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     const preview = recordIssueReportPreview({ title, body, privacyJudgment, ...review }, caller.conversationId, { directory });
     return {
       ...view(preview),
-      next: "Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after approval.",
+      next: `Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. Preparation needs no separate consent. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after exact-text approval. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   const givenDigest = text(args.digest);
@@ -2105,7 +2105,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
-      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
+      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
