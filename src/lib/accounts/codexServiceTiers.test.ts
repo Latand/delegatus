@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { codexServiceTierRefusal, codexLaunchTier, codexModelServiceTiers, fastestTier, raisesTier, tierOffers } from "./codexServiceTiers";
 
-test("catalog tiers are per account and never inferred from speed hints", () => {
+test("explicit catalogue tiers are authoritative per account", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tier-catalog-"));
   try {
     const accounts = ["account-a", "account-b", "account-c"].map((id, i) => {
@@ -14,6 +14,10 @@ test("catalog tiers are per account and never inferred from speed hints", () => 
     });
     expect(tierOffers(accounts, "gpt-6-astra", "ultrafast")).toEqual({ offering: ["account-c"], lacking: ["account-a", "account-b"], offered: ["priority", "ultrafast"] });
     expect(codexModelServiceTiers(accounts[0]!.home, "missing")).toBeNull();
+    fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", service_tiers: [], additional_speed_tiers: ["ultrafast"],
+    }] }));
+    expect(codexModelServiceTiers(root, "gpt-6.1-sol")).toEqual([]);
     expect(codexModelServiceTiers(root, "gpt-6-astra")).toBeNull();
     fs.writeFileSync(path.join(root, "models_cache.json"), "invalid");
     expect(codexModelServiceTiers(root, "gpt-6-astra")).toBeNull();
@@ -95,4 +99,16 @@ test("refusal diagnostics preserve per-account model evidence and scope", () => 
     expect(codexServiceTierRefusal([{ id: "account-c", home: root }], "gpt-6-luna", "ultrafast")).toContain("catalog unavailable");
     expect(tierOffers(accounts, "gpt-6-astra", "ultrafast").offering).toEqual(["account-a", "account-b"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy cache speed tiers supply explicit launch tier ids when service tiers are absent", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-tiers-"));
+  try {
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [
+      { slug: "gpt-6.1-sol", additional_speed_tiers: ["fast", "ultrafast", "unknown"] },
+    ] }));
+    expect(codexModelServiceTiers(home, "gpt-6.1-sol")).toEqual([
+      { id: "priority", name: "priority" }, { id: "ultrafast", name: "ultrafast" },
+    ]);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

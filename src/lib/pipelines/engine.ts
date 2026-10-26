@@ -751,13 +751,14 @@ async function spawnPipelineAgent(
      outside it is refused, and an allowed set with no capacity left is
      REPORTED. Neither case falls back onto an account the project forbids;
      the throw parks the stage with the reason on the record. */
-  const desiredTier = input.role.serviceTier;
+  const automaticTierPreference = input.role.serviceTierSource === "role-default" ? input.role.preferredServiceTier : undefined;
+  const desiredTier = input.role.serviceTier ?? automaticTierPreference;
   let serviceTier = desiredTier ?? null;
   const accounts = input.role.engine === "codex" ? listCodexAccounts() : [];
   const pool = allowedAccountIdsForProject(input.project, input.role.engine);
   const candidates = accounts.filter(account => (pool === null || pool.includes(account.id))
     && (!input.requestedAccountId || account.id === input.requestedAccountId));
-  const offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
+  let offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
   const required = input.role.serviceTierSource !== "role-default";
   if (offers && !offers.offering.length) {
     if (required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, input.role.model!, desiredTier!, input.requestedAccountId));
@@ -769,10 +770,32 @@ async function spawnPipelineAgent(
     ...((input.unavailableAccountIds?.length || (serviceTier && offers?.lacking.length))
       ? { unavailableIds: [...input.unavailableAccountIds ?? [], ...(serviceTier ? offers?.lacking ?? [] : [])] } : {}),
   };
-  let resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, request);
-  if (resolution.kind !== "available" && serviceTier && !required) {
-    serviceTier = null;
-    resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, { ...request, unavailableIds: input.unavailableAccountIds ?? [] });
+  let resolution;
+  if (automaticTierPreference && input.role.engine === "codex" && input.role.model) {
+    const preference = automaticTierPreference;
+    const ordered = preference === "ultrafast" ? ["ultrafast", "priority"] : [preference];
+    const preferredOffers = ordered.map(tier => ({ tier, offers: tierOffers(candidates, input.role.model!, tier) }));
+    const hasPriority = preferredOffers.some(({ tier, offers }) => tier === "priority" && offers.offering.length > 0);
+    const attempts = preferredOffers.filter(({ offers }) => offers.offering.length > 0);
+    if (!hasPriority) attempts.push({ tier: "standard", offers: tierOffers(candidates, input.role.model, "standard") });
+    resolution = { kind: "exhausted" as const, resetsAt: null, allowedAccountIds: candidates.map(account => account.id) };
+    for (const choice of attempts) {
+      serviceTier = choice.tier;
+      offers = choice.offers;
+      const attemptRequest = { ...request,
+        unavailableIds: [...input.unavailableAccountIds ?? [], ...choice.offers.lacking],
+      };
+      resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, attemptRequest);
+      if (resolution.kind === "available") break;
+      if (choice.tier === "ultrafast" && (resolution.kind === "exhausted" || resolution.kind === "unavailable")) continue;
+      break;
+    }
+  } else {
+    resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, request);
+    if (resolution.kind !== "available" && serviceTier && !required) {
+      serviceTier = null;
+      resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, { ...request, unavailableIds: input.unavailableAccountIds ?? [] });
+    }
   }
   if (resolution.kind !== "available") {
     throw new ProjectAccountRefusedError(resolution, input.role.engine, input.project,
@@ -12621,6 +12644,9 @@ export function normalizeStages(
     if (stage.serviceTier !== undefined && stage.serviceTier !== null && typeof stage.serviceTier !== "string") {
       violations.push({ field: at("serviceTier"), message: "serviceTier must be a string or null", expected: "Codex catalog tier id, null to inherit" });
     }
+    if (stage.preferredServiceTier !== undefined && (typeof stage.preferredServiceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(stage.preferredServiceTier))) {
+      violations.push({ field: at("preferredServiceTier"), message: "preferredServiceTier must be a catalog tier id", expected: "Codex catalog tier id for automatic selection" });
+    }
     if (!validAgentMemoryMax(stage.agentMemoryMaxBytes)) {
       violations.push({ field: at("agentMemoryMaxBytes"), message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", expected: "integer bytes from 1 GiB through 1 TiB, null to inherit" });
     }
@@ -12683,6 +12709,7 @@ export function normalizeStages(
       ...(stage.model !== undefined ? { model: typeof stage.model === "string" ? stage.model.trim() || null : null } : {}),
       ...(stage.effort !== undefined ? { effort: typeof stage.effort === "string" ? stage.effort.trim() || null : null } : {}),
       ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+      ...(stage.preferredServiceTier !== undefined ? { preferredServiceTier: stage.preferredServiceTier } : {}),
       ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
       ...(stage.access !== undefined ? { access: stage.access } : {}),
       ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
@@ -12775,6 +12802,7 @@ function draftStageInputs(stages: PipelineStage[]): PipelineStageInput[] {
     ...(stage.model !== undefined ? { model: stage.model } : {}),
     ...(stage.effort !== undefined ? { effort: stage.effort } : {}),
     ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+    ...(stage.preferredServiceTier !== undefined ? { preferredServiceTier: stage.preferredServiceTier } : {}),
     ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
     ...(stage.access !== undefined ? { access: stage.access } : {}),
     ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
@@ -15548,6 +15576,7 @@ export async function patchPipeline(
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
             serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
+            preferredServiceTier: resetRuntime ? undefined : target.preferredServiceTier,
             /* A read-only-locked role takes no access from the stage it replaces. */
             access: isReadOnlyLockedRole(roleRef?.roleId) ? undefined : target.access,
           },
@@ -15569,6 +15598,7 @@ export async function patchPipeline(
         target.model = resolved.role.model;
         target.effort = resolved.role.effort;
         target.serviceTier = req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier;
+        target.preferredServiceTier = resolved.role.preferredServiceTier;
         target.access = resolved.role.access;
         /* Belt-and-braces: resolvePipelineRole already enforces these bounds, but
            re-check so a future resolver change can never persist a poisoned record. */
