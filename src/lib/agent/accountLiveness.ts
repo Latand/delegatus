@@ -194,15 +194,14 @@ function canonicalId(file: RegistryFile, id: ViewerConversationId): ViewerConver
 }
 
 type ConversationLivenessIndex = {
-  deliveries: Map<ViewerConversationId, RegistryFile["heldDeliveries"][string][]>;
-  receipts: Map<ViewerConversationId, SpawnReceipt[]>;
+  deliveries?: Map<ViewerConversationId, RegistryFile["heldDeliveries"][string][]>;
+  receipts?: Map<ViewerConversationId, SpawnReceipt[]>;
 };
 
-/** Build once per account check; retained history can contain many thousands of
-    deliveries and receipts, most of which are unrelated to this account. */
-function conversationLivenessIndex(file: RegistryFile): ConversationLivenessIndex {
-  const deliveries: ConversationLivenessIndex["deliveries"] = new Map();
-  const receipts: ConversationLivenessIndex["receipts"] = new Map();
+/** Build each index at most once, and only when host and migration evidence
+    did not already answer. Retained history can contain thousands of rows. */
+function deliveryLivenessIndex(file: RegistryFile): NonNullable<ConversationLivenessIndex["deliveries"]> {
+  const deliveries: NonNullable<ConversationLivenessIndex["deliveries"]> = new Map();
   for (const delivery of Object.values(file.heldDeliveries)) {
     if (!UNDELIVERED_DELIVERY_STATES.has(delivery.state)) continue;
     const ids = new Set([canonicalId(file, delivery.conversationId), canonicalId(file, delivery.runtimeConversationId)]);
@@ -212,13 +211,18 @@ function conversationLivenessIndex(file: RegistryFile): ConversationLivenessInde
       deliveries.set(id, rows);
     }
   }
+  return deliveries;
+}
+
+function receiptLivenessIndex(file: RegistryFile): NonNullable<ConversationLivenessIndex["receipts"]> {
+  const receipts: NonNullable<ConversationLivenessIndex["receipts"]> = new Map();
   for (const receipt of registryLivenessRows(file).receipts) {
     const id = canonicalId(file, receipt.conversationId);
     const rows = receipts.get(id) ?? [];
     rows.push(receipt);
     receipts.set(id, rows);
   }
-  return { deliveries, receipts };
+  return receipts;
 }
 
 /**
@@ -248,7 +252,7 @@ export function conversationIsLive(
   const settled = purpose === "removal" ? REMOVAL_SETTLED_MIGRATION_PHASES : SETTLED_MIGRATION_PHASES;
   if (conversation.migration && !settled.has(conversation.migration.phase)) return true;
   const owns = (id: ViewerConversationId) => canonicalId(file, id) === conversation.id;
-  for (const delivery of index ? index.deliveries.get(conversation.id) ?? [] : Object.values(file.heldDeliveries)) {
+  for (const delivery of index ? (index.deliveries ??= deliveryLivenessIndex(file)).get(conversation.id) ?? [] : Object.values(file.heldDeliveries)) {
     if (!UNDELIVERED_DELIVERY_STATES.has(delivery.state)) continue;
     if (!owns(delivery.conversationId) && !owns(delivery.runtimeConversationId)) continue;
     /* held/assigned: the queued turn has not been attempted — always current,
@@ -266,7 +270,7 @@ export function conversationIsLive(
        grace-expired uncertain delivery contributes nothing on its own. */
     if (withinGrace(delivery.createdAt, probe)) return true;
   }
-  for (const receipt of index ? index.receipts.get(conversation.id) ?? [] : registryLivenessRows(file).receipts) {
+  for (const receipt of index ? (index.receipts ??= receiptLivenessIndex(file)).get(conversation.id) ?? [] : registryLivenessRows(file).receipts) {
     if (!owns(receipt.conversationId)) continue;
     if (receiptIsLive(file, receipt, probe)) return true;
   }
@@ -376,7 +380,7 @@ export function liveAccountConversationIds(
 ): ViewerConversationId[] {
   const probe = livenessProbe(options);
   const paths = liveEntryPaths(file, engine, probe);
-  const index = conversationLivenessIndex(file);
+  const index: ConversationLivenessIndex = {};
   const live: ViewerConversationId[] = [];
   for (const conversation of Object.values(file.conversations)) {
     if (conversation.engine !== engine || conversation.generations.at(-1)?.accountId !== accountId) continue;

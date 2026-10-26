@@ -5,6 +5,17 @@ import type { RegistryFile } from "./registry";
 
 const NOW = Date.parse("2026-08-23T15:00:00.000Z");
 
+test("a live host blocks removal without depending on unrelated history", () => {
+  const unavailable = new Proxy({}, { ownKeys() { throw new Error("history unavailable"); } });
+  const file = { entries: {}, receipts: unavailable, heldDeliveries: unavailable, conversationAliases: {},
+    conversations: { conversation_live: { id: "conversation_live", engine: "claude", continuityPaths: [], migration: null,
+      generations: [{ accountId: "target", path: "/session/live", host: { tmuxHost: { agent: { pid: 123, startIdentity: "fixture" } } } }] } },
+  } as unknown as RegistryFile;
+  expect(liveAccountConversationIds(file, "claude", "target", {
+    now: () => NOW, pidAlive: pid => pid === 123, processIdentity: () => "fixture",
+  })).toEqual(["conversation_live"]);
+});
+
 test("account removal checks retained delivery history once while preserving live evidence", () => {
   const deliveries: Record<string, unknown> = {};
   for (let i = 0; i < 6_000; i++) deliveries[`old-${i}`] = { state: "delivered" };
