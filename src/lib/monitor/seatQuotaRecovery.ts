@@ -163,6 +163,14 @@ function cut(observation: SeatQuotaObservation): number | null {
   return message && classifyProviderCondition("claude", message.errorClass, message.text).kind === "usage_limit"
     ? message.ts : null;
 }
+function quotaCutState(row: SeatQuotaObligation, observation: SeatQuotaObservation): "same" | "superseded" | "unknown" {
+  const evidence = observation.evidence;
+  if (observation.accountId !== row.accountId || evidence.externalPromptAfterCut || evidence.requestedCutOpen === false
+    || evidence.turn === "terminal" && !evidence.terminalProviderMessage && (evidence.message?.ts ?? 0) > row.cutAt
+    || (evidence.terminalProviderMessage?.ts ?? 0) > row.cutAt
+    || evidence.turn === "busy" && (evidence.turnStartedAt ?? 0) > row.cutAt) return "superseded";
+  return cut(observation) === row.cutAt && evidence.promptHistoryComplete === true ? "same" : "unknown";
+}
 function eligible(row: SeatQuotaObligation, observation: SeatQuotaObservation, now: number): boolean {
   // An elapsed label never overrides newer evidence that capacity is exhausted.
   if (observation.capacity === "exhausted" && (row.resetsAt === null || observation.observedAt === null
@@ -179,10 +187,11 @@ export async function seatQuotaDispatchGuard(project: string, ports = defaultSea
   if (!row || !open(row) || !sameSeat(ports.seat(project), row.seat)) throw new StructuredSendRefusedError("seat quota recovery cancelled");
   const observation = await ports.observe(project, row.seat, row.cutAt);
   if (!observation) throw new StructuredDispatchDeferredError("seat quota evidence unavailable");
-  if (observation.accountId !== row.accountId || cut(observation) !== row.cutAt
-    || observation.evidence.externalPromptAfterCut || observation.evidence.requestedCutOpen === false) {
+  const state = quotaCutState(row, observation);
+  if (state === "superseded") {
     throw new StructuredSendRefusedError("seat quota request answered or superseded");
   }
+  if (state === "unknown") throw new StructuredDispatchDeferredError("seat quota turn evidence unverified");
   if (await stopped(row, ports)) throw new StructuredSendRefusedError("seat quota recovery cancelled by control");
   const assert = () => {
     const current = readSeatQuotaObligation(project);
@@ -242,10 +251,13 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
       ? { ...current, state: "cancelled", reason: "explicit operator control" } : current);
     return false;
   }
-  if (row && open(row) && (cutAt !== row.cutAt || observation.accountId !== row.accountId
-    || observation.evidence.externalPromptAfterCut || observation.evidence.requestedCutOpen === false)) {
-    await change(project, current => current?.id === row!.id ? { ...current, state: "cancelled", reason: "request answered, replaced or account changed" } : current);
-    return false;
+  if (row && open(row)) {
+    const state = quotaCutState(row, observation);
+    if (state === "unknown") return true;
+    if (state === "superseded") {
+      await change(project, current => current?.id === row!.id ? { ...current, state: "cancelled", reason: "request answered, replaced or account changed" } : current);
+      return false;
+    }
   }
   if (!cutAt || cutAt < Date.parse(seat.designatedAt)) return false;
   if (!row || row.cutAt !== cutAt) {

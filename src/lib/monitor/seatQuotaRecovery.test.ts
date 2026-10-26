@@ -153,6 +153,18 @@ test("an unreadable control source keeps the durable obligation and dispatches n
   expect(f.read()?.state).toBe("owed"); expect(f.h.sent).toEqual([]);
 });
 
+test.each(["unknown", "empty-terminal", "incomplete-history"])("%s evidence keeps the obligation retryable", async condition => {
+  const f = harness(); await f.recover();
+  const evidence = structuredClone(f.h.observation.evidence);
+  f.h.now = RESET; f.h.observation.capacity = "unknown";
+  if (condition === "incomplete-history") f.h.observation.evidence.promptHistoryComplete = false;
+  else { f.h.observation.evidence.turn = condition === "unknown" ? "unknown" : "terminal"; f.h.observation.evidence.terminalProviderMessage = null; }
+  await f.recover(); expect(f.read()?.state).toBe("owed"); expect(f.h.sent).toEqual([]);
+  await expect(f.guard()).rejects.toBeInstanceOf(StructuredDispatchDeferredError);
+  f.h.observation.evidence = evidence;
+  await f.recover(); expect(f.h.sent).toHaveLength(1);
+});
+
 test("an ACK loss retains the exact submitted key and a second provider cut cannot create a second ask", async () => {
   const f = harness(); await f.recover(); f.h.now = RESET; f.h.observation.capacity = "unknown";
   f.ports.send = async request => { f.h.sent.push(request); throw new Error("ack lost"); };
