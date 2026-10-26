@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setStateFreeBytesProbeForTests } from "@/lib/state/diskFull";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-get-purity-"));
 const oldState = process.env.LLV_STATE_DIR;
@@ -28,8 +29,14 @@ function stateBytes(): Record<string, string> {
   return files;
 }
 
-beforeEach(() => setAgentRegistryForTests(registry));
-afterEach(() => setAgentRegistryForTests(null));
+beforeEach(() => {
+  setAgentRegistryForTests(registry);
+  setStateFreeBytesProbeForTests(() => 1024 ** 3);
+});
+afterEach(() => {
+  setAgentRegistryForTests(null);
+  setStateFreeBytesProbeForTests(null);
+});
 
 afterAll(() => {
   if (oldState === undefined) delete process.env.LLV_STATE_DIR;

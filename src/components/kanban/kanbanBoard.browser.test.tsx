@@ -31,7 +31,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureLaneReviewFrames, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -41,10 +41,10 @@ import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
 import { measureStageChain, stageChainFailures, wideStageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
-import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
+import { sampleAnswer, sampleMemory, sampleRule, sampleScope } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
-import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
+import type { RoleMemoryProjectView, RuleRevisionView, RuleView } from "@/lib/memory/roleTypes";
 import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
@@ -67,6 +67,20 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+/* docs/design/lane-diff-comments.md: the lane review sheet, entered from the
+   card's ⋯, in every state at 1440, 1024 and 640 px, both languages and themes. */
+describe("lane diff comments", () => {
+  browserTest("the review sheet's states, pinned to a real repository, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/lane-diff-comments/desktop");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const result = await captureLaneReviewFrames(browser, out, false);
+    expect(result.failures).toEqual([]);
+    expect(result.readings.length).toBe(3 * 2 * 2 * 10);
+  }, 600_000);
+});
 
 describe("retained worktree drilldown", () => {
   browserTest("resource entry, paging, variants and read failures fit desktop, 1000 px and 390 px in both languages and themes", async () => {
@@ -1820,6 +1834,94 @@ describe("memory profile window: one top, whole rows, level order, named topic",
         readings.push({ width, scheme, lang, seen });
       }
       fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
+/* The opening case's memory: builder keeps the sample's scopes and gains a swarm level, revisions by an agent role and by the curator with an earlier text each, and curator passes; merger and orchestrator hold this-project and every-project scopes. */
+function richMemory(): RoleMemoryProjectView {
+  const rules = sampleMemory();
+  const at = "2026-10-11T00:01:00.000Z";
+  const [one, two] = rules.scopes[0]!.active;
+  const earlier = (rule: RuleView, revisedBy: RuleRevisionView) => [{ id: `${rule.id}-v1`, rule: "Check the owner before a replay.", why: rule.why, hints: [], createdAt: "2026-01-01", revisedBy }];
+  one!.revisedBy = { by: "agent", at, roleId: "architect" }; one!.versions = earlier(one!, { by: "curator", at });
+  two!.revisedBy = { by: "curator", at }; two!.versions = earlier(two!, { by: "agent", at, roleId: "merger" });
+  for (const roleId of ["merger", "orchestrator"]) for (const scope of [`role:garden:${roleId}`, `role:*:${roleId}`]) rules.scopes.push({ ...sampleScope(scope, [{ ...sampleRule(`${roleId}-${scope.includes("*") ? "all" : "here"}`, `A ${roleId} rule for ${scope.includes("*") ? "every" : "this"} project.`), roleId }]) });
+  rules.scopes.push({ ...sampleScope("swarm:builder", [{ ...sampleRule("swarm-one", "Name the file a change reaches before changing it."), roleId: "builder" }]), kind: "swarm", roleId: "builder" });
+  const counts = { calls: 1, changed: 2, rewritten: 1, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 };
+  rules.curation = { lastAt: at, nextAt: null, newLessons: 0, passes: [{ id: "pass-1", state: "succeeded", claimedAt: at, endedAt: at, failure: null, counts }, { id: "pass-2", state: "failed", claimedAt: at, endedAt: at, failure: null, counts }] };
+  return rules;
+}
+
+describe("memory profile window: opening under slow data", () => {
+  browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
+    const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let rulesReads = 0, rulesAnswered = 0, profileAnswered = 0;
+    const profileReads: string[] = [];
+    let release!: () => void; let gate = Promise.resolve();
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      /* The first read answers at once (the menu row's count); the window's refresh and the profile wait for the test to release them. */
+      "/api/role-memory": async () => { if (++rulesReads > 1) await gate; rulesAnswered++; return Response.json(rules); },
+      "/api/role-memory/profile": async (request: Request) => {
+        profileReads.push(request.method);
+        await gate; profileAnswered++;
+        const view: MemoryProfileView = service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en");
+        view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null;
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const costumes = (page: Page, selector: string) => page.locator(selector).evaluateAll(nodes => nodes.map(node => node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null));
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        rulesReads = 0; rulesAnswered = 0; profileAnswered = 0; profileReads.length = 0;
+        gate = new Promise<void>(resolve => { release = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1&via=row`, { width, height }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-learned-rules-open]").waitFor();
+          await page.waitForFunction(() => /\d/.test(document.querySelector("[data-learned-rules-count]")?.textContent ?? ""));
+          const answeredBefore = rulesAnswered;
+          const started = Date.now();
+          await page.locator("[data-learned-rules-open]").click();
+          await page.locator("[data-memory-profile]").waitFor();
+          /* Ordering, not elapsed time: the body is drawn while the window's rules read and the profile read are both still held. */
+          expect({ rulesAnswered, profileAnswered }).toEqual({ rulesAnswered: answeredBefore, profileAnswered: 0 });
+          fs.appendFileSync(path.join(out, "opening-ms.log"), `${width} ${scheme} ${lang} ${Date.now() - started}\n`);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          expect(await page.locator("[data-memory-profile] h3").first().innerText()).toBe(translate(lang, "memoryProfile.reading"));
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-reading.png`) });
+          release();
+          await page.locator("[data-profile-summarize]").waitFor();
+          expect(profileReads).toEqual(["GET"]);
+          const slices = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-slice"), label: node.querySelector("h4, p")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
+          for (const slice of slices) expect(slice.costume !== null).toBe(slice.kind === "role" || slice.kind === "swarm");
+          /* Repeated roles across scopes each wear their own costume. */
+          const byRole = slices.filter(slice => slice.kind === "role" || slice.kind === "swarm").map(slice => slice.costume);
+          expect(byRole.filter(id => id === "builder").length).toBeGreaterThanOrEqual(3);
+          for (const id of ["merger", "orchestrator"]) expect(byRole.filter(costume => costume === id).length).toBe(2);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-loaded.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-section]").first().waitFor();
+          /* The curator's history summary and each pass wear the curator; the swarm heading wears its role. */
+          await page.locator("[data-curation-history] summary").click();
+          expect(await costumes(page, "[data-curation-history] summary")).toEqual(["curator"]);
+          expect(await costumes(page, "[data-curation-pass]")).toEqual(["curator", "curator"]);
+          expect(await costumes(page, "[data-rules-swarm]")).toEqual(["builder"]);
+          for (const row of await page.locator("[data-learned-rule] button[aria-expanded]").all()) await row.click();
+          for (const summary of await page.locator("[data-rule-versions] summary").all()) await summary.click();
+          const provenance = await page.locator("[data-rule-provenance]").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
+          const earlierLines = await page.locator("[data-rule-versions] li").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
+          /* Rules by another role than their scope's own also wear their author, so the revisions are checked by inclusion. */
+          expect(provenance).toEqual(expect.arrayContaining(["architect", "curator"]));
+          expect(earlierLines.sort()).toEqual(["curator", "merger"]);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { release(); await context.close(); }
+      }
     } finally { await browser.close(); server.stop(); }
   });
 });
@@ -9433,7 +9535,7 @@ describe("columns balanced on large screens, stage pills and heads on one line",
     });
     const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pb-pills .pb-pill')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
       /* The pill's name is .pb-name since the one pipeline block (#2072). */
-      const name = pill.querySelector(".pb-name, .pname");
+      const name = pill.querySelector(".pb-name");
       const model = pill.querySelector(".imodel");
       const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
       const r = box(pill);
