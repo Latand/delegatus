@@ -242,6 +242,47 @@ for (const grouped of [false, true]) test.each(["pure", "assertion", "cleanup"] 
   expect(publicationDeadlineOnly([...lines, ending.line].join("\n"))).toBe(kind === "pure");
 }, 30_000);
 
+test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGROUP).each(["pure", "assertion", "leak"] as const)("native service cleanup preserves the hook verdict: %s", async kind => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-native-deadline-")); roots.push(dir);
+  const record = path.join(dir, "child.json");
+  const lines: string[] = [];
+  const subject = path.join(dir, kind === "leak" ? "leak.ts" : "pending.test.ts");
+  writeFileSync(subject, `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    import { captureProcessIdentity } from ${JSON.stringify(path.join(root, "src/lib/processIdentity.ts"))};
+    ${kind === "leak" ? `
+      const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+      child.unref();
+      writeFileSync(${JSON.stringify(record)}, JSON.stringify(captureProcessIdentity(child.pid)));
+      process.exit(0);
+    ` : `
+      import { test, expect } from "bun:test";
+      test("decisive native assertion", () => {
+        writeFileSync(${JSON.stringify(record)}, JSON.stringify(captureProcessIdentity(process.pid)));
+        expect(1).toBe(${kind === "assertion" ? 2 : 1});
+      });
+      test("pending native result", async () => { await new Promise(() => {}); }, 60000);
+    `}`);
+  const error = await runSteps("pre-push", [{ name: "types", command: [] }], {
+    root: dir, deadline: soon(20_000), logDir: dir, say: line => lines.push(line),
+    prepare: () => ({ env: process.env, command: ["bash", "-c", 'export LLV_OWNED_RUN_TIMEOUT_MS=2500; exec "$@"', "native-deadline",
+      process.execPath, path.join(root, "scripts/owned-runner.ts"), process.execPath, ...(kind === "leak" ? [subject] : ["test", subject])] }),
+  }).then(() => null, (caught: unknown) => caught);
+  const output = lines.join("\n");
+  expect(existsSync(record), output).toBeTrue();
+  const identity: ProcessIdentity = JSON.parse(readFileSync(record, "utf8")); owned.push(identity);
+  // The real systemd --wait client must finish containment before the hook
+  // accepts a retry, including a detached child left by a successful command.
+  expect(processIdentityStatus(identity), output).toBe("dead");
+  const ending = endingOf("pre-push", error);
+  expect(ending.code, output).toBe(kind === "pure" ? 75 : 1);
+  if (kind === "pure") expect(error).toBeInstanceOf(NoVerdict);
+  expect(output).toContain(kind === "leak" ? "surviving owned processes:" : "processes awaiting deadline cleanup:");
+  if (kind === "assertion") expect(output).toContain("(fail) decisive native assertion");
+  expect(publicationDeadlineOnly([...lines, ending.line].join("\n"))).toBe(kind === "pure");
+}, 30_000);
+
 test("a peer timeout cannot erase a named assertion from a cancelled lane", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-peer-deadline-")); roots.push(dir);
   const ready = path.join(dir, "ready"), subject = path.join(dir, "assertion.test.ts");
