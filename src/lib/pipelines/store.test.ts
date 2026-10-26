@@ -1173,6 +1173,23 @@ function providerStoreFixture(): Pipeline {
   return lane;
 }
 
+test("startup owner handoff deadlines round-trip and malformed deadlines are refused", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const attempt = lane.runs[0]!.attempts[0]!;
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.startupOwnerWait).toBeUndefined();
+  const wait = { launchId: "launch-startup", deadline: "2026-10-23T12:10:00.000Z" };
+  attempt.startupOwnerWait = wait;
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.startupOwnerWait).toEqual(wait);
+  for (const invalid of [null, [], {}, { ...wait, launchId: "" }, { ...wait, launchId: 1 },
+    { ...wait, deadline: "invalid" }, { ...wait, deadline: 1 }]) {
+    attempt.startupOwnerWait = invalid as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.startupOwnerWait).toEqual(wait);
+  }
+}));
+
 test("suspension custody round-trips independently and rejects malformed stop evidence", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
   const suspension = { reason: "account" as const, detail: "account left binding", requestedAt: "2026-10-15T00:00:00Z",
