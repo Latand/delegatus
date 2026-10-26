@@ -4564,7 +4564,18 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
-type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
+type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed"; remote?: "unreachable" };
+
+/** A settled remote-read failure happened before any push. Pending reservations
+ * and uncertain writers still own their publication and cannot spend a retry. */
+function settledPublicationRefusal(pipeline: Pipeline): RefusedPublication | null {
+  const operation = pipeline.delivery?.operation;
+  const result = operation?.result;
+  if (operation?.state !== "settled" || !result) return null;
+  if (!result.ok) return result;
+  return result.remote === "unreachable" && !result.uncertain
+    ? { ok: false, error: result.detail, remote: "unreachable" } : null;
+}
 
 /** A quiescent publisher whose push never reached the remote: ended by a
     signal, by its time limit, or together with the Viewer that started it. */
@@ -4576,6 +4587,9 @@ function publicationNotLanded(published: RefusedPublication): boolean {
 function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
   const retried = attempt.publicationRetry?.exhausted ? `; retried ${PUBLICATION_RETRY_DELAYS_MS.length} times` : "";
+  if (published.remote === "unreachable") {
+    return `publishing the passed stage: checking the remote pipeline branch failed${retried}. Check remote access and connectivity, then use publish to try again.\n${published.error}`;
+  }
   if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
     return `publishing the passed stage: a check reached its execution deadline without a verdict after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
   }
@@ -4599,9 +4613,10 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
 
 /**
  * A publication that failed for a reason the stage cannot have caused waits
- * and tries again instead of asking a person at once: a refusal of a head that
- * changes nothing, or a push interrupted before it reached the remote (the
- * hook was not allowed to finish, so there is no verdict about the branch).
+ * and tries again instead of asking a person at once: a failed remote read,
+ * a refusal of a head that changes nothing, or a push interrupted before it
+ * reached the remote (the hook was not allowed to finish, so there is no
+ * verdict about the branch).
  * Execution deadlines without a decisive refusal retry on the same bounded
  * backoff as other interruptions. Each failed operation is counted once on
  * the attempt; the limit is durable across ticks and restarts.
@@ -4619,7 +4634,7 @@ async function retryRefusedPublication(
   const notLanded = publicationNotLanded(published);
   const deadlineOnly = failure?.retryableDeadline === true;
   if (!operation || operation.state !== "settled") return false;
-  const recoverable = recoverablePublication(published);
+  const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
     cause: deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
     detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
@@ -4645,6 +4660,7 @@ async function retryRefusedPublication(
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
   await keepPassedStageUnpublished(pipeline, attempt, deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
+    : published.remote === "unreachable" ? `${published.error}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
   ports.scheduleTick?.(Math.max(1_000, wait));
   return true;
@@ -4654,8 +4670,8 @@ async function retryRefusedPublication(
  * The operation id makes this safe to repeat after a lost acknowledgement. */
 function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, ports: PipelinePorts): void {
   const operation = pipeline.delivery?.operation;
-  const result = operation?.result as RefusedPublication | undefined;
-  if (!operation || operation.state !== "settled" || !result || result.ok !== false) return;
+  const result = settledPublicationRefusal(pipeline);
+  if (!operation || !result) return;
   const failure = result.failure;
   const notLanded = publicationNotLanded(result);
   const deadlineOnly = failure?.retryableDeadline === true;
@@ -4663,7 +4679,7 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
     cause: deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
     detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
-    recoverable: recoverablePublication(result) },
+    recoverable: result.remote === "unreachable" || recoverablePublication(result) },
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }
 
@@ -4840,6 +4856,13 @@ async function retryTerminalStagePublication(
     return;
   }
   if (published.remote === "unreachable") {
+    const refusal = settledPublicationRefusal(pipeline);
+    if (refusal) {
+      if (await retryRefusedPublication(pipeline, attempt, refusal, ports)) return;
+      attempt.error = afterCommitRepair(attempt, passedPublicationParkDetail(attempt, refusal));
+      await park(pipeline, attempt.error);
+      return;
+    }
     await keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
@@ -12341,7 +12364,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           await persistPipeline();
         }
         if (publicationPass === 0 && pipeline.delivery?.operation?.state === "settled"
-          && pipeline.delivery.operation.result?.ok && pipeline.delivery.operation.result.remote === "unreachable") {
+          && pipeline.delivery.operation.result?.ok && pipeline.delivery.operation.result.remote === "unreachable"
+          && !(passed && awaitingPassedPublication(pipeline) && !pipeline.delivery.operation.result.uncertain)) {
           delete pipeline.delivery.operation;
           await persistPipeline();
         }
@@ -15389,7 +15413,7 @@ export async function patchPipeline(
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
         }
-        if (pipeline.delivery?.operation?.state === "settled" && !pipeline.delivery.operation.result?.ok) {
+        if (pipeline.delivery && settledPublicationRefusal(pipeline)) {
           recordSettledPublicationFailure(pipeline, attempt, ports);
           delete pipeline.delivery.operation;
           pipeline.publishedCommit = null;

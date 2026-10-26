@@ -1307,6 +1307,10 @@ async function interruptedPublication() {
   pipeline.stages[0]!.next = "review";
   pipeline.stages.push(reviewStage);
   pipeline.runs.push(reviewRun);
+  // The failed read above only builds the accepted-head fixture. The writer
+  // interrupted below is this scenario's first publication failure.
+  delete pipeline.publicationRecovery;
+  delete pipeline.runs[0]!.attempts[0]!.publicationRetry;
   pipeline.delivery!.operation!.state = "pending";
   delete pipeline.delivery!.operation!.result;
   savePipelines([pipeline]);
