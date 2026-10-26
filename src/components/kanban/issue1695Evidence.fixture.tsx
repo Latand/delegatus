@@ -29,7 +29,7 @@ import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
-import { RulesWindow } from "@/components/roleMemory/LearnedRules";
+import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceConversationPanel } from "@/components/VoiceConversation";
@@ -4060,6 +4060,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The lane review case answers these from the driver's own server, through
+     the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
+  if (new URLSearchParams(location.search).has("laneReview")
+    && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
+    return serverFetch(url.pathname + url.search, init);
+  }
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
@@ -5279,7 +5285,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

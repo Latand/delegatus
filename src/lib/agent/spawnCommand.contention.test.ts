@@ -1446,3 +1446,36 @@ test.each(["own", "foreign", "forged", "takeover", "transport"] as const)("stage
     expect(after.receipts[begun.receipt.launchId].accountId).toBe("account-a");
   } finally { registry.close(); }
 });
+
+
+test("spawn dispatch holds no delivery record writer", async () => {
+  const { AgentRegistry } = await import("./registry");
+  const { Database } = await import("bun:sqlite");
+  const cwd = statePath("unlocked-spawn-cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  const filename = path.join(cwd, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(filename.replace(/\.json$/, ".sqlite"));
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.registry = () => registry;
+  const dispatch = dependencies.spawnStructuredConversation;
+  let calls = 0;
+  dependencies.spawnStructuredConversation = async input => {
+    peer.exec("PRAGMA busy_timeout = 0");
+    peer.exec("BEGIN IMMEDIATE");
+    try { calls++; return await dispatch(input); }
+    finally { peer.exec("ROLLBACK"); }
+  };
+  // Await the deferred work so the assertion covers the actual dispatch seam.
+  let work: Promise<unknown> | undefined;
+  dependencies.defer = callback => { work = callback(); };
+  try {
+    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: "unlocked-dispatch", title: "Writer-free dispatch", engine: "claude", cwd, prompt: "inspect", mcpServers: [] }),
+    }), dependencies);
+    expect(response.status).toBe(202);
+    await work;
+    expect(calls).toBe(1);
+  } finally { peer.close(); registry.close(); }
+});

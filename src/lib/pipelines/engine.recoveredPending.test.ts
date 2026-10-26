@@ -137,11 +137,35 @@ test.each(["unbound", "rebinding"] as const)("a pending attempt without an activ
   expect(loadPipelines()[0]!.stateDetail).toContain(`delivery controller (${publication})`);
   expect(h.calls.filter(call => call.startsWith("spawn:"))).toHaveLength(0);
   h.ports.structuredDeliveryPublication = () => "ready";
-  if (publication === "rebinding") h.advanceWallClock(60_000);
+  if (publication === "rebinding") {
+    const wait = loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait!;
+    h.advanceWallClock(Date.parse(wait.retryAfter) - Date.parse(h.ports.now()));
+  }
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.calls.filter(call => call.startsWith("spawn:"))).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+});
+
+test("a recovered pending attempt refuses a launch after its recorded controller deadline (#2996)", async () => {
+  const h = await reserveActivationOnly();
+  const records = loadPipelines();
+  const pipeline = records[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  delete attempt.activation;
+  attempt.state = "pending";
+  attempt.startedAt = null;
+  pipeline.cursor!.state = "pending";
+  savePipelines(records);
+  h.ports.structuredDeliveryPublication = () => "rebinding";
+  await tickPipelines([], h.ports);
+  const wait = loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait!;
+  h.advanceWallClock(Date.parse(wait.startedAt) + wait.budgetMs! - Date.parse(h.ports.now()));
+  h.ports.structuredDeliveryPublication = () => "ready";
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter(call => call.startsWith("spawn:"))).toHaveLength(0);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait).toEqual(wait);
 });
 
 test("pending retry preserves a booked controller backoff and names its deadline (#2996)", async () => {

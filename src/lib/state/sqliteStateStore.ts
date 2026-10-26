@@ -1,3 +1,4 @@
+import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
@@ -347,7 +348,10 @@ function connectDatabase(filename: string): Database {
 function connectRawDatabase(filename: string): Database {
   return stateLockAttempt("state.connection", () => {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-    const db = observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state");
+    const db = observeRegistryWriter(
+      observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state"),
+      filename, viewerLoopMonitor.current() ?? "state database write",
+    );
     try {
       db.exec("PRAGMA busy_timeout = 0");
       db.exec("PRAGMA synchronous = FULL");

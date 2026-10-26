@@ -1,5 +1,7 @@
+import { registryWriterDetail } from "./registryWriter";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
+import { hostExitWriterPending, readHostExit, reclaimHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -7,7 +9,7 @@ import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { structuredSetupStartedAt } from "@/lib/runtime/admissionBudget";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
-import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
+import { recordBlockingWait, withWaitCorrelation, currentWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
 import fs from "node:fs";
@@ -150,6 +152,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
+  exitProcess?: ProcessIdentity;
   signalDomain?: AgentSignalDomain;
   /** Why this host's engine runs without the signal boundary, if it does. */
   signalBoundary?: SignalBoundaryOff;
@@ -224,6 +227,11 @@ export interface AgentRegistryEntry {
   host: TmuxHostEvidence | null;
   /** Structured hosting metadata lives beside legacy tmux evidence during migration. */
   structuredHost?: StructuredHostColumns | null;
+  /** Original identity retained after the host columns are retired. */
+  hostExitProcess?: ProcessIdentity;
+  /** Replaced natives whose independent waiter has not completed yet. */
+  pendingHostExits?: { process: ProcessIdentity; launchId: string | null }[];
+  previousHostExit?: HostExitRecord;
   /** Exact process identities left alive by a partial structured-host kill. */
   structuredTerminationSurvivors?: ProcessIdentity[];
   /** Names the newest capture of those identities. A capture withdrawn after
@@ -279,6 +287,9 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  /** Terminal native evidence retained with this launch, including an open
+      pipeline attempt whose session row has since acquired another host. */
+  hostExit?: HostExitRecord;
   memoryCap?: AgentMemoryCap;
   launchId: string;
   /** Client-owned idempotency key. Legacy callers leave this null. */
@@ -2232,6 +2243,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   }
   return {
     kind: host.kind,
+    ...(host.exitProcess ? { exitProcess: host.exitProcess } : {}),
     ...(signalDomain ? { signalDomain } : {}),
     ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
@@ -2292,6 +2304,7 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
     host: value.host && typeof value.host === "object" && value.host.kind === "tmux" ? value.host : null,
     structuredHost: normalizeStructuredHost(value.structuredHost),
+    ...(value.structuredHost?.exitProcess ? { hostExitProcess: value.structuredHost.exitProcess } : {}),
     ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
   };
 }
@@ -4733,8 +4746,8 @@ export const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by
     nothing was written, so the durable state is what it was before the step,
     and the next pass resumes from it. */
 export class RegistryWriterBusyError extends Error {
-  constructor(readonly label: string) {
-    super(`${REGISTRY_WRITER_BUSY} (${label})`);
+  constructor(readonly label: string, readonly holder?: string) {
+    super(`${REGISTRY_WRITER_BUSY} (${label})${holder ? `; ${holder}` : ""}`);
     this.name = "RegistryWriterBusyError";
   }
 }
@@ -5422,7 +5435,7 @@ export class AgentRegistry {
     try {
       fs.mkdirSync(staging, 0o700);
       fd = fs.openSync(path.join(staging, "owner.json"), "wx", 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ ...owner, token }), "utf8");
+      fs.writeFileSync(fd, JSON.stringify({ ...owner, token, callSite: currentWaitCorrelation()?.label ?? "registry synchronous write", acquiredAt: Date.now() }), "utf8");
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
@@ -5757,7 +5770,7 @@ export class AgentRegistry {
       {@link RegistryWriterBusyError} when the lock stayed held. */
   async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
     const written = await this.whenWriterHeld(correlation, write);
-    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label);
+    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label, this.writerHolderDetail());
     return written.value;
   }
 
@@ -5788,7 +5801,7 @@ export class AgentRegistry {
       if (this.admittedJsonWriter) return { acquired: true, value: withWaitCorrelation(correlation, write) };
       const lock = `${this.filename}.write-lock`;
       fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-      const claim = this.tryAcquireLock(lock, captureProcessIdentity(process.pid));
+      const claim = withWaitCorrelation(correlation, () => this.tryAcquireLock(lock, captureProcessIdentity(process.pid)));
       if (!claim) {
         if (options.recordRefusal !== false) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
           durationMs: 0, correlation, subject: "agent-registry", refused: true });
@@ -6552,12 +6565,25 @@ export class AgentRegistry {
       terminal rejection receipt when the initiating origin is a denied role
       or the child would exceed the nesting-depth ceiling. */
   /** Bounded, non-blocking admission for request and controller paths. */
-  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
+  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void, options: {
+    /** Absolute monotonic cutoff supplied by a caller with a persisted budget. */
+    deadline?: number;
+  } = {}): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
-    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    // One bounded admission slice; the pipeline persists its longer lane deadline.
+    // Membership can need a separate state writer, so two seconds is not enough
+    // to admit and then record it under load.
+    const deadline = Math.min(options.deadline ?? Infinity, performance.now() + (this.writerDeadlineMs ?? 30_000));
+    const busy = (label: string) => new RegistryWriterBusyError(label, this.writerHolderDetail());
     const remaining = () => Math.max(0, deadline - performance.now());
-    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
-    if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
+    const check = (label: string) => {
+      if (performance.now() >= deadline) throw busy(label);
+      guard?.();
+    };
+    check(`${caller} admission`);
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input),
+      () => check(`${caller} admission`), { waitMs: remaining() });
+    if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -6566,7 +6592,7 @@ export class AgentRegistry {
       const admission = await waitForStateLock(`${caller}.membership`, async () => {
         try {
           return await withAccountMutationLockAsync(() => {
-            guard?.();
+            check(`${caller} membership`);
             return this.admitSpawnMembership(input, result);
           }, { caller: `${caller} membership`, waitMs: remaining() });
         } catch (error) {
@@ -6578,11 +6604,21 @@ export class AgentRegistry {
         await new Promise<void>(resolve => setImmediate(resolve));
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, guard, { waitMs: remaining() });
-        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+        }, () => check(`${caller} membership record`), { waitMs: remaining() });
+        if (!recorded.acquired) throw busy(`${caller} membership record`);
       }
     }
+    check(`${caller} admission`);
     return result;
+  }
+
+  private writerHolderDetail(): string {
+    if (this.sqliteStore) return registryWriterDetail(this.sqliteStore.filename);
+    try {
+      const lock = `${this.filename}.write-lock`;
+      const writer = JSON.parse(fs.readFileSync(this.lockOwnerFile(lock), "utf8")) as ProcessIdentity & { callSite?: string; acquiredAt?: number };
+      return `holder=${writer.callSite ?? "legacy registry writer"} pid=${writer.pid} age=${Math.max(0, Date.now() - (writer.acquiredAt ?? fs.statSync(lock).mtimeMs))}ms`;
+    } catch { return "holder=writer changed before inspection; retry admission"; }
   }
 
   /** Acquire each writer without waiting while the other is held. A failed
@@ -6603,6 +6639,7 @@ export class AgentRegistry {
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
+    let backoffMs = 5;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
     const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
       const deadline = performance.now() + remainingMs;
@@ -6638,7 +6675,9 @@ export class AgentRegistry {
           acquiredAt = undefined;
           if (inherited || performance.now() >= deadline) return result;
           waited = true;
-          await new Promise<void>(resolve => setTimeout(resolve, 5));
+          const delayMs = Math.min(Math.max(0, deadline - performance.now()), backoffMs * (0.5 + Math.random() * 0.5));
+          await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+          backoffMs = Math.min(250, backoffMs * 2);
         }
       } finally {
         if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
@@ -7684,6 +7723,16 @@ export class AgentRegistry {
       launchProfile: receipt.launchProfile,
       updatedAt: createdAt,
     };
+    const previous = file.entries[sessionKeyId(entry.key)];
+    const previousProcess = previous?.hostExitProcess ?? previous?.structuredHost?.exitProcess ?? previous?.structuredHost?.process;
+    const nextProcess = full.structuredHost?.exitProcess ?? full.structuredHost?.process ?? full.hostExitProcess;
+    if (nextProcess) full.hostExitProcess = nextProcess;
+    if (previous?.previousHostExit) full.previousHostExit = previous.previousHostExit;
+    const pendingExits = [...(previous?.pendingHostExits ?? [])];
+    if (previousProcess && (!nextProcess || !sameRecordedProcessIdentity(previousProcess, nextProcess))) {
+      pendingExits.push({ process: previousProcess, launchId: previous?.structuredHostOperationId ?? null });
+    }
+    if (pendingExits.length) full.pendingHostExits = pendingExits;
     file.entries[sessionKeyId(entry.key)] = full;
     receipt.key = entry.key;
     receipt.artifactPath = entry.artifactPath;
@@ -7718,7 +7767,7 @@ export class AgentRegistry {
   }
 
   stageStructuredSpawn(launchId: string, entry: Omit<AgentRegistryEntry, "updatedAt">): SpawnSettlement {
-    return this.mutate((file) => {
+    return this.mutateHostExit(entry.key, (file) => {
       const paths = new Set([entry.artifactPath]);
       const signature = migrationReadinessSignature(file, entry.key.engine, paths);
       const staged = this.settleSpawnInFile(file, launchId, {
@@ -8229,8 +8278,54 @@ export class AgentRegistry {
     });
   }
 
+  /** A replacement transfers completed evidence into the existing launch
+      history before reclaiming its two files. Pending waiters remain named
+      by the row and are reconciled by its next host lifecycle update. */
+  private mutateHostExit<T>(key: SessionKey, change: (file: RegistryFile) => T): T {
+    const reclaimed: ProcessIdentity[] = [];
+    const result = this.mutate(file => {
+      const id = sessionKeyId(key);
+      const before = file.entries[id];
+      const prior = before?.hostExitProcess ?? before?.structuredHost?.exitProcess ?? before?.structuredHost?.process;
+      const pending = [...(before?.pendingHostExits ?? [])];
+      const result = change(file);
+      const after = file.entries[id];
+      if (!after) return result;
+      if (!after.previousHostExit && before?.previousHostExit) after.previousHostExit = before.previousHostExit;
+      const current = after.hostExitProcess ?? after.structuredHost?.exitProcess ?? after.structuredHost?.process;
+      if (prior && (!current || !sameRecordedProcessIdentity(prior, current))) pending.push({ process: prior, launchId: before?.structuredHostOperationId ?? null });
+      pending.push(...(after.pendingHostExits ?? []));
+      const retained = new Map<string, { process: ProcessIdentity; launchId: string | null }>();
+      const seen = new Set<string>();
+      for (const item of pending) {
+        const identity = item.process;
+        const processKey = JSON.stringify([identity.pid, identity.startIdentity, identity.bootEpoch ?? null]);
+        if (seen.has(processKey)) continue;
+        seen.add(processKey);
+        if (current && sameRecordedProcessIdentity(identity, current)) continue;
+        const evidence = readHostExit(identity);
+        if (!evidence || evidence.unavailable || processIdentityStatus(identity) !== "dead" || hostExitWriterPending(identity)) {
+          retained.set(processKey, item);
+          continue;
+        }
+        const receipt = item.launchId ? file.receipts[item.launchId] : null;
+        if (receipt?.key?.engine === key.engine && receipt.key.sessionId === key.sessionId && !receipt.hostExit) receipt.hostExit = clone(evidence);
+        after.previousHostExit = clone(evidence);
+        reclaimed.push(identity);
+      }
+      if (retained.size) after.pendingHostExits = [...retained.values()];
+      else delete after.pendingHostExits;
+      return result;
+    });
+    for (const identity of reclaimed) {
+      try { reclaimHostExit(identity); }
+      catch (error) { console.error("[host exit] could not reclaim retained receipts", error); }
+    }
+    return result;
+  }
+
   upsert(entry: Omit<AgentRegistryEntry, "updatedAt">): AgentRegistryEntry {
-    return this.mutate((file) => {
+    return this.mutateHostExit(entry.key, (file) => {
       const keyId = sessionKeyId(entry.key);
       const existing = file.entries[keyId];
       const survivors = existing?.structuredTerminationSurvivors ?? [];
@@ -8247,7 +8342,10 @@ export class AgentRegistry {
         : entry;
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, entry.key.engine, changedHostPaths);
-      const full = { ...replacement, ...(survivors.length > 0 ? { structuredTerminationSurvivors: survivors } : {}), updatedAt: now() };
+      const full = { ...replacement,
+        ...(requestedHost?.exitProcess ?? requestedHost?.process ?? existing?.hostExitProcess
+          ? { hostExitProcess: requestedHost?.exitProcess ?? requestedHost?.process ?? existing!.hostExitProcess } : {}),
+        ...(survivors.length > 0 ? { structuredTerminationSurvivors: survivors } : {}), updatedAt: now() };
       file.entries[keyId] = full;
       advanceMigrationScopeRevision(file, entry.key.engine, readinessBefore, changedHostPaths);
       return clone(full);
@@ -8259,7 +8357,7 @@ export class AgentRegistry {
     structuredHost: StructuredHostColumns | null,
     status?: AgentHostStatus,
   ): AgentRegistryEntry {
-    return this.mutate((file) => {
+    return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) throw new Error("agent registry entry is missing");
@@ -8278,6 +8376,7 @@ export class AgentRegistry {
       };
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
+      entry.hostExitProcess = structuredHost?.exitProcess ?? structuredHost?.process ?? entry.structuredHost?.exitProcess ?? entry.structuredHost?.process ?? entry.hostExitProcess;
       entry.structuredHost = structuredHost ? normalizeStructuredHost(structuredHost) : null;
       if (status) entry.status = status;
       entry.updatedAt = now();
@@ -8296,7 +8395,7 @@ export class AgentRegistry {
     confirmedSurvivors: readonly ProcessIdentity[] = [],
     expectedCustody?: StructuredHostCustody | null,
   ): boolean {
-    return this.mutate((file) => {
+    return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
@@ -8318,6 +8417,7 @@ export class AgentRegistry {
       const replacement = {
         ...entry,
         host: null,
+        hostExitProcess: entry.structuredHost?.exitProcess ?? current ?? entry.hostExitProcess,
         structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
           pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         structuredTerminationSurvivors: [],
@@ -8583,7 +8683,7 @@ export class AgentRegistry {
     claimEpoch: number,
     releaseClaim = false,
   ): AgentRegistryEntry | null {
-    return this.mutate((file) => {
+    return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry?.structuredHost
@@ -8616,6 +8716,7 @@ export class AgentRegistry {
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
       entry.structuredHost = replacement.structuredHost;
+      entry.hostExitProcess = normalizedHost?.exitProcess ?? normalizedHost?.process ?? entry.hostExitProcess;
       entry.status = status;
       entry.pendingAction = replacement.pendingAction;
       if (releaseClaim) entry.claimOwner = null;

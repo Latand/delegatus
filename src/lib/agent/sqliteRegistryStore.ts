@@ -1,3 +1,4 @@
+import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -23,6 +24,20 @@ import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, Seat
 import { sessionKeyId } from "./sessionKey";
 import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+
+/** Startup owns these transactions. Explicit statements also pass through the
+ * writer observer; Bun's transaction callback API bypasses Database.exec. */
+function withStartupTransaction<T>(db: BunDatabase, write: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = write();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* preserve the migration failure */ }
+    throw error;
+  }
+}
 
 /** The collections the MCP grant decision reads and writes. Touching any one of
     them requires the decision to have run over ALL of them, because an entry or
@@ -1098,7 +1113,7 @@ export class SqliteAgentRegistryStore {
     /* Bound to the file at its name: a registry the activation fallback
        replaced is reopened, never written through the moved handle. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = observeSqlite(new Database(filename, { create: true, strict: true }), "registry");
+      const db = observeRegistryWriter(observeSqlite(new Database(filename, { create: true, strict: true }), "registry"), filename);
       try {
         db.exec(`PRAGMA busy_timeout = ${options.deferColdKeyInitialization ? 0 : 5000}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;`);
         db.exec(`
@@ -1138,7 +1153,7 @@ export class SqliteAgentRegistryStore {
         `);
         if (options.allowArchiveMigration !== false) {
           assertStateStartupMutation(path.dirname(filename),"agent registry archive schema");
-          db.transaction(() => {
+          withStartupTransaction(db, () => {
             installRegistryArchive(db);
             // Older normalizers omit this field. Keep active namespace authority
             // until a current writer has proved and recorded its retirement.
@@ -1153,7 +1168,7 @@ export class SqliteAgentRegistryStore {
               AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
               AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
             BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
-          }).immediate();
+          });
         }
         return db;
       } catch (error) {
@@ -5188,9 +5203,9 @@ export class SqliteAgentRegistryStore {
       fault and keeps running the statements after it (#1974), so a block
       written that way could commit half a migration and its marker. */
   private runAtomically(statements: readonly string[]): void {
-    this.db.transaction(() => {
+    withStartupTransaction(this.db, () => {
       for (const statement of statements) this.db.run(statement);
-    }).immediate();
+    });
   }
 
   private meta(key: string): string | null {

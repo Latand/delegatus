@@ -1,4 +1,5 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
+import { withHostStopOrigin } from "./hostExit";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
@@ -191,7 +192,7 @@ async function revalidateRetainedStartupHosts(
     if (!startupHostInScope(registry, sessionKeyId(item.key))
       || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
     else {
-      await item.host.release();
+      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, () => item.host.release());
       await flushStructuredHostPersistence(item.host);
     }
   });
@@ -3333,7 +3334,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
       });
       throw error;
     }
-    await host.release();
+    await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => host.release());
     await flushStructuredHostPersistence(host);
     released.add(sessionKeyId(key));
   }));
