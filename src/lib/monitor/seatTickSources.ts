@@ -1,3 +1,4 @@
+import { postMergeSeatSignals } from "@/lib/forge/postMerge";
 import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -1485,7 +1486,7 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = telegramPostSignals(project, sources.tasks(), loadSeatRounds(project));
+  const found: SeatTickSignalInput[] = [...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver())];
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
