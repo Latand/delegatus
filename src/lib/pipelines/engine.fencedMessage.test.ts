@@ -531,7 +531,7 @@ test("a turn the exiting host wrote while it stopped keeps the launch: the first
   } finally { await f.end(); }
 });
 
-test.each(["unset", "set"] as const)("failed startup recovery never signals a live host whose row moved to another process, and parks (control socket %s)", async socket => {
+test.each(["unset", "set"] as const)("failed startup recovery never signals a live writing host whose row moved to another process, and parks (control socket %s)", async socket => {
   const socketSet = socket === "set";
   const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
   if (socketSet) process.env.LLV_RUNTIME_HOST_SOCKET = path.join(process.env.TMPDIR!, "closed-runtime-host.sock");
@@ -539,6 +539,7 @@ test.each(["unset", "set"] as const)("failed startup recovery never signals a li
   const peer = await ownedHost();
   try {
     await f.tick(async () => {
+      fs.appendFileSync(f.artifactPath, JSON.stringify({ type: "session_meta", payload: { id: "live-host" } }) + "\n");
       const before = f.registry.readOnlySnapshot();
       const next = structuredClone(before);
       const entry = next.entries[`codex:${f.key.sessionId}`]!;
@@ -564,4 +565,47 @@ test.each(["unset", "set"] as const)("failed startup recovery never signals a li
     else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
     await f.end(); await peer.end();
   }
+});
+
+test("socketless startup recovery defers to the live starting Viewer without spending its wait budget", async () => {
+  const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  const f = await fencedLaunchWithRecordedHost();
+  const viewer = await ownedHost();
+  try {
+    const before = f.registry.readOnlySnapshot();
+    const next = structuredClone(before);
+    next.entries[`codex:${f.key.sessionId}`]!.claimOwner = `structured-host:${JSON.stringify(viewer.process)}`;
+    f.registry.restoreSnapshot(before, next);
+    let asked = 0;
+    await f.tick(async () => { asked++; return false; });
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launchId });
+    expect(f.attempt().controllerWait).toBeUndefined();
+    expect(f.attempt().unresolvedTermination).toBeUndefined();
+    expect(asked).toBe(0);
+    expect(f.signals).toEqual([]);
+    await f.tick(async () => { asked++; return false; }, "2026-10-23T12:10:00.000Z");
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(f.attempt().controllerWait).toBeUndefined();
+    expect(asked).toBe(0);
+    // The live Viewer does not prevent replacement once its recorded host exits.
+    await f.host.end();
+    await f.tick(async () => false, "2026-10-23T12:10:01.000Z");
+    expectReplacedAfterFailedStartup(f);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
+    await f.end(); await viewer.end();
+  }
+});
+
+test("failed startup recovery replaces a recorded host that exited before recovery", async () => {
+  const f = await fencedLaunchWithRecordedHost();
+  try {
+    await f.host.end();
+    await f.tick(async () => false);
+    expectReplacedAfterFailedStartup(f);
+    expect(f.signals).toEqual([]);
+  } finally { await f.end(); }
 });

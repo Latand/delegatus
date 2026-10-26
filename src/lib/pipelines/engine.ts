@@ -2063,6 +2063,13 @@ export function defaultPipelinePorts(
            again once the stop settles. */
         let effectStarted = false;
         const root = writer?.structuredHost?.process ?? null;
+        /* A socketless caller cannot release another live Viewer's controller.
+           Leave its failed launch pending for that controller, without taking
+           a tree capture or spending the startup recovery wait budget. Dead
+           engine identities still take the normal recovery path below. */
+        const control = structuredHostKillRefFromRegistry(probe.key);
+        if (control.ok && !runtimeHostSocket() && control.owner.status === "alive" && control.owner.identity?.pid !== process.pid
+          && root && terminationIdentityStatus(root) !== "dead") return { outcome: "deferred" };
         let stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
           if (effectStarted) return null;
           const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
@@ -11049,6 +11056,10 @@ async function deferRetiredLaunchRetry(
       ? await ports.stopStageAgent(target, { automatic: true, recordedIdentity: true, eligible })
       : await stopStageForRecovery(target, ports);
     if (!["stopped", "not-running"].includes(stopped.outcome)) {
+      if (fencedFirstMessage && stopped.outcome === "deferred") {
+        pipeline.stateDetail = "waiting for the starting Viewer to recover the failed startup host; keeping uncommitted work";
+        return "waiting";
+      }
       if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
       if (stopped.outcome === "unresolved") {
         await park(pipeline, `failed startup recovery could not terminate its recorded host: ${redactBounded(stopped.error, 300)}`, attempt);
