@@ -5,6 +5,7 @@
  */
 export const MERGE_REASONS = {
   refreshClosed: "the refresh was closed; finish the resolution review before retrying the merge",
+  refreshReviewRequired: "the refresh has not passed its resolution review",
   refreshSameBase: "the refresh did not clear the conflict, and main has not moved since",
   conflict: "conflict with the base branch",
   noChecks: "no checks reported on this head",

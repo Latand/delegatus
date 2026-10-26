@@ -3129,6 +3129,7 @@ export const en = {
   "pipelineBlock.finish.mergeOff": "This project leaves PRs open: the task moves to Done when the pipeline completes. The setting is in the board's ⋯ menu.",
   "pipelineBlock.merge.reason": "Merge stopped: {reason}.",
   "pipelineBlock.mergeReason.refreshClosed": "The refresh was closed before the PR merged.",
+  "pipelineBlock.mergeReason.refreshReviewRequired": "The refresh needs a passed resolution review before merging.",
   "pipelineBlock.mergeReason.refreshSameBase": "The refresh did not clear the conflict, and main has not moved since.",
   "pipelineBlock.mergeReason.refusedRefresh": "Delegatus could not start the refresh: {message}",
   "pipelineBlock.mergeReason.conflict": "conflict with the base branch",

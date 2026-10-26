@@ -3086,6 +3086,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.finish.mergeOff": "Цей проєкт лишає PR відкритими: задача перейде в «Готово», коли пайплайн завершиться. Налаштування — у меню ⋯ дошки.",
   "pipelineBlock.merge.reason": "Мердж зупинено: {reason}.",
   "pipelineBlock.mergeReason.refreshClosed": "Оновлення закрили до злиття PR.",
+  "pipelineBlock.mergeReason.refreshReviewRequired": "Перш ніж зливати, потрібно успішно пройти ревʼю розв’язання конфлікту.",
   "pipelineBlock.mergeReason.refreshSameBase": "Оновлення не усунуло конфлікт, і main відтоді не змінився.",
   "pipelineBlock.mergeReason.refusedRefresh": "Delegatus не зміг почати оновлення: {message}",
   "pipelineBlock.mergeReason.conflict": "конфлікт з базовою гілкою",

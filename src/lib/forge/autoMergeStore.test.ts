@@ -1096,22 +1096,106 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
 
 test("a newer delivery owner retires the completed predecessor merge with its successor named", async () => {
   const old = completedLane("predecessor");
+  const olderWithoutMerge = completedLane("predecessor-without-merge");
   const owner = completedLane("successor");
   const target = { repository: PROJECT, remote: "", branch: "refs/heads/review", pr: 7 };
   old.delivery = { target, disposition: "owner", publish: "disabled", active: false, ownerId: old.id, epoch: 1, journal: [] };
+  olderWithoutMerge.delivery = { target, disposition: "owner", publish: "disabled", active: false, ownerId: olderWithoutMerge.id, epoch: 0, journal: [] };
   owner.delivery = { target, disposition: "owner", publish: "enabled", active: true, ownerId: owner.id, epoch: 2, journal: [] };
-  owner.state = "running";
   old.merge = {
     state: "blocked", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
     seenChecks: [], head: HEAD, headSeenAt: iso(T0), lastChecks: [], readAt: iso(T0), nextReadAt: null, requestedAt: iso(T0),
     mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: MERGE_REASONS.conflict, blockedAt: iso(T0), updatedAt: iso(T0),
   };
-  savePipelines([old, owner]);
+  owner.merge = structuredClone(old.merge);
+  owner.merge.reason = MERGE_REASONS.conflict;
+  owner.merge.state = "blocked";
+  savePipelines([old, olderWithoutMerge, owner]);
+  const reloaded = loadPipelines();
+  expect(reloaded.find(lane => lane.id === owner.id)!.delivery!.active).toBe(false);
+  stampAttentionRoutes([], reloaded, T0 / 1000, {
+    seatFor: () => "conversation_seat", canonicalProject: project => project,
+    isSeatConversation: id => id === "conversation_seat", escalation: () => null, formWaiting: () => false,
+  });
+  expect(seatAgendaAsks({ files: [], pipelines: reloaded }, T0 / 1000, PROJECT).map(ask => ask.id)).toEqual([owner.id]);
   const ports = productionAutoMergePorts({ loadPipelines, now: () => T0, log: () => undefined });
   await sweepAutoMerge(ports);
   const retired = loadPipelines().find(lane => lane.id === old.id)!;
   expect(retired.merge).toMatchObject({ state: "cancelled", reason: "Merge superseded by delivery owner successor" });
+  expect(loadPipelines().find(lane => lane.id === olderWithoutMerge.id)!.merge).toBeUndefined();
   const stamp = retired.merge!.updatedAt;
   await sweepAutoMerge(ports);
   expect(loadPipelines().find(lane => lane.id === old.id)!.merge!.updatedAt).toBe(stamp);
+});
+
+test("a reloaded completed refresh with an exhausted review cannot dispatch its retained merge", async () => {
+  const parent = completedLane("refresh-parent");
+  const refresh = completedLane("refresh-review-exhausted");
+  refresh.refreshOf = { pipelineId: "refresh-parent", base: "b".repeat(40) };
+  refresh.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
+  refresh.stages.push({ ...refresh.stages[0]!, id: "fix", next: null });
+  Object.assign(refresh.runs[1]!.attempts[0]!, { state: "failed", budgetSpent: true });
+  refresh.runs.push({ stageId: "fix", attempts: [{ ...refresh.runs[0]!.attempts[0]!,
+    activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true },
+  }] });
+  refresh.merge = {
+    state: "queued", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: iso(T0),
+    mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: iso(T0),
+  };
+  parent.merge = structuredClone(refresh.merge);
+  Object.assign(parent.merge, { state: "refreshing", refresh: {
+    attempt: 1, base: "b".repeat(40), head: HEAD, key: "refresh-key", digest: "refresh-digest", requestedAt: iso(T0), pipelineId: refresh.id,
+  } });
+  savePipelines([parent, refresh]);
+  expect(loadPipelines().find(lane => lane.id === refresh.id)!.merge!.state).toBe("queued");
+  const writes: string[][] = [];
+  const ports = productionAutoMergePorts({
+    loadPipelines, now: () => T0, cachedState: () => null,
+    run: async () => { throw new Error("review gate should stop before forge reads"); },
+    write: async args => { writes.push(args); return ""; }, log: () => undefined,
+  });
+  for (let poll = 0; poll < 8; poll++) await sweepAutoMerge(ports);
+  expect(loadPipelines().find(lane => lane.id === refresh.id)!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.refreshReviewRequired });
+  expect(loadPipelines().find(lane => lane.id === parent.id)!.merge).toMatchObject({
+    state: "blocked", reason: `Refresh was not admitted: ${MERGE_REASONS.refreshReviewRequired}`,
+  });
+  expect(writes).toEqual([]);
+});
+
+test("a refresh review that fails at the merge mutation fence refuses dispatch", async () => {
+  const refresh = completedLane("refresh-review-race");
+  refresh.refreshOf = { pipelineId: "refresh-parent", base: "b".repeat(40) };
+  refresh.merge = {
+    state: "queued", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: iso(T0),
+    mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: iso(T0),
+  };
+  savePipelines([refresh]);
+  const writes: string[][] = [];
+  const ports = productionAutoMergePorts({
+    loadPipelines, now: () => T0, cachedState: () => null,
+    run: async args => {
+      if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: HEAD,
+        baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: [] });
+      if (args[1]?.includes("/reviews")) return "";
+      if (args.at(-1) === ".protection.required_status_checks.contexts") return "null";
+      if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+      throw new Error(`unexpected fixture read: ${args.join(" ")}`);
+    },
+    write: async args => { writes.push(args); return ""; }, log: () => undefined,
+  });
+  const mutate = ports.mutate;
+  let changed = false;
+  ports.mutate = (id, change) => mutate(id, live => {
+    if (!changed && live.merge?.state === "queued") {
+      live.runs[1]!.attempts[0]!.state = "failed";
+      changed = true;
+    }
+    return change(live);
+  });
+  await sweepAutoMerge(ports);
+  expect(changed).toBe(true);
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.refreshReviewRequired });
+  expect(writes).toEqual([]);
 });
