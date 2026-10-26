@@ -18,17 +18,26 @@ conversation, account, provider cut and original operation/submission identities
 It survives a Viewer restart and retains a terminal tombstone until a later
 logical request replaces it. Its continuation is authored by Delegatus and asks
 the seat to continue the request already in its transcript.
+Reads resolve the project's verified alias family, including predecessor
+control markers. Updates retain the obligation's original project and delivery
+identity; a project succession cannot discard an operator cancellation.
 
 An obligation becomes due at its recorded provider reset, or after a fresh live
 eligible sample newer than its exhaustion evidence. A newer exhausted sample
 updates the durable hold, including an unknown reset. Aging that sample cannot
 restore an earlier reset. No account is selected or changed by this recovery.
+Dispatch preparation persists newer exhaustion through the same update as the
+ticker, so a restart between the refusal and the next tick preserves the hold.
 
 Intent is persisted before delivery. Lost acknowledgements replay the same
 delivery key, using the existing registry and runtime-journal receipts. Unknown
 delivery outcomes keep their identity. A native continuation that was positively
 refused before execution uses the delivery layer's existing fenced retry path.
 The seat obligation grants no new turn for another failure of its own follow-up.
+A distinct delivered request establishes its own native turn boundary. It can
+replace a cancelled obligation even when both requests ended in quota errors
+without assistant output between them. Recovery follow-ups cannot establish
+that boundary because their delivery origin is excluded from the request join.
 
 Rotation, revocation, a reply, replacement input and account/binding changes
 withdraw recovery. Operator controls persist cancellation before native work,

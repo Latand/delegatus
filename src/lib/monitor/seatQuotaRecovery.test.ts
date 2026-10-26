@@ -5,7 +5,8 @@ import path from "node:path";
 import { cancelSeatQuotaOnControl, defaultSeatQuotaRecoveryPorts, recoverSeatQuota, readSeatQuotaObligation, seatQuotaDispatchGuard, type SeatQuotaObservation, type SeatQuotaRecoveryPorts } from "./seatQuotaRecovery";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { persistProjectAliases } from "@/lib/projects/aliases";
 import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
 import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "@/lib/runtime/engineHost";
 import type { StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
@@ -98,6 +99,31 @@ test("confirmed exhaustion after the recorded reset needs new evidence when no l
   await f.recover(); expect(f.h.sent).toEqual([]);
   f.h.observation.capacity = "available"; f.h.observation.observedAt = f.h.now;
   await f.recover(); expect(f.h.sent).toHaveLength(1);
+});
+
+test.each([null, (RESET + 3_600_000) / 1000])("dispatch persists newer exhaustion with reset %s before deferring", async nextReset => {
+  const f = harness(); await f.recover();
+  f.h.now = RESET + 1; f.h.observation.observedAt = f.h.now; f.h.observation.resetsAt = nextReset;
+  await expect(f.guard()).rejects.toBeInstanceOf(StructuredDispatchDeferredError);
+  expect(f.read()?.capacityObservedAt).toBe(RESET + 1);
+  expect(f.read()?.resetsAt).toBe(nextReset);
+  f.h.observation.capacity = "unknown"; f.h.now += 600_000;
+  await expect(f.guard()).rejects.toBeInstanceOf(StructuredDispatchDeferredError);
+  expect(f.h.sent).toEqual([]);
+  if (nextReset !== null) f.h.now = nextReset * 1000;
+  else { f.h.observation.capacity = "available"; f.h.observation.observedAt = f.h.now; }
+  expect(await f.guard()).toBeFunction();
+});
+
+test.each(["account", "snapshot"])("dispatch does not retain exhaustion from changed %s authority", async changed => {
+  const f = harness(); await f.recover();
+  f.h.now = RESET + 1; f.h.observation.observedAt = f.h.now; f.h.observation.resetsAt = null;
+  if (changed === "account") f.h.observation.accountId = "account-b";
+  else f.h.current = false;
+  await expect(f.guard()).rejects.toBeInstanceOf(changed === "account" ? StructuredSendRefusedError : StructuredDispatchDeferredError);
+  expect(f.read()?.capacityObservedAt).toBe(CUT);
+  expect(f.read()?.resetsAt).toBe(RESET / 1000);
+  expect(f.h.sent).toEqual([]);
 });
 
 test("a fresh eligible sample can end an unknown-reset hold; its earlier sample cannot", async () => {
@@ -222,6 +248,127 @@ test("operator control before detection fences the old request without granting 
   setSystemTime(CUT + 1); await cancelSeatQuotaOnControl("conversation_seat");
   f.h.now = RESET; f.h.observation.capacity = "unknown";
   await f.recover(); expect(f.h.sent).toEqual([]); expect(f.read()).toBeNull();
+});
+
+test.each(["before-detection", "after-detection", "after-succession"])("operator cancellation survives project succession %s", async boundary => {
+  const f = harness();
+  const at = f.h.seat!.designatedAt;
+  beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate work", clientRequestId: "alias-seat", mode: "existing", now: at });
+  completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: "alias-seat", conversationId: "conversation_seat", path: "seat.jsonl", now: at });
+  f.h.seat!.seatEpoch = orchestratorSeatFor("fixture").active!.seatEpoch;
+  if (boundary !== "before-detection") await f.recover();
+  const original = f.read();
+  const succeed = () => expect(persistProjectAliases([{ source: "fixture", target: "middle", displayName: "Project" },
+    { source: "middle", target: "current", displayName: "Project" }])).toBe(true);
+  if (boundary === "after-succession") succeed();
+  setSystemTime(CUT + 1); await cancelSeatQuotaOnControl("conversation_seat");
+  if (boundary !== "after-succession") succeed();
+  expect(orchestratorSeatFor("current").active?.seatEpoch).toBe(f.h.seat!.seatEpoch);
+  f.h.now = RESET; f.h.observation.capacity = "unknown";
+  for (const project of ["fixture", "middle", "current"]) {
+    await recoverSeatQuota(project, f.ports);
+    await expect(seatQuotaDispatchGuard(project, f.ports)).rejects.toBeInstanceOf(StructuredSendRefusedError);
+    expect(readSeatQuotaObligation(project)?.id ?? null).toBe(original?.id ?? null);
+    expect(readSeatQuotaObligation(project)?.state ?? null).toBe(original ? "cancelled" : null);
+  }
+  expect(f.h.sent).toEqual([]);
+});
+
+test("succession retains an owed delivery identity through dispatch and later cancellation", async () => {
+  const f = harness(); await f.recover(); const original = f.read()!;
+  expect(persistProjectAliases([{ source: "fixture", target: "current", displayName: "Project" }])).toBe(true);
+  f.h.now = RESET; f.h.observation.capacity = "unknown";
+  const guard = await seatQuotaDispatchGuard("current", f.ports);
+  await recoverSeatQuota("current", f.ports);
+  expect(f.h.sent[0]?.clientMessageId).toBe(original.id);
+  expect(f.h.sent[0]?.origin?.project).toBe("fixture");
+  expect(readSeatQuotaObligation("current")?.project).toBe("fixture");
+  f.h.stopped = true;
+  await recoverSeatQuota("fixture", f.ports);
+  expect(guard).toThrow(StructuredSendRefusedError);
+  expect(readSeatQuotaObligation("current")?.state).toBe("cancelled");
+});
+
+test("conflicting obligations across an alias family withhold dispatch", async () => {
+  const f = harness(); await f.recover();
+  await recoverSeatQuota("current", f.ports);
+  expect(persistProjectAliases([{ source: "fixture", target: "current", displayName: "Project" }])).toBe(true);
+  f.h.now = RESET; f.h.observation.capacity = "unknown";
+  expect(() => readSeatQuotaObligation("current")).toThrow("conflicting seat quota obligations");
+  await expect(seatQuotaDispatchGuard("fixture", f.ports)).rejects.toThrow("conflicting seat quota obligations");
+  expect(f.h.sent).toEqual([]);
+});
+
+test.each(["exhaustion", "alias-control"])("%s remains fenced after reopening in another process", async scenario => {
+  const directory = path.join(root, `restart-${++ordinal}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const fixture = path.join(import.meta.dir, "fixtures/seatQuotaReplay.ts");
+  const run = async (phase: string) => {
+    const child = Bun.spawn([process.execPath, fixture, phase], { env: { ...process.env, LLV_STATE_DIR: directory }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit, error).toBe(0); return JSON.parse(output.trim().split("\n").at(-1)!);
+  };
+  const before = await run(`${scenario}-persist`);
+  const after = await run(`${scenario}-reopen`);
+  expect(after.id).toBe(before.id);
+  expect(after.count).toBe(0);
+  expect(after.refused).toBe(true);
+  expect(after.state).toBe(scenario === "exhaustion" ? "owed" : "cancelled");
+});
+
+test("a distinct delivered request gets its own native recovery boundary after two quota cuts", async () => {
+  const directory = path.join(root, `replacement-${++ordinal}`);
+  fs.mkdirSync(directory, { recursive: true }); process.env.LLV_STATE_DIR = directory;
+  const transcript = path.join(directory, "22222222-2222-\x34222-8222-222222222222.jsonl");
+  const prompt = (at: number) => ({ type: "user", timestamp: new Date(at).toISOString(), message: { role: "user", content: "check existing work" } });
+  const quota = (at: number) => ({ type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "You've hit your session limit · resets 10:10am (UTC)" }] } });
+  const append = (...rows: unknown[]) => fs.appendFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const registry = new AgentRegistry(path.join(directory, "registry.json")); setAgentRegistryForTests(registry);
+  try {
+    setSystemTime(CUT - 1000);
+    append(prompt(CUT - 500), quota(CUT));
+    registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: "account-a",
+      launchProfile: emptyLaunchProfile({ cwd: directory, project: "fixture", model: "opus" }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date(CUT - 1000).toISOString() }]);
+    const conversation = registry.conversationForPath(transcript)!;
+    const a = registry.holdDelivery(conversation.id, "check existing work", "submission-a", "text", [], null, { operationId: "operation-a" });
+    setSystemTime(CUT + 1); registry.recordDeliveryOutcome(a.id, "delivered");
+    const designatedAt = new Date(CUT - 60_000).toISOString();
+    beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate work", clientRequestId: "replacement-seat", mode: "existing", now: designatedAt });
+    completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: "replacement-seat", conversationId: conversation.id, path: transcript, now: designatedAt });
+    const sent: StructuredMessageRequest[] = [];
+    let delivered = false;
+    const ports = { ...defaultSeatQuotaRecoveryPorts(), held: () => false, stopped: async () => false,
+      delivery: () => delivered ? "delivered" as const : "absent" as const,
+      send: async (request: StructuredMessageRequest, allowed: () => Promise<boolean>) => { if (await allowed()) { sent.push(request); delivered = true; } } };
+    await recoverSeatQuota("fixture", ports); const first = readSeatQuotaObligation("fixture")!;
+    expect(first.original.operationId).toBe("operation-a");
+    setSystemTime(CUT + 1000);
+    const b = registry.holdDelivery(conversation.id, "check other work", "submission-b", "text", [], null, { operationId: "operation-b" });
+    append(prompt(CUT + 1500), quota(CUT + 2000));
+    setSystemTime(CUT + 2001); registry.recordDeliveryOutcome(b.id, "delivered");
+    const observation = await ports.observe("fixture", ports.seat("fixture")!, CUT);
+    expect(observation?.request?.operationId).toBe("operation-b");
+    expect(observation?.evidence.terminalProviderMessage?.ts).toBe(CUT + 2000);
+    await recoverSeatQuota("fixture", ports);
+    expect(readSeatQuotaObligation("fixture")?.state).toBe("cancelled");
+    expect(readSeatQuotaObligation("fixture")?.id).toBe(first.id);
+    await recoverSeatQuota("fixture", ports);
+    const second = readSeatQuotaObligation("fixture")!;
+    expect(second.original).toMatchObject({ operationId: "operation-b", clientMessageId: "submission-b" });
+    expect(second.state).toBe("owed"); expect(second.id).not.toBe(first.id);
+    setSystemTime(RESET - 1); await recoverSeatQuota("fixture", ports); expect(sent).toEqual([]);
+    setSystemTime(RESET); await recoverSeatQuota("fixture", ports); await recoverSeatQuota("fixture", ports);
+    expect(sent).toHaveLength(1); expect(sent[0]?.clientMessageId).toBe(second.id);
+    expect(readSeatQuotaObligation("fixture")?.state).toBe("settled");
+    const own = registry.holdDelivery(conversation.id, "continue", second.id, "text", [], null,
+      { operationId: second.id, origin: { kind: "agent", role: SEAT_QUOTA_RECOVERY_ROLE, project: "fixture" } });
+    append(prompt(RESET + 500), quota(RESET + 1000));
+    setSystemTime(RESET + 1001); registry.recordDeliveryOutcome(own.id, "delivered");
+    await recoverSeatQuota("fixture", ports); await recoverSeatQuota("fixture", ports);
+    expect(readSeatQuotaObligation("fixture")?.id).toBe(second.id); expect(sent).toHaveLength(1);
+  } finally { registry.close(); }
 });
 
 test("native Claude quota evidence joins the request whose turn failed and invalidates on later output", async () => {

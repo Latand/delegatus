@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { canonicalProject, projectAliasKeys } from "@/lib/projects/aliases";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { orchestratorSeatFor, orchestratorSeatIdentityForConversation } from "@/lib/orchestrator/seats";
 import { agentRegistry, type RegistryConversation } from "@/lib/agent/registry";
@@ -78,6 +79,9 @@ const digest = (value: unknown) => crypto.createHash("sha256").update(JSON.strin
 function filename(project: string): string { return statePath("seat-quota-recovery", `${digest(project)}.json`); }
 function controlFilename(project: string): string { return statePath("seat-quota-recovery", `${digest(project)}.control.json`); }
 function controlled(project: string, seat: Seat, since: string): boolean {
+  return projectAliasKeys(project).some(key => controlledKey(key, seat, since));
+}
+function controlledKey(project: string, seat: Seat, since: string): boolean {
   let value: { seatEpoch: number; conversationId: string; at: string };
   try { value = JSON.parse(fs.readFileSync(controlFilename(project), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -94,11 +98,13 @@ export async function cancelSeatQuotaOnControl(conversationId: string): Promise<
   if (!identity) return;
   const seat = orchestratorSeatFor(identity.project).active;
   if (seat?.conversationId !== conversationId || seat.seatEpoch !== identity.seatEpoch) return;
-  await withFileTransaction(filename(identity.project), "seat quota control busy", () => {
-    writeJsonDurably(controlFilename(identity.project), { conversationId, seatEpoch: identity.seatEpoch, at: new Date().toISOString() });
+  const project = canonicalProject(identity.project);
+  await withFileTransaction(filename(project), "seat quota control busy", () => {
+    if (canonicalProject(project) !== project) throw new StructuredDispatchDeferredError("seat quota project changed");
+    writeJsonDurably(controlFilename(project), { conversationId, seatEpoch: identity.seatEpoch, at: new Date().toISOString() });
     const row = readSeatQuotaObligation(identity.project);
     if (row && open(row) && row.seat.seatEpoch === identity.seatEpoch) {
-      writeJsonDurably(filename(identity.project), { ...row, state: "cancelled", reason: "explicit operator control" });
+      writeJsonDurably(filename(row.project), { ...row, state: "cancelled", reason: "explicit operator control" });
     }
   });
 }
@@ -106,6 +112,12 @@ export async function cancelSeatQuotaOnControl(conversationId: string): Promise<
 /** One latest obligation/tombstone per project, independent of bounded receipts
  * and engine sessions. Replacing it requires a different, later logical ask. */
 export function readSeatQuotaObligation(project: string): SeatQuotaObligation | null {
+  const rows = projectAliasKeys(project).map(readObligationKey).filter((row): row is SeatQuotaObligation => row !== null)
+    .sort((a, b) => b.cutAt - a.cutAt);
+  if (rows.length > 1 && rows[0]!.cutAt === rows[1]!.cutAt) throw new Error("conflicting seat quota obligations; recovery withheld");
+  return rows[0] ?? null;
+}
+function readObligationKey(project: string): SeatQuotaObligation | null {
   let raw: unknown;
   try { raw = JSON.parse(fs.readFileSync(filename(project), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
@@ -128,11 +140,13 @@ function obligationId(row: Pick<SeatQuotaObligation, "project" | "seat" | "cutAt
   return `seat-quota-${digest([row.project, row.seat, row.cutAt, row.original])}`;
 }
 async function change(project: string, update: (row: SeatQuotaObligation | null) => SeatQuotaObligation | null) {
-  return withFileTransaction(filename(project), "seat quota recovery busy", () => {
+  const canonical = canonicalProject(project);
+  return withFileTransaction(filename(canonical), "seat quota recovery busy", () => {
     assertSeatTickWork();
+    if (canonicalProject(project) !== canonical) throw new StructuredDispatchDeferredError("seat quota project changed");
     const previous = readSeatQuotaObligation(project);
     const row = update(previous);
-    if (row) writeJsonDurably(filename(project), row);
+    if (row) writeJsonDurably(filename(row.project), row);
     return row;
   });
 }
@@ -187,6 +201,16 @@ function quotaRead<T>(read: () => T): T {
   }
 }
 
+async function retainExhaustion(project: string, row: SeatQuotaObligation, observation: SeatQuotaObservation, ports: SeatQuotaRecoveryPorts) {
+  if (observation.accountId !== row.accountId || observation.capacity !== "exhausted"
+    || observation.observedAt === null || observation.observedAt <= row.capacityObservedAt) return row;
+  const observedAt = observation.observedAt;
+  return change(project, current => current?.id === row.id && open(current) && observedAt > current.capacityObservedAt
+    && sameSeat(ports.seat(project), row.seat) && ports.current(observation)
+    ? { ...current, capacityObservedAt: observedAt, resetsAt: observation.resetsAt !== null
+      && observation.resetsAt * 1000 > observedAt ? observation.resetsAt : null } : current);
+}
+
 /** Reads are outside the store transaction. The final synchronous check is
  * carried into the host's own pre-write authorization callback. */
 export async function seatQuotaDispatchGuard(project: string, ports = defaultSeatQuotaRecoveryPorts()): Promise<() => void> {
@@ -194,6 +218,7 @@ export async function seatQuotaDispatchGuard(project: string, ports = defaultSea
   if (!row || !open(row) || !sameSeat(ports.seat(project), row.seat)) throw new StructuredSendRefusedError("seat quota recovery cancelled");
   const observation = await ports.observe(project, row.seat, row.cutAt);
   if (!observation) throw new StructuredDispatchDeferredError("seat quota evidence unavailable");
+  await retainExhaustion(project, row, observation, ports);
   const state = quotaCutState(row, observation);
   if (state === "superseded") {
     throw new StructuredSendRefusedError("seat quota request answered or superseded");
@@ -272,7 +297,7 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
     // Never turn our own unsuccessful continuation into a new user request.
     if (!observation.request || row && observation.request.operationId === row.original.operationId
       || observation.evidence.promptHistoryComplete !== true || observation.evidence.externalPromptAfterCut) return !!row && open(row);
-    const proposed: SeatQuotaObligation = { version: 1, id: "", project, seat, accountId: observation.accountId,
+    const proposed: SeatQuotaObligation = { version: 1, id: "", project: canonicalProject(project), seat, accountId: observation.accountId,
       cutAt, resetsAt: observation.evidence.terminalProviderMessage?.usageLimit?.resetsAt ?? observation.resetsAt,
       original: observation.request, state: "owed", reason: "provider usage limit", controlCursor: 0, capacityObservedAt: cutAt };
     proposed.id = obligationId(proposed);
@@ -281,12 +306,8 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
       && (!current || current.cutAt < cutAt && current.original.operationId !== proposed.original.operationId) ? proposed : current);
   }
   if (!row || !open(row)) return false;
-  if (observation.capacity === "exhausted" && observation.observedAt !== null && observation.observedAt > row.capacityObservedAt) {
-    row = await change(project, current => current?.id === row!.id && open(current) && observation.observedAt! > current.capacityObservedAt
-      ? { ...current, capacityObservedAt: observation.observedAt!, resetsAt: observation.resetsAt !== null
-        && observation.resetsAt * 1000 > observation.observedAt! ? observation.resetsAt : null } : current);
-    if (!row || !open(row)) return false;
-  }
+  row = await retainExhaustion(project, row, observation, ports);
+  if (!row || !open(row)) return false;
   if (row.state === "submitted") {
     const delivery = await ports.delivery?.(row);
     if (delivery === "pending" || delivery === "unknown") return true;
@@ -316,7 +337,7 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
   await ports.send({ path: observation.path, conversationId: seat.conversationId,
     clientMessageId: obligation.id, operationId: obligation.id, policy: "queue", turnId: null,
     cohortAt: obligation.original.createdAt,
-    origin: { kind: "agent", role: SEAT_QUOTA_RECOVERY_ROLE, project },
+    origin: { kind: "agent", role: SEAT_QUOTA_RECOVERY_ROLE, project: obligation.project },
     text: `Provider capacity interrupted the unanswered request already in this transcript (operation ${obligation.original.operationId}, submission ${obligation.original.clientMessageId}). Continue that same request from its existing context.` }, allowed);
   return true;
 }
@@ -340,24 +361,36 @@ export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
       if (allowed && !allowed.includes(generation.accountId)) throw new StructuredSendRefusedError("seat account binding revoked");
       const snapshot = registry.conversationDeliverySnapshot({ conversationId: seat.conversationId });
       if (registry.conversationMemberships(conversation.id).some(row => row.kind === "pipeline")) return null;
-      const key = JSON.stringify([statePath("state.sqlite"), generation.path, cutAt, seat.designatedAt]);
-      let evidence = evidenceCache.get(key) ?? null;
-      if (stageTurnEvidenceCurrent(evidence) !== true) {
-        evidence = await durableStageTurnEvidence("claude", generation.path, undefined, seat.designatedAt, undefined, cutAt);
-        if (evidence) {
-          evidenceCache.set(key, evidence);
-          while (evidenceCache.size > 64) evidenceCache.delete(evidenceCache.keys().next().value!);
+      const readEvidence = async (startedAt: string) => {
+        const key = JSON.stringify([statePath("state.sqlite"), generation.path, cutAt, startedAt]);
+        let evidence = evidenceCache.get(key) ?? null;
+        if (stageTurnEvidenceCurrent(evidence) !== true) {
+          evidence = await durableStageTurnEvidence("claude", generation.path, undefined, startedAt, undefined, cutAt);
+          if (evidence) {
+            evidenceCache.set(key, evidence);
+            while (evidenceCache.size > 64) evidenceCache.delete(evidenceCache.keys().next().value!);
+          }
         }
-      }
+        return evidence;
+      };
+      let evidence = await readEvidence(seat.designatedAt);
       if (!evidence) return null;
+      const joinedEvidence = evidence;
       const failureAt = evidence.terminalProviderMessage?.ts ?? 0;
       const requests = Object.values(snapshot.heldDeliveries).filter(row => row.conversationId === seat.conversationId
         && row.state === "delivered" && row.command.kind === "send" && row.command.origin?.role !== SEAT_QUOTA_RECOVERY_ROLE
         && (row.generationId === null || row.generationId === generation.id)
-        && evidence.turnStartedAt != null && Date.parse(row.createdAt) <= evidence.turnStartedAt
-        && Date.parse(row.deliveredAt ?? "") >= evidence.turnStartedAt
+        && joinedEvidence.turnStartedAt != null && Date.parse(row.createdAt) <= joinedEvidence.turnStartedAt
+        && Date.parse(row.deliveredAt ?? "") >= joinedEvidence.turnStartedAt
         && Date.parse(row.createdAt) <= failureAt).sort((a, b) => (b.admissionSeq ?? 0) - (a.admissionSeq ?? 0) || b.createdAt.localeCompare(a.createdAt));
       const request = requests[0];
+      // A separately admitted request owns its native turn, even if an older
+      // quota cut still has no assistant output closing its chain. Our own
+      // follow-up is excluded from the join above and cannot acquire a boundary.
+      if (request && evidence.turnStartedAt != null) {
+        evidence = await readEvidence(new Date(evidence.turnStartedAt).toISOString());
+        if (!evidence || stageTurnEvidenceCurrent(joinedEvidence) !== true) return null;
+      }
       const observations = registry.quotaObservations("claude");
       const quota = accountQuotaVerdict(observations, generation.accountId, Date.now(), generation.launchProfile.model);
       const fresh = liveFreshObservation(observations.find(row => row.accountId === generation.accountId), Date.now());
