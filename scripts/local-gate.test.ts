@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { codexFixture, createGateSandbox, createRuntimeCheckTree, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runAdmittedChecks, runPushPair, runSteps, supervisorTimeoutMs, SUPERVISOR_MARGIN_MS, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
@@ -13,6 +13,7 @@ import { changedSinceBase } from "./ci-platform-scope";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import configureNext from "../next.config";
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
+import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 const owned: ProcessIdentity[] = [];
@@ -113,23 +114,69 @@ test("the measured pipeline file families reserve comparison time without changi
   expect(step.command.slice(4)).toEqual(tests.map(file => `./${file}`));
 });
 
-test("only a gate build after the types pass skips Next's duplicate check", () => {
-  const before = process.env.LLV_GATE_TYPES_CHECKED, options = process.env.NODE_OPTIONS;
+test("runtime builds own one full-project check with fresh Next validators", () => {
+  const before = process.env.LLV_GATE_FULL_TYPES, options = process.env.NODE_OPTIONS;
   try {
     const steps = plan("pre-push", ["src/example.ts"], context({ runtime: true }));
-    expect(steps.filter(step => step.command.includes("tsc"))).toHaveLength(1);
-    expect(steps.find(step => step.name === "Viewer build")!.after).toBe("types");
-    for (const marker of [undefined, "0", "1"]) {
-      if (marker === undefined) delete process.env.LLV_GATE_TYPES_CHECKED;
-      else process.env.LLV_GATE_TYPES_CHECKED = marker;
-      expect(configureNext(PHASE_PRODUCTION_BUILD).typescript?.ignoreBuildErrors).toBe(marker === "1");
-      expect(configureNext(PHASE_DEVELOPMENT_SERVER).typescript?.ignoreBuildErrors).toBeUndefined();
+    expect(steps.filter(step => step.command.includes("tsc"))).toHaveLength(0);
+    expect(steps.filter(step => step.name === "Viewer build")).toHaveLength(1);
+    expect(plan("pre-push", ["src/example.ts"], context()).filter(step => step.command.includes("tsc"))).toHaveLength(1);
+    for (const marker of [undefined, "0", "1", "/another-checkout", process.cwd()]) {
+      if (marker === undefined) delete process.env.LLV_GATE_FULL_TYPES;
+      else process.env.LLV_GATE_FULL_TYPES = marker;
+      const config = configureNext(PHASE_PRODUCTION_BUILD);
+      expect(config.typescript?.ignoreBuildErrors).toBeUndefined();
+      expect(config.typescript?.tsconfigPath).toBe(marker === process.cwd() ? "tsconfig.json" : "tsconfig.production.json");
+      expect(configureNext(PHASE_DEVELOPMENT_SERVER).typescript?.tsconfigPath).toBeUndefined();
     }
   } finally {
-    if (before === undefined) delete process.env.LLV_GATE_TYPES_CHECKED; else process.env.LLV_GATE_TYPES_CHECKED = before;
+    if (before === undefined) delete process.env.LLV_GATE_FULL_TYPES; else process.env.LLV_GATE_FULL_TYPES = before;
     if (options === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = options;
   }
 });
+
+test.each(["bin/guide.md", "src/runtime-host/guide.md"])("runtime prose plans execute without a types prerequisite: %s", async file => {
+  for (const present of [false, true]) {
+    const dir = mkdtempSync(path.join(tmpdir(), "gate-runtime-prose-")); roots.push(dir);
+    mkdirSync(path.join(dir, ".github/workflows"), { recursive: true });
+    for (const workflow of ["platform-tests.yml", "bun-runtime.yml"]) writeFileSync(path.join(dir, ".github/workflows", workflow), readFileSync(path.join(root, ".github/workflows", workflow)));
+    if (present) { mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); writeFileSync(path.join(dir, file), "Guide\n"); }
+    const steps = plan("pre-push", [file], discover(dir, "HEAD", [file]));
+    expect(steps.find(step => step.name === "types")).toBeUndefined();
+    await runSteps("pre-push", steps, { root: dir, deadline: soon(10_000), logDir: dir, say: () => {},
+      prepare: () => ({ env: process.env, command: [process.execPath, "-e", "process.exit(0)"] }),
+    });
+  }
+});
+
+test("cold runtime builds reject invalid dynamic route/page contracts and tooling errors", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-next-contracts-")); roots.push(dir);
+  symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
+  for (const file of ["tsconfig.json", "tsconfig.production.json", "bin/envAlias.mjs"])
+    { mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); writeFileSync(path.join(dir, file), readFileSync(path.join(root, file))); }
+  writeFileSync(path.join(dir, "production.config.ts"), readFileSync(path.join(root, "next.config.ts")));
+  // App-specific worker entries need the full repository. Keep production's
+  // type configuration and disable those entries for this minimal app.
+  writeFileSync(path.join(dir, "next.config.ts"), 'import configure from "./production.config"; export default (phase: string) => ({ ...configure(phase), webpack: undefined });\n');
+  mkdirSync(path.join(dir, "src/app/[slug]"), { recursive: true });
+  mkdirSync(path.join(dir, "src/app/api/[slug]"), { recursive: true });
+  mkdirSync(path.join(dir, "scripts"));
+  writeFileSync(path.join(dir, "src/app/layout.tsx"), "export default function Layout({children}: {children: React.ReactNode}) { return <html><body>{children}</body></html> }\n");
+  writeFileSync(path.join(dir, "package.json"), '{"private":true}');
+  for (const kind of ["route", "page", "tooling", "valid"] as const) {
+    rmSync(path.join(dir, ".next"), { recursive: true, force: true });
+    writeFileSync(path.join(dir, "src/app/api/[slug]/route.ts"), kind === "route" ? 'export function GET() { return "invalid" }\n' : 'export function GET() { return new Response("valid") }\n');
+    writeFileSync(path.join(dir, "src/app/[slug]/page.tsx"), kind === "page" ? 'export default function Page({params}: {params: {slug: string}}) { return <p>{params.slug}</p> }\n' : 'export default async function Page({params}: {params: Promise<{slug: string}>}) { return <p>{(await params).slug}</p> }\n');
+    writeFileSync(path.join(dir, "scripts/tool.test.ts"), kind === "tooling" ? 'export const value: number = "invalid";\n' : 'export const value: number = 1;\n');
+    const lines: string[] = [];
+    const result = await runSteps("pre-push", [{ name: "Viewer build", command: [] }], { root: dir, deadline: soon(120_000), logDir: dir, say: line => lines.push(line),
+      prepare: () => ({ env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", LLV_GATE_TYPES_CHECKED: "1", LLV_GATE_FULL_TYPES: realpathSync(dir) }, command: ["node", path.join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"] }),
+    }).then(() => null, (error: unknown) => error);
+    expect(result === null, lines.join("\n")).toBe(kind === "valid");
+    if (kind === "route" || kind === "page") expect(lines.join("\n")).toContain(".next/types/");
+    if (kind === "tooling") expect(lines.join("\n")).toContain("scripts/tool.test.ts");
+  }
+}, 480_000);
 
 test("supervision covers the remaining execution budget and completed CPU wait with cleanup margin", () => {
   const budget = cpuWaitBudget({ NODE_ENV: "test" });
@@ -171,49 +218,6 @@ test.each([0, 1, 124])("a fresh admitted runner preserves success, refusal and d
   } else expect(outcome).not.toBeInstanceOf(NoVerdict);
 });
 
-test.each([false, true])("the build waits for the types result and is suppressed on refusal (%s)", async fails => {
-  const dir = mkdtempSync(path.join(tmpdir(), "gate-build-after-types-")); roots.push(dir);
-  const finished = path.join(dir, "typed"), built = path.join(dir, "built");
-  let release!: () => void;
-  const barrier = new Promise<void>(resolve => { release = resolve; });
-  let preparing!: () => void;
-  const ready = new Promise<void>(resolve => { preparing = resolve; });
-  let observed!: () => void, buildPrepared = false;
-  const observation = new Promise<void>(resolve => { observed = resolve; });
-  const pending = runSteps("pre-push", [
-    { name: "types", command: [], group: "push checks", lane: "types" },
-    { name: "Viewer build", command: [], group: "push checks", lane: "runtime", after: "types" },
-    { name: "independent", command: [], group: "push checks", lane: "independent" },
-  ], { root: dir, deadline: soon(10_000), logDir: dir, say: () => {}, prepare: async step => {
-    if (step.name === "types") { preparing(); await barrier; }
-    if (step.name === "Viewer build") buildPrepared = true;
-    if (step.name === "independent") observed();
-    return { env: process.env, command: [process.execPath, "-e", step.name === "types"
-      ? `require("node:fs").writeFileSync(${JSON.stringify(finished)}, "typed"); process.exit(${fails ? 1 : 0});`
-      : step.name === "independent" ? "process.exit(0);"
-      : `const fs = require("node:fs"); if (!fs.existsSync(${JSON.stringify(finished)})) process.exit(19); fs.writeFileSync(${JSON.stringify(built)}, "built");`] };
-  } }).then(() => null, (error: unknown) => error);
-  await ready;
-  await observation;
-  const premature = buildPrepared;
-  release();
-  const error = await pending;
-  expect(premature).toBe(false);
-  expect(error === null).toBe(!fails);
-  expect(existsSync(built)).toBe(!fails);
-});
-
-test("a missing types prerequisite refuses the build before preparation", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "gate-missing-types-")); roots.push(dir);
-  let prepared = false;
-  await expect(runSteps("pre-push", [{ name: "Viewer build", command: [], group: "push checks", after: "types" }], {
-    root: dir, deadline: soon(10_000), logDir: dir, say: () => {}, prepare: () => {
-      prepared = true; return { env: process.env, command: ["bash", "-c", "exit 0"] };
-    },
-  })).rejects.toThrow("missing prerequisite: types");
-  expect(prepared).toBe(false);
-});
-
 test.each([false, true])("a phase runner's deadline status remains retryable (grouped: %s)", async grouped => {
   const runner = stepRunner(soon(10_000), () => ({ types: "exit 124" }));
   const error = await runner.run([{ name: "types", command: [], ...(grouped ? { group: "push checks" } : {}) }]);
@@ -222,7 +226,41 @@ test.each([false, true])("a phase runner's deadline status remains retryable (gr
   expect(endingOf("pre-push", error).line).toContain('"types"');
 });
 
-test("fresh push hooks give only the build a types-pass marker, and a types refusal prevents the build", () => {
+for (const grouped of [false, true]) test.each(["pure", "assertion", "cleanup"] as const)(`owned timeout retains earlier refusal evidence (grouped: ${grouped}): %s`, async kind => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-deadline-evidence-")); roots.push(dir);
+  const subject = path.join(dir, "pending.test.ts");
+  writeFileSync(subject, `import { test, expect } from "bun:test";
+    test("first result", () => { ${kind === "assertion" ? "expect(1).toBe(2);" : kind === "cleanup" ? 'console.error("owned runner: budget cleanup failed: fixture refusal");' : "expect(1).toBe(1);"} });
+    test("pending result", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); }, 60000);`);
+  const lines: string[] = [];
+  const error = await runSteps("pre-push", [{ name: "types", command: [], ...(grouped ? { group: "checks" } : {}) }], {
+    root: dir, deadline: soon(20_000), logDir: dir, say: line => lines.push(line),
+    prepare: () => ({ env: process.env, command: [process.execPath, path.join(root, "scripts/owned-runner.ts"), "--budget", "3000", process.execPath, "test", subject] }),
+  }).then(() => null, (error: unknown) => error);
+  const ending = endingOf("pre-push", error);
+  expect(ending.code, lines.join("\n")).toBe(kind === "pure" ? 75 : 1);
+  expect(publicationDeadlineOnly([...lines, ending.line].join("\n"))).toBe(kind === "pure");
+}, 30_000);
+
+test("a peer timeout cannot erase a named assertion from a cancelled lane", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-peer-deadline-")); roots.push(dir);
+  const ready = path.join(dir, "ready"), subject = path.join(dir, "assertion.test.ts");
+  writeFileSync(subject, `import { test, expect } from "bun:test"; import { writeFileSync } from "node:fs";
+    test("decisive assertion", () => expect(1).toBe(2));
+    test("pending", async () => { writeFileSync(${JSON.stringify(ready)}, "ready"); setInterval(() => {}, 1000); await new Promise(() => {}); }, 60000);`);
+  const lines: string[] = [];
+  const result = await runSteps("pre-push", ["timeout", "assertion"].map(name => ({ name, command: [], group: "checks" })), {
+    root: dir, deadline: soon(10_000), logDir: dir, say: line => lines.push(line), prepare: step => ({ env: process.env,
+      command: step.name === "assertion" ? [process.execPath, "test", subject] : [process.execPath, "-e", `const fs = require("node:fs"); while (!fs.existsSync(${JSON.stringify(ready)})) await Bun.sleep(5); process.exit(124);`],
+    }),
+  }).then(() => null, (error: unknown) => error);
+  const ending = endingOf("pre-push", result);
+  expect(ending.code, lines.join("\n")).toBe(1);
+  expect(lines.join("\n")).toContain("(fail) decisive assertion");
+  expect(publicationDeadlineOnly([...lines, ending.line].join("\n"))).toBe(false);
+});
+
+test("fresh runtime hooks leave the full type check to the build and preserve its refusal", () => {
   const f = createHookFixture(root, roots);
   const cache = path.join(f.dir, "fixture-cache");
   const runtime = discover(root, "HEAD", ["Dockerfile"]);
@@ -242,15 +280,17 @@ test("fresh push hooks give only the build a types-pass marker, and a types refu
   const env: NodeJS.ProcessEnv = { ...f.env, XDG_CACHE_HOME: cache, LLV_GATE_TYPES_CHECKED: "inherited" };
   for (const fails of [false, true, false]) {
     const before = existsSync(env.HOOK_LOG!) ? f.calls().length : 0;
-    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...env, HOOK_FAIL: fails ? "tsc" : "" }, encoding: "utf8", timeout: 90_000 });
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...env, HOOK_FAIL: fails ? "build" : "" }, encoding: "utf8", timeout: 90_000 });
     expect(result.status, result.stderr).toBe(fails ? 1 : 0);
     const calls = f.calls().slice(before);
-    expect(calls.filter(call => call.args[0] === "tsc")).toHaveLength(1);
+    expect(calls.filter(call => call.args[0] === "tsc")).toHaveLength(0);
     const builds = calls.filter(call => call.args[0] === "run" && call.args[1] === "build");
-    expect(builds).toHaveLength(fails ? 0 : 1);
+    expect(builds).toHaveLength(1);
+    expect(calls.some(call => call.args[0] === "scripts/verify-viewer-runtime.ts")).toBe(!fails);
     for (const call of calls) {
       if (call.args[0] === "scripts/privacy-publication-gate.ts") continue;
-      expect(call.names.includes("LLV_GATE_TYPES_CHECKED"), call.args.join(" ")).toBe(builds.includes(call));
+      expect(call.names.includes("LLV_GATE_TYPES_CHECKED"), call.args.join(" ")).toBe(false);
+      expect(call.names.includes("LLV_GATE_FULL_TYPES"), call.args.join(" ")).toBe(builds.includes(call));
     }
   }
 }, 300_000);

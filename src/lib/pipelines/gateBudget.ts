@@ -8,8 +8,8 @@ export const PUBLICATION_PACK_MARGIN_MS = 60_000;
  * test-file, phase and confirmation limits remain the comparator's limits. */
 export function publicationPushBudgetMs(changed: readonly string[] | null): number {
   if (changed === null) return RUNTIME_PUBLICATION_PUSH_MS;
-  // Allow the reported 562 s types attempt followed by a 894 s build attempt,
-  // with room for the remaining verifiers and the pack, under a finite cap.
+  // Allow the observed multi-minute compilation and type checking under load,
+  // with room for the remaining runtime verifiers and pack, under a finite cap.
   if (changed.some(file => file === "Dockerfile" || file.startsWith("bin/") || file.startsWith("src/runtime-host/"))) return RUNTIME_PUBLICATION_PUSH_MS;
   return changed.some(file => /^src\/lib\/pipelines\/(?:engine(?:\.[^/]+)?\.ts|git\.ts|parkedPublication\.test\.ts)$/.test(file))
     ? PIPELINE_PUBLICATION_PUSH_MS : DEFAULT_PUBLICATION_PUSH_MS;

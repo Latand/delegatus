@@ -2,13 +2,14 @@ import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./clo
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
-import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
+import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -24,8 +25,6 @@ export interface Step {
   group?: string;
   /** Steps in one lane run in order; different lanes overlap. */
   lane?: string;
-  /** A previously planned check whose pass this step consumes. */
-  after?: string;
   /** A check the hosted job also runs: stopped at a caller's deadline, it is
       named as left to that job, never failed or dropped. */
   deferrable?: boolean;
@@ -69,7 +68,9 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   // main) has nothing a test could judge: whatever fails is already on main.
   // Privacy still reads every commit the push carries.
   if (mode === "pre-push" && changedFiles.length === 0) return steps;
-  if (mode === "pre-push" && !changedFiles.every(proseOnly)) steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
+  // Runtime builds generate Next's route/page validators before checking the
+  // full project. Their build owns the single whole-program check.
+  if (mode === "pre-push" && !env.runtime && !changedFiles.every(proseOnly)) steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
   const supplyChainChanged = changedFiles.some(file => ["package.json", "bun.lock", "security/audit-allowlist.json", "scripts/supply-chain-check.ts", "scripts/audit-with-retry.sh", ".github/workflows/supply-chain.yml"].includes(file));
   if (mode === "pre-push" && supplyChainChanged) {
     // Install the candidate graph before any later checks execute against
@@ -102,7 +103,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (env.runtime) {
     steps.push(
       { name: "runtime verdict tests", command: ["bun", "test", ...env.runtimeTests.map(file => `./${file}`)], capped: true, isolated: true, pinned: true },
-      { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true, after: "types" },
+      { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true },
       { name: "MCP size budgets", command: ["bun", "test", "./src/lib/mcp/answerSizes.test.ts"], capped: true, isolated: true, pinned: true },
       { name: "Viewer runtime", command: ["bun", "scripts/verify-viewer-runtime.ts"], capped: true, isolated: true, pinned: true },
       { name: "runtime host", command: ["bun", "scripts/verify-runtime-host.ts"], capped: true, isolated: true, pinned: true },
@@ -664,7 +665,16 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
     // missing verdict otherwise.
     const until = deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Infinity;
     const runPrepared = async (step: Step, ready: Prepared, log: string | undefined, cancel?: AbortSignal): Promise<Outcome> => {
-      const run = (destination: string | undefined) => execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+      const run = async (destination: string | undefined) => {
+        const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+        // A runner's deadline cannot erase a refusal it already printed. Use
+        // the same full-output veto as publication, before logs are truncated.
+        if (outcome.stopped && destination && existsSync(destination)
+          && !publicationDeadlineOnly(`${readFileSync(destination, "utf8")}\nowned runner: deadline expired`)) {
+          return { ...outcome, stopped: false, cancelled: false, code: 1 };
+        }
+        return outcome;
+      };
       const first = await run(log);
       if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
         || !comparableStep(step) || !log || !existsSync(log)) return first;
@@ -708,7 +718,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       if (!step.group) {
         if (options.passes?.reused(step, until + cpuInheritedWaitMs(budget.env))) continue;
         const ready = await prepared(prepare, step, until, options.cancel, budget.env);
-        const log = mode === "pre-push" && comparableStep(step) ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
+        const log = mode === "pre-push" ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
         const outcome = isOutcome(ready) ? ready : await runPrepared(step, ready, log, options.cancel);
         if (log && existsSync(log)) {
           const output = readFileSync(log, "utf8").trimEnd();
@@ -733,17 +743,13 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       options.cancel?.addEventListener("abort", onCancel, { once: true });
       if (options.cancel?.aborted) cancel.abort();
       const lanes = new Map<string, Promise<Outcome | null>>();
-      const checks = new Map<string, Promise<Outcome | null>>();
       const pending = members.map(({ member, log }, at) => {
         const predecessor = member.lane ? lanes.get(member.lane) : undefined;
-        const prerequisite = member.after ? checks.get(member.after) : undefined;
         const run = (async () => {
           await predecessor;
-          await prerequisite;
           if (cancel.signal.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
           const started = Date.now();
           try {
-            if (member.after && !prerequisite) throw new Error(`missing prerequisite: ${member.after}`);
             if (options.passes?.reused(member, until + cpuInheritedWaitMs(budget.env))) return { code: 0, stopped: false, ranMs: 0 };
             const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
             const outcome = isOutcome(ready) ? ready : await runPrepared(member, ready, log, cancel.signal);
@@ -755,7 +761,6 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           } catch (error) { errors.set(at, error); cancel.abort(); return null; }
         })();
         if (member.lane) lanes.set(member.lane, run);
-        checks.set(member.name, run);
         return run;
       });
       const outcomes = await Promise.all(pending);
@@ -764,7 +769,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         if (outcome?.leaked) throw new ContainmentFailed(`"${members[at]!.member.name}"`, outcome.leaked, outcome.cancelled);
       }
       if (errors.size) {
-        const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
+        const [first, error] = [...errors].find(([, error]) => !(error instanceof NoVerdict)) ?? [...errors][0]!, culprit = members[first]!.member.name;
         const reason = error instanceof Error ? error.message : String(error);
         if (!(error instanceof NoVerdict)) say(`${mode}: ${culprit}: failed (${reason})`);
         if (existsSync(members[first]!.log)) say(readFileSync(members[first]!.log, "utf8").trimEnd());
@@ -905,6 +910,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       const command = [...step.command];
       const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
       delete env.LLV_GATE_TYPES_CHECKED;
+      delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
@@ -919,7 +925,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       }
       if (step.selection) command.push(step.selection);
       if (step.selection === "--shared-only") env.LLV_GATE_COMPARE_BASE = base;
-      if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1", LLV_GATE_TYPES_CHECKED: "1" });
+      if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {
         if (command.length < 3) throw new Error("refusing an empty test list");
@@ -929,6 +935,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       }
       const usesBuild = ["Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls"].includes(step.name);
       if (usesBuild) runtimeTree ??= createRuntimeCheckTree(root, sandbox);
+      if (step.name === "Viewer build") env.LLV_GATE_FULL_TYPES = realpathSync(runtimeTree!);
       return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
     };
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
