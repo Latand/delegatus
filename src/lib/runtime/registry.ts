@@ -33,7 +33,7 @@ import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liven
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
-import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
@@ -792,13 +792,18 @@ export async function demoteSkippedStructuredRegistryHosts(
   orphanStop: StructuredOrphanStopDependencies = {},
   assertActive: () => void = () => {},
   admitBatch?: StructuredDemotionBatchAdmission,
+  preparedSnapshot?: RegistryFile,
 ): Promise<void> {
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const reuse = preparedSnapshot && registryStartupSelectionUnchanged(preparedSnapshot) === true;
+  const prepared = reuse ? preparedSnapshot : typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
   const rows: AgentRegistryEntry[] = [];
   const selected = prepared ? await startupStructuredHostEntries(prepared, assertActive) : registry.structuredHostEntries();
   await withViewerOperation("runtime.startup", () => forEachCooperatively(selected, entry => {
     performanceSpans.sync("runtime.startup.select", () => {
-      if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
+      if (entry.structuredHost && !shouldAdopt(entry)) {
+        const current = reuse ? startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)] : entry;
+        if (current?.structuredHost && (!reuse || !shouldAdopt(current))) rows.push(current);
+      }
     });
   }, { batchSize: 16, timeBudgetMs: 8 }));
   /* A row whose recorded process is gone settles in one write. A startup
@@ -1250,11 +1255,15 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   registry: AgentRegistry,
   shouldRetain: StructuredHostAdoptionFilter = entry => restartCutEvidenceHolds(sessionKeyId(entry.key)),
   assertActive: () => void = () => {},
+  preparedSnapshot?: RegistryFile,
 ): Promise<void> {
-  const prepared = await registry.prepareReadOnlySnapshot();
+  const reuse = preparedSnapshot && registryStartupSelectionUnchanged(preparedSnapshot) === true;
+  const prepared = reuse ? preparedSnapshot : await registry.prepareReadOnlySnapshot();
   const rows = await startupStructuredHostEntries(prepared, assertActive);
-  for (const [index, observed] of rows.entries()) {
-    if (!observed.structuredHost?.process) continue;
+  for (const [index, selected] of rows.entries()) {
+    if (!selected.structuredHost?.process) continue;
+    const observed = reuse ? startupHostSnapshot(registry, selected.key).entries[sessionKeyId(selected.key)] : selected;
+    if (!observed?.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
     await registry.deliveryWriteOrBusy({ label: "registry.dead-hosts" }, () => {
       assertActive();

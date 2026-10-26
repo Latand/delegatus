@@ -389,6 +389,9 @@ for (const retainedHost of [false, true]) test(`startup finalization reads selec
     expect(preparations).not.toContain("kicking recovered deliveries");
     expect(preparations).not.toContain("recovering pending spawns");
     expect(preparations).not.toContain("adopting Claude hosts");
+    // After runtime reads, adoption needs one current view. The identity-only
+    // selectors before it share the validated initial selection.
+    expect(preparations.filter(phase => phase === "refreshing transcripts")).toHaveLength(1);
     expect(capturedReceipts).toBe(true);
     expect(fencedAfterCapture).toBe(true);
   } finally {
@@ -1042,6 +1045,34 @@ test("startup signal identity selection reuses a validated view and refreshes mo
       .rejects.toThrow("selection refresh refused");
   } finally {
     observed.mockRestore(); journal.close(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const mode of ["dead", "demote"] as const) test(`startup ${mode} selection reuses its view and refuses an unavailable refresh`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-reconcile-selection-"));
+  const initial = seeded(root, 8);
+  const filename = path.join(root, "registry.sqlite");
+  const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+  const run = () => mode === "dead"
+    ? reconcileDeadStructuredRegistryHostsOffLoop(registry, () => true, () => {}, snapshot)
+    : demoteSkippedStructuredRegistryHosts(registry, () => true, undefined, undefined, undefined, undefined, snapshot);
+  try {
+    await run();
+    expect(preparations).toBe(0);
+    expect(registry.startupHostSnapshot({ engine: "codex", sessionId: "reader-0" }).entries["codex:reader-0"]?.status).toBe("idle");
+    peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-lane"; }, false);
+    await run();
+    expect(preparations).toBe(1);
+    observed.mockImplementation(async () => { throw new Error("reconciliation selection refused"); });
+    await expect(run()).rejects.toThrow("reconciliation selection refused");
+  } finally {
+    observed.mockRestore(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -1527,8 +1527,10 @@ async function refreshStructuredTranscriptState(
   assertActive: () => void = () => {},
   lastEventByHost: Map<string, number | null> = new Map(),
   hostKeys: ReadonlySet<string> | null = null,
+  prepared?: RegistryFile,
 ): Promise<ReadonlySet<string>> {
-  const snapshot = await preparedStartupSnapshot(registry);
+  const reuse = prepared && registryStartupSelectionUnchanged(prepared) === true;
+  const snapshot = reuse ? prepared : await preparedStartupSnapshot(registry);
   const observedAt = new Date().toISOString();
   const candidates: Array<{ conversation: RegistryFile["conversations"][string]; generation: RegistryFile["conversations"][string]["generations"][number]; hostKey: string }> = [];
   for await (const conversation of startupHostedConversationRows(snapshot)) {
@@ -1537,7 +1539,14 @@ async function refreshStructuredTranscriptState(
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
     const entry = snapshot.entries[hostKey];
     if ((!hostKeys || hostKeys.has(hostKey)) && entry?.structuredHost && entry.status === "live" && !conversation.supersededBy) {
-      candidates.push({ conversation, generation, hostKey });
+      const current = reuse ? startupHostSnapshot(registry, entry.key) : snapshot;
+      const currentEntry = current.entries[hostKey];
+      const currentConversation = current.conversations[conversation.id];
+      const currentGeneration = currentConversation?.generations.at(-1);
+      if (currentEntry?.structuredHost && currentEntry.status === "live" && currentConversation && !currentConversation.supersededBy
+        && currentGeneration && sessionKeyId({ engine: currentConversation.engine, sessionId: currentGeneration.id }) === hostKey) {
+        candidates.push({ conversation: currentConversation, generation: currentGeneration, hostKey });
+      }
     }
   }
   const observations: Parameters<AgentRegistry["reconcileConversations"]>[0] = [];
@@ -2395,7 +2404,7 @@ async function adoptStructuredHostsPass(
   const lastEventByHost = new Map<string, number | null>();
   const unreadableTranscripts = await (dependencies.refreshTranscriptState && !resumeDeferred
     ? dependencies.refreshTranscriptState(registry)
-    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred))
+    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred, recoveryBoundarySnapshot))
     ?? new Set<string>();
   await startupTurn();
   // Read under the existing lease, then release before any host or transcript I/O.
@@ -2454,7 +2463,7 @@ async function adoptStructuredHostsPass(
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || delayedRows.has(sessionKeyId(entry.key))
-      || evidenceMoved(entry), assertActive);
+      || evidenceMoved(entry), assertActive, recoveryBoundarySnapshot);
     const signals = await structuredStartupSignals(
       registry,
       client,
@@ -2859,7 +2868,7 @@ async function adoptStructuredHostsPass(
         answered.push(await demoteAdmitted(available, row.entry, row.mutation));
       }
       return answered;
-    }, "reconciling structured hosts"));
+    }, "reconciling structured hosts"), adoptionSnapshot);
     const publicationSnapshot = await preparedStartupSnapshot(registry);
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,
