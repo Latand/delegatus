@@ -12,6 +12,8 @@ import {
   stagingAgentViewerMcpEnvironment,
   stagingImageName,
   stagingStatePaths,
+  stagingRuntimeHostDockerArgs,
+  stagingViewerDockerArgs,
 } from "../src/runtime-host/stagingContainer";
 import {
   PROD_STATE_EVIDENCE_FILES,
@@ -20,6 +22,7 @@ import {
   retainStagingMcpRuntimes,
   stagingAgentControl,
   stagingRequestHeaders,
+  stagingContainerContext,
   type ProdStateFingerprint,
 } from "./deploy-staging";
 
@@ -97,10 +100,46 @@ function stagingFixture(): { home: string; context: Parameters<typeof stagingAge
     image: stagingImageName(revision),
     service,
     paths: stagingStatePaths(stateDir),
-    tmux: { legacyTmuxExternal: "0", tmuxTmpdir: "/tmp" },
+    tmux: { tmuxTmpdir: "/tmp" },
   };
   return { home, context, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
+
+test.each(["migrated", "explicit external"])("staging starts retain prod's %s tmux endpoint and mount across repeated starts", (mode) => {
+  const { home, context, cleanup } = stagingFixture();
+  const prodState = path.join(home, "prod-state");
+  const marker = path.join(prodState, "legacy-tmux-migration-complete");
+  context.service.environment.TMUX_TMPDIR = "/tmp";
+  try {
+    fs.mkdirSync(prodState);
+    expect(stagingContainerContext(context, prodState).tmux.tmuxTmpdir).toBe("/tmp");
+    if (mode === "migrated") fs.writeFileSync(marker, "completed\n");
+    else Object.assign(context.service.environment, { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "/run/user/1000/agent-log-viewer" });
+    const before = fs.existsSync(marker) ? fs.statSync(marker) : null;
+    const configured = structuredClone(context.service);
+    for (let start = 0; start < 2; start++) {
+      const resolved = stagingContainerContext(context, prodState);
+      for (const args of [stagingViewerDockerArgs(resolved), stagingRuntimeHostDockerArgs(resolved)]) {
+        expect(args).toContain("TMUX_TMPDIR=/run/user/1000/agent-log-viewer");
+        expect(args).toContain("type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer");
+        expect(args).toContain(`LLV_STATE_DIR=${context.paths.stateDir}`);
+      }
+      expect(context.service).toEqual(configured);
+      if (before) {
+        expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+        expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
+      }
+      expect(fs.readdirSync(prodState)).toEqual(mode === "migrated" ? ["legacy-tmux-migration-complete"] : []);
+    }
+    for (const volume of [
+      { type: "bind" as const, source: "/elsewhere", target: "/run/user/1000/agent-log-viewer", bind: {} },
+      { type: "bind" as const, source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", read_only: true, bind: {} },
+    ]) {
+      expect(() => stagingContainerContext({ ...context, service: { ...context.service, volumes: [volume] } }, prodState))
+        .toThrow("writable host directory");
+    }
+  } finally { cleanup(); }
+});
 
 /* What the deploy publishes before the new pair starts: the staging release
    target and the staging Viewer's compose snapshot, plus an operator key that

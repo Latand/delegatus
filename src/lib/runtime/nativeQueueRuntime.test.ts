@@ -533,6 +533,8 @@ test("native queue profile requests and image versions survive reopening without
   expect(entries.map(e => e.profilePolicy)).toEqual(["thread-at-dispatch", "thread-at-dispatch"]);
   expect(entries.map(e => e.versions[0]?.requestedRuntime)).toEqual([first.runtime, second.runtime]);
   expect(entries[0]?.versions[0]?.images).toEqual(images);
+  first.runtime!.model = "changed-after-admission";
+  expect(reopened.nativeQueueRead(conversationId)[0]?.versions[0]?.requestedRuntime?.model).toBe("model-one");
   reopened.close();
 });
 
