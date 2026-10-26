@@ -2476,8 +2476,9 @@ describe("the runtime pill names the model the conversation runs on", () => {
   /*
    * The production pill over the production composer, for a Codex stage launched
    * on Luna before the board scanned it, a conversation with no known model, a
-   * model the catalogue does not list and three Claude cases, at the desktop and
-   * the phone width, both languages, both schemes. `LLV_MODEL_FACE_SIDE=before`
+   * model the catalogue does not list and four Claude cases, at the desktop
+   * width, one between it and the phone, and the phone width, both languages,
+   * both schemes. `LLV_MODEL_FACE_SIDE=before`
    * runs the same case over a checkout that still falls back to the engine
    * default and records what it drew under `before`; the default records
    * `after` and gates it. Frames go to `.artifacts/runtime-model-face/`, which
@@ -2486,6 +2487,7 @@ describe("the runtime pill names the model the conversation runs on", () => {
   const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
   const VIEWPORTS = [
     { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-900", width: 900, height: 800, touch: false },
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
   const FILES = {
@@ -2495,6 +2497,8 @@ describe("the runtime pill names the model the conversation runs on", () => {
     sonnet: { face: "Sonnet 5.5", never: ["Opus"] },
     "claude-unreported": { face: null, never: ["Opus", "Sonnet"] },
     "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
+    /* The transcript's `fable-5-1` is the catalogue's Fable row: named, and its tiers stay open. */
+    fable: { face: "Fable", never: ["Opus", "Sonnet"] },
   } as const;
 
   browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
@@ -2609,7 +2613,8 @@ describe("the runtime pill names the model the conversation runs on", () => {
 describe("the headers name the model the conversation runs on", () => {
   /*
    * The pane's own header chip and the board reader's header chip over the
-   * production components, at the desktop width, both languages, both schemes.
+   * production components, at the desktop width and one between it and the
+   * phone, both languages, both schemes.
    * `LLV_MODEL_FACE_SIDE=before` records what a checkout that names the engine
    * draws; the default records `after` and gates it. Frames go to
    * `.artifacts/runtime-model-face/`, which is not committed.
@@ -2620,7 +2625,9 @@ describe("the headers name the model the conversation runs on", () => {
     unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
     unlisted: { shown: "gpt-5.5", never: ["Sol"] },
     sonnet: { shown: "Sonnet 5.5", never: ["Opus"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
   } as const;
+  const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
 
   browserTest("the pane header and the reader header show the observed or requested model, or the engine's name, never the engine default", async () => {
     const out = path.resolve(".artifacts/runtime-model-face");
@@ -2631,10 +2638,10 @@ describe("the headers name the model the conversation runs on", () => {
     const browser = await chromium.connect(browserServer.wsEndpoint());
     const readings: Record<string, unknown> = {};
     try {
-      for (const [name, expected] of Object.entries(CASES)) for (const part of ["branch", "reader"] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      for (const [name, expected] of Object.entries(CASES)) for (const part of ["branch", "reader"] as const) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const { context, page, pageErrors } = await openFixture(browser,
-          `${served.base}?case=runtime-model-face-headers&lang=${lang}&file=${name}&part=${part}`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
-        const key = `${name}-${part}-desktop-1440-${lang}-${scheme}`;
+          `${served.base}?case=runtime-model-face-headers&lang=${lang}&file=${name}&part=${part}`, { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", false);
+        const key = `${name}-${part}-${viewport.name}-${lang}-${scheme}`;
         try {
           await page.locator("[data-evidence-case]").waitFor({ timeout: 15_000 }).catch((error: Error) => { throw new Error(`${error.message}; page errors: ${pageErrors.join(" | ")}`); });
           await page.waitForTimeout(600);

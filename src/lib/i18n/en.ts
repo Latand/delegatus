@@ -581,6 +581,8 @@ export const en = {
   "runtimeConfig.pending": "switch pending",
   "runtimeConfig.modelUnknown": "No model reported yet — pick a model to change reasoning and speed",
   "runtimeConfig.modelUnlisted": "{model} is not in the model list — pick a model to change reasoning and speed",
+  "runtimeConfig.moveModelUnknown": "No model reported yet — pick a model before moving to another account",
+  "runtimeConfig.moveModelUnlisted": "{model} is not in the model list — pick a model before moving to another account",
   "runtimeConfig.switchHeld": "Not sent: moving to {account} failed — {reason}",
   "runtimeConfig.switchReasonSignedOut": "the account is signed out",
   "runtimeConfig.switchReasonLimit": "the account has reached its usage limit",

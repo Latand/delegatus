@@ -153,7 +153,7 @@ export function AccountBadge({
     if (!file || targetId === next || (switching && targetId === accountId)) return;
     /* The move is a reconfigure, and a reconfigure names a model: a conversation whose model is not known holds it. */
     if (!effectiveProfile(file).model) {
-      pushTaskToast("err", modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown"));
+      pushTaskToast("err", modelHoldMessage(t, file, "move") ?? t("runtimeConfig.moveModelUnknown"));
       return;
     }
     const previous = readPickedAccount(key);

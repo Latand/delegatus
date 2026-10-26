@@ -181,7 +181,7 @@ export function useAccountChoices(ports: PipelinePorts, show: Show, t: TFunction
     /* The move is a reconfigure, and a reconfigure names a model: a conversation whose model is not known holds it. */
     if (!effectiveProfile(file).model) {
       const { show, t } = live.current;
-      show(modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown"), undefined, { error: true });
+      show(modelHoldMessage(t, file, "move") ?? t("runtimeConfig.moveModelUnknown"), undefined, { error: true });
       return;
     }
     const previous = readPickedAccount(key);

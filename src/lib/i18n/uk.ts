@@ -578,6 +578,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "runtimeConfig.pending": "зміна очікує",
   "runtimeConfig.modelUnknown": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
   "runtimeConfig.modelUnlisted": "{model} немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+  "runtimeConfig.moveModelUnknown": "Модель ще не повідомлено — оберіть модель, перш ніж переходити на інший акаунт",
+  "runtimeConfig.moveModelUnlisted": "{model} немає в списку моделей — оберіть модель, перш ніж переходити на інший акаунт",
   "runtimeConfig.switchHeld": "Не надіслано: перехід на {account} не вдався — {reason}",
   "runtimeConfig.switchReasonSignedOut": "з акаунта виконано вихід",
   "runtimeConfig.switchReasonLimit": "акаунт вичерпав ліміт використання",

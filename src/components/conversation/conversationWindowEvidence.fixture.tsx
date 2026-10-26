@@ -1454,6 +1454,8 @@ const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   "claude-unreported": { engine: "claude", fmt: "claude", root: "claude-projects", model: null, launchModel: null },
   /* An older Opus release than the alias row names. */
   "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
+  /* A Fable stage whose transcript names the release the alias resolved to. */
+  fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
 };
 
 function modelFaceFile(which: string): FileEntry {

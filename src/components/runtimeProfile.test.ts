@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
 import { clampEffortToScale } from "@/lib/agent/efforts";
+import { translate } from "@/lib/i18n/core";
 import type { FileEntry } from "@/lib/types";
 
 import {
@@ -10,6 +11,7 @@ import {
   effectiveProfile,
   launchedModelId,
   listedModelId,
+  modelHoldMessage,
   observedModelId,
   readProfile,
   readResumeDraft,
@@ -191,6 +193,24 @@ test("a Fable conversation reads as the fable row whether the launch asked for t
   /* A family the catalogue lists a pinned release of keeps another version off its alias row. */
   expect(defaults({ ...claudeFile, model: "sonnet-4-5", launchModel: "sonnet" }).model).toBe("");
   expect(defaults({ ...claudeFile, model: "opus-4-1", launchModel: null }).model).toBe("");
+});
+
+test("a held change says why in words that name the change: no model, or one the pickers cannot send", () => {
+  for (const locale of ["en", "uk"] as const) {
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(locale, key, params);
+    const unknown: FileEntry = { ...claudeFile, model: null, launchModel: null };
+    const unlisted: FileEntry = { ...claudeFile, model: "opus-4-1", launchModel: "opus" };
+    expect(modelHoldMessage(t, unknown)).toBe(t("runtimeConfig.modelUnknown"));
+    expect(modelHoldMessage(t, unlisted)).toBe(t("runtimeConfig.modelUnlisted", { model: "Opus 4.1" }));
+    expect(modelHoldMessage(t, unknown, "move")).toBe(t("runtimeConfig.moveModelUnknown"));
+    expect(modelHoldMessage(t, unlisted, "move")).toBe(t("runtimeConfig.moveModelUnlisted", { model: "Opus 4.1" }));
+    expect(new Set([
+      modelHoldMessage(t, unknown), modelHoldMessage(t, unlisted), modelHoldMessage(t, unknown, "move"), modelHoldMessage(t, unlisted, "move"),
+    ]).size).toBe(4);
+    /* A listed model holds nothing, Fable's transcript release included. */
+    expect(modelHoldMessage(t, { ...claudeFile, model: "fable-5-1", launchModel: null }, "move")).toBeNull();
+    expect(modelHoldMessage(t, { ...claudeFile, model: null, launchModel: "gpt-6-luna", engine: "codex" })).toBeNull();
+  }
 });
 
 test("an explicit resume selection with no model sends no model", () => {

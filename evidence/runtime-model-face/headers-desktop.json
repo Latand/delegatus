@@ -482,6 +482,54 @@
       ],
       "overflowX": 0
     },
+    "luna-branch-desktop-900-en-light": {
+      "text": "gpt-6-luna",
+      "chips": [
+        {
+          "text": "gpt-6-luna",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "luna-branch-desktop-900-en-dark": {
+      "text": "gpt-6-luna",
+      "chips": [
+        {
+          "text": "gpt-6-luna",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "luna-branch-desktop-900-uk-light": {
+      "text": "gpt-6-luna",
+      "chips": [
+        {
+          "text": "gpt-6-luna",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "luna-branch-desktop-900-uk-dark": {
+      "text": "gpt-6-luna",
+      "chips": [
+        {
+          "text": "gpt-6-luna",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
     "luna-reader-desktop-1440-en-light": {
       "text": "Codex | gpt-6-lunahigh",
       "chips": [
@@ -554,6 +602,78 @@
       ],
       "overflowX": 0
     },
+    "luna-reader-desktop-900-en-light": {
+      "text": "Codex | gpt-6-lunahigh",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-6-lunahigh",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "luna-reader-desktop-900-en-dark": {
+      "text": "Codex | gpt-6-lunahigh",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-6-lunahigh",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "luna-reader-desktop-900-uk-light": {
+      "text": "Codex | gpt-6-lunahigh",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-6-lunahigh",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "luna-reader-desktop-900-uk-dark": {
+      "text": "Codex | gpt-6-lunahigh",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-6-lunahigh",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
     "unknown-branch-desktop-1440-en-light": {
       "text": "Codex",
       "chips": [
@@ -591,6 +711,54 @@
       "overflowX": 0
     },
     "unknown-branch-desktop-1440-uk-dark": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-branch-desktop-900-en-light": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-branch-desktop-900-en-dark": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-branch-desktop-900-uk-light": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-branch-desktop-900-uk-dark": {
       "text": "Codex",
       "chips": [
         {
@@ -650,6 +818,54 @@
       ],
       "overflowX": 0
     },
+    "unknown-reader-desktop-900-en-light": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-reader-desktop-900-en-dark": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-reader-desktop-900-uk-light": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unknown-reader-desktop-900-uk-dark": {
+      "text": "Codex",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
     "unlisted-branch-desktop-1440-en-light": {
       "text": "gpt-5.5",
       "chips": [
@@ -687,6 +903,54 @@
       "overflowX": 0
     },
     "unlisted-branch-desktop-1440-uk-dark": {
+      "text": "gpt-5.5",
+      "chips": [
+        {
+          "text": "gpt-5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-branch-desktop-900-en-light": {
+      "text": "gpt-5.5",
+      "chips": [
+        {
+          "text": "gpt-5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-branch-desktop-900-en-dark": {
+      "text": "gpt-5.5",
+      "chips": [
+        {
+          "text": "gpt-5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-branch-desktop-900-uk-light": {
+      "text": "gpt-5.5",
+      "chips": [
+        {
+          "text": "gpt-5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-branch-desktop-900-uk-dark": {
       "text": "gpt-5.5",
       "chips": [
         {
@@ -770,6 +1034,78 @@
       ],
       "overflowX": 0
     },
+    "unlisted-reader-desktop-900-en-light": {
+      "text": "Codex | gpt-5.5high",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-reader-desktop-900-en-dark": {
+      "text": "Codex | gpt-5.5high",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-reader-desktop-900-uk-light": {
+      "text": "Codex | gpt-5.5high",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "unlisted-reader-desktop-900-uk-dark": {
+      "text": "Codex | gpt-5.5high",
+      "chips": [
+        {
+          "text": "Codex",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "gpt-5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
     "sonnet-branch-desktop-1440-en-light": {
       "text": "Sonnet 5.5",
       "chips": [
@@ -807,6 +1143,54 @@
       "overflowX": 0
     },
     "sonnet-branch-desktop-1440-uk-dark": {
+      "text": "Sonnet 5.5",
+      "chips": [
+        {
+          "text": "Sonnet 5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-branch-desktop-900-en-light": {
+      "text": "Sonnet 5.5",
+      "chips": [
+        {
+          "text": "Sonnet 5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-branch-desktop-900-en-dark": {
+      "text": "Sonnet 5.5",
+      "chips": [
+        {
+          "text": "Sonnet 5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-branch-desktop-900-uk-light": {
+      "text": "Sonnet 5.5",
+      "chips": [
+        {
+          "text": "Sonnet 5.5",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-branch-desktop-900-uk-dark": {
       "text": "Sonnet 5.5",
       "chips": [
         {
@@ -883,6 +1267,318 @@
         },
         {
           "text": "Sonnet 5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-reader-desktop-900-en-light": {
+      "text": "Claude | Sonnet 5.5high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Sonnet 5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-reader-desktop-900-en-dark": {
+      "text": "Claude | Sonnet 5.5high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Sonnet 5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-reader-desktop-900-uk-light": {
+      "text": "Claude | Sonnet 5.5high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Sonnet 5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "sonnet-reader-desktop-900-uk-dark": {
+      "text": "Claude | Sonnet 5.5high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Sonnet 5.5high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-1440-en-light": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-1440-en-dark": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-1440-uk-light": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-1440-uk-dark": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-900-en-light": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-900-en-dark": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-900-uk-light": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-branch-desktop-900-uk-dark": {
+      "text": "Fable 5.1",
+      "chips": [
+        {
+          "text": "Fable 5.1",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-1440-en-light": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-1440-en-dark": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-1440-uk-light": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-1440-uk-dark": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-900-en-light": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-900-en-dark": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-900-uk-light": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable-reader-desktop-900-uk-dark": {
+      "text": "Claude | Fable 5.1high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.1high",
           "whole": true,
           "drawnInBox": true,
           "inView": true

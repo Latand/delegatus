@@ -573,7 +573,8 @@ export function RuntimePill({
   const effortLocked = modelUnknown;
   const modelLocked = false;
   const speedLocked = modelUnknown;
-  const modelHold = modelUnknown ? modelHoldMessage(t, file) : null;
+  /* A face with no model holds the edits even when the file has since listed one, so the line always says why. */
+  const modelHold = modelUnknown ? modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown") : null;
   const lockReason = modelHold ?? t("composer.settingsNextResume");
 
   const announceCommit = useCallback((next: RuntimeDraft) => {
@@ -661,7 +662,7 @@ export function RuntimePill({
     if (!engine || accountId === nextAccount || (switchApplying && accountId === runsOnAccount)) return;
     /* The move is a reconfigure, and a reconfigure names a model. */
     if (!stageRoute && !liveDraftRef.current.model) {
-      pushTaskToast("err", modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown"));
+      pushTaskToast("err", modelHoldMessage(t, file, "move") ?? t("runtimeConfig.moveModelUnknown"));
       return;
     }
     const previous = readPickedAccount(cardId);

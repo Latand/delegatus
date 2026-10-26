@@ -848,6 +848,22 @@ test("a Fable conversation keeps its catalogue model: tiers stay enabled and an 
   }
 });
 
+test("a live Fable conversation settles its reconfigure once the transcript's release reports the effort picked", async () => {
+  const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel: "fable", effort: "high" };
+  const { host, root } = await renderPill(<RuntimePill file={fable} surface="live-root" runtimeSettings={CLAUDE_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!);
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "fable", effort: "medium" });
+  const phase = "llvAgentRuntime:conversation_claude:phase";
+  expect(localStorage.getItem(phase)).toBe("confirming");
+  /* A poll that has not moved the effort yet leaves the change confirming. */
+  await rerender(root, <RuntimePill file={{ ...fable, mtime: 2 }} surface="live-root" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(localStorage.getItem(phase)).toBe("confirming");
+  await rerender(root, <RuntimePill file={{ ...fable, mtime: 3, effort: "medium" }} surface="live-root" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(localStorage.getItem(phase)).toBeNull();
+  await act(async () => root.unmount());
+});
+
 test("a held conversation says why in visible text, with other words for no model and for a model the pickers cannot send", async () => {
   const held = async (file: FileEntry, phone: boolean) => {
     mobile = phone;

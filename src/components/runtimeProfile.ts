@@ -111,11 +111,13 @@ export function unlistedModelName(file: FileEntry): string {
 }
 
 /** Why a change that sends a model is held, in words: one line for a conversation
-    with no known model and another for one whose model the pickers cannot send.
+    with no known model and another for one whose model the pickers cannot send,
+    worded for the change held (a reasoning or speed edit, or an account move).
     Null when the conversation runs on a listed model. */
-export function modelHoldMessage(t: TFunction, file: FileEntry): string | null {
+export function modelHoldMessage(t: TFunction, file: FileEntry, held: "edit" | "move" = "edit"): string | null {
   if (listedModelId(file)) return null;
   const name = unlistedModelName(file);
+  if (held === "move") return name ? t("runtimeConfig.moveModelUnlisted", { model: name }) : t("runtimeConfig.moveModelUnknown");
   return name ? t("runtimeConfig.modelUnlisted", { model: name }) : t("runtimeConfig.modelUnknown");
 }
 
