@@ -178,6 +178,12 @@ export function useAccountChoices(ports: PipelinePorts, show: Show, t: TFunction
     if (switches.get(key)?.phase === "sending") return;
     /* #1846: the pick is the conversation's intended account. Every account surface shows it in this frame
        from the shared store, and the conversation moves with its next message; nothing waits for an answer. */
+    /* The move is a reconfigure, and a reconfigure names a model: a conversation whose model is not known holds it. */
+    if (!effectiveProfile(file).model) {
+      const { show, t } = live.current;
+      show(t("runtimeConfig.modelUnknown"), undefined, { error: true });
+      return;
+    }
     const previous = readPickedAccount(key);
     setPickedAccount(key, target);
     const restore = () => {

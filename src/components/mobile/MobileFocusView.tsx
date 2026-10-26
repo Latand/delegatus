@@ -33,7 +33,7 @@ import { ChatEngineMark } from "./chatEngineMark";
 import { paneState, type PaneState } from "@/components/paneState";
 import type { BranchGroup } from "@/components/projectModel";
 import { draftWorkingDirectory } from "@/components/projectModel";
-import { cleanTitle, engineBadge, effortTitle, fileModelLabel } from "@/components/utils";
+import { cleanTitle, engineBadge, effortTitle, conversationModelLabel } from "@/components/utils";
 
 import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -886,7 +886,7 @@ const BAR_META_STATE = "min-w-0 max-w-[calc(100%-0.625rem)] truncate";
 function ChatIdentity({ file }: { file: FileEntry }) {
   const { t } = useLocale();
   const badge = engineBadge(file);
-  const modelName = fileModelLabel(file);
+  const modelName = conversationModelLabel(file);
   const model = modelName
     ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
     : badge.label;

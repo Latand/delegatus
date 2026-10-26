@@ -1,6 +1,6 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId, defaultModelFor } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId, modelDisplayName } from "@/lib/agent/models";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
@@ -42,22 +42,62 @@ export function profileKey(file: FileEntry): string {
   return storageKey(file) + ":profile";
 }
 
-/** The observed/boot model id the running (or recorded) agent resolves to. */
-export function observedModelId(file: FileEntry): string | null {
-  const engine = file.engine as "claude" | "codex" | "copilot";
-  return engine === "claude"
-    ? claudeCatalogModelId(file.launchModel ?? file.model) ?? file.model ?? null
-    : file.model ?? null;
+const COPILOT_MODEL = /^[a-z0-9][a-z0-9.-]{0,127}$/;
+
+function trimmedModel(value: string | null | undefined): string | null {
+  const model = typeof value === "string" ? value.trim() : "";
+  return model ? model : null;
 }
 
-/** Engine defaults for a conversation: the observed model when it is a known
-    catalog entry, else the shipped launch fallback; the observed effort when it is
-    in that model's scale, else the scale's lowest tier. */
+/** The catalogue row an engine's model id names, or null. A Claude transcript id
+    reads as its catalogue row only when that row names the same release: a
+    versioned id the catalogue has no row for (`opus-4-1`) is not the family
+    alias row (`opus` = Opus 5.5), and picking the alias would name another model. */
+function catalogModelId(engine: "claude" | "codex" | "copilot", raw: string | null): string | null {
+  if (!raw) return null;
+  if (engine === "copilot") return COPILOT_MODEL.test(raw) ? raw : null;
+  if (engine === "codex") return ENGINE_MODELS.codex.some((item) => item.id === raw) ? raw : null;
+  const stem = raw.trim().toLowerCase().replace(/-20\d{6}$/, "");
+  const pinned = ENGINE_MODELS.claude.find((item) => item.id === `claude-${stem}`);
+  if (pinned) return pinned.id;
+  const id = claudeCatalogModelId(raw);
+  const row = ENGINE_MODELS.claude.find((item) => item.id === id);
+  if (!row) return null;
+  return row.id === stem || !/\d/.test(stem) || modelDisplayName("claude", stem) === row.label ? row.id : null;
+}
+
+/** The model the transcript reports, as the catalogue names it when it does and as stored otherwise. */
+export function observedModelId(file: FileEntry): string | null {
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  const reported = trimmedModel(file.model);
+  return engine === "claude" ? catalogModelId(engine, reported) ?? reported : reported;
+}
+
+/** The model the launch asked for (stage override, project or role setting), recorded before any transcript line. */
+export function launchedModelId(file: FileEntry): string | null {
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  const requested = trimmedModel(file.launchModel);
+  return engine === "claude" ? catalogModelId(engine, requested) ?? requested : requested;
+}
+
+/** The model the conversation runs on: the observed one, else the launch's, else
+    null. Never an engine default: a name nobody observed or asked for is a guess. */
+export function runningModelId(file: FileEntry): string | null {
+  return observedModelId(file) ?? launchedModelId(file);
+}
+
+/** The running model as the catalogue lists it, or "" when it is unknown or
+    outside the catalogue (the pill then names the stored id itself). */
+export function listedModelId(file: FileEntry): string {
+  return catalogModelId(file.engine as "claude" | "codex" | "copilot", runningModelId(file)) ?? "";
+}
+
+/** Engine defaults for a conversation: the running model when the catalogue lists
+    it, else "" (no model); the observed effort when it is in that model's scale,
+    else the scale's lowest tier. */
 export function defaults(file: FileEntry): RuntimeDraft {
   const engine = file.engine as "claude" | "codex" | "copilot";
-  const models = ENGINE_MODELS[engine];
-  const observed = observedModelId(file);
-  const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : defaultModelFor(engine);
+  const model = listedModelId(file);
   const efforts = effortScale(engine, model) ?? [];
   return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false };
 }

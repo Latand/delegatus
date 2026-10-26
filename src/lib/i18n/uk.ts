@@ -576,6 +576,7 @@ export const uk: Record<keyof typeof en, Message> = {
   // (issue #390) — таблетка застосовує вибір автоматично.
   "runtimeConfig.failed": "Не вдалося змінити конфігурацію активного агента",
   "runtimeConfig.pending": "зміна очікує",
+  "runtimeConfig.modelUnknown": "Модель ще невідома — спершу оберіть модель",
   "runtimeConfig.switchHeld": "Не надіслано: перехід на {account} не вдався — {reason}",
   "runtimeConfig.switchReasonSignedOut": "з акаунта виконано вихід",
   "runtimeConfig.switchReasonLimit": "акаунт вичерпав ліміт використання",
@@ -1159,6 +1160,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.speedFastTier": "Швидка — пріоритетний тариф",
   "composer.backTo": "Назад",
   "composer.nextMessageUses": "Наступне повідомлення: {model} · {effort}",
+  "composer.nextMessageUsesNoModel": "Наступне повідомлення: {effort}",
   "composer.settingsNextResume": "застосується під час наступного відновлення розмови",
   "composer.structuredImagesUnavailable": "Структуровані розмови поки не підтримують картинки",
   "composer.codexImagesTextOnly": "Обрана модель Codex приймає лише текст.",
@@ -4656,6 +4658,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.tasks.lastOutput": "Останній вивід {age}",
   "mobile2.composer.sheetTitle": "Наступне повідомлення",
   "mobile2.composer.nextMessage": "Стосується наступного повідомлення: {model} · {effort}",
+  "mobile2.composer.nextMessageNoModel": "Стосується наступного повідомлення: {effort}",
   "mobile2.composer.stageSheetTitle": "Етап у роботі",
   "mobile2.composer.stageNow": "Діє одразу: хід зупиняється, спроба триває.",
   "mobile2.composer.chipAtLimit": "{model} · ліміт на {account}",

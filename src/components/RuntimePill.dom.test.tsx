@@ -769,3 +769,64 @@ test("ultrafast is visible and effort-only composer profiles preserve the thread
   expect(sendRuntimeFrom(file)).not.toHaveProperty("fast");
   await act(async () => root.unmount());
 });
+
+test("a stage whose transcript has not named a model yet reads the model its launch asked for, never the engine default", async () => {
+  const luna: FileEntry = { ...codexFile, model: null, launchModel: "gpt-6-luna", effort: "high" };
+  for (const surface of ["structured", "resume"] as const) {
+    const { host, root } = await renderPill(<RuntimePill file={luna} surface={surface} runtimeSettings={CODEX_STRUCTURED} />);
+    expect(faceOf(host)).toContain("6-Luna · High");
+    expect(faceOf(host)).not.toContain("Sol");
+    await act(async () => root.unmount());
+  }
+  const { host, root } = await renderPill(<RuntimePill file={luna} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  const tier = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Max")!;
+  await click(tier);
+  /* The effort pick is sent on the launch model, not a guess. */
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "gpt-6-luna", effort: "max" });
+  await act(async () => root.unmount());
+});
+
+test("the transcript's model wins over the launch's, in the face and on the phone sheet", async () => {
+  const file: FileEntry = { ...codexFile, model: "gpt-6-astra", launchModel: "gpt-6-luna" };
+  mobile = true;
+  const { host, root } = await renderPill(<RuntimePill file={file} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  expect(faceOf(host)).toContain("6-Astra · high");
+  await click(host.querySelector("[data-runtime-pill]")!);
+  expect(host.ownerDocument.querySelector("[data-mobile2-next-message]")?.textContent).toContain("6-Astra");
+  await act(async () => root.unmount());
+});
+
+test("a conversation with no known model names none and holds the edits that would send one", async () => {
+  const unknown: FileEntry = { ...codexFile, model: null, launchModel: null, effort: "high" };
+  const { host, root } = await renderPill(<RuntimePill file={unknown} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  const face = faceOf(host);
+  expect(face).toContain("Model · High");
+  expect(face).not.toContain("Sol");
+  expect(host.querySelector("[data-runtime-pill]")!.getAttribute("aria-label")).not.toContain("Sol");
+  await click(host.querySelector("[data-runtime-pill]")!);
+  const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
+  expect(tiers.length).toBeGreaterThan(0);
+  expect(tiers.every((row) => row.hasAttribute("aria-disabled"))).toBe(true);
+  await click(tiers[0]!);
+  expect(requests).toHaveLength(0);
+  /* Picking a model is how the face gets one, and it is the model that is sent. */
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "model")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "gpt-6-luna")!);
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "gpt-6-luna" });
+  expect(faceOf(host)).toContain("6-Luna");
+  await act(async () => root.unmount());
+});
+
+test("a model the catalogue does not list is named as the transcript reports it, on both engines", async () => {
+  const codex = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-5.5", launchModel: "gpt-6-luna" }} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  expect(faceOf(codex.host)).toContain("gpt-5.5");
+  expect(faceOf(codex.host)).not.toContain("Sol");
+  await act(async () => codex.root.unmount());
+  const claude = await renderPill(<RuntimePill file={{ ...claudeSeat, model: "opus-4-1", launchModel: "opus" }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(faceOf(claude.host)).toContain("Opus 4.1");
+  expect(faceOf(claude.host)).not.toContain("Opus 5.5");
+  await act(async () => claude.root.unmount());
+});
