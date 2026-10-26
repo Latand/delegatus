@@ -142,6 +142,14 @@ export function accessoryReserve(surfaces: number, boxHeight: number): number {
    Everything else — the composer and the rows beside it that never yield —
    lives in the rest. */
 export const TRANSCRIPT_FLOOR_SHARE = 0.6;
+/* WITH THE KEYBOARD UP the box is the strip above the keyboard, a third of the
+   screen on a phone, and the 60% floor above leaves the field a 2-4 line
+   window there: the draft the operator is writing, in the one state they write
+   in (2026-10-26, iPhone 11 report). The transcript is a glance back at the
+   conversation while the keyboard is open, so its floor drops to this share and
+   the field takes the rest. Send, Attach and the tools row stay inside the
+   composer's own box either way. */
+export const KEYBOARD_TRANSCRIPT_FLOOR_SHARE = 0.4;
 /* The card composer's chrome around the field, measured on the rendered card:
    the form's own padding and top border (py-2 + 1px = 17px), the input box's
    padding and borders (py-1 + two 1px edges = 10px), the quiet secondary row
@@ -165,9 +173,9 @@ export const COMPOSER_REST_PX = CARD_COMPOSER_CHROME_PX + COMPOSER_CEILING_FLOOR
     line): the share the transcript's floor leaves, less those rows. The class
     on the form is the bound before the box is measured; this is the bound once
     it is, and the field's ceiling is what is left inside it. */
-export function cardComposerBudget(boxHeight: number, rows = 0): number {
+export function cardComposerBudget(boxHeight: number, rows = 0, floorShare = TRANSCRIPT_FLOOR_SHARE): number {
   const others = Math.max(0, rows);
-  const share = Math.floor(boxHeight * (1 - TRANSCRIPT_FLOOR_SHARE)) - others;
+  const share = Math.floor(boxHeight * (1 - floorShare)) - others;
   return Math.max(Math.min(COMPOSER_REST_PX, boxHeight - others), share);
 }
 
@@ -230,6 +238,18 @@ export function cardComposerCeiling(boxHeight: number, surfaces: number, budget:
   const within = budget ?? cardComposerBudget(boxHeight);
   const reserve = accessoryReserve(surfaces, within);
   return Math.max(COMPOSER_CEILING_FLOOR_PX, Math.min(COMPOSER_MAX_PX, within - CARD_COMPOSER_CHROME_PX - reserve));
+}
+
+/** A field ceiling snapped down to whole lines. A field that stops growing at
+    a fraction of a line shows its newest line whole and cuts the one above it
+    halfway at the scroll edge, in the state the operator is writing in.
+    `chrome` is the field's own padding and border, which sit inside its
+    height; the one-row floor outranks the snap, and a line height the browser
+    does not report ("normal", or none at all) leaves the ceiling as it was. */
+export function wholeLineCeiling(ceiling: number, lineHeight: number, chrome: number): number {
+  if (!(lineHeight > 0) || !(chrome >= 0)) return ceiling;
+  const lines = Math.floor((ceiling - chrome) / lineHeight);
+  return Math.min(ceiling, Math.max(COMPOSER_CEILING_FLOOR_PX, chrome + lines * lineHeight));
 }
 
 /** The phone grow ceiling, from the VISIBLE viewport the operator can see

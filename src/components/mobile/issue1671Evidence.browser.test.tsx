@@ -13485,15 +13485,40 @@ describe("new task default deadline", () => {
 });
 
 describe("phone composer multiline growth", () => {
+  /* The orchestrator seat's phone composer at the widths between the iPhone 11 (414 x 896) and the small SE-class
+     phone, with the keyboard down and up. The keyboard shrinks only `visualViewport.height`, as on iOS Safari; the
+     visible heights are what that keyboard leaves on each phone, and `lines` is how many whole lines of a long draft
+     the field must show there. */
+  const PHONES = [
+    { width: 414, height: 896, keyboards: [{ visible: 380, lines: 5 }, { visible: 450, lines: 5 }] },
+    { width: 390, height: 844, keyboards: [{ visible: 360, lines: 4 }, { visible: 430, lines: 5 }] },
+    { width: 375, height: 667, keyboards: [{ visible: 300, lines: 3 }, { visible: 360, lines: 3 }] },
+  ];
   browserTest("long drafts grow and keep actions above the visual viewport keyboard", async () => {
     const out = process.env.LLV_PHONE_GROWTH_OUT ?? path.join(os.tmpdir(), "phone-composer-growth");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const setKeyboard = async (page: Page, visible: number | null) => {
+      await page.evaluate(height => {
+        const visual = window.visualViewport!;
+        if (height === null) delete (visual as unknown as { height?: number }).height;
+        else Object.defineProperty(visual, "height", { configurable: true, value: height });
+        visual.dispatchEvent(new Event("resize"));
+      }, visible);
+      await page.waitForTimeout(200);
+    };
+    /* Whole lines the field's content box shows, from the rendered field itself. */
+    const wholeLines = (field: ReturnType<Page["locator"]>) => field.evaluate(element => {
+      const style = getComputedStyle(element);
+      const content = element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      return { lines: content / parseFloat(style.lineHeight), height: element.getBoundingClientRect().height };
+    });
     try {
-      for (const viewport of [{ width: 414, height: 896 }, { width: 375, height: 667 }]) {
+      for (const phone of PHONES) {
+        const viewport = { width: phone.width, height: phone.height };
         for (const scheme of SCHEMES) for (const locale of ["en", "uk"] as const) {
-          const { page, context, pageErrors } = await openFixture(browser, `${server.base}?runtime=structured&agent-label=1#c=conversation_running`, viewport, scheme, locale, "reduce", true);
+          const { page, context, pageErrors } = await openFixture(browser, `${server.base}?seatnoise=ii&runtime=structured#c=conversation_running`, viewport, scheme, locale, "reduce", true);
           try {
             const field = page.locator("[data-mobile2-composer] textarea");
             await field.waitFor();
@@ -13503,6 +13528,27 @@ describe("phone composer multiline growth", () => {
             const empty = (await field.boundingBox())!.height;
             const emptyUnit = (await unit.boundingBox())!.height;
             await page.screenshot({ path: path.join(out, `${tag}-before.png`) });
+            const sendAndAttach = [page.locator("[data-mobile2-send]"), page.getByRole("button", { name: translate(locale, "composer.addAttachments"), exact: true })];
+            const expectActionsVisible = async (visibleHeight: number) => {
+              for (const control of sendAndAttach) {
+                expect(await control.isVisible()).toBe(true);
+                const box = (await control.boundingBox())!;
+                expect(box.y).toBeGreaterThanOrEqual(0);
+                expect(box.y + box.height).toBeLessThanOrEqual(visibleHeight + 1);
+              }
+              const box = (await page.locator("[data-mobile2-tools-actions]").boundingBox())!;
+              expect(box.x).toBeGreaterThanOrEqual(0);
+              expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+              expect(box.y + box.height).toBeLessThanOrEqual(visibleHeight + 1);
+            };
+            /* A short three-line draft shows whole, keyboard down and up, without scrolling inside the field. */
+            await field.fill("Please check the failing lane,\nread its last review,\nand tell me what blocks the merge.");
+            for (const visible of [null, ...phone.keyboards.map(keyboard => keyboard.visible)]) {
+              await setKeyboard(page, visible);
+              expect(await field.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+              await expectActionsVisible(visible ?? viewport.height);
+            }
+            await setKeyboard(page, null);
             await field.fill(Array.from({ length: 30 }, (_, index) => `Line ${index + 1}: Review the result and explain the next step.`).join("\n"));
             await page.waitForFunction(() => {
               const field = document.querySelector<HTMLTextAreaElement>("[data-mobile2-composer] textarea");
@@ -13510,41 +13556,22 @@ describe("phone composer multiline growth", () => {
             });
             const grown = (await field.boundingBox())!.height;
             expect(await field.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
-            expect(await field.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
             await page.screenshot({ path: path.join(out, `${tag}-after.png`) });
             expect(grown).toBeGreaterThan(empty + 44);
             expect((await unit.boundingBox())!.height).toBeGreaterThan(emptyUnit + 44);
             expect(grown).toBeLessThanOrEqual(viewport.height * .4 + 2);
-            for (const keyboard of [false, true]) {
-              if (keyboard) {
-                // Model Safari: the keyboard shrinks only visualViewport.
-                await page.evaluate(() => {
-                  Object.defineProperty(window.visualViewport, "height", { configurable: true, value: 320 });
-                  window.visualViewport!.dispatchEvent(new Event("resize"));
-                });
-                await page.waitForTimeout(150);
-                expect((await field.boundingBox())!.height).toBeLessThan(grown);
-              }
-              const visibleHeight = keyboard ? 320 : viewport.height;
-              if (keyboard) {
-                await page.screenshot({ path: path.join(out, `${tag}-keyboard.png`) });
-              }
-              for (const control of [page.locator("[data-mobile2-send]"), page.getByRole("button", { name: translate(locale, "composer.addAttachments"), exact: true })]) {
-                expect(await control.isVisible()).toBe(true);
-                const box = (await control.boundingBox())!;
-                expect(box.y).toBeGreaterThanOrEqual(0);
-                expect(box.y + box.height).toBeLessThanOrEqual(visibleHeight + 1);
-              }
-              const actions = page.locator("[data-mobile2-tools-actions]");
-              const box = (await actions.boundingBox())!;
-              expect(box.x).toBeGreaterThanOrEqual(0);
-              expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
-              expect(box.y + box.height).toBeLessThanOrEqual(visibleHeight + 1);
+            await expectActionsVisible(viewport.height);
+            for (const keyboard of phone.keyboards) {
+              await setKeyboard(page, keyboard.visible);
+              const shown = await wholeLines(field);
+              expect(shown.lines).toBeGreaterThanOrEqual(keyboard.lines);
+              /* The field stops at a whole line, so the edge never cuts the top line of the draft. */
+              expect(Math.abs(shown.lines - Math.round(shown.lines))).toBeLessThan(.05);
+              expect(shown.height).toBeLessThanOrEqual(grown + 1);
+              await page.screenshot({ path: path.join(out, `${tag}-keyboard-${keyboard.visible}.png`) });
+              await expectActionsVisible(keyboard.visible);
             }
-            await page.evaluate(() => {
-              delete (window.visualViewport as unknown as { height?: number }).height;
-              window.visualViewport!.dispatchEvent(new Event("resize"));
-            });
+            await setKeyboard(page, null);
             await page.waitForFunction(height => {
               const field = document.querySelector("[data-mobile2-composer] textarea");
               return field && Math.abs(field.getBoundingClientRect().height - height) < 1;
@@ -13554,5 +13581,5 @@ describe("phone composer multiline growth", () => {
         }
       }
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 300_000);
 });
