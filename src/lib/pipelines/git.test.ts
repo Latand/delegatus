@@ -2106,8 +2106,9 @@ for (const scenario of [
   { name: "ordinary gate change", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000 },
   { name: "engine gate change", adapter: true, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 1_500_000 },
   { name: "engine gate refusal", adapter: true, file: "src/lib/pipelines/engine.ts", refused: true, unreadable: null, ms: 1_500_000 },
-  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_500_000 },
-  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_500_000 },
+  { name: "runtime gate change", adapter: true, file: "Dockerfile", refused: false, unreadable: null, ms: 1_800_000 },
+  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_800_000 },
+  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_800_000 },
 ]) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
   const box = await publishSandbox();
   try {

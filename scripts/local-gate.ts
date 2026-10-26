@@ -24,6 +24,8 @@ export interface Step {
   group?: string;
   /** Steps in one lane run in order; different lanes overlap. */
   lane?: string;
+  /** A previously planned check whose pass this step consumes. */
+  after?: string;
   /** A check the hosted job also runs: stopped at a caller's deadline, it is
       named as left to that job, never failed or dropped. */
   deferrable?: boolean;
@@ -100,7 +102,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (env.runtime) {
     steps.push(
       { name: "runtime verdict tests", command: ["bun", "test", ...env.runtimeTests.map(file => `./${file}`)], capped: true, isolated: true, pinned: true },
-      { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true },
+      { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true, after: "types" },
       { name: "MCP size budgets", command: ["bun", "test", "./src/lib/mcp/answerSizes.test.ts"], capped: true, isolated: true, pinned: true },
       { name: "Viewer runtime", command: ["bun", "scripts/verify-viewer-runtime.ts"], capped: true, isolated: true, pinned: true },
       { name: "runtime host", command: ["bun", "scripts/verify-runtime-host.ts"], capped: true, isolated: true, pinned: true },
@@ -497,6 +499,13 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
 
 /** `cancelled`: stopped by `cancel`, never by the deadline. */
 interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean }
+/** The hook owns the verdict deadline. Leave its supervisor time to print the
+ * no-verdict line and finish containment before the supervisor stops the hook.
+ * Each nested runner receives the current remainder, never an inherited cap. */
+export const SUPERVISOR_MARGIN_MS = 30_000;
+export function supervisorTimeoutMs(until: number, env: NodeJS.ProcessEnv, now = Date.now()): number {
+  return Math.max(1, until + cpuInheritedWaitMs(env) - now) + SUPERVISOR_MARGIN_MS;
+}
 /** `log` names the file for the step's output; null discards it; absent shows
     it. `cancel` stops the step at once, as the deadline would. */
 async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, log?: string | null, cancel?: AbortSignal): Promise<Outcome> {
@@ -509,7 +518,9 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+      ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
+    }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
     const stop = new Promise<string | null>(resolve => { stopped = resolve; });
     // A child that already exited keeps nothing to stop, and its PID may be reused.
@@ -526,7 +537,9 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
     // The stop's own answer is bounded; the child's exit is not when it refuses
     // the signal, so whichever comes first ends the wait.
     const code = await Promise.race([child.exited, stop.then(() => null)]);
-    if (!stopping) return { code, stopped: false, ranMs: Date.now() - started };
+    // Owned runners reserve 124 for a deadline after their cleanup. Keep this
+    // distinct from a compiler/test refusal even if the supervisor wins a race.
+    if (!stopping) return { code, stopped: code === 124, ranMs: Date.now() - started };
     const leaked = await stop;
     // A survivor must not hold this hook open: the push ends with its report.
     if (leaked) child.unref();
@@ -720,13 +733,17 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       options.cancel?.addEventListener("abort", onCancel, { once: true });
       if (options.cancel?.aborted) cancel.abort();
       const lanes = new Map<string, Promise<Outcome | null>>();
+      const checks = new Map<string, Promise<Outcome | null>>();
       const pending = members.map(({ member, log }, at) => {
         const predecessor = member.lane ? lanes.get(member.lane) : undefined;
+        const prerequisite = member.after ? checks.get(member.after) : undefined;
         const run = (async () => {
           await predecessor;
+          await prerequisite;
           if (cancel.signal.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
           const started = Date.now();
           try {
+            if (member.after && !prerequisite) throw new Error(`missing prerequisite: ${member.after}`);
             if (options.passes?.reused(member, until + cpuInheritedWaitMs(budget.env))) return { code: 0, stopped: false, ranMs: 0 };
             const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
             const outcome = isOutcome(ready) ? ready : await runPrepared(member, ready, log, cancel.signal);
@@ -738,6 +755,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           } catch (error) { errors.set(at, error); cancel.abort(); return null; }
         })();
         if (member.lane) lanes.set(member.lane, run);
+        checks.set(member.name, run);
         return run;
       });
       const outcomes = await Promise.all(pending);
@@ -790,10 +808,11 @@ export async function runAdmittedChecks(command: string[], root: string, env: No
     const outcome = await execute(command, root, {
       ...budget.env, LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS,
       ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}),
-      LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000),
+      LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Date.now() + 15 * 60_000, env)),
     }, Infinity, undefined, cancel);
     if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
     if (outcome.cancelled) return;
+    if (outcome.stopped) throw new NoVerdict({ name: "push checks", command }, deadline ?? { startedAt: Date.now() - (outcome.ranMs ?? 0), at: Date.now() }, outcome);
     if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
   } finally {
     console.error(`pre-push: publication checks CPU wait: ${Math.round(budget.elapsed())} ms (excluded from execution budget)`);
@@ -885,6 +904,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
       const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
+      delete env.LLV_GATE_TYPES_CHECKED;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
@@ -899,7 +919,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       }
       if (step.selection) command.push(step.selection);
       if (step.selection === "--shared-only") env.LLV_GATE_COMPARE_BASE = base;
-      if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
+      if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1", LLV_GATE_TYPES_CHECKED: "1" });
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {
         if (command.length < 3) throw new Error("refusing an empty test list");

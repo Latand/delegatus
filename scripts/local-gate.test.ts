@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { codexFixture, createGateSandbox, createRuntimeCheckTree, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { codexFixture, createGateSandbox, createRuntimeCheckTree, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runAdmittedChecks, runPushPair, runSteps, supervisorTimeoutMs, SUPERVISOR_MARGIN_MS, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { createHookFixture, fixtureGitEnv } from "./local-gate.fixture";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { nativeBatches } from "./verify-native-codex-runtime";
@@ -11,6 +11,8 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { changedSinceBase } from "./ci-platform-scope";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
+import configureNext from "../next.config";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 const owned: ProcessIdentity[] = [];
@@ -103,12 +105,155 @@ test("the measured pipeline file families reserve comparison time without changi
     expect(publicationPushBudgetMs(files)).toBe(900_000);
     expect(publicationHookDeadline(publicationPushBudgetMs(files), now)).toBe(841_000);
   }
-  expect(publicationPushBudgetMs(null)).toBe(1_500_000);
+  for (const file of ["Dockerfile", "bin/cli.mjs", "src/runtime-host/main.ts"]) expect(publicationPushBudgetMs([file])).toBe(1_800_000);
+  expect(publicationPushBudgetMs(null)).toBe(1_800_000);
   const tests = Array.from({ length: 27 }, (_, index) => `src/lib/pipelines/engine.variant${index}.test.ts`);
   const file = "src/lib/pipelines/engine.ts";
   const step = plan("pre-push", [file], context({ existing: new Set([file]), tests })).find(step => step.name === "touched tests")!;
   expect(step.command.slice(4)).toEqual(tests.map(file => `./${file}`));
 });
+
+test("only a gate build after the types pass skips Next's duplicate check", () => {
+  const before = process.env.LLV_GATE_TYPES_CHECKED, options = process.env.NODE_OPTIONS;
+  try {
+    const steps = plan("pre-push", ["src/example.ts"], context({ runtime: true }));
+    expect(steps.filter(step => step.command.includes("tsc"))).toHaveLength(1);
+    expect(steps.find(step => step.name === "Viewer build")!.after).toBe("types");
+    for (const marker of [undefined, "0", "1"]) {
+      if (marker === undefined) delete process.env.LLV_GATE_TYPES_CHECKED;
+      else process.env.LLV_GATE_TYPES_CHECKED = marker;
+      expect(configureNext(PHASE_PRODUCTION_BUILD).typescript?.ignoreBuildErrors).toBe(marker === "1");
+      expect(configureNext(PHASE_DEVELOPMENT_SERVER).typescript?.ignoreBuildErrors).toBeUndefined();
+    }
+  } finally {
+    if (before === undefined) delete process.env.LLV_GATE_TYPES_CHECKED; else process.env.LLV_GATE_TYPES_CHECKED = before;
+    if (options === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = options;
+  }
+});
+
+test("supervision covers the remaining execution budget and completed CPU wait with cleanup margin", () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  try {
+    const ledger = JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!)[0];
+    writeFileSync(path.join(ledger, "queue.json"), JSON.stringify({ start: 100, end: 600 }));
+    // A stale inherited cap must not govern the next child.
+    expect(supervisorTimeoutMs(1000, { ...budget.env, LLV_OWNED_RUN_TIMEOUT_MS: "1" }, 800)).toBe(30_700);
+    expect(supervisorTimeoutMs(1000, { NODE_ENV: "test" }, 800)).toBe(30_200);
+    expect(supervisorTimeoutMs(1000, { NODE_ENV: "test" }, 1200)).toBe(30_001);
+    expect(publicationHookDeadline(publicationPushBudgetMs(["Dockerfile"]), 0)).toBeGreaterThan(894_000);
+    expect(publicationHookDeadline(publicationPushBudgetMs(["scripts/example.ts"]), 0)).toBeGreaterThan(562_000);
+  } finally { budget.close(); }
+});
+
+test("a phase child receives its current allowance instead of a stale inherited supervisor cap", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-supervisor-cap-")); roots.push(dir);
+  const record = path.join(dir, "allowance");
+  const now = Date.now;
+  Date.now = () => 1000;
+  try {
+    await runSteps("pre-push", [{ name: "types", command: [] }], {
+      root: dir, deadline: { startedAt: 1000, at: 2000 }, logDir: dir, say: () => {},
+      prepare: () => ({ env: { ...process.env, LLV_OWNED_RUN_TIMEOUT_MS: "1" }, command: [process.execPath, "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(record)}, process.env.LLV_OWNED_RUN_TIMEOUT_MS);`] }),
+    });
+    expect(readFileSync(record, "utf8")).toBe("31000");
+  } finally { Date.now = now; }
+});
+
+test.each([0, 1, 124])("a fresh admitted runner preserves success, refusal and deadline outcomes (%s)", async code => {
+  const deadline = soon(10_000);
+  const outcome = await runAdmittedChecks(["bash", "-c", `exit ${code}`], root, process.env, deadline).then(() => null, (error: unknown) => error);
+  if (code === 0) expect(outcome).toBeNull();
+  else if (code === 124) {
+    expect(outcome).toBeInstanceOf(NoVerdict);
+    expect(endingOf("pre-push", outcome).code).toBe(75);
+    expect(endingOf("pre-push", outcome).line).toContain('"push checks"');
+  } else expect(outcome).not.toBeInstanceOf(NoVerdict);
+});
+
+test.each([false, true])("the build waits for the types result and is suppressed on refusal (%s)", async fails => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-build-after-types-")); roots.push(dir);
+  const finished = path.join(dir, "typed"), built = path.join(dir, "built");
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let preparing!: () => void;
+  const ready = new Promise<void>(resolve => { preparing = resolve; });
+  let observed!: () => void, buildPrepared = false;
+  const observation = new Promise<void>(resolve => { observed = resolve; });
+  const pending = runSteps("pre-push", [
+    { name: "types", command: [], group: "push checks", lane: "types" },
+    { name: "Viewer build", command: [], group: "push checks", lane: "runtime", after: "types" },
+    { name: "independent", command: [], group: "push checks", lane: "independent" },
+  ], { root: dir, deadline: soon(10_000), logDir: dir, say: () => {}, prepare: async step => {
+    if (step.name === "types") { preparing(); await barrier; }
+    if (step.name === "Viewer build") buildPrepared = true;
+    if (step.name === "independent") observed();
+    return { env: process.env, command: [process.execPath, "-e", step.name === "types"
+      ? `require("node:fs").writeFileSync(${JSON.stringify(finished)}, "typed"); process.exit(${fails ? 1 : 0});`
+      : step.name === "independent" ? "process.exit(0);"
+      : `const fs = require("node:fs"); if (!fs.existsSync(${JSON.stringify(finished)})) process.exit(19); fs.writeFileSync(${JSON.stringify(built)}, "built");`] };
+  } }).then(() => null, (error: unknown) => error);
+  await ready;
+  await observation;
+  const premature = buildPrepared;
+  release();
+  const error = await pending;
+  expect(premature).toBe(false);
+  expect(error === null).toBe(!fails);
+  expect(existsSync(built)).toBe(!fails);
+});
+
+test("a missing types prerequisite refuses the build before preparation", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-missing-types-")); roots.push(dir);
+  let prepared = false;
+  await expect(runSteps("pre-push", [{ name: "Viewer build", command: [], group: "push checks", after: "types" }], {
+    root: dir, deadline: soon(10_000), logDir: dir, say: () => {}, prepare: () => {
+      prepared = true; return { env: process.env, command: ["bash", "-c", "exit 0"] };
+    },
+  })).rejects.toThrow("missing prerequisite: types");
+  expect(prepared).toBe(false);
+});
+
+test.each([false, true])("a phase runner's deadline status remains retryable (grouped: %s)", async grouped => {
+  const runner = stepRunner(soon(10_000), () => ({ types: "exit 124" }));
+  const error = await runner.run([{ name: "types", command: [], ...(grouped ? { group: "push checks" } : {}) }]);
+  expect(error).toBeInstanceOf(NoVerdict);
+  expect(endingOf("pre-push", error).code).toBe(75);
+  expect(endingOf("pre-push", error).line).toContain('"types"');
+});
+
+test("fresh push hooks give only the build a types-pass marker, and a types refusal prevents the build", () => {
+  const f = createHookFixture(root, roots);
+  const cache = path.join(f.dir, "fixture-cache");
+  const runtime = discover(root, "HEAD", ["Dockerfile"]);
+  const binary = path.join(cache, "delegatus-gate/bun-9.9.9/node_modules/.bin/bun");
+  mkdirSync(path.dirname(binary), { recursive: true });
+  writeFileSync(binary, '#!/bin/bash\nif [[ "$1" == --version ]]; then echo 9.9.9; else exec "$HOOK_BUN" "$HOOK_RECORD" "$@"; fi\n', { mode: 0o755 });
+  for (const version of runtime.codexVersions) {
+    const target = process.arch === "x64" ? "x86_64" : "aarch64";
+    const codex = path.join(cache, `delegatus-gate/codex-${version}/node_modules/@openai/codex-linux-${process.arch}/vendor/${target}-unknown-linux-musl/bin/codex`);
+    mkdirSync(path.dirname(codex), { recursive: true }); writeFileSync(codex, "fixture");
+  }
+  for (const file of [...runtime.runtimeTests, "src/lib/mcp/answerSizes.test.ts"]) {
+    mkdirSync(path.dirname(path.join(f.dir, file)), { recursive: true }); writeFileSync(path.join(f.dir, file), "// fixture\n");
+  }
+  writeFileSync(path.join(f.dir, "Dockerfile"), "RUN npm install -g bun@9.9.9\n");
+  // The real recorder already captures every environment name without values.
+  const env: NodeJS.ProcessEnv = { ...f.env, XDG_CACHE_HOME: cache, LLV_GATE_TYPES_CHECKED: "inherited" };
+  for (const fails of [false, true, false]) {
+    const before = existsSync(env.HOOK_LOG!) ? f.calls().length : 0;
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...env, HOOK_FAIL: fails ? "tsc" : "" }, encoding: "utf8", timeout: 90_000 });
+    expect(result.status, result.stderr).toBe(fails ? 1 : 0);
+    const calls = f.calls().slice(before);
+    expect(calls.filter(call => call.args[0] === "tsc")).toHaveLength(1);
+    const builds = calls.filter(call => call.args[0] === "run" && call.args[1] === "build");
+    expect(builds).toHaveLength(fails ? 0 : 1);
+    for (const call of calls) {
+      if (call.args[0] === "scripts/privacy-publication-gate.ts") continue;
+      expect(call.names.includes("LLV_GATE_TYPES_CHECKED"), call.args.join(" ")).toBe(builds.includes(call));
+    }
+  }
+}, 300_000);
 test("scoped heavy steps retain pin, host interpreter and both native fixture versions", () => {
   const steps = plan("pre-push", ["package.json"], context({ linux: true, runtime: true, native: true }));
   expect(steps.some(step => step.name === "Linux backend")).toBeTrue();
@@ -612,15 +757,18 @@ test("repository default budgets follow current changes across fresh hook proces
     const types = calls.find(call => call.args[0] === "tsc")!;
     expect(types).toBeDefined();
     expect(types.now).toBe(now);
-    return { deadline: Number(types.deadline), ownedBudget: Number(types.ownedBudget) };
+    const wait = Number(/publication checks CPU wait: (\d+) ms/.exec(result.stderr)![1]);
+    // The fixed child clock has not advanced through real admission; remove
+    // the measured queue interval when comparing the execution allowance.
+    return { deadline: Number(types.deadline), ownedBudget: Number(types.ownedBudget) - wait };
   };
   // Each call starts a new real hook and admitted process.
-  expect(run()).toEqual({ deadline: now + 1_440_000, ownedBudget: 1_440_000 });
+  expect(run()).toEqual({ deadline: now + 1_440_000, ownedBudget: 1_440_000 + SUPERVISOR_MARGIN_MS });
   f.git("rm", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "retain ordinary change");
-  expect(run()).toEqual({ deadline: now + 840_000, ownedBudget: 840_000 });
+  expect(run()).toEqual({ deadline: now + 840_000, ownedBudget: 840_000 + SUPERVISOR_MARGIN_MS });
   mkdirSync(directory, { recursive: true });
   writeFileSync(modulePath, "export const value = 1;\n"); f.git("add", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "restore engine change");
-  expect(run(String(now + 30_000))).toEqual({ deadline: now + 30_000, ownedBudget: 30_000 });
+  expect(run(String(now + 30_000))).toEqual({ deadline: now + 30_000, ownedBudget: 30_000 + SUPERVISOR_MARGIN_MS });
 }, 120_000);
 
 for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows KanbanBoard baseline errors and rejects one added error by file/line`, () => {

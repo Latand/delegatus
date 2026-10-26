@@ -103,7 +103,9 @@ export default function configureNext(phase: string): NextConfig {
       // online CPUs and starts 23 page-data workers in each lane. Leave one
       // CPU for their coordinator and bound their aggregate memory demand.
       experimental: { ...nextConfig.experimental, cpus: 2 },
-      typescript: { tsconfigPath: "tsconfig.production.json" },
+      // Only the pre-push build receives this after its full types phase passes.
+      // Ordinary builds and hosted CI retain Next's own check.
+      typescript: { tsconfigPath: "tsconfig.production.json", ignoreBuildErrors: process.env.LLV_GATE_TYPES_CHECKED === "1" },
     };
   }
   return nextConfig;
