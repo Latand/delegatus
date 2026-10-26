@@ -1166,7 +1166,7 @@ async function actuateQueuedPinnedSpawn(
   }
   assertActive();
   if (response?.path && receipt.accountId !== account.accountId) {
-    const { recordActualSpawnAccountOffLoop } = await import("@/lib/agent/spawnCommand");
+    const { recordActualSpawnAccountOffLoop } = await import("@/lib/agent/spawnAccountSettlement");
     assertActive();
     await recordActualSpawnAccountOffLoop(registry, admissionClaim.receipt, account.accountId, response.path);
     assertActive();

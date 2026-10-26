@@ -1393,7 +1393,7 @@ test.each(["json", "sqlite"] as const)("quota setup restores its title with curr
 
 test.each(["own", "foreign", "forged", "takeover", "transport"] as const)("staged fallback account settlement fences writer evidence: %s", async evidence => {
   const { AgentRegistry } = await import("./registry");
-  const { recordActualSpawnAccountOffLoop } = await import("./spawnCommand");
+  const { recordActualSpawnAccountOffLoop } = await import("./spawnAccountSettlement");
   const { captureProcessIdentity } = await import("@/lib/processIdentity");
   const cwd = statePath(`staged-fallback-account-${evidence}`);
   fs.mkdirSync(cwd, { recursive: true });
