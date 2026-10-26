@@ -38,6 +38,13 @@ function fakeGitHub(overrides: Record<string, Answer> = {}) {
   };
 }
 
+function githubWithPermissions(granted: Record<string, string>, issued: Record<string, string> = FORGE_APP_PERMISSIONS) {
+  return fakeGitHub({
+    [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "Acme" }, suspended_at: null, permissions: granted } },
+    "POST app/installations/42/access_tokens": { status: 201, body: { token: ISSUED, expires_at: "2030-01-01T01:00:00Z", permissions: issued } },
+  });
+}
+
 /* What the agent's shell holds when it types `gh`: the operator's configuration,
    as the launch pins it, and the declaration naming the one App repository. */
 const AGENT_ENV = { [FORGE_REPOSITORIES_ENV]: "Acme/Widgets", GH_CONFIG_DIR: OPERATOR_CONFIG, GITHUB_TOKEN: "inherited-token" };
@@ -109,7 +116,7 @@ describe("minting", () => {
 
   /* #2518: an approved bug report is filed on a token of its own. */
   test("an issue token is asked for issues and metadata alone, and a push token never carries them", async () => {
-    const granted = { ...FORGE_APP_PERMISSIONS, issues: "write" };
+    const granted = { ...FORGE_APP_PERMISSIONS, issues: "write", workflows: "write" };
     const github = fakeGitHub({
       [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "Acme" }, suspended_at: null, permissions: granted } },
       "POST app/installations/42/access_tokens": { status: 201, body: { token: ISSUED, expires_at: "2030-01-01T01:00:00Z", permissions: { ...FORGE_APP_ISSUE_PERMISSIONS } } },
@@ -117,6 +124,17 @@ describe("minting", () => {
     expect(await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_PERMISSIONS)).toMatchObject({ token: ISSUED, repository: REPO });
     expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { issues: "write", metadata: "read" } });
     expect(FORGE_APP_PERMISSIONS).not.toHaveProperty("issues");
+  });
+
+  test("standalone write tokens and covered gh writes keep their permissions when workflows is granted", async () => {
+    const granted = { ...FORGE_APP_PERMISSIONS, workflows: "write", issues: "write", actions: "write" };
+    const standalone = ports({ github: githubWithPermissions(granted) });
+    expect(await mintInstallationToken(REPO, standalone)).toMatchObject({ token: ISSUED, repository: REPO });
+    expect(standalone.github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { ...FORGE_APP_PERMISSIONS } });
+    const gh = ports({ github: githubWithPermissions(granted) });
+    expect(await runGh(["pr", "create", "--fill"], gh)).toBe(0);
+    expect(gh.github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { ...FORGE_APP_PERMISSIONS } });
+    expect(gh.started).toHaveLength(1);
   });
 
   test("an installation that was not granted issues refuses the issue token before any token exists", async () => {
@@ -475,6 +493,44 @@ describe("git's push credential helper", () => {
     expect(await gitCredential("get", ask, p)).toBe(0);
     expect(p.out.join("")).toBe(`username=x-access-token\n${["password", ISSUED].join("=")}\n`);
     expect(p.github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { ...FORGE_APP_PERMISSIONS } });
+  });
+
+  test.each([
+    ["granted", { workflows: "write" }, { workflows: "write" }],
+    ["absent", {}, {}],
+    ["read only", { workflows: "read" }, {}],
+  ] as const)("workflow permission %s: only a write grant adds it to the push token", async (_name, grant, requested) => {
+    const permissions = { ...FORGE_APP_PERMISSIONS, ...requested };
+    const github = githubWithPermissions({ ...FORGE_APP_PERMISSIONS, ...grant, issues: "write", actions: "write" }, permissions);
+    const p = ports({ github, origin: null });
+    expect(await gitCredential("get", ask, p)).toBe(0);
+    expect(p.out.join("")).toBe(`username=x-access-token\n${["password", ISSUED].join("=")}\n`);
+    expect(p.err).toEqual([]);
+    expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions });
+    expect(github.calls[2]).toMatchObject({ method: "GET", target: "installation/repositories?per_page=100", token: ISSUED });
+    expect(FORGE_APP_PERMISSIONS).toEqual({ contents: "write", pull_requests: "write", metadata: "read" });
+  });
+
+  test.each([
+    ["missing workflows", { workflows: "write" }, {}],
+    ["downgraded workflows", { workflows: "write" }, { workflows: "read" }],
+    ["extra permission", { workflows: "write" }, { workflows: "write", issues: "write" }],
+    ["downgraded base permission", { workflows: "write" }, { workflows: "write", pull_requests: "read" }],
+    ["unrequested workflows", {}, { workflows: "write" }],
+    ["read grant upgraded", { workflows: "read" }, { workflows: "write" }],
+  ] as const)("a push token with %s is revoked and git is told to stop", async (_name, grant, issued) => {
+    const github = githubWithPermissions({ ...FORGE_APP_PERMISSIONS, ...grant }, { ...FORGE_APP_PERMISSIONS, ...issued });
+    const p = ports({ github, ordinary: "username=operator\n" });
+    let ordinaryCalls = 0;
+    p.ordinaryCredential = async () => { ordinaryCalls++; return "username=operator\n"; };
+    expect(await gitCredential("get", ask, p)).toBe(1);
+    expect(p.out).toEqual(["quit=true\n"]);
+    expect(p.err.join("")).toContain("the issued token carries unexpected permissions");
+    expect(ordinaryCalls).toBe(0);
+    expect(github.calls.map(call => `${call.method} ${call.target}`)).toEqual([
+      `GET repos/${REPO}/installation`, "POST app/installations/42/access_tokens", "DELETE installation/token",
+    ]);
+    expect(github.calls.at(-1)).toMatchObject({ token: ISSUED });
   });
 
   test("negative control: with no App credential git is told to stop asking, and the ordinary helpers are not consulted", async () => {
