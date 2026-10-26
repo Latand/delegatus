@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as workLinks from "./workLinks";
 
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -349,4 +350,81 @@ test("renamed cache entries share the freshest PR and preserve both histories", 
   expect(old.pr(45)?.number).toBe(45);
   expect(old.pr(47)?.number).toBe(47);
   expect(old.byHead("feature/46")).toHaveLength(1);
+});
+
+test("warm forge views reuse alias derivation until either ledger changes", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { recordProjectRemote, persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
+  const { forgeCacheView, updateForgeCache } = await import("./cache");
+  const { worktreeMapStore } = await import("@/lib/projects/persistence");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "work-link-warm-"));
+  const previous = process.env.LLV_STATE_DIR;
+  const normalize = spyOn(workLinks, "githubRepositoryOfRemote");
+  process.env.LLV_STATE_DIR = root;
+  try {
+    updateForgeCache(() => {});
+    const old = projectIdentityFromRemote("https://github.com/acme/old-name.git", root)!;
+    const current = projectIdentityFromRemote("https://github.com/acme/widgets.git", root)!;
+    const latest = projectIdentityFromRemote("https://github.com/acme/latest.git", root)!;
+    for (const identity of [old, current, latest]) recordProjectRemote(identity);
+    // Include the empty derivation: an unchanged ledger still needs no rescan.
+    forgeCacheView();
+    normalize.mockClear();
+    forgeCacheView();
+    expect(normalize).not.toHaveBeenCalled();
+
+    expect(persistProjectAliases([{ source: old.project, target: current.project, displayName: "widgets" }])).toBe(true);
+    const first = forgeCacheView();
+    expect(first.repository("acme/old-name")?.canonical).toBe("acme/widgets");
+    expect(normalize).toHaveBeenCalled();
+    normalize.mockClear();
+    expect(forgeCacheView()).toBe(first);
+    expect(normalize).not.toHaveBeenCalled();
+    worktreeMapStore.patchRows(path.join(root, "worktree-map.json"), 2, tx => {
+      tx.put({ key: "fixture-checkout", value: { repo: "fixture-repository", worktree: "fixture-lane" } });
+    });
+    expect(forgeCacheView()).toBe(first);
+    expect(normalize).not.toHaveBeenCalled();
+
+    // A remote revision alone changes the target behind the same alias.
+    recordProjectRemote({ ...current, canonicalRemote: "github.com/acme/renamed" });
+    const renamed = forgeCacheView();
+    expect(renamed.repository("acme/old-name")?.canonical).toBe("acme/renamed");
+    expect(normalize).toHaveBeenCalled();
+    normalize.mockClear();
+    expect(forgeCacheView()).toBe(renamed);
+    expect(normalize).not.toHaveBeenCalled();
+
+    expect(persistProjectAliases([{ source: current.project, target: latest.project, displayName: "latest" }])).toBe(true);
+    const chained = forgeCacheView();
+    expect(chained.repository("acme/old-name")?.canonical).toBe("acme/latest");
+    expect(normalize).toHaveBeenCalled();
+    normalize.mockClear();
+    updateForgeCache(data => { data.repositories["acme/latest"] = { ...emptyRepositoryEntry(), prs: Object.fromEntries([pr(46)]) }; });
+    const refreshed = forgeCacheView();
+    expect(refreshed.repository("acme/old-name")?.pr(46)?.number).toBe(46);
+    expect(normalize).not.toHaveBeenCalled();
+
+    const recovered = projectIdentityFromRemote("https://github.com/acme/recovered.git", root)!;
+    recordProjectRemote(recovered);
+    expect(forgeCacheView().repository("acme/recovered")).toBeNull();
+    const { worktreeRecoveryCollection } = await import("@/lib/projects/worktreeRecoveryStore");
+    worktreeRecoveryCollection().replaceSync([{
+      source: recovered.project, target: latest.project, displayName: "latest",
+      cwd: root, repo: root, worktree: "fixture-lane",
+      event: {
+        id: "recovery-fixture", seq: 1, at: LANE_AT, type: "project_moved", state: "completed", project: latest.project,
+        pipelineId: null, stageId: null, attempt: null, conversationId: null, role: null, summary: "Recovered fixture",
+      },
+    }]);
+    expect(forgeCacheView().repository("acme/recovered")?.canonical).toBe("acme/latest");
+  } finally {
+    normalize.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

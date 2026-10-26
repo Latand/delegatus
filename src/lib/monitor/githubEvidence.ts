@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
 import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 
 import type { GithubEvidenceRow } from "./evidence";
 
@@ -38,9 +39,10 @@ export interface GithubRunnerOptions {
   declared?: (repository: string) => boolean;
 }
 
-/** Identify only explicit repository reads; writes retain their existing gate. */
-function readRepository(args: string[]): string | null {
-  const readCommand = ["pr", "issue", "repo"].includes(args[0] ?? "") && ["list", "view"].includes(args[1] ?? "");
+/** Resolve reads before requesting a token; writes retain their existing gate. */
+async function readRepository(args: string[], cwd: string, timeoutMs: number): Promise<{ repository: string; args: string[] } | null> {
+  const readCommand = (["pr", "issue"].includes(args[0] ?? "") && ["list", "view"].includes(args[1] ?? ""))
+    || (args[0] === "repo" && args[1] === "view");
   const api = args[0] === "api";
   const query = args.find(arg => arg.startsWith("query="))?.slice(6);
   if (!readCommand && !api) return null;
@@ -53,11 +55,30 @@ function readRepository(args: string[]): string | null {
   const owner = args.find(arg => arg.startsWith("owner="))?.slice(6);
   const name = args.find(arg => arg.startsWith("name="))?.slice(5);
   const literal = query ? /repository\(owner:\s*"([^"\n]+)",\s*name:\s*"([^"\n]+)"/.exec(query) : null;
-  const repository = explicit ?? endpoint ?? (owner && name ? `${owner}/${name}` : literal ? `${literal[1]}/${literal[2]}` : null);
-  return repository && /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository) ? repository.toLowerCase() : null;
+  const positional = args[0] === "repo" && args[1] === "view" && args[2] && !args[2].startsWith("-") ? args[2] : null;
+  const url = args[1] === "view" && args[2]?.startsWith("https://")
+    ? /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/\d+(?:[/?#]|$)/i.exec(args[2])?.[1] ?? args[2]
+    : null;
+  const repository = explicit ?? positional ?? url ?? endpoint ?? (owner && name ? `${owner}/${name}` : literal ? `${literal[1]}/${literal[2]}` : null);
+  if (repository !== null) {
+    const resolved = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository) ? repository.toLowerCase() : githubRepositoryOfRemote(repository);
+    return resolved ? { repository: resolved, args } : null;
+  }
+  if (!readCommand || index >= 0) return null;
+  let context = process.env.GH_REPO;
+  if (!context) {
+    try {
+      const { stdout } = await execFileAsync("git", ["remote", "get-url", "origin"], { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 });
+      context = stdout.trim();
+    } catch { return null; }
+  }
+  const resolved = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(context) ? context.toLowerCase() : githubRepositoryOfRemote(context);
+  if (!resolved) return null;
+  // Pin the context used to mint the token so gh cannot choose another remote.
+  return { repository: resolved, args: args[0] === "repo" ? ["repo", "view", resolved, ...args.slice(2)] : [...args, "--repo", resolved] };
 }
 
-/** Explicit reads of declared repositories use the App token helper, including
+/** Reads of declared repositories use the App token helper, including
     in Docker where the local gh has no account configuration. Writes keep their
     existing routing, and a refused App read never falls back to another identity. */
 export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunnerOptions = {}): GithubRunner {
@@ -68,8 +89,8 @@ export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunn
   const asApp = options.asApp ?? forgeAppWriter(cwd, timeoutMs);
   const declared = options.declared ?? isForgeAppRepository;
   return async (args) => {
-    const repository = readRepository(args);
-    return repository && declared(repository) ? asApp(args, repository) : exec(args);
+    const target = await readRepository(args, cwd, timeoutMs);
+    return target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args);
   };
 }
 

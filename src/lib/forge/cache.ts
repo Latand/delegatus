@@ -1,8 +1,11 @@
 import fs from "node:fs";
 
 import { projectAliasResolver, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { projectStoreSignature } from "@/lib/projects/persistence";
+import { WORKTREE_RECOVERY_COLLECTION } from "@/lib/projects/worktreeRecoveryStore";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 
 import { githubRepositoryOfRemote, type CachedPullRequest, type ForgeCacheView, type ForgeRepositoryView, type PullRequestState } from "./workLinks";
 
@@ -186,10 +189,20 @@ export function readForgeCache(file = forgeCacheFile()): { data: ForgeCacheFile;
   return next;
 }
 
-let resolvedMemo: { data: ForgeCacheFile; aliases: string; view: ForgeCacheView } | null = null;
+// One derived snapshot and one resolved view, replaced when their inputs move.
+let aliasMemo: {
+  remotes: string;
+  projects: string;
+  recoveries: number | null;
+  aliases: ReadonlyMap<string, string>;
+} | null = null;
+let resolvedMemo: { data: ForgeCacheFile; aliases: ReadonlyMap<string, string>; view: ForgeCacheView } | null = null;
 
-export function forgeCacheView(file = forgeCacheFile()): ForgeCacheView {
-  const { data, view } = readForgeCache(file);
+function repositoryAliases(): ReadonlyMap<string, string> {
+  const remotesSignature = projectStoreSignature("project-remotes.json");
+  const projectsSignature = projectStoreSignature("project-aliases.json");
+  const recoveries = readStateCollectionRevision(statePath("state.sqlite"), WORKTREE_RECOVERY_COLLECTION);
+  if (aliasMemo?.remotes === remotesSignature && aliasMemo.projects === projectsSignature && aliasMemo.recoveries === recoveries) return aliasMemo.aliases;
   const remotes = recordedProjectRemotes();
   const project = projectAliasResolver();
   const aliases = new Map<string, string>();
@@ -198,11 +211,17 @@ export function forgeCacheView(file = forgeCacheFile()): ForgeCacheView {
     const target = githubRepositoryOfRemote(remotes[project(key)]);
     if (source && target && source !== target) aliases.set(source, target);
   }
+  aliasMemo = { remotes: remotesSignature, projects: projectsSignature, recoveries, aliases };
+  return aliases;
+}
+
+export function forgeCacheView(file = forgeCacheFile()): ForgeCacheView {
+  const { data, view } = readForgeCache(file);
+  const aliases = repositoryAliases();
   if (!aliases.size) return view;
-  const signature = JSON.stringify([...aliases]);
-  if (resolvedMemo?.data === data && resolvedMemo.aliases === signature) return resolvedMemo.view;
+  if (resolvedMemo?.data === data && resolvedMemo.aliases === aliases) return resolvedMemo.view;
   const resolved = forgeViewOf(data, aliases);
-  resolvedMemo = { data, aliases: signature, view: resolved };
+  resolvedMemo = { data, aliases, view: resolved };
   return resolved;
 }
 
@@ -274,5 +293,7 @@ export function observeForgePullRequest(
 
 export function resetForgeCacheForTests(): void {
   memoHost.__llvForgeCacheMemo = null;
+  aliasMemo = null;
+  resolvedMemo = null;
   nudges.clear();
 }

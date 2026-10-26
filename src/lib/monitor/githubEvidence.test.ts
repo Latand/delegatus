@@ -375,10 +375,80 @@ test("GitHub reads use the declared App without a host gh configuration", async 
   const args = ["pr", "list", "--repo", "Acme/Widgets", "--json", "number"];
   expect(await run(args)).toBe(JSON.stringify(args));
   expect(await run(["api", "repos/acme/widgets/issues/46"])).toContain("issues/46");
+  expect(await run(["repo", "view", "Acme/Widgets", "--json", "defaultBranchRef"])).toContain("defaultBranchRef");
   expect(await run(["api", "graphql", "-F", "owner=acme", "-F", "name=widgets", "-f", "query=query { repository(owner: $owner, name: $name) { name } }"])).toContain("graphql");
-  expect(calls).toEqual(["acme/widgets", "acme/widgets", "acme/widgets"]);
+  expect(calls).toEqual(["acme/widgets", "acme/widgets", "acme/widgets", "acme/widgets"]);
   await expect(run(["pr", "merge", "46", "--repo", "acme/widgets"])).rejects.toThrow("no host gh configuration");
   await expect(run(["pr", "list", "--repo", "acme/other"])).rejects.toThrow("no host gh configuration");
+  for (const args of [
+    ["pr", "view", "https://github.com/acme/widgets/pull/46"],
+    ["issue", "view", "https://github.com/acme/widgets/issues/47"],
+    ["repo", "view", "https://github.com/acme/widgets"],
+  ]) expect(await run(args)).toBe(JSON.stringify(args));
+  await expect(run(["pr", "view", "https://example.invalid/acme/widgets/pull/46"])).rejects.toThrow("no host gh configuration");
+});
+
+test("cwd reads resolve local Git context and recheck a changed origin", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const root = path.join(SANDBOX, "checkout");
+  fs.mkdirSync(path.join(root, "nested"), { recursive: true });
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: root });
+    expect(result.exitCode).toBe(0);
+  };
+  git("init");
+  git("remote", "add", "origin", "https://github.com/Acme/Widgets.git");
+  const calls: { args: string[]; repository: string }[] = [];
+  let fallbacks = 0;
+  const run = githubRunner(path.join(root, "nested"), 1000, {
+    declared: repository => repository === "acme/widgets",
+    asApp: async (args, repository) => { calls.push({ args, repository }); return "[]"; },
+    exec: async () => { fallbacks++; throw new Error("no host gh configuration"); },
+  });
+  for (const args of [["pr", "list"], ["issue", "list"], ["pr", "view", "46"], ["issue", "view", "47"], ["repo", "view"]]) {
+    expect(await run(args)).toBe("[]");
+    expect(calls.at(-1)).toEqual({ args: args[0] === "repo" ? ["repo", "view", "acme/widgets"] : [...args, "--repo", "acme/widgets"], repository: "acme/widgets" });
+  }
+  expect(fallbacks).toBe(0);
+  for (const args of [
+    ["pr", "merge", "46"], ["issue", "create", "--title", "example"], ["repo", "edit"],
+    ["repo", "list", "acme"],
+    ["api", "repos/acme/widgets/issues", "-f", "title=example"],
+    ["api", "repos/acme/widgets/issues/46", "--method=PATCH"],
+    ["api", "graphql", "-f", "query=mutation { example }"],
+    ["pr", "list", "--repo", "acme/other"],
+    ["pr", "list", "--repo", "invalid"],
+  ]) await expect(run(args)).rejects.toThrow("no host gh configuration");
+  expect(calls).toHaveLength(5);
+  git("remote", "set-url", "origin", "https://github.com/acme/other.git");
+  await expect(run(["pr", "list"])).rejects.toThrow("no host gh configuration");
+  git("remote", "remove", "origin");
+  await expect(run(["issue", "list"])).rejects.toThrow("no host gh configuration");
+  expect(calls).toHaveLength(5);
+});
+
+test("a repository environment override takes precedence over cwd for reads", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const previous = process.env.GH_REPO;
+  const calls: string[] = [];
+  const run = githubRunner(SANDBOX, 1000, {
+    declared: repository => repository === "acme/widgets",
+    asApp: async (args, repository) => { calls.push(repository); return JSON.stringify(args); },
+    exec: async () => { throw new Error("no host gh configuration"); },
+  });
+  try {
+    process.env.GH_REPO = "Acme/Widgets";
+    expect(await run(["pr", "list"])).toBe(JSON.stringify(["pr", "list", "--repo", "acme/widgets"]));
+    expect(calls).toEqual(["acme/widgets"]);
+    process.env.GH_REPO = "acme/other";
+    await expect(run(["issue", "list"])).rejects.toThrow("no host gh configuration");
+    // An explicit repository still wins over the environment.
+    expect(await run(["repo", "view", "acme/widgets"])).toContain("widgets");
+    expect(calls).toEqual(["acme/widgets", "acme/widgets"]);
+  } finally {
+    if (previous === undefined) delete process.env.GH_REPO;
+    else process.env.GH_REPO = previous;
+  }
 });
 
 test("a read carries only the App token and never retries as another identity", async () => {
@@ -398,7 +468,27 @@ test("a read carries only the App token and never retries as another identity", 
     },
   });
   const run = githubRunner(SANDBOX, 1000, { asApp, declared: () => true, exec: async () => { fallbackCalls++; return "[]"; } });
-  await expect(run(["pr", "view", "46", "--repo", "acme/widgets"])).rejects.toThrow("read refused");
-  expect(calls).toBe(1);
+  const root = path.join(SANDBOX, "refused-checkout");
+  fs.mkdirSync(root);
+  expect(Bun.spawnSync(["git", "init", root]).exitCode).toBe(0);
+  expect(Bun.spawnSync(["git", "-C", root, "remote", "add", "origin", "https://github.com/acme/widgets.git"]).exitCode).toBe(0);
+  const cwdRun = githubRunner(root, 1000, { asApp, declared: () => true, exec: async () => { fallbackCalls++; return "[]"; } });
+  for (const args of [["pr", "view", "46", "--repo", "acme/widgets"], ["repo", "view", "acme/widgets"]]) {
+    await expect(run(args)).rejects.toThrow("read refused");
+  }
+  await expect(cwdRun(["issue", "list"])).rejects.toThrow("read refused");
+  expect(calls).toBe(3);
+  expect(fallbackCalls).toBe(0);
+  const mintRefused = githubRunner(root, 1000, {
+    declared: () => true,
+    asApp: forgeAppWriter(root, 1000, {
+      tokens: new ForgeAppTokenSource(async () => { throw new Error("mint refused"); }),
+      exec: async () => { throw new Error("unexpected dispatch"); },
+    }),
+    exec: async () => { fallbackCalls++; return "[]"; },
+  });
+  for (const args of [["pr", "list"], ["repo", "view", "acme/widgets"]]) {
+    await expect(mintRefused(args)).rejects.toThrow("mint refused");
+  }
   expect(fallbackCalls).toBe(0);
 });
