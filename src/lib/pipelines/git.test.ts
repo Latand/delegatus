@@ -18,6 +18,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
 import { publicationPushBudgetMs } from "./gateBudget";
+import { recoverablePublication } from "./publicationHistory";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2101,13 +2102,32 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
   };
 }
 
+test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
+  const box = await publishSandbox();
+  try {
+    const head = await box.commit("change.txt", "accepted work\n");
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    const refusal = kind === "assertion" ? "(fail) named assertion" : kind === "cleanup" ? "owned runner: budget cleanup failed: fixture refusal" : "";
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${refusal}\nowned runner: deadline expired\npre-push: no verdict within the push budget of 10 s: "types" was still running\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected publication refusal");
+    expect(result.failure?.retryableDeadline).toBe(kind === "pure");
+    expect(result.outcome).toBe(kind === "pure" ? "not-landed" : undefined);
+    expect(recoverablePublication(result)).toBe(kind === "pure");
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
 for (const scenario of [
   { name: "ordinary repository", adapter: false, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 900_000 },
   { name: "ordinary gate change", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000 },
   { name: "engine gate change", adapter: true, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 1_500_000 },
   { name: "engine gate refusal", adapter: true, file: "src/lib/pipelines/engine.ts", refused: true, unreadable: null, ms: 1_500_000 },
-  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_500_000 },
-  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_500_000 },
+  { name: "runtime gate change", adapter: true, file: "Dockerfile", refused: false, unreadable: null, ms: 1_800_000 },
+  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_800_000 },
+  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_800_000 },
 ]) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
   const box = await publishSandbox();
   try {

@@ -354,10 +354,13 @@ test("child death, false completion, and account-read failure become recoverable
   const work = account("work", "/accounts/work");
   await runtime.startLogin(work);
   children[0]!.exit();
+  expect(runtime.peekLogin(work)).toMatchObject({ reason: "child-died" });
+  expect(fixtureRuntime({ stateFile }).peekLogin(work)).toMatchObject({ reason: "child-died" });
   await expect(runtime.loginSnapshot(work)).resolves.toEqual({ state: "failed", attemptState: "failed", deviceAuth: null });
 
   await runtime.retryLogin(work);
   children[2]!.completed("login-3", false);
+  expect(runtime.peekLogin(work)).toMatchObject({ reason: "login-unsuccessful" });
   await expect(runtime.loginSnapshot(work)).resolves.toEqual({ state: "failed", attemptState: "failed", deviceAuth: null });
 
   await runtime.retryLogin(work);
