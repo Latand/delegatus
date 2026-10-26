@@ -24,8 +24,12 @@ export type CloudStageAttempt = {
   model: string | null;
   error?: string;
   accountId?: string;
+  /** A receiptless submission may still be executing remotely. */
+  submissionUnresolved?: boolean;
   failures?: number;
   fallbackEligible?: boolean;
+  /** Only a terminal failed observation releases custody of a known task. */
+  failureConfirmed?: boolean;
   fallback?: { at: string; reason: string };
   patch?: { digest: string; tree: string; applied?: boolean; applying?: boolean };
   result?: ParsedStageVerdict | RejectedStageVerdict;
@@ -103,8 +107,10 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
     && (row.model === null || typeof row.model === "string")
     && (row.error === undefined || typeof row.error === "string")
     && (row.accountId === undefined || typeof row.accountId === "string")
+    && (row.submissionUnresolved === undefined || typeof row.submissionUnresolved === "boolean")
     && (row.failures === undefined || Number.isSafeInteger(row.failures) && Number(row.failures) >= 0 && Number(row.failures) <= 3)
     && (row.fallbackEligible === undefined || typeof row.fallbackEligible === "boolean")
+    && (row.failureConfirmed === undefined || typeof row.failureConfirmed === "boolean")
     && (row.fallback === undefined || typeof record(row.fallback).reason === "string"
       && typeof record(row.fallback).at === "string" && Number.isFinite(Date.parse(String(record(row.fallback).at))))
     && (row.patch === undefined || /^[a-f0-9]{64}$/.test(String(record(row.patch).digest))

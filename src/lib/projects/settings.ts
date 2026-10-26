@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { statePath } from "@/lib/configDir";
-import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { translate, type Locale } from "@/lib/i18n/core";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -226,10 +226,11 @@ export function setPipelineStageRuntime(project: string, runtime: "local" | "cod
 
 /** A durable reservation spreads launches across the currently eligible pool.
  * Concurrent controllers share the settings lock; no history scan or cache. */
-export function reserveCloudStageAccount(project: string, eligible: readonly string[]): string | null {
+export async function reserveCloudStageAccount(project: string, eligible: readonly string[]): Promise<string | null> {
   const ids = [...new Set(eligible)].sort();
   if (!ids.length || ids.some(id => !id || id.length > 100)) return null;
-  return underFileLock(() => {
+  try { return await withFileTransaction(settingsFile(), "Cloud account reservation is busy", () => {
+    cache = null;
     const key = canonicalProject(project.trim());
     if (!key) return null;
     const projects: Record<string, ProjectSettingsEntry> = Object.assign(Object.create(null), readProjects());
@@ -237,7 +238,7 @@ export function reserveCloudStageAccount(project: string, eligible: readonly str
     const selected = ids[(ids.indexOf(prior ?? "") + 1) % ids.length]!;
     projects[key] = { ...projects[key], cloudStageAccountCursor: selected };
     return writeProjects(projects) ? selected : null;
-  }, null);
+  }); } catch (error) { if (error instanceof FileTransactionBusyError) return null; throw error; }
 }
 
 export function validCodexCloudEnvironmentId(value: unknown): value is string {

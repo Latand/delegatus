@@ -2,7 +2,7 @@ import { expect, test, harness, create, loadPipelines, savePipelines, tickPipeli
 import { normalizeStages } from "./engine";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
-import { codexCloudEnvironmentId, setCodexCloudEnvironmentId, resetProjectSettingsForTests, setPipelineStageRuntime } from "@/lib/projects/settings";
+import { codexCloudEnvironmentId, setCodexCloudEnvironmentId, resetProjectSettingsForTests, setPipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, type CloudStageClient } from "./cloudStage";
 import { HostedCloudError } from "./cloudHostedErrors";
 import { CloudSubmissionNotStartedError } from "./cloudHostedClient";
@@ -12,7 +12,7 @@ import { renderStagePrompt } from "./prompts";
 import { resolveStageTestGuidance } from "./testGuidance";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { hardenedRedact } from "@/lib/view/compactText";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { PipelineStageInput, PatchPipelineRequest } from "./types";
 
 const taskId = "current-review-1";
@@ -118,15 +118,46 @@ test("cloud role tier preferences visibly fall back to the provider default", as
   expect(lane().stages[0]!.effectiveRole.serviceTier).toBe("priority");
 });
 
-test("a cloud failure diagnostic is retained through durable stage settlement", async () => {
+for (const detail of ["Environment setup failed: missing dependency", "Cloud task timed out"]) for (const legacy of [false, true])
+  test(`a confirmed Cloud failure falls back with its diagnostic: ${detail} (legacy: ${legacy})`, async () => {
   const { h } = await fixture();
-  const error = "Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency";
+  const error = `Codex Cloud turn failed: ${detail}`;
   h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error });
-  await submitted(h); await step(h); await step(h);
+  await submitted(h);
+  const accountId = attempt().accountId!;
+  if (legacy) {
+    const record = lane(), cloud = record.runs[0]!.attempts.at(-1)!.cloud!;
+    delete cloud.accountId; delete cloud.submissionUnresolved; savePipelines([record]);
+  }
+  await step(h); await step(h);
   expect(attempt().cloud?.error).toBe(error);
+  expect(attempt().cloud?.accountId).toBe(accountId);
+  expect(attempt().cloud?.failureConfirmed).toBe(true);
   expect(attempt().cloud?.fallback?.reason).toBe(error);
   expect(attempt().executionRuntime).toBe("cloud-then-local");
   expect(attempt().state).toBe("pending");
+});
+
+test("confirmed Cloud failure releases account custody for an allowed local fallback", async () => {
+  const { h, submits } = await fixture();
+  await submitted(h);
+  const originalAccount = attempt().accountId!;
+  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error: "Cloud run timed out" });
+  await step(h);
+  expect(attempt().cloud?.failureConfirmed).toBe(true);
+  h.ports.allowedAccountIds = () => ["replacement-account"];
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved) => spawn({ ...input, requestedAccountId: input.requestedAccountId ?? "replacement-account" }, reserved);
+  h.ports.resolveProjectSpawn = (_engine, request) => request.requestedId && request.requestedId !== "replacement-account"
+    ? { kind: "not_allowed", accountId: request.requestedId, allowedAccountIds: ["replacement-account"] }
+    : { kind: "available", account: { engine: "codex", accountId: "replacement-account", kind: "managed",
+      home: path.resolve("replacement"), transcriptRoot: path.resolve("replacement"), env: { NODE_ENV: "test" } } };
+  for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
+  expect(h.spawnInputs).toHaveLength(1); expect(submits).toHaveLength(1);
+  expect(attempt().executionRuntime).toBe("cloud-then-local");
+  expect(attempt().cloud?.accountId).toBe(originalAccount);
+  expect(attempt().cloud?.fallback?.reason).toBe("Cloud run timed out");
+  expect(attempt().accountId).toBe("replacement-account");
 });
 
 test("cloud verifier findings use the same normalization, severity ranking and failure routing", async () => {
@@ -181,7 +212,7 @@ test("missing environment falls back once; an internal lane retains its custody 
   expect(attempt().error).toContain("published lane branch");
 });
 
-test("polling has durable bounded backoff and a total timeout", async () => {
+test("polling has durable bounded backoff and expiry retains remote custody", async () => {
   const { h, reads } = await fixture();
   h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "pending", model: "gpt-6.1-sol" }; };
   await submitted(h);
@@ -200,12 +231,19 @@ test("polling has durable bounded backoff and a total timeout", async () => {
   expect(JSON.parse(child.stdout)).toMatchObject({ polls: 6, deadlineAt: attempt().cloud!.deadlineAt, taskId });
   h.advanceWallClock(CLOUD_STAGE_TIMEOUT_MS);
   await step(h);
-  expect(attempt().state).toBe("pending");
-  expect(attempt().cloud?.fallback?.reason).toBe("Codex Cloud stage timed out");
+  expect(lane().state).toBe("needs_decision");
+  expect(attempt().error).toContain("remote execution is unresolved");
+  expect(attempt().cloud?.fallback).toBeUndefined();
   await step(h); await step(h);
-  expect(h.spawnInputs).toHaveLength(1);
-  expect(attempt().executionRuntime).toBe("cloud-then-local");
+  expect(h.spawnInputs).toHaveLength(0);
   expect(reads).toHaveLength(6);
+  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "completed", model: "gpt-6.1-sol" }; };
+  const n = attempt().n;
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await step(h); await step(h);
+  expect(attempt().n).toBe(n);
+  expect(attempt().state).toBe("passed");
+  expect(reads.at(-1)!.taskId).toBe(taskId);
 });
 
 test.each(["submission", "read", "final-read", "oversized-message", "invalid-receipt", "missing-verdict", "contradiction"])("cloud failure %s is explicit", async kind => {
@@ -226,19 +264,38 @@ test.each(["submission", "read", "final-read", "oversized-message", "invalid-rec
   expect(submits.length).toBeLessThanOrEqual(1);
 });
 
-test("interrupted submission fails after a real process restart without a duplicate task", async () => {
+for (const expired of [false, true]) for (const legacy of [false, true])
+  test(`interrupted submission survives restart without duplicate work (expired: ${expired}, legacy: ${legacy})`, async () => {
   const { h, submits } = await fixture();
   await submitted(h);
   const record = lane(), cloud = record.runs[0]!.attempts.at(-1)!.cloud!;
-  Object.assign(cloud, { phase: "submitting", taskId: null, taskUrl: null });
+  Object.assign(cloud, { phase: "submitting", taskId: null, taskUrl: null, submissionUnresolved: true });
+  if (legacy) { delete cloud.accountId; delete cloud.submissionUnresolved; }
   savePipelines([record]);
   const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), record.id], {
     env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
   });
   expect(child.status).toBe(0);
   expect(JSON.parse(child.stdout).phase).toBe("submitting");
-  await step(h);
+  if (expired) h.advanceWallClock(CLOUD_STAGE_TIMEOUT_MS);
+  await step(h); await step(h);
   expect(attempt().error).toContain("outcome unknown"); expect(submits).toHaveLength(1);
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(attempt().cloud?.submissionUnresolved).toBe(true);
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toContain("outcome unknown");
+});
+
+test("a legacy failed submission keeps custody when its account exists only on the attempt", async () => {
+  const { h, submits } = await fixture();
+  await submitted(h);
+  const record = lane(), cloud = record.runs[0]!.attempts.at(-1)!.cloud!;
+  Object.assign(cloud, { phase: "failed", taskId: null, taskUrl: null, error: "Cloud submission outcome unknown" });
+  delete cloud.accountId; delete cloud.submissionUnresolved;
+  savePipelines([record]); h.advanceWallClock(CLOUD_STAGE_TIMEOUT_MS);
+  await step(h); await step(h);
+  expect(lane().state).toBe("needs_decision"); expect(h.spawnInputs).toHaveLength(0);
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toContain("outcome unknown");
+  expect(submits).toHaveLength(1);
 });
 
 test("unpublished or moved heads are refused before submission and before acceptance", async () => {
@@ -354,6 +411,32 @@ test("account revocation after a poll prevents reading the final message", async
   h.ports.cloudClient!.readFinalMessage = async () => { finalReads++; return { message: pass, model: "gpt-6.1-sol" }; };
   await step(h); await step(h);
   expect(finalReads).toBe(0); expect(attempt().error).toContain("not_allowed");
+});
+
+for (const legacy of [false, true]) test(`Cloud account removal preserves the original task account (legacy: ${legacy})`, async () => {
+  const { h, submits, reads } = await fixture();
+  await submitted(h);
+  const originalAccount = attempt().accountId!, n = attempt().n;
+  if (legacy) {
+    const record = lane(), cloud = record.runs[0]!.attempts.at(-1)!.cloud!;
+    delete cloud.accountId; delete cloud.submissionUnresolved; savePipelines([record]);
+  }
+  let revoked = true;
+  h.ports.allowedAccountIds = () => revoked ? ["replacement-account"] : [originalAccount, "replacement-account"];
+  h.ports.resolveProjectSpawn = (_engine, request) => {
+    const id = request.requestedId ?? "replacement-account";
+    if (revoked && id === originalAccount) return { kind: "not_allowed", accountId: id, allowedAccountIds: ["replacement-account"] };
+    return { kind: "available", account: { engine: "codex", accountId: id, kind: "managed", home: path.resolve(id), transcriptRoot: path.resolve(id), env: { NODE_ENV: "test" } } };
+  };
+  await step(h); await step(h);
+  expect(lane().state).toBe("needs_decision"); expect(attempt().accountId).toBe(originalAccount);
+  expect(reads).toHaveLength(0); expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
+  revoked = false;
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await step(h); await step(h);
+  expect(attempt().state).toBe("passed"); expect(attempt().n).toBe(n);
+  expect(reads.at(-1)!.account.accountId).toBe(originalAccount);
+  expect(attempt().cloud?.accountId).toBe(originalAccount); expect(submits).toHaveLength(1);
 });
 
 test("edits after activation preserve the explicit model bound to the cloud attempt", async () => {
@@ -644,13 +727,34 @@ test("a failed Cloud handshake retries before falling back because no turn start
   expect(attempt().cloud?.fallback?.reason).toBe("Codex Cloud handshake failed");
 });
 
-test("transient polling failures reuse the receipt and durable retry budget", async () => {
+test("a confirmed pre-turn refusal permits retry without treating it as an unresolved submission", async () => {
   const { h, submits } = await fixture();
+  h.ports.cloudClient!.submit = async input => { submits.push(input); throw new CloudSubmissionNotStartedError("Cloud model setup refused", "invalid"); };
+  for (let i = 0; i < 6 && lane().state !== "needs_decision"; i++) await step(h);
+  expect(lane().state).toBe("needs_decision");
+  expect(attempt().cloud).toMatchObject({ taskId: null, submissionUnresolved: false, fallbackEligible: false });
+  expect(h.spawnInputs).toHaveLength(0);
+  h.ports.cloudClient!.submit = async input => { submits.push(input); return { taskId, taskUrl }; };
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await submitted(h);
+  expect(submits).toHaveLength(2);
+  expect(attempt().cloud?.submissionUnresolved).toBe(false);
+});
+
+test.each(["poll", "readFinalMessage", "readDiff"] as const)("transient %s failures retain the receipt and durable retry budget", async operation => {
+  const { h, submits } = await fixture({ stages: operation === "readDiff" ? [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] : undefined });
   await submitted(h);
   let polls = 0;
-  h.ports.cloudClient!.poll = async () => { polls++; throw new HostedCloudError("Cloud unavailable", "unavailable"); };
+  h.ports.cloudClient![operation] = async () => { polls++; throw new HostedCloudError("Cloud unavailable", "unavailable"); };
   for (const [failures, delay] of [[1, 2000], [2, 4000]] as const) {
-    await step(h);
+    if (operation === "poll" && failures === 2) {
+      const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id,
+        "poll-unavailable", h.ports.now()], { env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
+      expect({ status: child.status, error: child.stderr }).toMatchObject({ status: 0 });
+      const output = JSON.parse(child.stdout);
+      expect(output).toMatchObject({ pollRequests: 1, submissions: 0, failures: 2 });
+      polls += output.pollRequests;
+    } else await step(h);
     expect(attempt().cloud).toMatchObject({ phase: "polling", failures, taskId });
     const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
       env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
@@ -659,8 +763,24 @@ test("transient polling failures reuse the receipt and durable retry budget", as
     h.advanceWallClock(delay);
   }
   await step(h); await step(h); await step(h);
-  expect(polls).toBe(3); expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(1);
-  expect(attempt().cloud?.fallback?.reason).toBe("Cloud unavailable");
+  expect(polls).toBe(3); expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
+  expect(lane().state).toBe("needs_decision");
+  expect(attempt().cloud?.fallback).toBeUndefined();
+  expect(attempt().cloud?.error).toBe("Cloud unavailable");
+  expect(attempt().cloud?.fallbackEligible).toBe(false);
+  const receipt = attempt().cloud!.taskId, n = attempt().n;
+  if (operation === "poll") h.ports.cloudClient!.poll = async () => ({ state: "completed", model: "gpt-6.1-sol" });
+  else if (operation === "readFinalMessage") h.ports.cloudClient!.readFinalMessage = async () => ({ message: pass, model: "gpt-6.1-sol" });
+  // A diff retry is exercised against real Git by the builder checks below.
+  if (operation !== "readDiff") {
+    const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
+      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
+    expect(child.status).toBe(0); expect(JSON.parse(child.stdout).taskId).toBe(receipt);
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    await step(h); await step(h);
+    expect(attempt().n).toBe(n); expect(attempt().cloud!.taskId).toBe(receipt);
+    expect(attempt().state).toBe("passed"); expect(submits).toHaveLength(1);
+  }
 });
 
 test("Cloud account selection skips a missing environment and spreads durable reservations", async () => {
@@ -693,6 +813,100 @@ test("Cloud account selection skips a missing environment and spreads durable re
   expect(JSON.parse(child.stdout).accountId).toBe("account-b");
 });
 
+test("legacy fallback eligibility cannot abandon a known Cloud receipt", async () => {
+  const { h, submits } = await fixture();
+  await submitted(h);
+  const record = lane();
+  Object.assign(record.runs[0]!.attempts.at(-1)!.cloud!, { phase: "failed", fallbackEligible: true, error: "Cloud unavailable" });
+  savePipelines([record]);
+  await step(h); await step(h);
+  expect(h.spawnInputs).toHaveLength(0); expect(lane().state).toBe("needs_decision");
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await step(h); await step(h);
+  expect(attempt().cloud?.taskId).toBe(taskId); expect(attempt().state).toBe("passed");
+  expect(submits).toHaveLength(1);
+});
+
+for (const replacement of [false, true]) test(`fresh preselected accounts require catalog admission (eligible replacement: ${replacement})`, async () => {
+  const { h, submits } = await fixture();
+  await submitted(h);
+  const record = lane(), current = record.runs[0]!.attempts.at(-1)!;
+  Object.assign(current.cloud!, { phase: "reserved", taskId: null, taskUrl: null, accountId: "account-a" });
+  current.accountId = "account-a";
+  savePipelines([record]); submits.length = 0;
+  const catalogs: string[] = [];
+  h.ports.resolveProjectSpawn = (_engine, request) => {
+    const id = request.requestedId ?? ["account-a", ...(replacement ? ["account-b"] : [])].find(id => !request.unavailableIds?.includes(id));
+    return id ? { kind: "available", account: { engine: "codex", accountId: id, kind: "managed", home: path.resolve(id), transcriptRoot: path.resolve(id), env: { NODE_ENV: "test" } } }
+      : { kind: "unavailable", allowedAccountIds: [] };
+  };
+  h.ports.cloudClient!.hasEnvironment = async input => { catalogs.push(input.account.accountId); return input.account.accountId === "account-b"; };
+  await step(h); await step(h);
+  expect(catalogs).toContain("account-a");
+  if (replacement) {
+    expect(submits).toHaveLength(1); expect(submits[0]!.account.accountId).toBe("account-b");
+  } else {
+    expect(submits).toHaveLength(0); expect(attempt().cloud?.fallback?.reason).toContain("environment unavailable");
+  }
+});
+
+test("local account recovery catalog-admits its replacement before a new Cloud submission", async () => {
+  const { h, submits } = await fixture({ enabled: false });
+  const originalSpawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => ({ ...await originalSpawn(input, reserved), paneId: null });
+  for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(attempt().executionRuntime).toBe("cloud-then-local");
+  h.setConversationActive(false);
+  h.advanceWallClock(1000);
+  const text = "You've hit your usage limit", ts = Date.parse(h.ports.now());
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", message: { text, ts },
+    terminalProviderMessage: { text, ts, errorClass: "usage_limit_exceeded", usageLimit: { resetsAt: null } } });
+  setCodexCloudEnvironmentId(lane().project, "env-fixture");
+  const catalogs: string[] = [];
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "replacement-account", kind: "managed",
+    home: path.resolve("replacement"), transcriptRoot: path.resolve("replacement"), env: { NODE_ENV: "test" } } });
+  h.ports.cloudClient!.hasEnvironment = async input => { catalogs.push(input.account.accountId); return false; };
+  for (let i = 0; i < 8 && !catalogs.length; i++) await step(h);
+  expect(lane().runs[0]!.attempts.length).toBeGreaterThan(1);
+  expect(catalogs).toEqual(["replacement-account"]);
+  expect(submits).toHaveLength(0);
+});
+
+test("Cloud reservation yields under a peer settings lock while stage work continues", async () => {
+  const { h } = await fixture();
+  await submitted(h);
+  const child = spawn(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id, "hold-settings-lock"], {
+    env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, stdio: ["pipe", "pipe", "pipe"],
+  });
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
+  let inputError: Error | undefined;
+  child.stdin.on("error", error => { inputError = error; });
+  let reservation: Promise<string | null> | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.once("data", data => data.toString().includes("locked") ? resolve() : reject(new Error("lock not acquired")));
+      child.once("error", reject); child.once("exit", () => reject(new Error("lock holder exited before readiness")));
+    });
+    let settled = false;
+    reservation = Promise.resolve(reserveCloudStageAccount(lane().project, ["account-a", "account-b"]))
+      .then(value => { settled = true; return value; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    await step(h); await step(h);
+    expect(attempt().state).toBe("passed");
+    expect(settled).toBe(false);
+    child.stdin.end("release");
+    expect(await exited).toBe(0); expect(inputError).toBeUndefined();
+    expect(await reservation).toBe("account-a");
+    expect(await reserveCloudStageAccount(lane().project, ["account-a", "account-b"])).toBe("account-b");
+  } finally {
+    if (!child.stdin.destroyed) child.stdin.end("release");
+    await exited;
+    await reservation;
+  }
+});
+
 test("MCP runtime choices persist through creation, overrides, defaults and frozen definitions", async () => {
   const { h } = await fixture();
   const project = lane().project;
@@ -723,7 +937,10 @@ test("MCP runtime choices persist through creation, overrides, defaults and froz
 });
 
 
-test.each([["builder", false], ["fix", false], ["builder", true]] as const)("Cloud %s diff settlement honours commit hooks (refused: %s)", async (id, refuseHook) => {
+for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["builder", false, false, false, false], ["fix", false, false, false, false],
+  ["builder", true, false, false, false], ["builder", false, true, false, false], ["builder", false, false, true, false],
+  ["builder", false, false, false, true]] as const)
+  test(`Cloud ${id} diff settlement honours commit hooks (refused: ${refuseHook}, writer exhausted: ${exhaustedWriter}, diff outage: ${diffOutage}, late writer: ${lateWriter})`, async () => {
   const native = await realProvisioningRepo(`cloud-${id}`);
   try {
     const { repo, root, git, realExec } = native;
@@ -747,8 +964,58 @@ test.each([["builder", false], ["fix", false], ["builder", true]] as const)("Clo
     ].join("\n");
     await submitted(h);
     expect(submits[0]!.headSha).toBe(await git(repo, "rev-parse", "main"));
+    if (diffOutage) {
+      const readDiff = h.ports.cloudClient!.readDiff;
+      h.ports.cloudClient!.readDiff = async () => { throw new HostedCloudError("Cloud diff unavailable", "unavailable"); };
+      for (const delay of [2000, 4000, 0]) { await step(h); h.advanceWallClock(delay); }
+      await step(h);
+      expect(lane().state).toBe("needs_decision"); expect(h.spawnInputs).toHaveLength(0);
+      expect(attempt().cloud?.fallback).toBeUndefined(); expect(submits).toHaveLength(1);
+      h.ports.cloudClient!.readDiff = readDiff;
+      expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    }
+    const record = lane(), current = record.runs[0]!.attempts.at(-1)!;
+    const previous = { ...structuredClone(current), n: 1, state: "passed" as const, cloud: undefined,
+      completedAt: h.ports.now(), verdict: { status: "pass" as const, findings: [] },
+      definition: current.definition && { ...structuredClone(current.definition), runtime: "local" as const },
+      conversationId: "previous-local-writer", executionRuntime: "local" as const };
+    current.n = 2;
+    record.runs[0]!.attempts.unshift(previous); savePipelines([record]);
+    const base = record.lastPassedCommit;
+    let writerAlive = true, writerChecks = 0, stops = 0;
+    h.ports.stageHostTreeStillRunning = ids => { writerChecks++; return writerAlive && ids.includes(previous.conversationId) ? "previous writer remains alive" : null; };
+    h.ports.stopSettledStageWriter = async () => { stops++; return { outcome: "failed", error: "writer still alive" }; };
     await step(h); await step(h);
+    expect(writerChecks).toBeGreaterThan(0); expect(stops).toBe(1);
+    expect(attempt().cloud?.patch?.applied).toBeUndefined();
+    expect(fs.readFileSync(path.join(lane().worktreeDir, "existing.txt"), "utf8")).toBe("before\n");
+    expect(lane().lastPassedCommit).toBe(base); expect(fs.existsSync(receipt)).toBe(false);
+    expect(await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${lane().branch}`)).toStartWith(base);
+    if (exhaustedWriter) {
+      for (let i = 0; i < 4 && lane().state === "running"; i++) { h.advanceWallClock(5000); await step(h); }
+      expect(lane().state).toBe("needs_decision"); expect(stops).toBe(3);
+      expect(attempt().cloud?.patch?.applied).toBeUndefined();
+      expect(fs.existsSync(receipt)).toBe(false); expect(lane().lastPassedCommit).toBe(base);
+      return;
+    }
+    writerAlive = false;
+    if (lateWriter) {
+      const execute = h.ports.exec;
+      h.ports.exec = async (command, args, cwd, env, options) => {
+        const result = await execute(command, args, cwd, env, options);
+        if (command === "git" && args[0] === "diff" && args.includes("--cached") && args.includes("--quiet")) writerAlive = true;
+        return result;
+      };
+    }
     for (let i = 0; i < 8 && lane().state === "running"; i++) await step(h);
+    if (lateWriter) {
+      expect(lane().state).toBe("needs_decision"); expect(attempt().error).toContain("prior stage writer");
+      expect(attempt().cloud?.patch?.applied).toBeUndefined();
+      expect(fs.readFileSync(path.join(lane().worktreeDir, "existing.txt"), "utf8")).toBe("before\n");
+      expect(fs.existsSync(receipt)).toBe(false); expect(lane().lastPassedCommit).toBe(base);
+      expect(await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${lane().branch}`)).toStartWith(base);
+      return;
+    }
     if (refuseHook) {
       expect(lane().state).toBe("needs_decision");
       expect(attempt().error).toContain("commit");

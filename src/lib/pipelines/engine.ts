@@ -7947,6 +7947,25 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
   if (stage.kind !== "run" || attempt.report || attempt.verdict || openRuntimeSwitch(attempt)
     || !["running", "needs_decision"].includes(attempt.state)) return false;
+  // Cloud custody is reconciled through its original subscription receipt.
+  // A local host stop cannot authorize changing that account or its work.
+  const cloud = attempt.cloud;
+  if (cloud && !cloud.fallback) {
+    const unresolved = !(cloud.phase === "failed" && cloud.failureConfirmed)
+      && (cloud.taskId || cloud.phase === "submitting" || cloud.submissionUnresolved === true
+        || cloud.phase === "failed" && cloud.submissionUnresolved === undefined && (cloud.accountId || attempt.accountId));
+    if (unresolved) {
+      const accountId = cloud.accountId ?? attempt.accountId;
+      let refusal: string | null = null;
+      try {
+        const pool = ports.allowedAccountIds?.(pipeline.project, attempt.effectiveRole.engine);
+        if (!accountId) refusal = "Codex Cloud task account is unavailable; original submission custody retained";
+        else if (pool && !pool.includes(accountId)) refusal = "Codex Cloud task account left the project binding; original task retained";
+      } catch { refusal = "Codex Cloud task account binding is unreadable; original task retained"; }
+      if (refusal) { await park(pipeline, refusal, attempt); await persist(); return true; }
+    }
+    return false;
+  }
   let blocked: string | null;
   try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
   catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
@@ -8187,6 +8206,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       return ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
     };
     const cloud = structuredClone(original);
+    let submissionDispatched = false;
     try {
       if (remaining <= 0) throw new Error("Codex Cloud stage timed out");
       const bound = attemptStage(stage, attempt);
@@ -8209,10 +8229,11 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error("Codex Cloud account changed");
       };
       let account: AccountContext;
-      if (cloud.accountId || attempt.accountId) {
+      if (cloud.taskId && (cloud.accountId || attempt.accountId)) {
         const resolution = resolve(cloud.accountId ?? attempt.accountId ?? null);
         if (resolution.kind !== "available") throw new Error(`Codex Cloud account ${resolution.kind}`);
         account = resolution.account;
+        cloud.accountId = account.accountId;
       } else {
         // Enumerate the allowed/capacity pool and verify each catalog before
         // reserving the next eligible account under the project settings lock.
@@ -8239,7 +8260,8 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         }
         if (!eligible.length) throw new HostedCloudError("Codex Cloud project environment unavailable on allowed accounts", "cloud-limit");
         assertLane();
-        const selectedId = reserveCloudStageAccount(pipeline.project, eligible.map(item => item.accountId));
+        const selectedId = await reserveCloudStageAccount(pipeline.project, eligible.map(item => item.accountId));
+        assertLane();
         const selected = eligible.find(item => item.accountId === selectedId);
         if (!selected) throw new Error("Codex Cloud account reservation could not be persisted");
         account = selected;
@@ -8248,7 +8270,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       if (cloud.phase === "reserved") {
         // Persist before submission. A crash after this point is ambiguous and
         // must never silently submit the same paid work a second time.
-        cloud.phase = "submitting"; cloud.accountId = account.accountId;
+        cloud.phase = "submitting"; cloud.accountId = account.accountId; cloud.submissionUnresolved = true;
         if (!await checkpoint(cloud, account.accountId)) return;
         const head = await currentPipelineBranchHead(pipeline, execute);
         let remote = await currentPipelineRemoteBranchHead(pipeline, execute);
@@ -8271,7 +8293,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         const prompt = renderStagePrompt(pipeline, bound, attempt.effectiveRole,
           attempt.input ?? normalizedOutput(pipeline), effectiveWorkerLimit(pipeline.project).value,
           resolveStageTestGuidance());
-        const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); return client.submit({ environmentId: cloud.environmentId,
+        const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
           branch: cloud.branch, headSha: cloud.headSha, prompt: hardenedRedact([prompt,
             "Cloud runtime instructions (override local host, scratch and MCP mechanics above):",
             `Start from exactly commit ${cloud.headSha} on branch ${cloud.branch}; report a failure if the checkout differs.`,
@@ -8283,7 +8305,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           account, signal: abort.signal, assertCurrent }); }, abort.signal));
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
           || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error("Codex Cloud transport returned an invalid task reference; submission outcome unknown");
-        cloud.taskId = submitted.taskId; cloud.taskUrl = submitted.taskUrl;
+        cloud.taskId = submitted.taskId; cloud.taskUrl = submitted.taskUrl; cloud.submissionUnresolved = false;
         if (submitted.thread) {
           cloud.thread = structuredClone(submitted.thread);
           cloud.model = submitted.thread.hosted?.model ?? cloud.model;
@@ -8298,7 +8320,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         assertCurrent();
         cloud.model = observed.model ?? cloud.model;
         if (cloud.model && cloud.model !== bound.model) throw new Error("Codex Cloud task model differs from the explicit stage model");
-        if (observed.state === "failed") { cloud.phase = "failed"; cloud.fallbackEligible = true; cloud.error = hardenedRedact(observed.error).slice(0, 2000); }
+        if (observed.state === "failed") { cloud.phase = "failed"; cloud.fallbackEligible = true; cloud.failureConfirmed = true; cloud.error = hardenedRedact(observed.error).slice(0, 2000); }
         else if (observed.state === "completed") {
           const final = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); return client.readFinalMessage(access); }, abort.signal));
           assertCurrent();
@@ -8327,8 +8349,8 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           cloud.polls += 1;
         }
       }
-      if (unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) throw new Error("Codex Cloud stage timed out");
-      if (cloud.phase !== "failed") { delete cloud.error; delete cloud.fallbackEligible; }
+      if (cloud.phase !== "failed" && unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) throw new Error("Codex Cloud stage timed out");
+      if (cloud.phase !== "failed") { delete cloud.error; delete cloud.fallbackEligible; delete cloud.failureConfirmed; }
       await checkpoint(cloud);
     } catch (error) {
       // Control changes withdraw this job. Keep a known task receipt so a
@@ -8339,9 +8361,10 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       }
       const detail = error instanceof Error ? error.message : "Codex Cloud operation failed";
       const unavailable = error instanceof HostedCloudError && error.category !== "invalid";
-      const ambiguousSubmission = expected.phase === "submitting"
+      if (!cloud.taskId) cloud.submissionUnresolved = submissionDispatched
         && !(error instanceof CloudSubmissionNotStartedError)
-        && (abort.signal.aborted || error instanceof HostedCloudError && error.category === "unavailable");
+        && !(error instanceof HostedCloudError && error.category === "cloud-limit");
+      const ambiguousSubmission = cloud.submissionUnresolved === true;
       // Read-only transport retries reuse the task receipt. Never replay an
       // ambiguous submit. Three durable failures exhaust the retry budget.
       cloud.failures = Math.min(3, (cloud.failures ?? 0) + 1);
@@ -8350,7 +8373,8 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         && cloud.failures < 3 && !abort.signal.aborted;
       await checkpoint({ ...cloud, phase: retry ? original.phase : "failed",
         nextPollAt: retry ? new Date(unixMs(ports.now()) + cloudPollDelay(cloud.failures - 1)).toISOString() : cloud.nextPollAt,
-        fallbackEligible: !ambiguousSubmission && (unavailable || abort.signal.aborted || detail === "Codex Cloud stage timed out"),
+        fallbackEligible: !cloud.taskId && !ambiguousSubmission && cloud.submissionUnresolved === false
+          && (unavailable || abort.signal.aborted || detail === "Codex Cloud stage timed out"),
         error: abort.signal.aborted ? "Codex Cloud operation timed out" : hardenedRedact(detail).slice(0, 2000) });
     } finally { clearTimeout(timer); }
   }, async () => controllerPipelineVersionNow(id));
@@ -8385,12 +8409,47 @@ function cloudPatchDirectory(pipeline: Pipeline, stage: PipelineStage, attempt: 
   return path.join(pipelineArtifactsDir(pipeline.id), "cloud", key);
 }
 
+async function holdForPriorStageWriters(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  /* Two writers never share one worktree (#2790). An earlier attempt whose
+     stream is gone while its engine, or a process a stop captured from its
+     tree, may still run holds this launch until a stop proves it gone; the
+     terminal reap and the interrupted-turn recovery are what end it. */
+  const priorAttempts = pipeline.runs.flatMap(run => run.attempts.map(candidate => ({ stageId: run.stageId, candidate })))
+    .filter(({ candidate }) => candidate !== attempt && candidate.conversationId);
+  if (ports.stageHostTreeStillRunning?.(priorAttempts.map(({ candidate }) => candidate.conversationId!))) {
+    const held = await endSettledPriorWriters(pipeline, stage.id, attempt, priorAttempts, ports, persist);
+    if (held?.park) {
+      await park(pipeline, held.detail, attempt);
+      await persist();
+      return true;
+    }
+    if (held) {
+      const detail = `${PRIOR_WRITER_WAIT_PREFIX}${held.detail}`;
+      if (pipeline.stateDetail !== detail) {
+        pipeline.stateDetail = detail;
+        await persist();
+      }
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
+      return true;
+    }
+  }
+  if (attempt.priorWriterStop) delete attempt.priorWriterStop;
+  if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
+  return false;
+}
+
 async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
   const bound = attemptStage(stage, attempt);
   const reject = async (error: string) => {
     attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = error;
-    if (attempt.cloud) { attempt.cloud.phase = "failed"; attempt.cloud.error = error; }
+    if (attempt.cloud) {
+      if (attempt.cloud.phase === "reserved") attempt.cloud.submissionUnresolved = false;
+      if (attempt.cloud.phase === "submitting" && !attempt.cloud.taskId) attempt.cloud.submissionUnresolved = true;
+      attempt.cloud.phase = "failed"; attempt.cloud.error = error;
+    }
     setCursorState(pipeline, stage.id, "pending");
     await park(pipeline, error, attempt); await persist();
   };
@@ -8441,32 +8500,39 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     await persist();
   }
   const cloud = attempt.cloud;
-  if (cloud.phase === "failed") return cloud.fallbackEligible ? fallback(cloud.error ?? "Codex Cloud task failed") : reject(cloud.error ?? "Codex Cloud task failed");
+  if (cloud.phase === "failed") return cloud.fallbackEligible && (!cloud.taskId || cloud.failureConfirmed) ? fallback(cloud.error ?? "Codex Cloud task failed") : reject(cloud.error ?? "Codex Cloud task failed");
   if (cloud.phase === "completed" && cloud.result) {
     if (pipeline.lastPassedCommit !== cloud.headSha) return reject("Codex Cloud reviewed head moved before settlement");
     if (bound.effectiveRole.access === "read-write" && !("failureReason" in cloud.result)) {
       if (!cloud.patch) return reject("Codex Cloud builder result is missing its diff receipt");
+      if (await holdForPriorStageWriters(pipeline, stage, attempt, ports, persist)) return;
       const reader = pipelineRecordReader(pipeline.id), authority = cloudExecutionFence(pipeline, stage.id);
       const assertCurrent = () => {
         const current = reader.read();
         if (!current || cloudExecutionFence(current, stage.id) !== authority) throw new Error("Codex Cloud diff authority changed");
+        const prior = current.runs.flatMap(run => run.attempts.filter(candidate =>
+          candidate.conversationId && !(run.stageId === stage.id && candidate.n === attempt.n)));
+        if (ports.stageHostTreeStillRunning?.(prior.map(candidate => candidate.conversationId!))) throw new Error("Codex Cloud prior stage writer is still running");
         assertProactiveTaskExecution(current.taskIds);
         const request = { project: pipeline.project, requestedId: cloud.accountId ?? attempt.accountId, model: attempt.effectiveRole.model, requireCapacity: false };
         const account = ports.resolveProjectSpawn?.("codex", request) ?? accountManager.resolveProjectSpawn("codex", request);
         if (account.kind !== "available") throw new Error(`Codex Cloud account ${account.kind}`);
       };
-      try { await applyCloudPatch(cloudPatchDirectory(pipeline, stage, attempt), cloud.patch, cloud.headSha,
-        pipeline.worktreeDir, ports.exec, assertCurrent, persist); }
+      try {
+        await applyCloudPatch(cloudPatchDirectory(pipeline, stage, attempt), cloud.patch, cloud.headSha,
+          pipeline.worktreeDir, ports.exec, assertCurrent, persist);
+        assertCurrent();
+      }
       catch (error) { return reject(hardenedRedact(error instanceof Error ? error.message : "Codex Cloud diff application failed")); }
     }
     await settleStageVerdict(pipeline, stage, attempt, cloud.result, ports, persist); return;
   }
-  if (unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) {
-    if (pipelineControllerJobLanes().includes(pipeline.id)) return;
-    return fallback("Codex Cloud stage timed out");
-  }
   if (pipelineControllerJobLanes().includes(pipeline.id)) return;
   if (cloud.phase === "submitting") return reject("Codex Cloud submission was interrupted; outcome unknown, automatic resubmission refused");
+  if (unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) {
+    if (cloud.taskId) return reject("Codex Cloud stage timed out; remote execution is unresolved, retry to reconcile the original task");
+    return fallback("Codex Cloud stage timed out before submission");
+  }
   const delay = unixMs(cloud.nextPollAt) - unixMs(ports.now());
   if (delay > 0) { ports.scheduleTick?.(Math.min(delay, unixMs(cloud.deadlineAt) - unixMs(ports.now()))); return; }
   if (!startCloudStageJob(pipeline, stage, attempt, ports.cloudJobContext?.ports ?? ports, ports.cloudJobContext?.phaseDone)) ports.scheduleTick?.(1000);
@@ -8661,32 +8727,7 @@ async function tickRunStage(
       );
       return;
     }
-    /* Two writers never share one worktree (#2790). An earlier attempt whose
-       stream is gone while its engine, or a process a stop captured from its
-       tree, may still run holds this launch until a stop proves it gone; the
-       terminal reap and the interrupted-turn recovery are what end it. */
-    const priorAttempts = pipeline.runs.flatMap(run => run.attempts.map(candidate => ({ stageId: run.stageId, candidate })))
-      .filter(({ candidate }) => candidate !== attempt && candidate.conversationId);
-    if (ports.stageHostTreeStillRunning?.(priorAttempts.map(({ candidate }) => candidate.conversationId!))) {
-      const held = await endSettledPriorWriters(pipeline, stage.id, attempt, priorAttempts, ports, persist);
-      if (held?.park) {
-        await park(pipeline, held.detail, attempt);
-        await persist();
-        return;
-      }
-      if (held) {
-        const detail = `${PRIOR_WRITER_WAIT_PREFIX}${held.detail}`;
-        if (pipeline.stateDetail !== detail) {
-          pipeline.stateDetail = detail;
-          await persist();
-        }
-        ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
-        ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
-        return;
-      }
-    }
-    if (attempt.priorWriterStop) delete attempt.priorWriterStop;
-    if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
+    if (await holdForPriorStageWriters(pipeline, stage, attempt, ports, persist)) return;
     // Consume CPU admission only once the other launch gates allow a start.
     if (await holdStageLaunch(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
@@ -15330,6 +15371,30 @@ export async function patchPipeline(
       }
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
+      // A failed read or expired observation budget never releases Cloud
+      // execution custody. Retry the original receipt, without a new attempt,
+      // worktree reset, account rotation or paid submission.
+      if (stage && attempt?.cloud && !attempt.cloud.fallback && !attempt.verdict
+        && pipeline.state === "needs_decision"
+        && !(attempt.cloud.fallbackEligible && (!attempt.cloud.taskId || attempt.cloud.failureConfirmed))) {
+        const cloud = attempt.cloud;
+        if (!cloud.taskId && cloud.phase !== "reserved" && (cloud.phase === "submitting" || cloud.submissionUnresolved === true
+          || cloud.submissionUnresolved === undefined && (cloud.accountId || attempt.accountId))) {
+          return { error: "Codex Cloud submission outcome unknown; reconcile remote execution before retrying", status: 409 };
+        }
+        if (cloud.taskId) {
+          cloud.phase = cloud.result && (attempt.effectiveRole.access === "read-only" || cloud.patch) ? "completed" : "polling";
+          cloud.failures = 0;
+          cloud.deadlineAt = new Date(unixMs(ports.now()) + CLOUD_STAGE_TIMEOUT_MS).toISOString();
+          cloud.nextPollAt = ports.now();
+          delete cloud.error; delete cloud.fallbackEligible; delete cloud.failureConfirmed;
+          attempt.state = "running"; attempt.error = null; attempt.completedAt = null;
+          setCursorState(pipeline, stage.id, "running");
+          pipeline.state = "running"; pipeline.stateDetail = null;
+          await persist(); requestPipelineTick();
+          return { pipeline };
+        }
+      }
       if (unstartedPending && attempt) {
         // Wake the existing reservation. Its owner and downstream receipt key
         // remain authoritative; retry never grants another dispatch permit.

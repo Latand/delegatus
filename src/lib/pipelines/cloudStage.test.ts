@@ -51,9 +51,12 @@ test("backoff is deterministic and bounded", () => {
 
 describe("durable cloud attempts", () => {
   test("reserved, polling, completed and failed states round-trip", () => {
-    for (const value of [reserved, { ...reserved, ...reference, phase: "polling", polls: 3 },
+    for (const value of [reserved, { ...reserved, phase: "submitting", submissionUnresolved: true },
+      { ...reserved, phase: "failed", error: "Cloud model setup refused", submissionUnresolved: false },
+      { ...reserved, ...reference, phase: "polling", polls: 3, submissionUnresolved: false },
       { ...reserved, ...reference, phase: "completed", model: "gpt-6.1-sol", result: { output: "Checked", verdict: { status: "pass", findings: [] } } },
       { ...reserved, phase: "failed", error: "Cloud unavailable" },
+      { ...reserved, ...reference, phase: "failed", error: "Cloud task timed out", fallbackEligible: true, failureConfirmed: true },
       { ...reserved, phase: "failed", error: "Cloud unavailable", failures: 3, accountId: "account-a", fallbackEligible: true,
         fallback: { at: reserved.nextPollAt, reason: "Cloud unavailable" } },
       { ...reserved, ...reference, phase: "completed", result: { output: "Built", verdict: { status: "pass", findings: [] } },
@@ -66,7 +69,7 @@ describe("durable cloud attempts", () => {
       { phase: "failed" }, { polls: -1 }, { polls: 0.5 }, { headSha: "bad" }, { deadlineAt: "bad" },
       { nextPollAt: "bad" }, { taskId: "id", taskUrl: null }, { model: 3 },
       { ...reference, taskUrl: "http://example.com/task" }, { result: { verdict: "pass" } }, { fallback: { at: "bad", reason: "x" } }, { failures: 4 },
-      { patch: { digest: "bad", tree: "a".repeat(40) } }, { fallbackEligible: "yes" }]) {
+      { patch: { digest: "bad", tree: "a".repeat(40) } }, { fallbackEligible: "yes" }, { failureConfirmed: "yes" }, { submissionUnresolved: "yes" }]) {
       expect(isCloudStageAttempt({ ...reserved, ...change })).toBe(false);
     }
   });

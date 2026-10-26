@@ -1334,5 +1334,895 @@
       "classification": "PRE-EXISTING",
       "resolvedByLongerFollowup": false
     }
-  ]
+  ],
+  "fixVerification": {
+    "recordedAt": "2026-10-26T18:15:35.517996+00:00",
+    "reviewedSourceParent": "c0f8bf88f4899a8d7a36369c5ac6ec84c5b42de0",
+    "comparisonBase": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+    "sourceSha256": {
+      "docs/design/cloud-stage-runtime.md": "136ff988ffe9104da6d823b4e963b6533a3c94b22cce0048e8c838f24a10f12e",
+      "src/lib/pipelines/cloudStage.test.ts": "79083e6c4309bb3ca6ea150fbce5a53adcb732593597796037220eb474c85c09",
+      "src/lib/pipelines/cloudStage.ts": "3485b116adcee38b03e9a6f5f3b909df0917571d5e709a1328b29ba6e90973b3",
+      "src/lib/pipelines/engine.cloud.test.ts": "ab75a6cc4ff983bbf7054b9fb897d5f7441bbb3462586a4de8027b7df3129b2f",
+      "src/lib/pipelines/engine.ts": "7c0fc29e7389c7958147c84f890fcaa5128f654a0b23e9da4b1de400493e3794",
+      "src/lib/pipelines/fixtures/cloudStageRestart.ts": "ba86d0d51becf82f9e724ebab0afd2922ddeec68e5b7f85167087ad7680d9f5b",
+      "src/lib/projects/settings.ts": "dd10ed3dd3b1c7233e249ca6c76772c016ab3632e6a0d971e3b761ca654d4519"
+    },
+    "runtime": "Bun 1.4.0 (34cbb9a40)",
+    "verificationSequence": "Product source remained unchanged through both comparison runs. After the first typecheck, a non-null TypeScript assertion corrected the added Cloud test fixture type without changing runtime behaviour; that complete test file was rerun. Unaffected consumer observations were retained, omitted consumers were added, and the final typecheck followed the additional checks.",
+    "guardControl": {
+      "test": "src/lib/pipelines/engine.cloud.test.ts",
+      "case": "late writer: true",
+      "mutation": "Remove the prior-writer check in the Cloud patch authority callback",
+      "expectedExitCode": 1,
+      "exitCode": 1,
+      "sourceRestored": true,
+      "sourceSha256": "7c0fc29e7389c7958147c84f890fcaa5128f654a0b23e9da4b1de400493e3794"
+    },
+    "testSelection": {
+      "retainedManifest": "testPaths",
+      "consumerInventory": "Static imports/exports, dynamic imports, type imports, child script references and nested eval strings; direct importers and their tests",
+      "requiredConsumerTests": 403,
+      "missingConsumerTests": 0,
+      "additionalPaths": [
+        "src/lib/state/fileTransaction.wait.test.ts",
+        "src/lib/pipelines/engine.accountGuard.test.ts",
+        "src/lib/pipelines/engine.activation.test.ts",
+        "src/lib/pipelines/engine.containment.test.ts",
+        "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "src/lib/pipelines/engine.providerBudget.test.ts",
+        "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        "src/lib/pipelines/engine.providerChains.test.ts",
+        "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        "src/lib/pipelines/engine.providerReset.test.ts",
+        "src/lib/pipelines/engine.providerSignals.test.ts",
+        "src/lib/pipelines/engine.provisioning.test.ts",
+        "src/lib/pipelines/engine.recoveredPending.test.ts",
+        "src/lib/pipelines/engine.recovery.test.ts",
+        "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "src/lib/pipelines/engine.spawnSilence.test.ts",
+        "src/lib/pipelines/engine.succession.part2.test.ts",
+        "src/lib/pipelines/engine.succession.test.ts",
+        "scripts/test-child-lifetime-audit.test.ts",
+        "src/app/api/account-migration-get-purity.test.ts",
+        "src/app/api/attention/needs-you/route.test.ts",
+        "src/app/api/bridge/route.test.ts",
+        "src/app/api/conversations/route.test.ts",
+        "src/app/api/files/deliveryAttention.integration.test.ts",
+        "src/app/api/files/response.perf.test.ts",
+        "src/app/api/files/scanCache.real.test.ts",
+        "src/app/api/monitor/seat-tick/settings/route.test.ts",
+        "src/app/api/orchestrator/seat/route.test.ts",
+        "src/app/api/orchestrator/seat/status/incumbent.test.ts",
+        "src/app/api/proc/route.test.ts",
+        "src/app/api/runtime/realtime/route.injection.test.ts",
+        "src/app/api/spawn/route.binding.test.ts",
+        "src/app/api/spawn/route.launcher.test.ts",
+        "src/app/api/spawn/route.test.ts",
+        "src/app/api/tasks/curator/route.test.ts",
+        "src/app/api/voice-companion/calls/route.test.ts",
+        "src/app/api/voice-companion/memory/route.test.ts",
+        "src/app/api/voice-companion/session/route.test.ts",
+        "src/components/LogFeed.startingWindow.dom.test.tsx",
+        "src/components/mobile/MobileOrchestratorSheet.render.test.tsx",
+        "src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+        "src/components/mobile/issue1671Evidence.browser.test.tsx",
+        "src/components/orchestrator/SeatTickTurbo.dom.test.tsx",
+        "src/components/orchestrator/seatRecoveryFailure.test.ts",
+        "src/components/orchestrator/seatState.test.ts",
+        "src/components/voiceCompanion/CompanionTranscript.dom.test.tsx",
+        "src/components/voiceCompanion/voiceCompanionProduct.dom.test.tsx",
+        "src/lib/accounts/accountMutation.callers.test.ts",
+        "src/lib/accounts/claudeProvider.smoke.test.ts",
+        "src/lib/accounts/migration/controller.performance.test.ts",
+        "src/lib/agent/identityWaveMigration.test.ts",
+        "src/lib/agent/registry.servingWriters.test.ts",
+        "src/lib/agent/registry.writerWait.test.ts",
+        "src/lib/agent/spawnCommand.contention.test.ts",
+        "src/lib/agent/spawnCommand.locale.test.ts",
+        "src/lib/agent/spawnCommand.telegram.test.ts",
+        "src/lib/agent/spawnDeferral.test.ts",
+        "src/lib/asks/asksYou.test.ts",
+        "src/lib/attention/routeOverlay.test.ts",
+        "src/lib/bridge/recovery.test.ts",
+        "src/lib/bridge/routing.test.ts",
+        "src/lib/externalRelay/ownerServiceTools.test.ts",
+        "src/lib/externalRelay/ownerStop.test.ts",
+        "src/lib/externalRelay/ownerTier.test.ts",
+        "src/lib/externalRelay/progressSteps.runner.test.ts",
+        "src/lib/externalRelay/runner.test.ts",
+        "src/lib/flows/commands.durable.test.ts",
+        "src/lib/flows/commands.set-roles.test.ts",
+        "src/lib/flows/engine.test.ts",
+        "src/lib/flows/relayResumeAccount.test.ts",
+        "src/lib/mcp/bridgeDirective.test.ts",
+        "src/lib/mcp/controlEndpoint.test.ts",
+        "src/lib/mcp/managerAuthority.test.ts",
+        "src/lib/mcp/managerLifecycleSeams.test.ts",
+        "src/lib/mcp/searchTranscripts.test.ts",
+        "src/lib/mcp/voiceUtteranceWiring.test.ts",
+        "src/lib/mcp/writerConcurrency.test.ts",
+        "src/lib/memory/roleProblems.test.ts",
+        "src/lib/monitor/seatAutoRotation.test.ts",
+        "src/lib/monitor/seatTickController.agenda.test.ts",
+        "src/lib/monitor/seatTickController.catchUp.test.ts",
+        "src/lib/monitor/seatTickController.reporting.test.ts",
+        "src/lib/monitor/seatTickController.scheduling.test.ts",
+        "src/lib/monitor/turboRuntime.test.ts",
+        "src/lib/orchestrator/authority.test.ts",
+        "src/lib/orchestrator/deputyCommand.test.ts",
+        "src/lib/orchestrator/deputySweep.test.ts",
+        "src/lib/orchestrator/operatorDecisionForms.test.ts",
+        "src/lib/orchestrator/rotationSettlement.test.ts",
+        "src/lib/orchestrator/seatChannel.nativeQueue.test.ts",
+        "src/lib/orchestrator/seatChannel.test.ts",
+        "src/lib/orchestrator/seatCommand.test.ts",
+        "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+        "src/lib/orchestrator/workerCount.registry.test.ts",
+        "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+        "src/lib/release/production.test.ts",
+        "src/lib/release/tools.test.ts",
+        "src/lib/runtime/accountCreditGuard.test.ts",
+        "src/lib/runtime/agentRecordAuthors.test.ts",
+        "src/lib/runtime/claudeMessageProvenance.test.ts",
+        "src/lib/runtime/deliveredMessageOccurrences.test.ts",
+        "src/lib/runtime/http.retryProgress.test.ts",
+        "src/lib/runtime/http.test.ts",
+        "src/lib/runtime/legacyClaudeRecovery.cleanCi.integration.test.ts",
+        "src/lib/runtime/sendSettlement.test.ts",
+        "src/lib/runtime/startup.handoverRetry.test.ts",
+        "src/lib/runtime/structuredControls.test.ts",
+        "src/lib/runtime/structuredMessageDelivery.test.ts",
+        "src/lib/runtime/structuredSpawn.integration.test.ts",
+        "src/lib/runtime/structuredSpawn.terminalize.test.ts",
+        "src/lib/scanner/importBoundary.test.ts",
+        "src/lib/scanner/index.integrity.test.ts",
+        "src/lib/scanner/index.pin.test.ts",
+        "src/lib/scanner/registryDemotion.test.ts",
+        "src/lib/scanner/scanCache.catalogFreshness.test.tsx",
+        "src/lib/scanner/scanCoordinator.test.ts",
+        "src/lib/scanner/settledTurnProjection.test.ts",
+        "src/lib/selfUpdate/quietDeadHosts.test.ts",
+        "src/lib/tasks/doneVisibility.test.ts",
+        "src/lib/telegram/bot/reportReplies.test.ts",
+        "src/lib/telegram/reportSpawn.test.ts",
+        "src/lib/transfer/accounts.test.ts",
+        "src/lib/transfer/cli.test.ts",
+        "src/lib/transfer/transferMeasure.test.ts",
+        "src/lib/voiceCompanion/addedTools.test.ts",
+        "src/lib/voiceCompanion/callMemory.test.ts",
+        "src/lib/voiceCompanion/callResume.test.ts",
+        "src/lib/voiceCompanion/codexConversation.test.ts",
+        "src/lib/voiceCompanion/codexProvider.test.ts",
+        "src/lib/voiceCompanion/delivery.team.test.ts",
+        "src/lib/voiceCompanion/http.test.ts",
+        "src/lib/voiceCompanion/liveAdapter.test.ts",
+        "src/lib/voiceCompanion/ownerHistoryRecording.test.ts",
+        "src/lib/voiceCompanion/prototypeFlow.test.ts",
+        "src/lib/voiceCompanion/prototypeRead.test.ts",
+        "src/lib/voiceCompanion/retention.test.ts",
+        "src/lib/voiceCompanion/storage.test.ts",
+        "src/proxy.team.test.ts",
+        "src/runtime-host/journal.test.ts"
+      ]
+    },
+    "commands": {
+      "comparisons": "bash scripts/gate-slot.sh bun <serial scratch harness calling touchedTests once per explicit test path>",
+      "comparisonApi": "touchedTests(cwd, comparisonBase, [path], { env: checkEnvironment(process.env), budgets: path-specific fileMs and runMs below })",
+      "defaultPerFileEquivalent": "bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base 0728b67c411f29e65b446cf6f4fd591a0c0bb819 <one explicit test path>",
+      "typecheck": "bash scripts/gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit --incremental false"
+    },
+    "isolation": "Detached export with matching dependencies, main refs pinned to comparisonBase; one file at a time with private HOME, config, temp and state through the captured gate wrapper; closed Viewer control URL; fake Cloud transport only.",
+    "budgets": {
+      "fileMs": 300000,
+      "comparisonMs": 900000,
+      "remoteActionsFileMs": 900000,
+      "remoteActionsComparisonMs": 3600000
+    },
+    "result": {
+      "selectedFiles": 562,
+      "completedComparisons": 560,
+      "completedBrowserImporters": 2,
+      "introduced": 0,
+      "preexisting": 509,
+      "fixed": 0,
+      "absent": 0,
+      "flaky": 4,
+      "preexistingAssertions": 494,
+      "preexistingRunnerErrors": 15,
+      "typecheckExitCode": 0
+    },
+    "intermittentObservations": [
+      {
+        "file": "scripts/local-gate.test.ts",
+        "sites": [
+          {
+            "file": "scripts/local-gate.test.ts",
+            "suite": "",
+            "name": "privacy refusal stops running admitted checks and their detached helper",
+            "kind": "test",
+            "occurrence": 0,
+            "base": {
+              "pass": 1,
+              "fail": 1
+            },
+            "head": {
+              "pass": 1,
+              "fail": 1
+            }
+          }
+        ]
+      },
+      {
+        "file": "src/lib/mcp/reportTools.test.ts",
+        "sites": [
+          {
+            "file": "src/lib/mcp/reportTools.test.ts",
+            "suite": "",
+            "name": "get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only",
+            "kind": "test",
+            "occurrence": 0,
+            "base": {
+              "pass": 2,
+              "fail": 0
+            },
+            "head": {
+              "pass": 1,
+              "fail": 1
+            }
+          }
+        ]
+      },
+      {
+        "file": "src/lib/orchestrator/rotationSettlement.test.ts",
+        "sites": [
+          {
+            "file": "src/lib/orchestrator/rotationSettlement.test.ts",
+            "suite": "",
+            "name": "REGRESSION (#1757): a launch that DOES become readable confirms the seat instead of rolling it back",
+            "kind": "test",
+            "occurrence": 0,
+            "base": {
+              "pass": 2,
+              "fail": 0
+            },
+            "head": {
+              "pass": 1,
+              "fail": 1
+            }
+          }
+        ]
+      },
+      {
+        "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+        "sites": [
+          {
+            "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+            "suite": "",
+            "name": "SQLite busy throw then success preserves one pending intent",
+            "kind": "test",
+            "occurrence": 0,
+            "base": {
+              "pass": 2,
+              "fail": 0
+            },
+            "head": {
+              "pass": 1,
+              "fail": 1
+            }
+          }
+        ]
+      }
+    ],
+    "preexistingRunnerDiagnostics": [
+      {
+        "file": "src/lib/mcp/bridgeReportOrigin.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/deputyAttribution.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/maintainerGuard.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskBoardVisibility.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskColor.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskColorGroupHide.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskDetails.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskIcon.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskLineEdits.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskPosition.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/mcp/taskPriority.integration.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/memory/roleLane.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/memory/roleLaunch.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/app/api/spawn/route.binding.test.ts",
+        "count": 1
+      },
+      {
+        "file": "src/lib/selfUpdate/quietDeadHosts.test.ts",
+        "count": 1
+      }
+    ],
+    "comparisonsWithNonGreenHeads": [
+      {
+        "file": "src/lib/pipelines/severedStageRetry.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/app/api/projects/settings/route.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "scripts/local-gate.test.ts",
+        "flaky": 1
+      },
+      {
+        "file": "scripts/runtime-host-viewer-adapter.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "preexisting": 8
+      },
+      {
+        "file": "src/app/api/orchestrator/seat/seatFailureRead.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/pipelines/[id]/route.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/pipelines/route.busy.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/spawn/route.stageTasks.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+        "preexisting": 5
+      },
+      {
+        "file": "src/app/api/tasks/[id]/spawn/route.binding.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/components/BranchPane.spawn.dom.test.tsx",
+        "preexisting": 1
+      },
+      {
+        "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+        "preexisting": 8
+      },
+      {
+        "file": "src/components/kanban/KanbanPipelines.dom.test.tsx",
+        "preexisting": 1
+      },
+      {
+        "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+        "preexisting": 2
+      },
+      {
+        "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+        "preexisting": 1
+      },
+      {
+        "file": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+        "preexisting": 1
+      },
+      {
+        "file": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+        "preexisting": 1
+      },
+      {
+        "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+        "preexisting": 3
+      },
+      {
+        "file": "src/components/pipelines/PipelineBlock.dom.test.tsx",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/accounts/projectBindings.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/boardMaintenance/guard.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/delivery.test.ts",
+        "preexisting": 12
+      },
+      {
+        "file": "src/lib/i18n/serverBoundary.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/lifecycle/projector.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/links/taskSync.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/mainThreadInstrumentation.test.ts",
+        "preexisting": 7
+      },
+      {
+        "file": "src/lib/mcp/agentFleet.binding.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/mcp/autoUpdates.test.ts",
+        "preexisting": 4
+      },
+      {
+        "file": "src/lib/mcp/bridgeReportOrigin.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/callCost.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/compactAnswers.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/conversationMigration.integration.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/mcp/crossProject.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/deployAuthority.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/deploymentListPages.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/deputyAttribution.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/dismissAttention.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/largeReads.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/linkedSeatTools.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/maintainerGuard.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/orchestratorTools.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/mcp/originalKeySendRecovery.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/pipelineBusyAdmission.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/pipelineRoleFence.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/projectResolution.test.ts",
+        "preexisting": 12
+      },
+      {
+        "file": "src/lib/mcp/pullRequestReads.test.ts",
+        "preexisting": 3
+      },
+      {
+        "file": "src/lib/mcp/reportTools.test.ts",
+        "flaky": 1
+      },
+      {
+        "file": "src/lib/mcp/requestAttention.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/mcp/retryStageLaunch.integration.test.ts",
+        "preexisting": 4
+      },
+      {
+        "file": "src/lib/mcp/seatAnswerBudgets.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/spawnDeployer.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/stdio.integration.test.ts",
+        "preexisting": 17
+      },
+      {
+        "file": "src/lib/mcp/taskBoardVisibility.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskColor.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskColorGroupHide.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskDetails.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskIcon.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskLineEdits.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskPosition.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/taskPriority.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/memory/roleLane.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/memory/roleLaunch.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/onboarding/healthRoute.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/orchestrator/ownerRelay.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/orchestrator/relay.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/orchestrator/rotationAuthority.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+        "preexisting": 6
+      },
+      {
+        "file": "src/lib/pipelines/coldScan.test.ts",
+        "preexisting": 3
+      },
+      {
+        "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/pipelines/engine.ports.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/pipelines/engine.routing.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/pipelines/engineConnectionRefusal.test.ts",
+        "preexisting": 4
+      },
+      {
+        "file": "src/lib/pipelines/remoteActions.test.ts",
+        "preexisting": 42
+      },
+      {
+        "file": "src/lib/pipelines/severedTurnResume.test.ts",
+        "preexisting": 10
+      },
+      {
+        "file": "src/lib/pipelines/stageCompletion.test.ts",
+        "preexisting": 25
+      },
+      {
+        "file": "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+        "preexisting": 13
+      },
+      {
+        "file": "src/lib/pipelines/stageInput.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "preexisting": 3
+      },
+      {
+        "file": "src/lib/pipelines/stageSizing.test.ts",
+        "preexisting": 9
+      },
+      {
+        "file": "src/lib/pipelines/stageVerdictRequest.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/pipelines/taskStatusNote.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/projects/shortIds.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/projects/succession.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/prototypeReview/mcpReceipts.test.ts",
+        "preexisting": 8
+      },
+      {
+        "file": "src/lib/runtime/releaseInterruption.test.ts",
+        "preexisting": 7
+      },
+      {
+        "file": "src/lib/runtime/startup.test.ts",
+        "preexisting": 4
+      },
+      {
+        "file": "src/lib/search/transcriptSearch.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/selfUpdate/quietFallback.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/selfUpdate/workEvidence.test.ts",
+        "preexisting": 11
+      },
+      {
+        "file": "src/lib/state/declaredIndexes.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/tasks/launchMembership.registry.test.ts",
+        "preexisting": 4
+      },
+      {
+        "file": "src/lib/voiceCompanion/readPaths.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/voiceCompanion/tools.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/runtime-host/mcpRuntimeProbe.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/pipelines/engine.activation.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerReset.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "scripts/test-child-lifetime-audit.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/app/api/account-migration-get-purity.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/attention/needs-you/route.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/conversations/route.test.ts",
+        "preexisting": 14
+      },
+      {
+        "file": "src/app/api/spawn/route.binding.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/app/api/spawn/route.test.ts",
+        "preexisting": 23
+      },
+      {
+        "file": "src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/accounts/migration/controller.performance.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/agent/spawnCommand.contention.test.ts",
+        "preexisting": 3
+      },
+      {
+        "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+        "preexisting": 31
+      },
+      {
+        "file": "src/lib/agent/spawnDeferral.test.ts",
+        "preexisting": 4
+      },
+      {
+        "file": "src/lib/externalRelay/ownerStop.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/externalRelay/ownerTier.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/externalRelay/progressSteps.runner.test.ts",
+        "preexisting": 3
+      },
+      {
+        "file": "src/lib/flows/relayResumeAccount.test.ts",
+        "preexisting": 8
+      },
+      {
+        "file": "src/lib/mcp/bridgeDirective.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/mcp/writerConcurrency.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/monitor/seatTickController.agenda.test.ts",
+        "preexisting": 6
+      },
+      {
+        "file": "src/lib/monitor/seatTickController.catchUp.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+        "preexisting": 28
+      },
+      {
+        "file": "src/lib/orchestrator/rotationSettlement.test.ts",
+        "preexisting": 9,
+        "flaky": 1
+      },
+      {
+        "file": "src/lib/orchestrator/seatChannel.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/orchestrator/seatCommand.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+        "preexisting": 5,
+        "flaky": 1
+      },
+      {
+        "file": "src/lib/runtime/accountCreditGuard.test.ts",
+        "preexisting": 6
+      },
+      {
+        "file": "src/lib/runtime/claudeMessageProvenance.test.ts",
+        "preexisting": 2
+      },
+      {
+        "file": "src/lib/runtime/legacyClaudeRecovery.cleanCi.integration.test.ts",
+        "preexisting": 1
+      },
+      {
+        "file": "src/lib/selfUpdate/quietDeadHosts.test.ts",
+        "preexisting": 28
+      },
+      {
+        "file": "src/lib/telegram/bot/reportReplies.test.ts",
+        "preexisting": 1
+      }
+    ],
+    "browserImporters": [
+      {
+        "file": "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "passed": 1,
+        "skipped": 267,
+        "failed": 0,
+        "exitCode": 0,
+        "mode": "Normal opt-in gating; no new UI was changed."
+      },
+      {
+        "file": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+        "passed": 0,
+        "skipped": 104,
+        "failed": 0,
+        "exitCode": 0,
+        "mode": "Normal opt-in gating; no new UI was changed."
+      }
+    ],
+    "behavior": [
+      "Ambiguous submission expiry never releases custody, including slice-1 records whose account lives only on the attempt; explicit retry requires confirmed no-dispatch proof before another submission.",
+      "Polling, final-message and diff outages retain their original task; retry reconciles it without another submission. A new process spends the persisted polling retry budget.",
+      "A confirmed failed Cloud observation stores failureConfirmed; legacy fallback flags cannot release a known task.",
+      "Cloud patches share the local prior-writer stop/wait/park fence. Real Git fixtures verify no patch, commit or publication while held, followed by hook-enabled settlement after termination.",
+      "Fresh preselected and recovery-selected accounts check the environment catalog.",
+      "A separate process holds settings while a heartbeat and stage settlement proceed; durable account rotation resumes after release."
+    ]
+  }
 }

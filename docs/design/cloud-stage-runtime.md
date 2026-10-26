@@ -142,9 +142,14 @@ RPC errors and auth stderr are discarded. No performance gain is claimed.
 The existing account resolver enforces the project pool, capacity and explicit
 account. Each candidate's authenticated catalog must contain the project's
 environment. A durable cursor in project settings reserves accounts in rotation
-among the eligible accounts, under the settings file lock. Reservations survive
+among the eligible accounts, under the asynchronous settings file transaction.
+Its bounded wait yields the Viewer loop. Fresh submissions, including recovery
+accounts, always check the catalog; only an existing task receipt reuses its
+admitted account without a catalog read. Reservations survive
 restarts and concurrent controllers; selection scans no pipeline history. The
 Cloud receipt retains its account after a fallback selects a local account.
+Local account recovery cannot replace an unresolved Cloud task's account;
+authority recovery reconciles the original receipt.
 The runtime rechecks lane and account authority around transport calls. It binds
 the stage definition at activation and includes the pinned specification,
 previous output, lane branch, base and exact accepted head in the cloud prompt.
@@ -182,13 +187,22 @@ accepted base through the existing publication journal before remote checkout.
 The existing verdict parser and settlement path normalize findings and handle
 pass, fail, decision requests and fail edges into local or Cloud fix stages.
 Confirmed failed Cloud turns, missing environments, Cloud limits and exhausted
-availability retries fall back to the same stage locally once. Transport reads
-retry at two and four seconds, retaining the task receipt and a durable limit
-of three failures. A total stage timeout also falls back once. The persisted
+availability retries before execution fall back to the same stage locally once.
+Transport reads retry at two and four seconds, retaining the task receipt and a
+durable limit of three failures. Exhausted reads and an expired observation
+budget park with the original receipt; they never authorize local execution.
+A confirmed failed poll stores `failureConfirmed`; a legacy eligibility flag
+without that proof cannot release a known task. An explicit retry reconciles
+that receipt under a fresh observation budget,
+without submitting another turn. Expiry before submission can fall back safely. The persisted
 fallback marker prevents a restarted controller from resubmitting to Cloud.
 Model, receipt, authority, patch and custody failures retain their refusal. Interrupted
 submission with no receipt refuses automatic resubmission because its outcome is
-unknown. A receipt resumes polling after restart. Superseded replies cannot
+unknown. `submissionUnresolved` preserves that custody when an interrupted
+submission parks; a confirmed pre-turn refusal clears it. Legacy records with their account stored only on the attempt retain the same
+custody; reconciliation copies that account into the Cloud receipt before
+fallback. A receipt
+resumes polling after restart. Superseded replies cannot
 replace another receipt or advance a paused lane. Delivery takeover can clear the
 old lane's active publication claim without advancing its old epoch; cloud jobs
 also fence the owner, active flag, publication policy and disposition, and the
@@ -199,8 +213,10 @@ for inspection; the attempt fails instead of polling or accepting a verdict.
 
 Writable results pass through `cloudStagePatch.ts`. It stores the patch and a
 SHA-256 receipt outside the worktree and computes the expected tree in a private
-index. Application requires the accepted head and an unchanged lane index and
-worktree. The applying intent is persisted before `git apply --index`. After an
+index. Application first uses the local launch path's prior-writer fence,
+including its bounded stop, wait and park sequence. An earlier surviving writer
+keeps the patch unapplied and unaccepted. Application then requires the accepted
+head and an unchanged lane index and worktree. The applying intent is persisted before `git apply --index`. After an
 interruption, the exact expected index tree and matching worktree prove that the
 apply landed; a partial apply or unrelated edit refuses recovery and preserves
 the files. The normal stage settlement then commits with hooks and publishes
