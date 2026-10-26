@@ -234,7 +234,7 @@ test("the controller retires a membership-admitted host failure and retry-stage 
     expect(failedLaunchId).toBeTruthy();
     expect(registry.spawnReceipt(failedLaunchId!)?.membershipAdmitted).toBe(true);
     expect(retired).toMatchObject({ launchId: null, conversationId: null, state: "pending" });
-    expect(retired.retiredLaunches?.map(row => row.launchId)).toContain(failedLaunchId);
+    expect(retired.retiredLaunches?.map(row => row.launchId)).toContain(failedLaunchId!);
 
     now = Date.parse(retired.controllerWait!.startedAt) + 10 * 60_000 + 1;
     await tickPipelines([], h.ports);
