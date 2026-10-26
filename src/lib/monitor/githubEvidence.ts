@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
+import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
+
 import type { GithubEvidenceRow } from "./evidence";
 
 /**
@@ -29,12 +32,44 @@ export interface GithubEvidenceOptions {
   timeoutMs?: number;
 }
 
-/** The one `gh` seam. Shared with the seat tick's proposal source (#1245), so
-    there is a single place a command, a timeout or a buffer bound is chosen. */
-export function githubRunner(cwd: string, timeoutMs: number): GithubRunner {
-  return async (args) => {
+export interface GithubRunnerOptions {
+  exec?: GithubRunner;
+  asApp?: ForgeAppWriter;
+  declared?: (repository: string) => boolean;
+}
+
+/** Identify only explicit repository reads; writes retain their existing gate. */
+function readRepository(args: string[]): string | null {
+  const readCommand = ["pr", "issue", "repo"].includes(args[0] ?? "") && ["list", "view"].includes(args[1] ?? "");
+  const api = args[0] === "api";
+  const query = args.find(arg => arg.startsWith("query="))?.slice(6);
+  if (!readCommand && !api) return null;
+  if (api && (args.includes("--input") || args.includes("-X") || args.includes("--method") || args.some(arg => /^(?:--method=|-X.)/.test(arg)))) return null;
+  if (api && args[1] === "graphql" && (!query || /\bmutation\b/.test(query))) return null;
+  if (api && args[1] !== "graphql" && args.some(arg => ["-f", "-F", "--field", "--raw-field"].includes(arg))) return null;
+  const index = args.findIndex(arg => arg === "--repo" || arg === "-R");
+  const explicit = index >= 0 ? args[index + 1] : args.find(arg => arg.startsWith("--repo="))?.slice(7);
+  const endpoint = api ? /^\/?repos\/([^/]+\/[^/?]+)/.exec(args[1] ?? "")?.[1] : null;
+  const owner = args.find(arg => arg.startsWith("owner="))?.slice(6);
+  const name = args.find(arg => arg.startsWith("name="))?.slice(5);
+  const literal = query ? /repository\(owner:\s*"([^"\n]+)",\s*name:\s*"([^"\n]+)"/.exec(query) : null;
+  const repository = explicit ?? endpoint ?? (owner && name ? `${owner}/${name}` : literal ? `${literal[1]}/${literal[2]}` : null);
+  return repository && /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository) ? repository.toLowerCase() : null;
+}
+
+/** Explicit reads of declared repositories use the App token helper, including
+    in Docker where the local gh has no account configuration. Writes keep their
+    existing routing, and a refused App read never falls back to another identity. */
+export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunnerOptions = {}): GithubRunner {
+  const exec = options.exec ?? (async (args: string[]) => {
     const { stdout } = await execFileAsync("gh", args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
     return stdout;
+  });
+  const asApp = options.asApp ?? forgeAppWriter(cwd, timeoutMs);
+  const declared = options.declared ?? isForgeAppRepository;
+  return async (args) => {
+    const repository = readRepository(args);
+    return repository && declared(repository) ? asApp(args, repository) : exec(args);
   };
 }
 

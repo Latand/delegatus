@@ -6,6 +6,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { emptyRepositoryEntry, forgeViewOf, type ForgeCacheFile, type StoredPullRequest } from "./cache";
 import {
   editStoredWorkLinks,
+  mergeWorkLinks,
   githubRepositoryOfRemote,
   MAX_WORK_LINKS,
   normalizeWorkLinkInput,
@@ -283,4 +284,69 @@ describe("manual attach and detach", () => {
     expect(refused).toMatchObject({ ok: false, status: 409, code: "WORK_LINK_LIMIT" });
     expect(!refused.ok && refused.error).toContain("acme/widgets#20");
   });
+});
+
+test("task links merge case variants and a recorded rename across pipeline snapshots", () => {
+  const view = forgeViewOf({ schemaVersion: 1, repositories: {
+    "acme/old-name": { ...emptyRepositoryEntry(), canonical: "Acme/Widgets" },
+  } });
+  const link = (repository: string, source: "auto" | "manual", checkedAt: string): WorkLink => ({
+    key: `${repository}#46`, repository, number: 46, kind: "pr",
+    url: `https://github.com/${repository}/pull/46`, source,
+    via: source === "manual" ? ["manual"] : ["delivery-pr"],
+    state: source === "manual" ? "merged" : "open", checkedAt,
+  });
+  const old = link("ACME/OLD-NAME", "auto", "2026-09-21T00:00:00Z");
+  const current = link("acme/widgets", "manual", "2026-09-22T00:00:00Z");
+  const result = resolveTaskLinks({}, [{ links: [old, current], noPr: false }], view);
+  expect(result.links).toHaveLength(1);
+  expect(result.links[0]).toMatchObject({ key: "acme/widgets#46", repository: "acme/widgets", source: "manual", state: "merged", via: ["delivery-pr", "manual"] });
+  expect(result.links[0]!.url).toBe("https://github.com/acme/widgets/pull/46");
+  expect(old.repository).toBe("ACME/OLD-NAME");
+  expect(mergeWorkLinks([[current, { ...current, key: "ACME/WIDGETS#46", repository: "ACME/WIDGETS" }]])).toHaveLength(1);
+  expect(resolveTaskLinks({}, [{ links: [old, link("acme/unrelated", "auto", old.checkedAt!)], noPr: false }], view).links).toHaveLength(2);
+});
+
+test("the recorded project rename joins task links before a forge sweep", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { recordProjectRemote, persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
+  const { forgeCacheView } = await import("./cache");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "work-link-rename-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const old = projectIdentityFromRemote("https://github.com/acme/old-name.git", root)!;
+    const current = projectIdentityFromRemote("https://github.com/acme/widgets.git", root)!;
+    recordProjectRemote(old);
+    recordProjectRemote(current);
+    const task = { workLinks: [
+      { repository: "ACME/OLD-NAME", number: 46, kind: "pr" as const, addedAt: LANE_AT, addedBy: "operator" as const },
+      { repository: "acme/widgets", number: 46, kind: "pr" as const, addedAt: LANE_AT, addedBy: "operator" as const },
+    ] };
+    expect(resolveTaskLinks(task, [], forgeCacheView()).links).toHaveLength(2);
+    expect(persistProjectAliases([{ source: old.project, target: current.project, displayName: "widgets" }])).toBe(true);
+    const links = resolveTaskLinks(task, [], forgeCacheView()).links;
+    expect(links).toHaveLength(1);
+    expect(links[0]!.key).toBe("acme/widgets#46");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("renamed cache entries share the freshest PR and preserve both histories", () => {
+  const view = forgeViewOf({ schemaVersion: 1, repositories: {
+    "Acme/Old-Name": { ...emptyRepositoryEntry(), canonical: "Acme/Widgets", prs: Object.fromEntries([pr(46), pr(45)]) },
+    "acme/widgets": { ...emptyRepositoryEntry(), prs: Object.fromEntries([pr(46, { state: "merged", checkedAt: "2026-09-23T00:00:00Z" }), pr(47)]) },
+  } });
+  const old = view.repository("ACME/OLD-NAME")!;
+  expect(old).toBe(view.repository("Acme/Widgets")!);
+  expect(old.pr(46)?.state).toBe("merged");
+  expect(old.pr(45)?.number).toBe(45);
+  expect(old.pr(47)?.number).toBe(47);
+  expect(old.byHead("feature/46")).toHaveLength(1);
 });

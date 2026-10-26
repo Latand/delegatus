@@ -363,3 +363,42 @@ describe("open issues ranked for the board maintenance report", () => {
     expect(errors).toEqual({ ok: false, unavailable: "malformed-output" });
   });
 });
+
+test("GitHub reads use the declared App without a host gh configuration", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const calls: string[] = [];
+  const run = githubRunner(SANDBOX, 1000, {
+    declared: repository => repository === "acme/widgets",
+    asApp: async (args, repository) => { calls.push(repository); return JSON.stringify(args); },
+    exec: async () => { throw new Error("no host gh configuration"); },
+  });
+  const args = ["pr", "list", "--repo", "Acme/Widgets", "--json", "number"];
+  expect(await run(args)).toBe(JSON.stringify(args));
+  expect(await run(["api", "repos/acme/widgets/issues/46"])).toContain("issues/46");
+  expect(await run(["api", "graphql", "-F", "owner=acme", "-F", "name=widgets", "-f", "query=query { repository(owner: $owner, name: $name) { name } }"])).toContain("graphql");
+  expect(calls).toEqual(["acme/widgets", "acme/widgets", "acme/widgets"]);
+  await expect(run(["pr", "merge", "46", "--repo", "acme/widgets"])).rejects.toThrow("no host gh configuration");
+  await expect(run(["pr", "list", "--repo", "acme/other"])).rejects.toThrow("no host gh configuration");
+});
+
+test("a read carries only the App token and never retries as another identity", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const { forgeAppWriter, ForgeAppTokenSource } = await import("@/lib/forge/appWrite");
+  let fallbackCalls = 0;
+  let calls = 0;
+  const asApp = forgeAppWriter(SANDBOX, 1000, {
+    source: { NODE_ENV: "test", HOME: SANDBOX, GH_CONFIG_DIR: path.join(SANDBOX, "unused-config"), GITHUB_TOKEN: "unused-token" },
+    tokens: new ForgeAppTokenSource(async () => ({ token: "test-app-token", expiresAt: null })),
+    exec: async (_args, env) => {
+      calls++;
+      expect(env.GH_TOKEN).toBe("test-app-token");
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GH_CONFIG_DIR).not.toBe(path.join(SANDBOX, "unused-config"));
+      throw new Error("read refused");
+    },
+  });
+  const run = githubRunner(SANDBOX, 1000, { asApp, declared: () => true, exec: async () => { fallbackCalls++; return "[]"; } });
+  await expect(run(["pr", "view", "46", "--repo", "acme/widgets"])).rejects.toThrow("read refused");
+  expect(calls).toBe(1);
+  expect(fallbackCalls).toBe(0);
+});
