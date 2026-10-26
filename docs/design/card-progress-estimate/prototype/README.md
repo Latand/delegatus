@@ -54,7 +54,7 @@ The bar uses the product's tokens and adds no colour:
 - the fill is `--color-secondary`;
 - an estimate older than 24 hours fills with diagonal stripes of
   `--color-muted`, 2 px wide with 2 px gaps that show the inside of the track,
-  so it differs from a fresh estimate by its form and not only its tone;
+  so it differs from a fresh estimate by its form as well as its tone;
 - an absent estimate is the same outline, dashed, with nothing inside.
 
 Measured in the rendered pages (WCAG relative luminance, light / dark):
