@@ -704,6 +704,10 @@ export type PipelineStageAttempt = {
   /** Proven fenced first messages replaced in this attempt. Retained across
       successful spawn handshakes and controller restarts; at most three. */
   fencedMessageRetries?: number;
+  /** Socketless recovery hands a failed launch back to its runnable Viewer
+      for at most ten minutes. Ownership changes and controller restarts keep
+      this deadline; successful retirement clears it before replacement. */
+  startupOwnerWait?: { launchId: string; deadline: string };
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
