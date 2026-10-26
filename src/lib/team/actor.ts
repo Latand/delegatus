@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-import { callerConversationId, directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { callerConversationId } from "@/lib/agent/operatorAuthority";
+import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { pairedTelegramOwner } from "@/lib/externalRelay/store";
@@ -63,7 +64,7 @@ export function teamActor(req: ActorRequest): TeamActor {
   const conversationId = callerConversationId(req);
   if (conversationId) return { kind: "agent", conversationId };
   if (operatorSpawnCapabilityPresented(req)) return { kind: "service", service: "viewer" };
-  if (!directOperatorActivityAuthority(req).ok) return { kind: "service", service: "viewer" };
+  if (internalServiceClaim(req).claim === "valid") return { kind: "service", service: "viewer" };
   let live: LiveSession | null = null;
   try {
     live = requestSession(req);

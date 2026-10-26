@@ -20,7 +20,7 @@ import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { interruptionObligationDirectory, accountGuardObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { listCodexAccounts } from "@/lib/accounts/codex";
-import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -830,7 +830,7 @@ function reviewerTierForAccount(role: RoleConfig, account: AccountContext): Role
   const offers = tierOffers([{ id: account.accountId, home: account.home }], role.model, role.serviceTier);
   if (offers.offering.length) return role;
   if (role.serviceTierSource !== "role-default") {
-    throw new CodexServiceTierUnavailableError(`selected reviewer account does not offer serviceTier ${role.serviceTier}; offered: ${offers.offered.join(", ") || "none"}`);
+    throw new CodexServiceTierUnavailableError(codexServiceTierRefusal([{ id: account.accountId, home: account.home }], role.model, role.serviceTier, account.accountId, "selected"));
   }
   return withoutPreferredReviewerTier(role);
 }
@@ -852,7 +852,7 @@ function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch
       && (!round.accountId || account.id === round.accountId));
     const offers = tierOffers(candidates, role.model, role.serviceTier);
     if (!offers.offering.length) {
-      if (required) throw new CodexServiceTierUnavailableError(`no account in this project's reviewer pool offers serviceTier ${role.serviceTier} for ${role.model}; offered: ${offers.offered.join(", ") || "none"}`);
+      if (required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, role.model, role.serviceTier, round.accountId));
       role = withoutPreferredReviewerTier(role);
     } else lacking = offers.lacking;
   }

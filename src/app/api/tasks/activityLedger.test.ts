@@ -27,9 +27,10 @@ const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy
 const { statePath } = await import("@/lib/configDir");
 const { taskRevision } = await import("@/lib/tasks/revision");
 const { loadTasks } = await import("@/lib/tasks/store");
+const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
 
 const DESKTOP = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
-const headers = (extra: Record<string, string> = {}) => ({ "content-type": "application/json", host: "localhost", "user-agent": DESKTOP, ...extra });
+const headers = (extra: Record<string, string> = {}) => ({ cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json", host: "localhost", "user-agent": DESKTOP, ...extra });
 const ledgerDir = () => statePath("activity");
 const rows = () => readRequests(0, Date.now() + 60_000, { dir: ledgerDir }).rows.map(({ at, project, surface, kind }) => ({ at, project, surface, kind }));
 

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { shortId } from "@/lib/shortIds";
 
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
@@ -22,7 +23,7 @@ afterAll(() => Object.assign(process.env, inheritedGitConfig));
    over a store of its own and must never read or write the operator's. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-"));
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
-const { commitPipelineStage } = await import("./git");
+const { commitPipelineStage, provisionPipelineWorktree, provisionPipelineWorktreeAsync } = await import("./git");
 const { findPipelineRecord, loadPipelines, pipelineArtifactsDir, savePipelines } = await import("./store");
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { realExec } = await import("@/lib/workflows/provision");
@@ -111,6 +112,38 @@ function writeOutput(repo: string, relative: string, content: string) {
   fs.mkdirSync(path.dirname(path.join(repo, relative)), { recursive: true });
   fs.writeFileSync(path.join(repo, relative), content);
 }
+
+test.each(["sync", "async"] as const)("%s provisioning supports the first hooked commit in a fresh worktree", async mode => {
+  const box = hookedRepo();
+  try {
+    fs.writeFileSync(path.join(box.repo, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), "node_modules/\n");
+    fs.mkdirSync(path.join(box.repo, "scripts"));
+    fs.writeFileSync(path.join(box.repo, "scripts/lint.ts"), 'import { ESLint } from "eslint";\nconst results = await new ESLint().lintFiles(["source.ts"]);\nif (results.some(result => result.errorCount)) process.exit(1);\n');
+    fs.copyFileSync(path.resolve("eslint.config.mjs"), path.join(box.repo, "eslint.config.mjs"));
+    box.run("add", ".");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "lint configuration");
+    fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+    const subject = { ...box.subject, branch: "lane", baseBranch: "main", baseRef: box.run("rev-parse", "HEAD"), worktreeDir: path.join(box.root, "lane") };
+    expect(fs.existsSync(subject.worktreeDir)).toBe(false);
+    const provisioned = mode === "sync"
+      ? await provisionPipelineWorktree(subject, box.exec)
+      : await provisionPipelineWorktreeAsync(subject, (command, args, cwd) => Promise.resolve(box.exec(command, args, cwd)));
+    expect(provisioned).toMatchObject({ ok: true });
+    fs.writeFileSync(path.join(box.repo, ".git/hooks/pre-commit"), `#!/bin/sh\n'${process.execPath}' --no-install scripts/lint.ts\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(subject.worktreeDir, "source.ts"), "export const value = 2;\n");
+    expect((await box.exec("git", ["add", "source.ts"], subject.worktreeDir)).code).toBe(0);
+    const commit = await box.exec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "first stage change"], subject.worktreeDir);
+    expect(commit, commit.stderr).toMatchObject({ code: 0 });
+    // Exercise real lint refusal too, so a silently skipped hook cannot pass.
+    fs.writeFileSync(path.join(subject.worktreeDir, "source.ts"), "export const value: any = 2;\n");
+    await box.exec("git", ["add", "source.ts"], subject.worktreeDir);
+    const refused = await box.exec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "invalid stage change"], subject.worktreeDir);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stdout + refused.stderr).not.toContain("Cannot find module");
+    expect(box.calls.join("\n")).not.toContain("bun install");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test.each([
   ["installed", "node_modules"], ["fixed-on-retry", "node_modules"],
@@ -472,6 +505,8 @@ async function runningStage(h: ReturnType<typeof harness>, access: "read-only" |
     spec: "AC1",
     repoDir: "/repo",
     src: "/claude/creator.jsonl",
+    // These cases exercise settlement; remote publication has its own fixture.
+    publication: "internal",
     stages: [
       access === "read-only"
         ? { id: "study", kind: "run", role: { roleId: "architect" }, access, outputs: ["evidence/draft"], prompt: "Study", next: "verify" }
@@ -514,6 +549,38 @@ test.each(["read-only", "read-write"] as const)("retry-stage retries a refused %
   expect(h.spawnCount()).toBe(launches);
   expect(h.requests).toHaveLength(1);
   expect(h.calls.filter(call => call.startsWith("git commit"))).toHaveLength(2);
+});
+
+test.each(["read-only", "read-write"] as const)("a %s staging refusal parks and retries settlement without relaunching the passed stage", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  const execute = h.ports.exec;
+  let refuseStaging = true;
+  h.ports.exec = (command, args, ...rest) => args[0] === "add" && refuseStaging
+    ? refusal(`cannot stage ${OUTPUT}: permission denied`)
+    : execute(command, args, ...rest);
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor?.state).toBe("committing");
+  expect(parked.stateDetail).toContain(`cannot stage ${OUTPUT}`);
+  expect(parked.stateDetail).toContain("retry-stage");
+  expect(study().verdict?.status).toBe("pass");
+  expect(study().commitRepair).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(h.requests).toHaveLength(0);
+  h.ports.conversationAgentActive = async () => false;
+  refuseStaging = false;
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBeNull();
+  expect(study().state).toBe("passed");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(h.requests).toHaveLength(0);
+  expect(h.calls.some(call => call.startsWith("git reset --hard") || call.startsWith("git clean"))).toBe(false);
 });
 
 test("retry-stage refuses a settlement retry while the repair turn is still busy or queued", async () => {
@@ -1198,7 +1265,7 @@ test("a request a crash interrupted after the stage accepted it is replayed unde
 
 test.each([
   ["the ancestry check fails", (h: ReturnType<typeof harness>) => h.ancestryAnswers({ code: 128, stdout: "", stderr: "fatal: object store unavailable" }),
-    `stage head ${STAGE_HEAD} does not descend from accepted head ${BASE_SHA}; fatal: object store unavailable`],
+    `stage head ${shortId(STAGE_HEAD)} does not descend from accepted head ${shortId(BASE_SHA)}; fatal: object store unavailable`],
   ["history reconciliation fails", (h: ReturnType<typeof harness>) => {
     h.ancestryAnswers({ code: 1, stdout: "", stderr: "" });
     h.branchRefAnswers({ code: 128, stdout: "", stderr: "fatal: ref HEAD is not a symbolic ref" });
@@ -1362,6 +1429,7 @@ function repairedPublication() {
 
 test.each([
   ["the pre-push hook refuses the repaired head", "publishing the passed stage: ", (h: ReturnType<typeof repairedPublication>) => {
+    fs.mkdirSync(path.dirname(h.hook), { recursive: true });
     fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests' >&2\necho '(fail) the stage broke this [2.00ms]' >&2\nexit 1\n", { mode: 0o700 });
   }],
   ["the worktree moved past the repaired head", "the worktree moved to ", (h: ReturnType<typeof repairedPublication>) => {

@@ -167,6 +167,39 @@ test("image storage scans outside the account lease and rechecks a racing reserv
   } finally { scan.mockRestore(); registry.close(); }
 });
 
+test.each(["adopted", "rejected"] as const)("proactive delivery rechecks rejection after asynchronous authorization: %s", async phase => {
+  const rejected = phase === "rejected";
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { registry, conversation } = registryWithConversation();
+  try {
+    const { task } = await admitProactiveTask(candidate(`delivery-${rejected}`), context(), undefined, authority());
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "structured", conversationId: conversation.id,
+      origin: { kind: "operator" }, clientAttemptId: `adopted-delivery-${rejected}`, taskIds: [task.id],
+      launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Continue the retained work" }) });
+    let commands = 0;
+    const key = `proactive-delivery-${rejected}`;
+    const client = {
+      readSession: sessionReader(async () => snapshot(conversation.id)),
+      command: async (value: { operationId: string }) => {
+        commands++;
+        return { operationId: value.operationId, replayed: false, receipt: {
+          operationId: value.operationId, idempotencyKey: key, conversationId: conversation.id, kind: "send",
+          status: "queued", text: "Continue the retained work", at: new Date(NOW).toISOString(), revision: 1,
+        } };
+      },
+    } as unknown as RuntimeHostClient;
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: key, text: "Continue the retained work" }, {
+      enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+      authorizeDispatch: async () => { if (rejected) await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task)); },
+    });
+    expect(result?.ok).toBe(!rejected);
+    expect(commands).toBe(rejected ? 0 : 1);
+  } finally { registry.close(); }
+});
+
 test("Claude image-only admission stores refs and journals their content digest", async () => {
   const { registry, conversation } = registryWithConversation("default", "claude");
   const imageRef: StructuredImageRef = { sha256: "a".repeat(64), mime: "image/png", bytes: 67 };

@@ -299,7 +299,7 @@ test("role_presets validates catalog-backed Codex tiers and persists a reviewer 
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
   expect(loadRoleOverrides().schemaVersion).toBe(5);
   const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "tier-role-unoffered", overrides: { reviewer: { config: { ...config, serviceTier: "unoffered" } } } }));
-  expect(refused.message).toContain("offered: priority, ultrafast");
+  expect(refused.message).toContain(`account "account C" (${account.id}): gpt-6-astra offered: priority, ultrafast`);
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
   const cleared = { engine: "codex", model: "gpt-6-astra", effort: "high" };
   await tools(SEAT).role_presets({ clientRequestId: "tier-role-clear", overrides: { reviewer: { config: cleared } } });

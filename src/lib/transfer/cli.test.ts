@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 
 import { internalServiceHeaders } from "@/lib/agent/callerClaims";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { leaveSeatLessons, roleMemoryCollection } from "@/lib/memory/roleStore";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
@@ -221,11 +222,14 @@ describe("transfer route gate", () => {
   const gate = (headers: Record<string, string>) => within(target, () => transferGate(new NextRequest("http://127.0.0.1:8898/api/transfer/report", { headers })));
 
   test("admits the owner's page and the host controller, refuses agents, other services and other sites", async () => {
-    expect(await gate(PAGE)).toBeNull();
+    /* The owner's page holds the session cookie its navigation opened; Fetch Metadata alone proves nothing. */
+    const page = { ...PAGE, cookie: `llv_operator=${await within(target, () => soloBrowserSession())}` };
+    expect(await gate(page)).toBeNull();
     expect(await gate({ host: "127.0.0.1:8898", ...await within(target, () => internalServiceHeaders("controller")) })).toBeNull();
     for (const headers of <Record<string, string>[]>[
       { host: "127.0.0.1:8898", ...await within(target, () => internalServiceHeaders("mcp")) },
-      { ...PAGE, "x-llv-spawn-capability": "A".repeat(43) },
+      PAGE,
+      { ...page, "x-llv-spawn-capability": "A".repeat(43) },
       { host: "127.0.0.1:8898", origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" },
       { host: "127.0.0.1:8898" },
       { host: "127.0.0.1:8898", "x-llv-internal-service": `controller.${"0".repeat(64)}` },

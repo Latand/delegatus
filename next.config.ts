@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
    read below (docs/design/rename-delegatus.md §5). */
@@ -53,7 +53,8 @@ const nextConfig: NextConfig = {
       // masks in JavaScript when `bufferutil` is absent. A CommonJS external
       // keeps the importing modules synchronous; `serverExternalPackages`
       // emits `import("ws")` and turns every importer into an async module.
-      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws" }];
+      // The provenance verifier also runs under Node and resolves its installed graph.
+      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws", "@sigstore/bundle": "commonjs @sigstore/bundle", "@sigstore/tuf": "commonjs @sigstore/tuf", "@sigstore/verify": "commonjs @sigstore/verify" }];
       const originalEntry = config.entry;
       config.entry = async () => ({
         ...(typeof originalEntry === "function" ? await originalEntry() : originalEntry),
@@ -84,6 +85,11 @@ const nextConfig: NextConfig = {
 };
 
 export default function configureNext(phase: string): NextConfig {
+  if (phase === PHASE_DEVELOPMENT_SERVER) {
+    // Bun can exit tsc before its large --showConfig stdout pipe is flushed.
+    // Read the same project through the installed TypeScript API at startup.
+    return { ...nextConfig, experimental: { ...nextConfig.experimental, useTypeScriptCli: false } };
+  }
   if (phase === PHASE_PRODUCTION_BUILD) {
     // Every build entry point loads this config before Next launches TypeScript.
     // Preserve unrelated Node options and any larger caller-supplied heap.

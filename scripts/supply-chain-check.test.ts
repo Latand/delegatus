@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { auditArguments, requireFrozenInstall, requireMatchingLockfile } from "./supply-chain-check";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -24,9 +24,11 @@ test("frozen install rejects a dependency manifest that disagrees with the old l
   const root = mkdtempSync(join(tmpdir(), "supply-frozen-")); roots.push(root);
   writeFileSync(join(root, "package.json"), readFileSync(join(import.meta.dir, "../package.json")));
   writeFileSync(join(root, "bun.lock"), `${readFileSync(join(import.meta.dir, "../bun.lock"), "utf8")}\n`);
-  mkdirSync(join(root, "patches"));
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { dependencies: Record<string, string>; patchedDependencies?: Record<string, string> };
-  for (const patch of Object.values(manifest.patchedDependencies ?? {})) writeFileSync(join(root, patch), readFileSync(join(import.meta.dir, "..", patch)));
+  for (const patch of new Set(Object.values(manifest.patchedDependencies ?? {}))) {
+    mkdirSync(dirname(join(root, patch)), { recursive: true });
+    writeFileSync(join(root, patch), readFileSync(join(import.meta.dir, "..", patch)));
+  }
   manifest.dependencies.entities = "7.0.0";
   writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
   expect(() => requireFrozenInstall(root)).toThrow("bun install --frozen-lockfile failed");

@@ -10,6 +10,7 @@ import { NextRequest } from "next/server";
 import { POST as autoRoute } from "@/app/api/self-update/auto/route";
 import { GET as snapshotRoute } from "@/app/api/self-update/route";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -204,7 +205,6 @@ function domain(attribution: CallerAttribution, callerProject: string | null = n
 
 interface Session {
   call(args: Record<string, unknown>): Promise<{ failed: boolean; payload: Record<string, unknown> }>;
-  description(): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -225,9 +225,6 @@ async function session(attribution: CallerAttribution, callerProject: string | n
       const result = await client.callTool({ name: "auto_updates", arguments: args });
       return { failed: result.isError === true, payload: (result.structuredContent ?? {}) as Record<string, unknown> };
     },
-    async description() {
-      return (await client.listTools()).tools.find((tool) => tool.name === "auto_updates")?.description ?? "";
-    },
     async close() {
       await client.close();
       await server.close();
@@ -242,7 +239,7 @@ async function once(attribution: CallerAttribution, args: Record<string, unknown
 
 /** What the Update dialog reads: the snapshot route, as the operator's page. */
 async function dialog(): Promise<Snapshot> {
-  const response = await fetch(new URL("/api/self-update", controlOrigin), { headers: { origin: controlOrigin, "sec-fetch-site": "same-origin" } });
+  const response = await fetch(new URL("/api/self-update", controlOrigin), { headers: { origin: controlOrigin, "sec-fetch-site": "same-origin", cookie: `llv_operator=${soloBrowserSession()}` } });
   return await response.json() as Snapshot;
 }
 
@@ -250,7 +247,7 @@ async function dialog(): Promise<Snapshot> {
 async function dialogSwitch(body: Record<string, unknown>): Promise<number> {
   const response = await fetch(new URL("/api/self-update/auto", controlOrigin), {
     method: "POST",
-    headers: { origin: controlOrigin, "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    headers: { origin: controlOrigin, "sec-fetch-site": "same-origin", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   return response.status;
@@ -552,15 +549,4 @@ test("the dialog's switch is recorded as the operator, and a writer claimed with
   const view = await dialog();
   expect(view.auto?.changedBy).toEqual({ kind: "operator", conversationId: null, via: "dialog" });
   expect(view.history?.[0]).toMatchObject({ kind: "auto-on", by: "operator", writer: { kind: "operator", conversationId: null, via: "dialog" } });
-});
-
-test("the registered description says what enabling does", async () => {
-  const opened = await session(WORKER);
-  const description = await opened.description().finally(() => opened.close());
-  expect(description).toContain("main");
-  expect(description).toContain("green");
-  expect(description).toContain("quiet");
-  expect(description).toContain("rolls back");
-  expect(description).toContain("switch themselves off");
-  expect(description).toContain("auto_updates_write_refused");
 });

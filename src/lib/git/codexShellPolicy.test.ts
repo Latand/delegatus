@@ -6,13 +6,13 @@ import path from "node:path";
 import { readCodexShellPolicy } from "./codexShellPolicy";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
 
-test("native policy bridge issues only initialize and config/read and keeps diagnostics private", async () => {
+test("native policy bridge excludes operator credentials, issues only initialize and config/read and keeps diagnostics private", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-policy-bridge-"));
   try {
     const binary = path.join(root, "fixture-codex");
     const methods = path.join(root, "methods.jsonl");
-    fs.writeFileSync(binary, `#!${process.execPath}\nimport fs from 'node:fs';\nimport { createInterface } from 'node:readline';\nfor await (const line of createInterface({ input: process.stdin })) {\nconst request = JSON.parse(line); fs.appendFileSync(process.env.POLICY_METHODS, request.method+'\\n');\nif (!request.id) continue;\nconsole.log(JSON.stringify({ id: request.id, result: request.method === 'initialize' ? {} : { config: { shell_environment_policy: { inherit: 'core', include_only: ['PATH'], set: { OTHER: 'kept' } } } } }));\n}\n`, { mode: 0o700 });
-    const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: root, POLICY_METHODS: methods };
+    fs.writeFileSync(binary, `#!${process.execPath}\nimport fs from 'node:fs';\nif (['LLV_TOKEN','DELEGATUS_TOKEN','LLV_OPERATOR_TOKEN','DELEGATUS_OPERATOR_TOKEN'].some(name=>process.env[name]!==undefined)) process.exit(9);\nimport { createInterface } from 'node:readline';\nfor await (const line of createInterface({ input: process.stdin })) {\nconst request = JSON.parse(line); fs.appendFileSync(process.env.POLICY_METHODS, request.method+'\\n');\nif (!request.id) continue;\nconsole.log(JSON.stringify({ id: request.id, result: request.method === 'initialize' ? {} : { config: { shell_environment_policy: { inherit: 'core', include_only: ['PATH'], set: { OTHER: 'kept' } } } } }));\n}\n`, { mode: 0o700 });
+    const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: root, POLICY_METHODS: methods, LLV_TOKEN: "fixture", DELEGATUS_TOKEN: "fixture", LLV_OPERATOR_TOKEN: "fixture", DELEGATUS_OPERATOR_TOKEN: "fixture" };
     expect(await readCodexShellPolicy(binary, root, env)).toEqual({ inherit: "core", include_only: ["PATH"], set: { OTHER: "kept" } });
     expect(fs.readFileSync(methods, "utf8").trim().split("\n")).toEqual(["initialize", "initialized", "config/read"]);
     fs.writeFileSync(binary, '#!/bin/sh\nprintf "private diagnostic" >&2\nexit 1\n', { mode: 0o700 });

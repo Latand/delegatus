@@ -6,8 +6,7 @@ export const SERVICE_TIER_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export type CodexTierOffer = { id: string; name: string };
 const cache = new Map<string, { key: string; models: unknown[] }>();
 
-/** Catalog evidence only: missing or unreadable rows never imply availability. */
-export function codexModelServiceTiers(home: string, model: string): CodexTierOffer[] | null {
+function catalogModels(home: string): unknown[] | null {
   const file = path.join(home, "models_cache.json");
   try {
     const stat = fs.statSync(file);
@@ -19,11 +18,46 @@ export function codexModelServiceTiers(home: string, model: string): CodexTierOf
       cache.set(file, record);
       while (cache.size > 64) cache.delete(cache.keys().next().value!);
     }
-    const row = record.models.find((value): value is Record<string, unknown> => !!value && typeof value === "object" && (value as { slug?: unknown }).slug === model);
-    if (!Array.isArray(row?.service_tiers)) return null;
-    return row.service_tiers.filter((tier): tier is CodexTierOffer => !!tier && typeof tier.id === "string" && SERVICE_TIER_PATTERN.test(tier.id))
-      .map(tier => ({ id: tier.id, name: typeof tier.name === "string" ? tier.name : tier.id }));
+    return record.models;
   } catch { return null; }
+}
+
+function catalogRow(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+/** Catalog evidence only: missing or unreadable rows never imply availability. */
+export function codexModelServiceTiers(home: string, model: string): CodexTierOffer[] | null {
+  const row = catalogModels(home)?.find(value => catalogRow(value) && value.slug === model);
+  if (!catalogRow(row) || !Array.isArray(row.service_tiers)) return null;
+  return row.service_tiers.filter((tier): tier is CodexTierOffer => !!tier && typeof tier.id === "string" && SERVICE_TIER_PATTERN.test(tier.id))
+    .map(tier => ({ id: tier.id, name: typeof tier.name === "string" ? tier.name : tier.id }));
+}
+
+export type TierDiagnosticAccount = {
+  id: string; label?: string; tiers: string[] | null; alternativeModels: string[];
+};
+
+/** Describe only the accounts evaluated by the caller's existing admission rule. */
+export function serviceTierRefusal(accounts: readonly TierDiagnosticAccount[], model: string, tier: string, accountId?: string | null, selection: "pinned" | "selected" = "pinned"): string {
+  const scope = accountId ? `${selection} account ${JSON.stringify(accountId)}` : "allowed accounts";
+  const details = accounts.map(account => {
+    const name = account.label ? `${JSON.stringify(account.label)} (${account.id})` : JSON.stringify(account.id);
+    const offered = account.tiers === null ? "unknown (catalog unavailable)" : [...new Set(account.tiers)].sort().join(", ") || "none";
+    const alternatives = [...new Set(account.alternativeModels)].sort();
+    return `account ${name}: ${model} offered: ${offered}${alternatives.length ? `; ${tier} offered for other models on this account: ${alternatives.join(", ")}` : ""}`;
+  });
+  return `no evaluated account offers serviceTier ${tier} for model ${model}; evaluated ${scope}: ${details.join("; ") || "none"}`;
+}
+
+export function codexServiceTierRefusal(accounts: readonly { id: string; home: string; label?: string }[], model: string, tier: string, accountId?: string | null, selection: "pinned" | "selected" = "pinned"): string {
+  return serviceTierRefusal(accounts.map(account => ({
+    id: account.id, label: account.label,
+    tiers: codexModelServiceTiers(account.home, model)?.map(value => value.id) ?? null,
+    alternativeModels: (catalogModels(account.home) ?? []).filter(catalogRow)
+      .filter(row => typeof row.slug === "string" && row.slug !== model && Array.isArray(row.service_tiers)
+        && row.service_tiers.some(value => catalogRow(value) && value.id === tier)).map(row => row.slug as string),
+  })), model, tier, accountId, selection);
 }
 
 export function tierOffers(accounts: readonly { id: string; home: string }[], model: string, tier: string) {

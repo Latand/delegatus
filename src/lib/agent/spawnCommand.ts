@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { AgentRegistry, SpawnReceipt } from "./registry";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
@@ -583,7 +584,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (!stat.isDirectory()) {
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
-  const authorizeLaunch = () => {
+  let relatedAuthority: (string | null)[] = [];
+  const authorizeLaunch = (receipt: SpawnReceipt | null = existingAttempt) => {
+    assertProactiveTaskExecution([...(typeof body.taskId === "string" ? [body.taskId] : []),
+      ...(receipt?.failureReporting?.taskIds ?? []),
+      ...proactiveConversationTaskIds([...relatedAuthority, receipt?.conversationId,
+        authenticatedCaller?.kind === "agent" ? authenticatedCaller.conversationId : null, supersedesConversationId], registry)]);
     if (role.value?.role === "curator") {
       const pass = machinePassAuthority();
       const project = canonicalProject(explicitProject ?? projectForCwd(cwd) ?? "");
@@ -639,6 +645,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     }), registry);
     const parent = lineage.parent;
     const reviewedConversationId = lineage.reviewed?.conversationId ?? null;
+    relatedAuthority = [parent?.conversationId ?? null, reviewedConversationId];
     /* An authenticated agent caller always resolves its own conversation as
        parent; failure here means broken caller identity. An operator-capability
        caller without src proceeds as a silent root (#341) — the API lane now
@@ -1260,7 +1267,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             && Boolean(receipt.admissionOwner && current.admissionOwner
               && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)),
         });
-        try { authorizeLaunch(); }
+        try { authorizeLaunch(receipt); }
         catch {
           await failOwnedAdmission("autonomous launch authorization revoked");
           return;
@@ -1284,7 +1291,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
               || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner))) {
               throw new Error("structured launch admission ownership changed");
             }
-            try { authorizeLaunch(); }
+            try { authorizeLaunch(receipt); }
             catch {
               await failOwnedAdmission("autonomous launch authorization revoked");
               throw new Error("autonomous launch authorization revoked");
@@ -1299,7 +1306,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
                 imageRefs,
                 registry,
                 client: runtimeClient,
-                authorize: dependencies.authorizeAutonomousLaunch,
+                authorize: () => authorizeLaunch(receipt),
               });
             } catch (error) {
               // The launcher may already have settled its own failure. That
@@ -1490,8 +1497,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       }
     }
     const startedAtMs = Date.now();
-    authorizeLaunch();
-    const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt);
+    authorizeLaunch(begun.receipt);
+    const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt,
+      { authorize: () => authorizeLaunch(begun.receipt) });
     const childPath = await resolveSpawnedTranscriptPath({
       engine,
       knownTranscript: spec.transcript ?? null,

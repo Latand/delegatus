@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkEnvironment, environmentFingerprint, GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { systemBootEpoch } from "../src/lib/processIdentity";
@@ -11,6 +11,14 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+test("portable input capture retains values and explicit absences without placement or authority", () => {
+  const inputs = checkInputEnvironment(checkEnvironment({
+    PATH: "/usr/bin", HOME: "/fixture/home", LANG: "C.UTF-8", NODE_OPTIONS: "--max-old-space-size=1024",
+    LLV_GATE_CHECK_ENV: "PROBE,ABSENT,constructor", PROBE: "value", LLV_GATE_PUSH_DEADLINE: "1000", LLV_TOKEN: "private",
+  }));
+  expect(inputs).toEqual({ LANG: "C.UTF-8", NODE_OPTIONS: "--max-old-space-size=1024", LLV_GATE_CHECK_ENV: "PROBE,ABSENT,constructor", PROBE: "value", ABSENT: null, constructor: null });
+});
 
 test("a raw environment keys every variable that would reach a check", () => {
   const base = { NODE_ENV: "test" as const };
@@ -114,6 +122,41 @@ test("an installed tool edit invalidates the fingerprint without a version or lo
   expect(installedFingerprint(root)).not.toBe(before);
 });
 
+test("JSON and interpreter lines stay bound without being parsed as module code", () => {
+  const root = fixture();
+  mkdirSync(path.join(root, "scripts"));
+  writeFileSync(path.join(root, "scripts", "local-gate.ts"), 'import "./child";');
+  const child = path.join(root, "scripts", "child.ts");
+  const contents = 'import "../policy.json"; export const value = true;';
+  writeFileSync(child, `#!/usr/bin/env bun\n${contents}`);
+  const policy = path.join(root, "policy.json");
+  writeFileSync(policy, '{"enabled":true,"limits":[1,2]}');
+  const inputs = gateToolFiles(root);
+  expect(inputs).toContain("policy.json");
+  expect(inputs).toContain(path.join("scripts", "child.ts"));
+  expect(inputs.map(file => path.win32.normalize(file))).toContain(path.win32.join("scripts", "child.ts"));
+  const modulePath = path.join(import.meta.dir, "gate-cache.ts");
+  const run = (body: string) => {
+    const source = `import path from "node:path";
+      import { GateCache, gateToolFiles, fileFingerprint, fingerprint } from ${JSON.stringify(modulePath)};
+      const root = ${JSON.stringify(root)};
+      const key = fingerprint(gateToolFiles(root).map(file => [file, fileFingerprint(path.join(root, file))]));
+      const cache = new GateCache(path.join(root, "receipts"), value => value?.passed === true);
+      ${body}`;
+    const result = Bun.spawnSync([process.execPath, "-e", source], { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    return result.stdout.toString().trim();
+  };
+  expect(run('cache.write(key, { passed: true }); console.log(cache.read(key)?.passed);')).toBe("true");
+  writeFileSync(policy, '{"enabled":false,"limits":[1,2]}');
+  expect(run("console.log(cache.read(key));")).toBe("undefined");
+  expect(run('cache.write(key, { passed: true }); console.log(cache.read(key)?.passed);')).toBe("true");
+  writeFileSync(child, `#!/usr/bin/env node\n${contents}`);
+  expect(run("console.log(cache.read(key));")).toBe("undefined");
+  writeFileSync(child, "export const broken = ;");
+  expect(() => gateToolFiles(root)).toThrow();
+});
+
 test("a shared install flipping group or other bits keeps the fingerprint; the owner's execute bit changes it", () => {
   const root = fixture(), directory = path.join(root, "node_modules", "cli"); mkdirSync(directory, { recursive: true });
   const script = path.join(directory, "cli.mjs"); writeFileSync(script, "export {};"); chmodSync(script, 0o775);
@@ -148,4 +191,36 @@ test("orphaned atomic writes share the receipt storage bound after a restart", (
     new GateCache(${JSON.stringify(root)}, value => value?.passed === true).write("complete", { passed: true });`]);
   expect(restarted.exitCode, restarted.stderr.toString()).toBe(0);
   expect(readdirSync(root)).toHaveLength(256);
+});
+
+
+test("gate receipts fingerprint imported data without parsing it as source", () => {
+  const root = fixture();
+  mkdirSync(path.join(root, "scripts"));
+  mkdirSync(path.join(root, "src"));
+  writeFileSync(path.join(root, "scripts/local-gate.ts"), 'import "../package.json"; import "../src/check";\n');
+  writeFileSync(path.join(root, "src/check.ts"), 'import "../checks.json"; export const check = true;\n');
+  writeFileSync(path.join(root, "package.json"), '{"version":"1"}');
+  writeFileSync(path.join(root, "checks.json"), '{"enabled":true}');
+  const files = gateToolFiles(root);
+  expect(files).toContain("package.json");
+  expect(files).toContain("checks.json");
+  expect(files).toContain("src/check.ts");
+  const fingerprint = () => files.map(file => fileFingerprint(path.join(root, file)));
+  const before = fingerprint();
+  writeFileSync(path.join(root, "checks.json"), '{"enabled":false}');
+  expect(fingerprint()).not.toEqual(before);
+  writeFileSync(path.join(root, "src/check.ts"), "export const broken = ;");
+  expect(() => gateToolFiles(root)).toThrow();
+});
+
+
+test("gate receipts follow imports from executable scripts with a shebang", () => {
+  const root = fixture();
+  mkdirSync(path.join(root, "scripts"));
+  mkdirSync(path.join(root, "bin"));
+  writeFileSync(path.join(root, "scripts/local-gate.ts"), 'import "../bin/check.mjs";\n');
+  writeFileSync(path.join(root, "bin/check.mjs"), '#!/usr/bin/env bun\nimport "../scripts/child";\n');
+  writeFileSync(path.join(root, "scripts/child.ts"), 'export const check = true;\n');
+  expect(gateToolFiles(root)).toContain("scripts/child.ts");
 });

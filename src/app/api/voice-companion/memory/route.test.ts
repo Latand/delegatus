@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 const root = fs.mkdtempSync(path.join(os.tmpdir(),"voice-memory-routes-"));
 process.env.LLV_STATE_DIR = path.join(root,"state"); process.env.XDG_CONFIG_HOME = path.join(root,"config");
 const { GET, DELETE } = await import("./route");
@@ -12,7 +13,7 @@ const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/memb
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
 afterAll(() => { setCompanionSessionsForTests(undefined); resetTeamStoreForTests(); fs.rmSync(root,{ recursive:true,force:true }); });
-function request(method: string,body?: unknown,headers: Record<string,string> = {}) { return new NextRequest("http://127.0.0.1/api/voice-companion/memory",{ method,headers: { host: "127.0.0.1","sec-fetch-site": "same-origin",...headers },...(body ? { body: JSON.stringify(body) } : {}) }); }
+function request(method: string,body?: unknown,headers: Record<string,string> = {}) { return new NextRequest("http://127.0.0.1/api/voice-companion/memory",{ method,headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1","sec-fetch-site": "same-origin",...headers },...(body ? { body: JSON.stringify(body) } : {}) }); }
 test("memory authority blocks agents and cross-origin requests; starter scopes reads and clears", async () => {
   expect((await GET(request("GET",undefined,{ "x-llv-spawn-capability": "fixture" }))).status).toBe(403);
   expect((await DELETE(request("DELETE",{ all:true },{ "sec-fetch-site": "cross-site" }))).status).toBe(403);

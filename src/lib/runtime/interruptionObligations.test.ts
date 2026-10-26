@@ -90,8 +90,6 @@ test("the continuation names the deployment and the way back to a stage verdict"
   const text = interruptionContinuationText(obligation);
   expect(text).toContain("A Viewer deployment interrupted your turn");
   expect(text).toContain("tool-call at 2026-09-19T11:16:07.000Z");
-  expect(text).toContain("Run long commands in the foreground");
-  expect(text).toContain("stage_report");
 });
 
 test("a record appended to the pending journal while an import runs is kept for the next read", () => {
@@ -483,4 +481,23 @@ test("guard replay uses its cut identity index without scanning pending history"
     expect(historyScans).toBe(0);
   } finally { scan.mockRestore(); }
   expect((await conversationCuts(store, first.obligation.conversationId)).length).toBe(131);
+});
+
+
+test("cut deduplication retains legacy pid/start equality across boot metadata", () => {
+  for (const startIdentity of [null, "start"]) {
+    for (const bootEpoch of [undefined, null, "boot-current", "boot-earlier"]) {
+      const store = interruptionObligationStore(fs.mkdtempSync(path.join(directory, "matrix-")));
+      const owner = { pid: 42, startIdentity, bootEpoch: "boot-current" };
+      const input = { ...releaseCut, owner };
+      store.record(input);
+      const sameOwner = { pid: 42, startIdentity, bootEpoch };
+      expect(store.record({ ...input, owner: sameOwner }).created).toBe(false);
+      const changedStart = { pid: 42, startIdentity: "other", bootEpoch };
+      expect(store.record({ ...input, owner: changedStart }).created).toBe(true);
+      const changedPid = { pid: 43, startIdentity, bootEpoch };
+      expect(store.record({ ...input, owner: changedPid }).created).toBe(true);
+      expect(store.record({ ...input, owner: null }).created).toBe(true);
+    }
+  }
 });

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
+import { HostedCloudError, hostedHttpFailure, hostedNetworkFailure, hostedRpcFailure, type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -16,7 +17,7 @@ const MAX_FRAME = 16 * 1024 * 1024;
 type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
 type Input = Parameters<CloudStageClient["submit"]>[0];
-type Guard = Pick<Input, "signal" | "assertCurrent">;
+export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
   socket: (auth: Auth) => WebSocket;
@@ -62,7 +63,7 @@ function text(value: unknown, code: string): string {
   requireCloud(typeof value === "string" && value.length > 0, code);
   return value;
 }
-function guard(input: Guard) { input.signal.throwIfAborted(); input.assertCurrent(); }
+function guard(input: HostedCloudGuard) { input.signal.throwIfAborted(); input.assertCurrent(); }
 function shell(value: string) { return "'" + value.replaceAll("'", "'\\''") + "'"; }
 async function configuration(response: Response): Promise<Row> {
   requireCloud(response.body, "environment response missing");
@@ -77,7 +78,33 @@ async function configuration(response: Response): Promise<Row> {
       chunks.push(value);
     }
     return row(JSON.parse(Buffer.concat(chunks).toString()));
-  } finally { await reader.cancel(); reader.releaseLock(); }
+  } finally {
+    // A broken stream's cancellation can reject with the same transport error.
+    // Preserve the read/parse result rather than replacing its cause.
+    try { await reader.cancel(); } catch { /* The reader is being released. */ }
+    reader.releaseLock();
+  }
+}
+
+async function catalogue(url: string, auth: Auth, scope: HostedCloudGuard, dependencies: HostedCloudDependencies): Promise<Row> {
+  guard(scope);
+  let response: Response;
+  try {
+    response = await dependencies.fetch(url, {
+      headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
+      redirect: "error", signal: scope.signal,
+    });
+  } catch (error) { guard(scope); throw hostedNetworkFailure(error); }
+  guard(scope);
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* The HTTP refusal is already decisive. */ }
+    throw hostedHttpFailure(response.status);
+  }
+  let detail: Row;
+  try { detail = await configuration(response); }
+  catch (error) { guard(scope); throw hostedNetworkFailure(error); }
+  guard(scope);
+  return detail;
 }
 
 /** Raw native auth responses and stderr never cross this boundary. No API-key fallback. */
@@ -144,15 +171,16 @@ async function authenticate(account: AccountContext, signal: AbortSignal): Promi
   }
 }
 
-class HostedConnection {
+export class HostedConnection {
   private id = 0;
   private pending = new Map<number, { method: string; resolve: (value: Row) => void; reject: (error: Error) => void }>();
   private ownThread: string | null = null;
   private watchedThread: string | null = null;
   private rerouted = false;
-  constructor(private ws: WebSocket, private input: Guard) {
-    ws.on("error", () => this.fail("socket error"));
-    ws.on("close", () => this.fail("socket closed"));
+  private failure: HostedCloudError | undefined;
+  constructor(private ws: WebSocket, private input: HostedCloudGuard) {
+    ws.on("error", () => this.fail("socket error", "unavailable"));
+    ws.on("close", () => this.fail("socket closed", "unavailable"));
     ws.on("message", bytes => {
       const data = Array.isArray(bytes) ? Buffer.concat(bytes) : Buffer.from(bytes as ArrayBuffer);
       if (data.length > MAX_FRAME) { this.fail("socket frame too large"); ws.terminate(); return; }
@@ -160,7 +188,8 @@ class HostedConnection {
       try { message = row(JSON.parse(data.toString())); }
       catch { this.fail("socket protocol changed"); return; }
       const params = row(message.params);
-      if (message.method && message.id !== undefined) {
+      const serverMessage = Object.hasOwn(message, "method");
+      if (serverMessage && message.id !== undefined) {
         // Account-wide server request IDs are independent of our request IDs.
         if (params.threadId !== this.ownThread || !this.ownThread) return;
         try {
@@ -175,10 +204,10 @@ class HostedConnection {
         this.rerouted = true; this.fail("model was rerouted");
       }
       const pending = this.pending.get(Number(message.id));
-      if (!pending || message.method) return;
+      if (!pending || serverMessage) return;
       this.pending.delete(Number(message.id));
       // Remote messages may contain credentials; publish only the error code.
-      if (message.error) pending.reject(new Error(`Codex Cloud ${pending.method} refused (${Number(row(message.error).code) || "unknown"})`));
+      if (message.error) pending.reject(hostedRpcFailure(row(message.error)));
       else {
         const result = row(message.result);
         if (pending.method === "thread/start" && typeof row(result.thread).id === "string") this.watch(String(row(result.thread).id));
@@ -188,20 +217,32 @@ class HostedConnection {
   }
   own(thread: string) { this.ownThread = thread; this.watch(thread); }
   watch(thread: string) { this.watchedThread = thread; }
-  private fail(reason: string) {
-    for (const pending of this.pending.values()) pending.reject(new Error(`Codex Cloud ${reason}`));
+  private fail(reason: string, category: HostedCloudFailure = "invalid") {
+    this.failure ??= new HostedCloudError(`Codex Cloud ${reason}`, category);
+    for (const pending of this.pending.values()) pending.reject(this.failure);
     this.pending.clear();
   }
   async open() {
     await new Promise<void>((resolve, reject) => {
       if (this.ws.readyState === WebSocket.OPEN) return resolve();
-      this.ws.once("open", resolve);
-      this.ws.once("error", () => reject(new Error("Codex Cloud handshake failed")));
-      this.ws.once("close", () => reject(new Error("Codex Cloud handshake closed")));
-      const stop = () => reject(new Error("Codex Cloud handshake timed out"));
-      this.input.signal.addEventListener("abort", stop, { once: true });
-      this.ws.once("open", () => this.input.signal.removeEventListener("abort", stop));
-      if (this.input.signal.aborted) stop();
+      const clean = () => {
+        this.ws.off("open", opened); this.ws.off("error", failed); this.ws.off("close", closed);
+        this.ws.off("unexpected-response", refused); this.input.signal.removeEventListener("abort", stopped);
+      };
+      const finish = (error?: Error) => { clean(); if (error) reject(error); else resolve(); };
+      const opened = () => finish();
+      const failed = () => finish(new HostedCloudError("Codex Cloud handshake failed", "unavailable"));
+      const closed = () => finish(new HostedCloudError("Codex Cloud handshake closed", "unavailable"));
+      const stopped = () => finish(new HostedCloudError("Codex Cloud handshake stopped", "invalid"));
+      const refused = (_request: unknown, response: import("node:http").IncomingMessage) => {
+        // Preserve the HTTP cause before termination emits socket error/close.
+        finish(hostedHttpFailure(response.statusCode ?? 0));
+        response.resume(); this.ws.terminate();
+      };
+      this.ws.once("open", opened); this.ws.once("error", failed); this.ws.once("close", closed);
+      this.ws.once("unexpected-response", refused);
+      this.input.signal.addEventListener("abort", stopped, { once: true });
+      if (this.input.signal.aborted) stopped();
     });
     await this.rpc("initialize", { clientInfo: { name: "delegatus_cloud", version: "1.0.0" }, capabilities: { experimentalApi: true } });
     guard(this.input);
@@ -209,12 +250,13 @@ class HostedConnection {
   }
   async rpc(method: string, params: Row, receipt = false): Promise<Row> {
     guard(this.input);
+    if (this.failure) throw this.failure;
     requireCloud(!this.rerouted, "model was rerouted");
     const id = ++this.id;
     const response = new Promise<Row>((resolve, reject) => {
       this.pending.set(id, { method, resolve, reject });
-      try { this.ws.send(JSON.stringify({ id, method, params }), error => { if (error) this.fail("socket send failed"); }); }
-      catch { this.fail("socket send failed"); }
+      try { this.ws.send(JSON.stringify({ id, method, params }), error => { if (error) this.fail("socket send failed", "unavailable"); }); }
+      catch { this.fail("socket send failed", "unavailable"); }
     });
     const result = await response;
     if (!receipt) guard(this.input);
@@ -224,7 +266,7 @@ class HostedConnection {
   close() { this.fail("operation stopped"); this.ws.terminate(); }
 }
 
-const defaults: HostedCloudDependencies = {
+export const hostedCloudDependencies: HostedCloudDependencies = {
   authenticate,
   socket: auth => new WebSocket(ENDPOINT.replace("https:", "wss:") + "/", ["codex-app-server", "codex-client.desktop", `openai-bearer.${auth.token}`], {
     headers: { "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
@@ -234,30 +276,66 @@ const defaults: HostedCloudDependencies = {
   uuid: randomUUID,
 };
 
+
+/** Stages and publication checks resolve the same ASB environment catalog. */
+export async function resolveHostedCloudEnvironment(environmentId: string, auth: Auth, scope: HostedCloudGuard,
+  dependencies: HostedCloudDependencies = hostedCloudDependencies): Promise<string> {
+  requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(environmentId), "environment must be an ASB configuration");
+  const detail = await catalogue(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(environmentId)}`, auth, scope, dependencies);
+  requireCloud(detail.id === environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
+  const repository = row(detail.repositories[0]);
+  let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
+  if (!cwd) {
+    // The desktop app resolves an opaque repository id through this shared
+    // catalog and maps its full name to the default cloud workspace root.
+    const id = text(repository.repository_id, "environment repository missing");
+    guard(scope);
+    const detail = await catalogue(`https://chatgpt.com/backend-api/wham/github/repositories/${encodeURIComponent(id)}`, auth, scope, dependencies);
+    const fullName = text(detail.repository_full_name, "repository name missing");
+    requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
+      && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");
+    cwd = "/workspace/" + fullName.split("/")[1];
+  }
+  requireCloud(cwd.startsWith("/") && !cwd.includes("\0"), "environment mount invalid");
+  return cwd;
+}
+
+/** One authenticated socket and deadline per owner; credentials are never cached. */
+export async function openHostedCloudSession(input: HostedCloudGuard & { account: AccountContext }, timeoutMs: number,
+  dependencies: HostedCloudDependencies = hostedCloudDependencies) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  const scope = { ...input, signal: AbortSignal.any([input.signal, abort.signal]) };
+  let client: HostedConnection | undefined;
+  const stop = () => client?.close();
+  const close = () => { clearTimeout(timer); scope.signal.removeEventListener("abort", stop); client?.close(); };
+  scope.signal.addEventListener("abort", stop, { once: true });
+  try {
+    guard(scope);
+    const auth = await dependencies.authenticate(input.account, scope.signal);
+    guard(scope);
+    client = new HostedConnection(dependencies.socket(auth), scope);
+    await client.open();
+    guard(scope);
+    return { client, auth, scope, close };
+  } catch (error) { close(); throw error; }
+}
+
 /** Each controller job owns one bounded socket. There is no credential/session cache. */
-export function createHostedCloudStageClient(dependencies: HostedCloudDependencies = defaults): CloudStageClient {
-  async function using<T>(input: Guard & { account: AccountContext }, run: (client: HostedConnection, auth: Auth, scope: Guard) => Promise<T>, receipt = false): Promise<T> {
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), 30_000);
-    const scope = { ...input, signal: AbortSignal.any([input.signal, abort.signal]) };
-    let client: HostedConnection | undefined;
-    const stop = () => client?.close();
-    scope.signal.addEventListener("abort", stop, { once: true });
+export function createHostedCloudStageClient(dependencies: HostedCloudDependencies = hostedCloudDependencies): CloudStageClient {
+  async function using<T>(input: HostedCloudGuard & { account: AccountContext }, run: (client: HostedConnection, auth: Auth, scope: HostedCloudGuard) => Promise<T>, receipt = false): Promise<T> {
+    let session: Awaited<ReturnType<typeof openHostedCloudSession>> | undefined;
     try {
-      guard(scope);
-      const auth = await dependencies.authenticate(input.account, scope.signal);
-      guard(scope);
-      client = new HostedConnection(dependencies.socket(auth), scope);
-      await client.open();
-      const result = await run(client, auth, scope);
-      if (!receipt) guard(scope);
+      session = await openHostedCloudSession(input, 30_000, dependencies);
+      const result = await run(session.client, session.auth, session.scope);
+      if (!receipt) guard(session.scope);
       return result;
     } catch (error) {
-      if (scope.signal.aborted) throw new Error("Codex Cloud operation timed out");
+      if (input.signal.aborted || session?.scope.signal.aborted) throw new Error("Codex Cloud operation timed out");
       // Never forward dependency errors, URLs, auth stderr or raw RPC payloads.
       throw new Error(error instanceof Error && /^Codex Cloud [A-Za-z0-9 ()/-]+$/.test(error.message)
         ? error.message : "Codex Cloud transport failed");
-    } finally { clearTimeout(timer); scope.signal.removeEventListener("abort", stop); client?.close(); }
+    } finally { session?.close(); }
   }
   async function command(client: HostedConnection, environment: Row, script: string) {
     const result = await client.rpc("command/exec", { environmentId: text(environment.environmentId, "environment instance missing"),
@@ -302,36 +380,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha) && Buffer.byteLength(input.prompt) <= 1024 * 1024, "submission input invalid");
       guard(input);
-      const response = await dependencies.fetch(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(input.environmentId)}`, {
-        headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
-        redirect: "error", signal: scope.signal,
-      });
-      guard(input);
-      requireCloud(response.ok, `environment HTTP ${response.status}`);
-      const detail = await configuration(response);
-      guard(input);
-      requireCloud(detail.id === input.environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
-      const repository = row(detail.repositories[0]);
-      let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
-      if (!cwd) {
-        // The desktop app resolves an opaque repository id through this shared
-        // catalog and maps its full name to the default cloud workspace root.
-        const id = text(repository.repository_id, "environment repository missing");
-        guard(scope);
-        const response = await dependencies.fetch(`https://chatgpt.com/backend-api/wham/github/repositories/${encodeURIComponent(id)}`, {
-          headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
-          redirect: "error", signal: scope.signal,
-        });
-        guard(scope);
-        requireCloud(response.ok, `repository HTTP ${response.status}`);
-        const detail = await configuration(response);
-        guard(scope);
-        const fullName = text(detail.repository_full_name, "repository name missing");
-        requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
-          && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");
-        cwd = "/workspace/" + fullName.split("/")[1];
-      }
-      requireCloud(cwd.startsWith("/") && !cwd.includes("\0"), "environment mount invalid");
+      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
         config: { "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },

@@ -32,8 +32,9 @@ const logs = await import("@/app/api/logs/route");
 const log = await import("@/app/api/log/route");
 
 const origin = "http://127.0.0.1:8899";
-const operator = { origin, host: "127.0.0.1:8899" };
-const agent = { ...operator, [VIEWER_SPAWN_CAPABILITY_HEADER]: "A".repeat(43) };
+const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+const operator = () => ({ cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899" });
+const agent = { origin, host: "127.0.0.1:8899", [VIEWER_SPAWN_CAPABILITY_HEADER]: "A".repeat(43) };
 afterEach(() => setCallerConversationResolverForTests(null));
 const asAgent = () => setCallerConversationResolverForTests((digest) => (digest ? "conversation_agent" : null));
 
@@ -53,7 +54,7 @@ test("an install that never kept a chat conversation lists none and writes nothi
   const seeded = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(SANDBOX, "untouched-state");
   try {
-    const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }));
+    const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator() }));
     expect(await response.json()).toEqual({ relays: [], chats: [], answers: [], retentionDays: 30 });
     expect(fs.existsSync(path.join(SANDBOX, "untouched-state", "external-relay"))).toBe(false);
   } finally { process.env.LLV_STATE_DIR = seeded; }
@@ -91,7 +92,7 @@ const batch = (headers: Record<string, string>, paths: string[]) => logs.POST(ne
 }));
 
 test("the operator reads each chat's conversation with its relay, target, chat and transcript, newest turn first", async () => {
-  const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }));
+  const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator() }));
   expect(response.status).toBe(200);
   const body = await response.json();
   expect(body.relays).toEqual([{ id: "relay_chats", name: "Example relay", origin: "https://relay.example" }]);
@@ -144,7 +145,7 @@ test("an install whose chats hold no conversation lists its kept answers under t
     keepAnswer(answerRecord("bot-gone", "req_mid", ago(600_000)));
     /* Past the 30 days nothing is listed. */
     keepAnswer(answerRecord("bot-1", "req_expired", ago(40 * 86_400_000)));
-    const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }));
+    const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator() }));
     const body = await response.json();
     expect(body.chats).toEqual([]);
     expect(body.retentionDays).toBe(30);
@@ -156,7 +157,7 @@ test("an install whose chats hold no conversation lists its kept answers under t
 
     /* A new record in a target's directory is listed on the next read. */
     keepAnswer(answerRecord("bot-1", "req_newest", ago(1_000), { state: "running", outcome: null, finishedAt: null, durationMs: null, answer: null, delivery: null }));
-    const again = await (await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }))).json();
+    const again = await (await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator() }))).json();
     expect(again.answers[0]).toMatchObject({ requestId: "req_newest", state: "running", outcome: null });
   } finally { process.env.LLV_STATE_DIR = seeded; }
 });
@@ -169,14 +170,14 @@ test("an agent's capability is refused the list", async () => {
 });
 
 test("the feed serves a recorded relay transcript to the operator alone, and only that file", async () => {
-  const read = await (await batch(operator, [claudeTranscript, codexTranscript, stranger])).json();
+  const read = await (await batch(operator(), [claudeTranscript, codexTranscript, stranger])).json();
   expect(read.chunks.r0.data).toBe(LINE);
   expect(read.chunks.r1.data).toBe(LINE);
   expect(read.chunks.r2).toEqual({ error: "path not allowed" });
 
-  const tail = await log.GET(new NextRequest(`${origin}/api/log?path=${encodeURIComponent(claudeTranscript)}`, { headers: operator }));
+  const tail = await log.GET(new NextRequest(`${origin}/api/log?path=${encodeURIComponent(claudeTranscript)}`, { headers: operator() }));
   expect((await tail.json()).data).toBe(LINE);
-  const older = await log.GET(new NextRequest(`${origin}/api/log?path=${encodeURIComponent(claudeTranscript)}&before=${LINE.length}`, { headers: operator }));
+  const older = await log.GET(new NextRequest(`${origin}/api/log?path=${encodeURIComponent(claudeTranscript)}&before=${LINE.length}`, { headers: operator() }));
   expect((await older.json()).data).toBe(LINE);
 
   asAgent();
@@ -189,7 +190,7 @@ test("the feed serves a recorded relay transcript to the operator alone, and onl
 test("a cross-origin page is refused the transcript, and nobody can delete it through the feed route", async () => {
   const foreign = await (await batch({ origin: "https://elsewhere.example", host: "127.0.0.1:8899" }, [claudeTranscript])).json();
   expect(foreign.chunks.r0).toEqual({ error: "path not allowed" });
-  const removal = await log.DELETE(new NextRequest(`${origin}/api/log?path=${encodeURIComponent(claudeTranscript)}`, { method: "DELETE", headers: operator }));
+  const removal = await log.DELETE(new NextRequest(`${origin}/api/log?path=${encodeURIComponent(claudeTranscript)}`, { method: "DELETE", headers: operator() }));
   expect(removal.status).toBe(403);
   expect(fs.existsSync(claudeTranscript)).toBe(true);
 });

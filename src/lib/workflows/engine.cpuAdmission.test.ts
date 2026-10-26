@@ -164,7 +164,7 @@ test.skip.each(["setup", "stage", "review"] as const)("update-held %s retains FI
   releaseDrain(drainFile(), "update");
   reader.ports.cpuAdmissionReconcile!();
   expect(reader.ports.cpuPressureHold!(two!)).toMatchObject({ since: began, queue: { position: 2 } });
-  expect(reader.ports.cpuPressureHold!(one!)).toMatchObject({ since: began, queue: { remainingMs: 1 } });
+  expect(reader.ports.cpuPressureHold!(one!)).toMatchObject({ since: began, queue: { heldBy: "pressure", waitedMs: CPU_QUEUE_MAX_WAIT_MS - 1 } });
   now += 1;
   await tickWorkflows([], reader.ports);
   expect(reader.starts).toHaveLength(1);

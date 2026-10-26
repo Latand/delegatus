@@ -76,6 +76,8 @@ const recordingFetch = (async (input: string | URL | Request, init?: RequestInit
     patches.push({ url, method: "PATCH", body: JSON.parse(String(init.body)) });
     return json({ pipeline: served });
   }
+  /* The ⋯ sheet reads where the lane's checks run; that read is no pipeline act. */
+  if (url.startsWith("/api/pipelines/") && url.includes("/checks")) return json({ project: "cloud", override: null, effective: "cloud" });
   if (url.startsWith("/api/pipelines/")) {
     reads.push(url);
     return json({ pipeline: served, stageDigests: {}, revision: "rev-7" });

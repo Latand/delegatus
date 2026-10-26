@@ -19,6 +19,21 @@ type OpenRequest = { mode: OnboardingMode; step: OnboardingStepId | null };
 
 const OPEN_EVENT = "llv:open-onboarding";
 
+/** Whether `GET /api/onboarding` has answered: `pending` until it does,
+    `failed` when it refused or never arrived, `read` once its marker (which
+    may be null, an install never decided) is known. */
+export type OnboardingMarkerStatus = "pending" | "failed" | "read";
+
+/** A first run still in progress, which is all the guide's newcomer help
+    (the cost estimate, the cheaper choice) is shown to: a read marker that is
+    never decided, or neither completed nor dismissed. An existing install, a
+    guide finished or left once and opened again from the menu, and a marker
+    not read yet or not readable, read as before. */
+export function unfinishedFirstRun(marker: OnboardingMarker | null, status: OnboardingMarkerStatus): boolean {
+  if (status !== "read") return false;
+  return marker === null || (marker.reason !== "existing-install" && !marker.completedAt && !marker.dismissedAt);
+}
+
 export function openOnboarding(mode: OnboardingMode = "guide", step: OnboardingStepId | null = null): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { mode, step } }));
@@ -82,14 +97,18 @@ export function useOnboarding(): {
   /** Counts openings, so every open starts the dialog afresh. */
   opening: number;
   marker: OnboardingMarker | null;
+  markerStatus: OnboardingMarkerStatus;
   /** The seat tick's check interval, which the orchestrator step names. */
   checkMinutes: number | null;
+  legacyState: boolean;
   close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
   const [step, setStep] = useState<OnboardingStepId | null>(null);
   const [opening, setOpening] = useState(0);
   const [marker, setMarker] = useState<OnboardingMarker | null>(null);
+  const [markerStatus, setMarkerStatus] = useState<OnboardingMarkerStatus>("pending");
+  const [legacyState, setLegacyState] = useState(false);
   const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
 
   useEffect(() => publishOnboarding({ guideOpen: mode !== null }), [mode]);
@@ -110,10 +129,18 @@ export function useOnboarding(): {
     const stopKeys = onOpenKeys(() => setMode(null));
     let cancelled = false;
     void fetch("/api/onboarding")
-      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown } : null)
+      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown; legacyState?: boolean } : null)
       .catch(() => null)
       .then((body) => {
-        if (cancelled || !body) return;
+        if (cancelled) return;
+        /* A refusal, a lost request, or an answer without a marker field
+           leaves the install undecided here: nothing is shown to a newcomer. */
+        if (!body || body.marker === undefined || typeof body.marker !== "object") {
+          setMarkerStatus("failed");
+          return;
+        }
+        setMarkerStatus("read");
+        setLegacyState(body.legacyState === true);
         setMarker(body.marker);
         publishOnboarding({ loaded: true, marker: body.marker });
         if (typeof body.seatTickCheckMinutes === "number" && body.seatTickCheckMinutes > 0) setCheckMinutes(body.seatTickCheckMinutes);
@@ -141,5 +168,5 @@ export function useOnboarding(): {
       .then((written) => { if (written) setMarker(written); });
   }, []);
 
-  return { mode, step, opening, marker, checkMinutes, close };
+  return { mode, step, opening, marker, markerStatus, legacyState, checkMinutes, close };
 }

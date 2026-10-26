@@ -429,3 +429,137 @@ test.each(["delivery", "disabled-environment", "changed-environment"].flatMap(ki
   expect(submits).toHaveLength(seam === "before-submit" ? 0 : 1);
   if (seam === "submit") expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "failed" });
 });
+
+test.each(["reject", "edit"] as const)("proactive authority is rechecked before cloud dispatch after %s", async change => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { mutateTasks, loadTasksByIds } = await import("@/lib/tasks/store");
+  const { patchTask } = await import("@/lib/tasks/commands");
+  const { proactiveTaskExecutionError } = await import("@/lib/tasks/proactiveExecution");
+  const { proactiveCandidateDecision } = await import("@/lib/tasks/proactive");
+  const { h, submits } = await fixture();
+  const record = lane();
+  record.project = `${record.project}-cloud-authority-${change}-${record.id}`;
+  savePipelines([record]);
+  const project = record.project;
+  expect(setCodexCloudEnvironmentId(project, "env-fixture")).toBe(true);
+  const startedAt = new Date(NOW - (change === "reject" ? 1_000 : 2_000)).toISOString();
+  const { task } = await admitProactiveTask({ ...candidate(`cloud-authority-${change}`), project },
+    { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
+  const now = () => new Date(NOW).toISOString();
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
+  const linked = lane();
+  linked.taskIds = [task.id];
+  savePipelines([linked]);
+
+  const exec = h.ports.exec;
+  let invalidated = false;
+  h.ports.exec = async (command, args, ...rest) => {
+    const result = await exec(command, args, ...rest);
+    if (!invalidated && args.includes("ls-remote") && lane().runs[0]?.attempts.at(-1)?.cloud?.phase === "submitting") {
+      invalidated = true;
+      if (change === "reject") {
+        const currentTask = loadTasksByIds(new Set([task.id]))[0]!;
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined, now);
+      } else {
+        mutateTasks(tasks => {
+          const result = patchTask(tasks, task.id, { text: "The accepted scope changed before Cloud dispatch" });
+          if (!result.ok) throw new Error(result.error);
+          return { tasks: result.tasks, result: null };
+        });
+        const changedTask = loadTasksByIds(new Set([task.id]))[0]!;
+        expect(changedTask.text).toBe("The accepted scope changed before Cloud dispatch");
+        expect(changedTask.proactive?.scopeRevision).toBeGreaterThan(0);
+        expect(proactiveCandidateDecision(changedTask)).toEqual({ rejected: false, adopted: false });
+        expect(proactiveTaskExecutionError([task.id])).toBeTruthy();
+      }
+    }
+    return result;
+  };
+  try {
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await settlePipelineControllerJobs();
+  } finally { h.ports.exec = exec; }
+
+  expect(invalidated).toBe(true);
+  expect(submits).toHaveLength(0);
+  expect(attempt().cloud?.phase).toBe("failed");
+  expect(attempt().cloud?.error).toMatch(/rejected|scope review|unreadable/i);
+});
+
+test("the hosted transport guard rejects authority revoked after engine admission", async () => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { loadTasksByIds } = await import("@/lib/tasks/store");
+  const { h, submits } = await fixture();
+  const record = lane();
+  record.project = `${record.project}-cloud-authority-transport-${record.id}`;
+  savePipelines([record]);
+  const project = record.project;
+  expect(setCodexCloudEnvironmentId(project, "env-fixture")).toBe(true);
+  const startedAt = new Date(NOW - 4_000).toISOString();
+  const { task } = await admitProactiveTask({ ...candidate("cloud-authority-transport"), project },
+    { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
+  const now = () => new Date(NOW).toISOString();
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
+  const linked = lane();
+  linked.taskIds = [task.id];
+  savePipelines([linked]);
+
+  h.ports.cloudClient!.submit = async input => {
+    const currentTask = loadTasksByIds(new Set([task.id]))[0]!;
+    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined, now);
+    input.assertCurrent();
+    submits.push(input);
+    return { taskId, taskUrl };
+  };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await settlePipelineControllerJobs();
+
+  expect(submits).toHaveLength(0);
+  expect(attempt().cloud?.phase).toBe("failed");
+  expect(attempt().cloud?.error).toContain("invented work was rejected");
+});
+
+test("a Cloud submission already in flight keeps its receipt after proactive authority is revoked", async () => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { loadTasksByIds } = await import("@/lib/tasks/store");
+  const { h, submits } = await fixture();
+  const record = lane();
+  record.project = `${record.project}-cloud-authority-inflight-${record.id}`;
+  savePipelines([record]);
+  const project = record.project;
+  expect(setCodexCloudEnvironmentId(project, "env-fixture")).toBe(true);
+  const startedAt = new Date(NOW - 3_000).toISOString();
+  const { task } = await admitProactiveTask({ ...candidate("cloud-authority-inflight"), project },
+    { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
+  const now = () => new Date(NOW).toISOString();
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
+  const linked = lane();
+  linked.taskIds = [task.id];
+  savePipelines([linked]);
+
+  let ready!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  h.ports.cloudClient!.submit = async input => {
+    input.assertCurrent();
+    submits.push(input);
+    ready();
+    await held;
+    return { taskId, taskUrl };
+  };
+  try {
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await started;
+    const currentTask = loadTasksByIds(new Set([task.id]))[0]!;
+    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined, now);
+  } finally { release(); await settlePipelineControllerJobs(); }
+
+  expect(submits).toHaveLength(1);
+  expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "failed" });
+});
