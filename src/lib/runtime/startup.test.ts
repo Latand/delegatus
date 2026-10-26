@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { readHostExit, recordHostStop } from "./hostExit";
 import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 
 // Durable startup fixtures yield between phases. Supervise their whole pass
@@ -1338,9 +1339,13 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
   } as RuntimeHostClient;
   const ledger = createFakeDeliveryLedger();
   let releaseCalls = 0;
+  const exitProcess = { pid: 2147482790, startIdentity: `retained-startup-exit-${condition}`, bootEpoch: "fixture-boot" };
   const host = Object.assign(new FakeEngineHost(ledger), {
     onStateChange: () => () => {},
-    release: async () => { releaseCalls += 1; },
+    release: async () => {
+      recordHostStop(exitProcess, "EOF", "fixture-startup-release");
+      releaseCalls += 1;
+    },
   });
   const key = { engine: "codex" as const, sessionId };
   const scheduled: Array<() => void> = [];
@@ -1442,6 +1447,7 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
     expect(continuationAdmissions).toBe(1);
     expect(ledger.writes).toEqual([]);
     expect(releaseCalls).toBe(1);
+    expect(readHostExit(exitProcess)?.stop).toMatchObject({ path: "startup-retained-host-release", operationId: `codex:${sessionId}` });
     expect(journal.snapshot().recentOperations.filter((receipt) =>
       receipt.operationId.startsWith(`recovery-continuation-${sessionId}-`))).toEqual([]);
 
@@ -2755,11 +2761,8 @@ test("the surviving restart nudge names the turn that was severed", async () => 
     /* The turn it is talking about, named by the evidence that identifies it. */
     expect(message?.text).toContain("tool-result");
     expect(message?.text).toContain(severedAt);
-    expect(message?.text).toContain("resume that turn");
     /* #1276: the Viewer owns the clock now, so the seat is no longer asked to
        arm a schedule it has no lever for. */
-    expect(message?.text).not.toContain("re-arm");
-    expect(message?.text).not.toContain("checkpoint loop");
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();

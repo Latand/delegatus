@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 /* This suite exercises the close path's host teardown, which terminates agent
    processes. Everything it touches is a throwaway registry inside this sandbox
@@ -20,6 +21,7 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 type KillRequest = { conversationId: string; transcriptPath: string; action: string; actor?: { kind: "agent"; conversationId: string } };
 const killed: KillRequest[] = [];
+let settleKill: (() => void) | undefined;
 let killResult: { status: number; body: Record<string, unknown> } = { status: 200, body: { ok: true, structured: true } };
 
 /** Marks every answer this suite produces, so a test can prove the stubbed
@@ -29,6 +31,7 @@ mock.module("@/lib/conversation/actions", () => ({
   CONVERSATION_ACTIONS: ["interrupt", "kill", "resume", "compact", "dialog-key"] as const,
   applyConversationAction: async (request: KillRequest) => {
     killed.push(request);
+    settleKill?.();
     return { status: killResult.status, body: { ...killResult.body, target: MOCK_MARKER } };
   },
 }));
@@ -43,7 +46,7 @@ type Registry = InstanceType<typeof AgentRegistry>;
 
 /** Seats a structured conversation whose host process is this test process, so
     the liveness probe reports a resident host without spawning anything. */
-function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null } } = {}): {
+function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null; bootEpoch?: string | null } } = {}): {
   registry: Registry;
   conversationId: string;
   launchId: string;
@@ -93,6 +96,7 @@ function target(conversationId: string | null, agentPath: string | null = null) 
 
 beforeEach(() => {
   killed.length = 0;
+  settleKill = undefined;
   killResult = { status: 200, body: { ok: true, structured: true } };
 });
 
@@ -105,6 +109,7 @@ test("a resident stage host is terminated through the conversation kill control 
   killed.length = 0;
 
   const fixture = hostedConversation();
+  settleKill = () => { fixture.registry.terminateStructuredHost(fixture.key); };
   /* Delivered on the spot, the shape a legacy pane kill and a replayed terminal
      kill both produce. */
   killResult = { status: 200, body: { ok: true, structured: true, operationId: "kill-op-1", receipt: { status: "delivered" } } };
@@ -118,6 +123,7 @@ test("a resident stage host is terminated through the conversation kill control 
 
 test("an automatic stage retirement stamps its control actor", async () => {
   const fixture = hostedConversation();
+  settleKill = () => { fixture.registry.terminateStructuredHost(fixture.key); };
   killResult = { status: 200, body: { ok: true, structured: true, operationId: "automatic-stop", receipt: { status: "delivered" } } };
   try {
     expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { automatic: true })).toEqual({ outcome: "stopped" });
@@ -128,6 +134,7 @@ test("an automatic stage retirement stamps its control actor", async () => {
 
 test("an attempt whose conversation id no longer resolves is found by its transcript (#670)", async () => {
   const fixture = hostedConversation();
+  settleKill = () => { fixture.registry.terminateStructuredHost(fixture.key); };
 
   const result = await stopPipelineStageAgent({
     stageId: "build",
@@ -197,7 +204,7 @@ test("a queued kill confirmed by the host leaving the registry is a stop (#670)"
   setAgentRegistryForTests(null);
 });
 
-test("a queued kill confirmed by its durable receipt is a stop (#670)", async () => {
+test("a delivered kill receipt without registry termination remains unconfirmed (#670)", async () => {
   const fixture = hostedConversation();
   queuedKill();
 
@@ -206,7 +213,8 @@ test("a queued kill confirmed by its durable receipt is a stop (#670)", async ()
     confirmationProbes({ client: statusClient({ status: "delivered" }) }),
   );
 
-  expect(result).toEqual({ outcome: "stopped" });
+  expect(result).toEqual({ outcome: "unconfirmed", operationId: "kill-op-queued",
+    detail: "kill accepted as queued but termination was not confirmed" });
   setAgentRegistryForTests(null);
 });
 
@@ -416,14 +424,41 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
   setAgentRegistryForTests(null);
 });
 
+test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
+  const pid = 2_000_000_124;
+  const signals: number[] = [];
+  let alive = true;
+  const originalIdentity = procBackend.processIdentity.bind(procBackend), originalAlive = procBackend.pidAlive.bind(procBackend);
+  const identity = (candidate: number) => candidate === pid ? alive ? "fixture-orphan-root" : null : originalIdentity(candidate);
+  const living = (candidate: number) => candidate === pid ? alive : originalAlive(candidate);
+  const identitySpy = spyOn(procBackend, "processIdentity").mockImplementation(identity);
+  const aliveSpy = spyOn(procBackend, "pidAlive").mockImplementation(living);
+  try {
+    const processRef = captureProcessIdentity(pid);
+    const fixture = hostedConversation({ status: "dead", process: processRef });
+    const { retirePipelineStageAgent } = await import("./engine");
+    const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
+      requireIdleEvidence: true,
+      termination: { processIdentity: identity, bootEpoch: () => processRef.bootEpoch ?? null, pidAlive: living,
+        ppidMap: () => new Map(), processGroupId: () => null,
+        signal: candidate => { signals.push(candidate); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
+        retireRegistryEntry: () => true },
+    });
+    expect(signals).toEqual([]);
+    expect(result).toEqual({ outcome: "deferred" });
+    expect(killed).toEqual([]);
+  } finally { identitySpy.mockRestore(); aliveSpy.mockRestore(); }
+});
+
 test("provider recovery authority survives the engine idle retirement helper", async () => {
   const fixture = hostedConversation();
+  settleKill = () => { fixture.registry.terminateStructuredHost(fixture.key); };
   const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
   const onlyIfIdle = { revision: 1, writerClaim: "fixture:1" };
   const client = { readSession: async () => ({ conversationId: fixture.conversationId, host: "hosted", turn: "idle", activeTurnId: null,
     attentionIds: [], retirementBlocked: false, revision: 1, writerClaim: onlyIfIdle.writerClaim, artifactPath: fixture.path }) } as unknown as RuntimeHostClient;
   const { retirePipelineStageAgent } = await import("./engine");
-  expect(await retirePipelineStageAgent(target(fixture.conversationId, fixture.path), { client, providerRecovery })).toEqual({ outcome: "stopped" });
+  expect(await retirePipelineStageAgent(target(fixture.conversationId, fixture.path), { client, providerRecovery, requireIdleEvidence: true })).toEqual({ outcome: "stopped" });
   expect(killed).toEqual([expect.objectContaining({ onlyIfIdle, providerRecovery })]);
 });
 
@@ -437,6 +472,7 @@ test("provider recovery authority cannot select an unconditional engine stop", a
 
 test("runtime-switch handoff forwards its stable owned stop identity to the kill control", async () => {
   const fixture = hostedConversation();
+  settleKill = () => { fixture.registry.terminateStructuredHost(fixture.key); };
   killResult = { status: 200, body: { ok: true, operationId: "switch-owned-stop", receipt: { status: "delivered" } } };
   expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { operationId: "switch-owned-stop" })).toEqual({ outcome: "stopped" });
   expect(killed[0]).toMatchObject({ operationId: "switch-owned-stop", conversationId: fixture.conversationId });

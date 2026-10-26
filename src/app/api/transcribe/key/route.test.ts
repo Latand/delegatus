@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import type { TranscribeBackendInfo } from "@/lib/transcribeBackend";
 
@@ -42,7 +43,7 @@ afterEach(() => {
 function put(body: unknown, host = "127.0.0.1"): Promise<Response> {
   return PUT(new NextRequest("http://127.0.0.1/api/transcribe/key", {
     method: "PUT",
-    headers: { host, "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host, "content-type": "application/json", "sec-fetch-site": "same-origin" },
     body: JSON.stringify(body),
   }));
 }

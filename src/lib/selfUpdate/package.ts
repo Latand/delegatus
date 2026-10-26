@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { verifiedPackageArchive, type VerifiedArchive } from "./provenance";
 import { realPorts } from "./steps";
 import { writeAtomic } from "./apply";
 import type { LauncherRecord } from "./launcher";
@@ -71,7 +72,7 @@ export function packageVersion(root: string): string { return JSON.parse(readFil
 export class PackageRunner implements RunnerPort {
   state: UpdateState = idleUpdate(["fetch", "install", "ready"]);
   constructor(private readonly record: LauncherRecord, private readonly bun: string, private readonly env: Record<string, string>,
-    private readonly logDir: string, private readonly changed: () => void, private readonly ports = realPorts(() => {}), private readonly registry = registryRevision) {}
+    private readonly logDir: string, private readonly changed: () => void, private readonly ports = realPorts(() => {}), private readonly registry = registryRevision, private readonly verifyArchive = verifiedPackageArchive) {}
   logPath(step: string): string { return join(this.logDir, `${step}.log`); }
   restore(state: UpdateState): void { this.state = state.state === "running" ? { ...state, state: "failed" } : state; }
   async retry(): Promise<void> { await this.start(this.state.target!, { version: this.state.targetVersion!, trigger: this.state.trigger ?? "operator" }); }
@@ -84,15 +85,18 @@ export class PackageRunner implements RunnerPort {
       trigger: meta.trigger ?? "operator", startedAt: new Date().toISOString() };
     mkdirSync(container, { recursive: true }); mkdirSync(this.logDir, { recursive: true });
     const steps = this.state.steps;
+    let archive: VerifiedArchive | undefined;
     for (let index = 0; index < steps.length; index++) {
       steps[index] = { ...steps[index]!, state: "running", startedAt: new Date().toISOString() }; this.changed();
       try {
         if (index === 0) {
           const revision = await this.registry(version);
           if (!revision.sha || revision.sha !== target) throw new Error("The package revision changed");
+          archive = await this.verifyArchive(version, target, container);
         } else if (index === 1) {
           writeAtomic(join(container, "package.json"), { private: true });
-          const code = await this.ports.run([this.bun, "add", "--exact", `delegatus-cli@${version}`], { cwd: container, env: this.env, work: "update-package", onLine: line => { steps[index]!.tail.push(line); steps[index]!.tail = steps[index]!.tail.slice(-40); this.changed(); } });
+          if (!archive) throw new Error("Verified npm provenance archive is unavailable");
+          const code = await this.ports.run([this.bun, "add", "--exact", archive.path], { cwd: container, env: this.env, work: "update-package", onLine: line => { steps[index]!.tail.push(line); steps[index]!.tail = steps[index]!.tail.slice(-40); this.changed(); } });
           if (code !== 0) throw new Error(`Package install exited with ${code}`);
         } else {
           if (packageVersion(dir) !== version || !existsSync(join(dir, "dist", "standalone", "server.js")) || !existsSync(join(dir, "dist", "runtime-host.mjs"))
@@ -102,9 +106,11 @@ export class PackageRunner implements RunnerPort {
         steps[index] = { ...steps[index]!, state: "done" };
       } catch (error) {
         steps[index] = { ...steps[index]!, state: "failed", failure: { kind: "error", text: error instanceof Error ? error.message : String(error) } };
-        this.state = { ...this.state, state: "failed", finishedAt: new Date().toISOString() }; this.changed(); return;
+        this.state = { ...this.state, state: "failed", finishedAt: new Date().toISOString() }; this.changed();
+        await archive?.remove(); return;
       }
     }
+    await archive?.remove();
     this.state = { ...this.state, state: "done", finishedAt: new Date().toISOString() }; this.changed();
   }
 }

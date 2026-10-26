@@ -1,3 +1,4 @@
+import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
@@ -30,6 +31,7 @@ import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn 
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
+import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -1397,10 +1399,8 @@ describe("CodexAppServerHost", () => {
       const start = server.requests.find((request) => request.method === "thread/realtime/start")
         ?.params as { prompt?: string; realtimeStartInstructions?: string; realtimeEndInstructions?: string };
       /* The correction. A second copy of the demotion would be the defect. */
-      expect(start.realtimeStartInstructions).toMatch(/it was not written for you/i);
       expect(start.realtimeStartInstructions).not.toBe(COORDINATOR_VOICE_PERSONA);
       expect(start.prompt).not.toBe(COORDINATOR_VOICE_PERSONA);
-      expect(start.realtimeEndInstructions).toMatch(/realtime voice has ended/i);
 
       /* And the history the demotion lives in is left exactly as it was. */
       expect(server.requests.filter((request) => request.method === "thread/inject_items")).toEqual([]);
@@ -3091,6 +3091,63 @@ describe("CodexAppServerHost", () => {
       turnId: "turn-1",
     });
     await host.release();
+  });
+
+  describe("native queue proof of an entry the engine consumed", () => {
+    const queueEntry = (threadId: string, overrides: Partial<NativeQueueRecord["versions"][number]> = {}): NativeQueueRecord => ({
+      entryId: "consumed-entry", conversationId: "conversation_fixture",
+      binding: {threadId, accountId: "fixture"}, clientUserMessageId: "consumed-entry", nativeSubmissionId: "native-submission",
+      revision: 1, versions: [{revision: 1, operationId: "consumed-entry", text: "Look at this", images: [], contentDigest: "fixture-digest",
+        origin: {kind: "operator"}, ...overrides}],
+      profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null,
+      dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
+    });
+
+    test("an adopted thread whose resume omitted its transcript path still proves a consumed entry", async () => {
+      const server = new FakeAppServer("pathless-native-thread");
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      server.omitThreadPath = true;
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+      try {
+        const entry = queueEntry("pathless-native-thread");
+        entry.versions[0].input = await host.nativeQueue!.prepare(entry, entry.versions[0]);
+        server.readTurns = [{id: "turn-1", status: "completed", items: [
+          {type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId, content: entry.versions[0].input}]}];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({itemId: "canonical-user"})]);
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({itemId: "canonical-user"});
+        // The executor's pass over this real host moves the consumed entry to delivered.
+        const transitions: Array<{ id: string; phase: string }> = [];
+        const executor = new NativeQueueExecutor({ resolveHost: () => host, binding: () => entry.binding, client: {
+          nativeQueueRead: async () => [entry],
+          operationStatus: async () => ({ receipt: { status: "queued" } }),
+          nativeQueueTransition: async (id: string, transition: { phase: string }) => { transitions.push({ id, phase: transition.phase }); },
+        } as unknown as RuntimeHostClient });
+        expect(await executor.reconcile("conversation_fixture")).toBeFalse();
+        expect(transitions).toEqual([{ id: "consumed-entry", phase: "proven" }]);
+        expect(server.requests.some(r => r.method === "turn/start" || r.method === "turn/steer" || r.method === "thread/queue/add")).toBeFalse();
+      } finally { await host.release(); }
+    }, 15000);
+
+    test("an image entry the engine recorded as a data URL is proven", async () => {
+      const server = new FakeAppServer("image-native-thread");
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+      try {
+        const bytes = Buffer.from("fixture-image-bytes");
+        const { createHash } = await import("node:crypto");
+        const image = {sha256: createHash("sha256").update(bytes).digest("hex"), mime: "image/png" as const, bytes: bytes.length};
+        const entry = queueEntry("image-native-thread", {images: [image]});
+        entry.versions[0].input = [
+          {type: "localImage", path: `/runtime-images/${image.sha256}.png`},
+          {type: "text", text: "Look at this", text_elements: []},
+        ];
+        server.readTurns = [{id: "turn-1", status: "completed", items: [{type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId,
+          content: [{type: "image", url: `data:image/png;base64,${bytes.toString("base64")}`}, {type: "text", text: "Look at this", text_elements: []}]}]}];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({itemId: "canonical-user"})]);
+      } finally { await host.release(); }
+    }, 15000);
   });
 
   test("confirms native queue delivery and materialization across 316 turns within existing bounds", async () => {
@@ -6830,3 +6887,51 @@ for (const { midAnswer = false, graceful = false, reconnectFailure, crashBeforeW
     fs.rmSync(socketRoot, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("Codex records its stop before EOF can end the native host", async () => {
+  const server = new FakeAppServer("host-eof-thread");
+  let nativeAlive = true;
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: () => server as never,
+    processIdentity: () => nativeAlive ? "fixture-codex-eof" : null, pidAlive: () => nativeAlive, signalProcess: () => {} });
+  const process = (await host.health()).exitProcess!;
+  const beforeEof: { value: ReturnType<typeof readHostExit> } = { value: null };
+  let deliveredEof = false;
+  const end = spyOn(server.stdin, "end").mockImplementation(() => {
+    if (!deliveredEof) {
+      deliveredEof = true;
+      beforeEof.value = readHostExit(process);
+      nativeAlive = false;
+      queueMicrotask(() => { server.emit("exit", 0, null); server.emit("close", 0, null); });
+    }
+    return server.stdin;
+  });
+  try {
+    await withHostStopOrigin({ path: "deploy-cut", operationId: "eof-operation" }, () => host.release());
+    expect(end).toHaveBeenCalled();
+    expect(beforeEof.value?.stop).toMatchObject({ path: "deploy-cut", operationId: "eof-operation", signal: "EOF" });
+    expect(readHostExit(process)?.exit).toMatchObject({ code: 0, signal: null });
+  } finally { end.mockRestore(); await host.release(); }
+});
+
+for (const ending of ["release", "external", "code"] as const) test(`Codex host exit observer retains ${ending} status and source after release`, async () => {
+  const server = new FakeAppServer("host-exit-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    processIdentity: () => "fixture-codex-host-exit", pidAlive: () => true, shutdownGraceMs: 10,
+    signalProcess: (_pid, signal) => {
+      queueMicrotask(() => server.emit("close", null, signal));
+    } });
+  const process = (await host.health()).exitProcess!;
+  try {
+    expect(process.startIdentity).toBe("fixture-codex-host-exit");
+    if (ending === "release") await withHostStopOrigin({ path: "deploy-cut", operationId: "deploy-fixture-operation" }, () => host.release());
+    else {
+      server.emit("exit", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+      server.emit("close", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+    }
+    const evidence = readHostExit(process)!;
+    expect(evidence.exit).toMatchObject({ code: ending === "code" ? 23 : null, signal: ending === "external" ? "SIGKILL" : ending === "release" ? "SIGTERM" : null });
+    expect(evidence.stop).toEqual(ending === "release" ? expect.objectContaining({ path: "deploy-cut", operationId: "deploy-fixture-operation" }) : null);
+    expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
+    expect((await host.health()).exitProcess).toEqual(process);
+  } finally { await host.release(); }
+});

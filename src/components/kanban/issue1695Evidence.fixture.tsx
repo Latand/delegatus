@@ -16,6 +16,8 @@ import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import { translate, useLocale } from "@/lib/i18n";
 import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
@@ -27,7 +29,7 @@ import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
-import { RulesWindow } from "@/components/roleMemory/LearnedRules";
+import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceConversationPanel } from "@/components/VoiceConversation";
@@ -181,7 +183,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
+const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled" || SCENARIO === "cpu-pressure";
 const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
@@ -390,6 +392,12 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
 const SEAT_CLS = SCENARIO === "seat-create-cls";
 const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+/* The setup guide on a fresh install that still runs on linked earlier state
+   (`guide=installer`): the guide opens by itself with the old-state notice, no
+   role is overridden, both engines are signed in, and the catalog adds three
+   repositories beside a plain folder and a checkout under a temporary
+   directory, which the project picker leaves out. */
+const INSTALLER_GUIDE = ORCH_FIRST && new URLSearchParams(location.search).get("guide") === "installer";
 /* The seat case opens as the create draft and leaves it when Confirm is pressed. */
 const FM_SEAT = FIRST_MESSAGE && FM_CASE === "s";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW || FM_SEAT;
@@ -585,6 +593,15 @@ const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
+const INSTALLER_PROJECTS = INSTALLER_GUIDE ? [
+  { project: `repo-${"1".repeat(32)}`, displayName: "atlas-api", projectRoot: "/repo/atlas-api", conversations: 4, smt: now - 30 * MIN },
+  { project: `repo-${"2".repeat(32)}`, displayName: "harbor-docs", projectRoot: "/repo/harbor-docs", conversations: 2, smt: now - 2 * 60 * MIN },
+  { project: `repo-${"3".repeat(32)}`, displayName: "ledger-export", projectRoot: "/repo/ledger-export", conversations: 1, smt: now - 26 * 60 * MIN },
+  { project: `dir-${"4".repeat(32)}`, displayName: "notes", projectRoot: "/repo/notes", conversations: 1, smt: now - 40 * MIN },
+  { project: `repo-${"5".repeat(32)}`, displayName: "scratch-checkout", projectRoot: "/tmp/scratch-checkout", conversations: 1, smt: now - 10 * MIN },
+] : [];
+/* The guide preselects no project and lists repositories only, so the Telegram step's case picks this one first. */
+const TELEGRAM_REPOSITORY = { project: `repo-${"6".repeat(32)}`, displayName: "atlas", projectRoot: "/repo/atlas", conversations: 1, smt: now - MIN };
 const REV = (n: number) => `task-v1:00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 function conversation(id: string, title: string, over: Record<string, unknown> = {}): FileEntry {
@@ -1841,7 +1858,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : SCENARIO === "cpu-pressure" ? "1st · held by CPU pressure · waited 4 min" : "2nd · waited 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -3430,6 +3447,9 @@ const OLDER_FAILS = params.get("olderfails") === "1";
    good, so what the click took away comes back with the reason. */
 const DISMISS_REFUSED = params.get("dismissrefused") === "1";
 const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&boardhold=1` never answers the board's first read, so the project stays on its loading
+   skeleton and the bar of a leaf without a board, for the header's narrow-window case. */
+const BOARD_HOLD = params.get("boardhold") === "1";
 /* `&settingsrefuse=1`: every write to the voice companion's settings is refused
    with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
 const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
@@ -4013,7 +4033,7 @@ const workerAnswer = (project: string | null) => ({
   project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
-const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/memory/source", "/api/asks-you/key", "/api/team"];
 /* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
    projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
    Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
@@ -4043,6 +4063,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The lane review case answers these from the driver's own server, through
+     the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
+  if (new URLSearchParams(location.search).has("laneReview")
+    && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
+    return serverFetch(url.pathname + url.search, init);
+  }
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
@@ -4067,6 +4093,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
     return serverFetch(url.pathname + url.search, init);
   }
+  if (INSTALLER_GUIDE && url.pathname === "/api/onboarding") {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null };
+    if (method === "PUT") return json({ marker: { ...marker, ...(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>), steps: {} } });
+    return json({ marker, legacyState: true, seatTickCheckMinutes: 10 });
+  }
+  if (INSTALLER_GUIDE && url.pathname === "/api/roles") return json({ roles: [] });
+  if (INSTALLER_GUIDE && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, cli: "found" }, codex: { ...accountsBody.codex, cli: "found" } });
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
     if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
@@ -4086,6 +4121,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* The installation's memory source (memory-source-switch.md §3.4): not chosen, unless the driver answers it under `&header=1`. */
+  if (url.pathname === "/api/memory/source") return json({ choice: null, phase: null });
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
@@ -4298,13 +4335,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : NEEDS_FILTER
       ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
-      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog),
+        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
         ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
@@ -4364,6 +4401,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    if (BOARD_HOLD) return new Promise<Response>(() => {});
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/view/presence" && method === "POST") {
@@ -5023,6 +5061,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
+/* `&replydelay=MS` answers every read and write MS later, so a driver can show that what it measures
+   waits for the state it needs and never for a guessed time (the header's narrow-window case). */
+const REPLY_DELAY = Number(params.get("replydelay")) || 0;
+if (REPLY_DELAY > 0) {
+  const answer = window.fetch;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    await new Promise((resolve) => setTimeout(resolve, REPLY_DELAY));
+    return answer(input, init);
+  }) as typeof fetch;
+}
+
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
 const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
@@ -5048,6 +5097,30 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* The consumed entry is gone from Codex's queue and has no proof yet; a second entry with the same words is still held there.
+   The panel's view is the production projection of journal-shaped records, so the acknowledgement hint is the real one. */
+const proofAfter = new URLSearchParams(location.search).get("proof") === "after";
+const proofRecord = (id: string, overrides: Partial<NativeQueueRecord> = {}): NativeQueueRecord => ({
+  entryId: `entry-${id}`, conversationId: "conversation_proof_queue", binding: { threadId: "thread-proof", accountId: "account-a" },
+  clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1,
+  versions: [{ revision: 1, operationId: `entry-${id}`, text: "Check the memory profile", images: [], contentDigest: `digest-${id}` }],
+  profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null, dispatchedRevision: null, dispatchedTurnId: null,
+  proof: null, reason: null, ...overrides });
+const proofView = projectNativeQueue({
+  turn: "running", activeTurnId: "turn-proof",
+  entries: [
+    proofAfter ? proofRecord("a", { state: "delivered", dispatchedRevision: 1, dispatchedTurnId: "turn-proof",
+      proof: { threadId: "thread-proof", clientUserMessageId: "client-a", revision: 1, turnId: "turn-proof", itemId: "item-a", input: [{ type: "text", text: "Check the memory profile" }] } })
+      : proofRecord("a"),
+    proofRecord("b"),
+  ],
+  native: { threadId: "thread-proof", stale: false, items: [{ id: "native-b", clientUserMessageId: "client-b", input: [{ type: "text", text: "Check the memory profile" }] }] },
+});
+const queueProofPreview = <div className="p-3"><NativeQueuePanel
+  view={proofView}
+  unresolved={[]} error={null} thread={{ model: null, effort: null }} cardId="conversation_proof_queue" mintKey={() => "proof-queue-edit"}
+  submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
+/></div>;
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
@@ -5227,11 +5300,11 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

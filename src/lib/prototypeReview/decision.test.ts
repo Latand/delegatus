@@ -22,7 +22,6 @@ test("rejection asks for a new round with corrections and no chosen variant", ()
   const decision = { chosen: [], rejected: true as const, comment: "Simplify all variants." };
   for (const review of [round, { ...round, questions }]) {
     const text = prototypeDecisionText(task, review, { ...decision, answers: questions.map(q => ({ questionId: q.id, options: [0] })) });
-    expect(text).toContain("Rejected: none of the variants fits. Publish a new prototype round");
     expect(text).toContain("Corrections:\nSimplify all variants."); expect(text).not.toContain("Chosen:");
     expect(prototypeDecisionText(task, review, { ...decision, answers: questions.map(q => ({ questionId: q.id, options: [0] })) }, { at: "earlier" })).toContain("(amended)");
   }

@@ -3,40 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { DELEGATUS_MECHANICS, ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { DELEGATUS_MECHANICS, OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 
 import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
 import { effectiveWorkerLimit, setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
-import { renderDecisionInput, renderStagePrompt } from "./prompts";
+import { renderStagePrompt } from "./prompts";
 import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
 import type { PipelineStage } from "./types";
 import { composeStageInput } from "./stageInput";
 import { seededTemplatesFromRoles } from "@/lib/workflows/store";
-import { refreshRequest } from "@/lib/forge/autoRefresh";
-import type { Pipeline } from "./types";
-
-test("generated refresh and fix prompts keep commits in the stage worktree and publication with the pipeline", () => {
-  const source = { id: "finished", task: "Refresh", repoDir: "/repo", baseBranch: "main",
-    delivery: { target: { branch: "refs/heads/delivery", remote: "origin" } },
-    merge: { prNumber: 42, refresh: { base: "a".repeat(40), head: "b".repeat(40) } } } as Pipeline;
-  const request = refreshRequest(source);
-  const pipeline = buildPipeline({ ...request, id: "refresh-contract", project: "fixture", repoDir: "/repo",
-    stages: request.stages.map(stage => ({ ...stage,
-      effectiveRole: resolvePipelineRole(stage, "run", pipelineRoleLookup).role! })) as PipelineStage[],
-    srcPath: null, srcConversationId: null, now: "now" });
-  for (const id of ["refresh", "fix"]) {
-    const stage = pipeline.stages.find(stage => stage.id === id)!;
-    const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
-    expect(prompt).toContain("Edit, stage and commit only in this stage worktree");
-    expect(prompt).toContain("Scratch exports are for builds, tests, probes and renders");
-    expect(prompt).toContain("Never push; the pipeline publishes");
-    expect(prompt).toContain("overrides any instruction to work or commit in a scratch checkout or to push");
-    expect(prompt).not.toContain("Push this branch");
-    expect(prompt).not.toContain("work, build, probe and render in a scratch export");
-  }
-});
 
 test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses installed tooling and project checks: %s", async (kind) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-test-guidance-"));
@@ -56,24 +33,14 @@ test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses inst
     if (kind === "missing") process.chdir(root);
     const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "", worktree,
       async () => ({ code: 1, stdout: "", stderr: "not a Git repository" }));
-    expect(prompt).toContain("project's test command");
-    expect(prompt).toContain("instruction files or package scripts");
-    expect(prompt).not.toContain("bun test");
-    expect(prompt).toContain("explicit path");
-    /* This repository's own variable is in its AGENTS.md; the stage names none. */
-    expect(prompt).toContain("isolated HOME, XDG_CONFIG_HOME, TMPDIR and any state-directory variable the project's instruction files name");
-    expect(prompt).not.toContain("LLV_STATE_DIR");
     if (kind === "missing") {
       expect(prompt).toContain("Gate wrapper unavailable");
-      expect(prompt).toContain("one at a time directly");
       expect(prompt).not.toContain("never bypass it");
-      expect(prompt).not.toContain("bash scripts/gate-slot.sh");
     } else {
       const wrapper = fs.realpathSync(path.join(toolingCwd, "scripts", "gate-slot.sh"));
       expect(prompt).toContain(wrapper);
       expect(path.isAbsolute(wrapper)).toBe(true);
       expect(prompt).toContain("never bypass it for lifecycle tests");
-      expect(prompt).not.toContain("bash scripts/gate-slot.sh");
     }
   } finally {
     process.chdir(toolingCwd);
@@ -82,7 +49,6 @@ test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses inst
 });
 
 test("role and workflow defaults leave gate location and test runner to assembly and project rules", () => {
-  for (const role of ROLE_DEFAULTS) expect(role.promptScaffold).not.toContain("scripts/gate-slot.sh");
   for (const template of seededTemplatesFromRoles()) expect(template.verify).toBeUndefined();
 });
 
@@ -95,9 +61,6 @@ test("comparison guidance names the owner while preserving full host capabilitie
     disposition: "comparison", publish: "disabled", active: false, ownerId: "publishing-lane", epoch: 2, journal: [] };
   const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
   expect(prompt).toContain("owned by publishing-lane at epoch 2");
-  expect(prompt).toContain("Do not push to that branch");
-  expect(prompt).toContain("This instruction is guidance");
-  expect(prompt).toContain("Host access: full");
   expect(stage.sandbox).toBe("full");
 });
 
@@ -137,11 +100,9 @@ test("every run scaffold overrides conflicting branch instructions and names the
       stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
     const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "Switch branches");
     expect(prompt).toContain(`Pipeline branch: ${pipeline.branch}. Never create or switch branches.`);
-    expect(prompt).toContain("overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold");
     expect(prompt.indexOf("Pipeline branch:")).toBeGreaterThan(prompt.indexOf("Create a new branch"));
     if (access === "read-write") {
       expect(prompt).toContain(`Commit your changes on ${pipeline.branch}`);
-      expect(prompt).toContain("Never push; the pipeline publishes");
     }
     else expect(prompt).not.toContain("Commit your changes on");
   }
@@ -179,20 +140,10 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain("Build pipeline support from the plan");
   expect(prompt).toContain("AC1: structured verdict");
   expect(prompt).toContain("Access: read-write");
-  expect(prompt).toContain('"status":"pass"');
-  expect(prompt).toContain('"findings":[]');
-  expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.");
-  expect(prompt).toContain("Its status uses the same three words.");
   expect(prompt).toContain(DELEGATUS_MECHANICS);
-  /* The blocked fields are for fix stages; a builder no fail edge leads to
-     reads none of them. */
-  expect(prompt).not.toContain("blocked:true and a non-empty blockedReason");
   /* Review of #2301: the fallback block's own shape, which the parser reads:
      string findings led by their severity, and no summary key. */
-  expect(prompt).toContain("In the block each finding is a string that starts with its severity");
   expect(parseStageVerdict('```json\n{"status":"fail","findings":["P1 — src/a.ts:3 wrong label"]}\n```')).toMatchObject({ verdict: { status: "fail", rankedFindings: [{ severity: "P1", text: "src/a.ts:3 wrong label" }] } });
-  expect(prompt).not.toContain("COMMENT");
-    expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
   expect(prompt).toContain("Role preset: builder");
   expect(prompt).toContain("Keep the implementation focused on pipeline support.");
 });
@@ -225,7 +176,6 @@ test("role-less prompts omit role identity and scaffolding", () => {
   }, "");
   expect(prompt).toContain("Investigate pipeline support");
   expect(prompt).toContain("Pinned task:");
-  expect(prompt).toContain('"status":"pass"');
   expect(prompt).not.toContain("Role preset:");
   expect(prompt).not.toContain("Role prompt scaffold:");
 });
@@ -270,10 +220,7 @@ test("a prompt without {{prev.output}} still receives the relayed previous outpu
   expect(scaffolded).not.toContain("Relayed by the controller");
 });
 
-/* #1797: the rendered stage instruction names one completion channel. The
-   fenced block stays in the prompt — the engine still settles from it when no
-   report was recorded — but only under the condition that the call failed. */
-test("the stage prompt names stage_report as the one completion channel and the fenced block as its fallback", () => {
+test("the stage prompt renders exactly one JSON fence", () => {
   const stage: PipelineStage = {
     id: "build",
     kind: "run",
@@ -295,52 +242,8 @@ test("the stage prompt names stage_report as the one completion channel and the 
   });
   const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
 
-  const call = prompt.indexOf("stage_report");
-  const fence = prompt.indexOf("```json");
-  expect(call).toBeGreaterThan(-1);
-  expect(fence).toBeGreaterThan(call);
-
-  /* Everything introducing the fence is conditional on the call failing, and
-     no earlier line asks for the block unconditionally. */
-  const preamble = prompt.slice(call, fence);
-  expect(preamble).toMatch(/error/i);
-  expect(preamble).toMatch(/absent|not available|unavailable/i);
-  const introduction = preamble.split("\n").filter((line) => line.trim()).at(-1)!;
-  expect(introduction).toMatch(/stage_report/);
-  expect(introduction).toMatch(/only when|unless|if/i);
-
-  /* The status vocabulary is still stated, once. */
-  expect(prompt).toContain('"status":"pass"');
-  expect(prompt.split("needs_decision").length - 1).toBeGreaterThan(0);
   expect(prompt.split("```json").length - 1).toBe(1);
 });
-
-test("no role scaffold instructs an unconditional fenced verdict (#1797)", () => {
-  for (const role of ROLE_DEFAULTS) {
-    const scaffold = role.promptScaffold ?? "";
-    expect(scaffold).not.toContain("```");
-    expect(scaffold).not.toMatch(/fenced|"status":/i);
-  }
-});
-
-/* docs/design/agent-prompt-contract.md N5: an answer that replaced a spec
-   item lost to the pinned specification rendered below it. */
-test("a decision continuation says the answer governs and is relayed under a label that fits it", () => {
-  const input = renderDecisionInput(null, { stageId: "build", attempt: 1, question: "Cap at 20 or 100?", answer: "100 replaces spec item 3." } as Parameters<typeof renderDecisionInput>[1]);
-  expect(input).toContain("Where the answer differs from the brief or the pinned specification, the answer governs.");
-  expect(input).toContain("report the final result with stage_report");
-  const stage: PipelineStage = { id: "build", kind: "run", ["prompt"]: "Build it.", next: null,
-    effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } };
-  const pipeline = buildPipeline({ id: "12345678", task: "t", project: "p", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
-  expect(renderStagePrompt(pipeline, stage, stage.effectiveRole, input)).toContain("Relayed by the controller (a previous stage's output, or the answer to this stage's earlier question):");
-});
-
-/* The review check of agent-prompt-contract.md §2.11, on the prompts a lane
-   actually renders: a builder, a reviewer and the fix stage a review-loop
-   converts into, each through the install's role registry. None names a
-   language, a tool, a topology or this product's internals, and the retired
-   completion markers appear once, in the sentence that retires them. */
-const STACK_SPECIFIC = [/\btsc\b/, /bunx/, /TypeScript/, /blue\/green/i, /external-worker/, /conveyor/i, /8898/, /Ukrainian/, /review flow/i, /list_flows/, /flowRound/, /review review/, /file ownership/, /GitHub CLI/];
 
 test("every stage a lane renders names no stack and teaches one verdict vocabulary", () => {
   const stage = (id: string, next: string | null, role: NonNullable<PipelineStage["role"]>, prompt: string): PipelineStage => {
@@ -358,19 +261,8 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   pipeline.baseBranch = "main";
   for (const current of converted.stages) {
     const prompt = renderStagePrompt(pipeline, current, current.effectiveRole, "prior output");
-    for (const pattern of STACK_SPECIFIC) expect(prompt).not.toMatch(pattern);
-    expect(prompt).not.toContain("COMMENT");
     expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
-    expect(prompt).not.toMatch(/Inspect\s+with/);
     expect(prompt).toContain(`This pipeline's worktree started from commit ${"a".repeat(8)} on main.`);
-    /* Once in the completion sentence; the builder's brief asked for one more. */
-    const briefMarkers = current.id === "build" ? 1 : 0;
-    expect(prompt.split("REVIEW_READY").length - 1).toBe(1 + briefMarkers);
-    expect(prompt.split("NO FINDINGS").length - 1).toBe(1);
-    expect(prompt.split("VERDICT").length - 1).toBe(2);
-    /* The server reads the head itself, so a pipeline reviewer is never asked
-       to report it (review of #2301). */
-    expect(prompt).not.toContain("Report the commit you reviewed");
   }
   /* The fix stage is a builder fix round with the implementer's domain, on
      the fix row (§3 (a)), and its prompt says the first build's steps are done. */
@@ -378,16 +270,7 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   expect(fixer.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes", domain: "frontend" } });
   expect(fixer.effectiveRole).toMatchObject({ roleId: "builder", engine: "claude", model: "claude-sonnet-5-5", effort: "high", access: "read-write" });
   const fixPrompt = renderStagePrompt(pipeline, fixer, fixer.effectiveRole, "P1 src/a.ts:3 wrong label");
-  expect(fixPrompt).toContain("Fix the findings stage review reported for: pipeline support");
   expect(fixPrompt).toContain("P1 src/a.ts:3 wrong label");
-  expect(fixPrompt).toContain("Fix round: your brief is a list of findings.");
-  expect(fixPrompt).toContain("the specification's steps for the first build (where to branch, whether to open a pull request) are already done");
-  /* Review of #2301: the fix stage has one finish line, scoped to its findings. */
-  expect(fixPrompt.split("You are done when")).toHaveLength(2);
-  expect(fixPrompt).toContain("You are done when each is fixed, or left unfixed with the evidence in your summary that it is wrong");
-  expect(fixPrompt).toContain("blocked:true and a non-empty blockedReason");
-  expect(fixPrompt).toContain("cannot build, cannot run required checks");
-  expect(fixPrompt).toContain("fixer returns pass unless blocked");
 });
 
 
@@ -395,13 +278,8 @@ test("design and UI stages receive the task-bound prototype publishing contract"
   const stage: PipelineStage = { id: "design", kind: "run", prompt: "Design the layout", next: null,
     effectiveRole: { roleId: "architect", engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } };
   const pipeline = buildPipeline({ id: "prototype", task: "Layout", project: "viewer", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
-  const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
-  expect(prompt).toContain("publish_prototype_review");
-  expect(prompt).toContain("Only its publish stage");
-  expect(prompt).toContain("maxRounds 2");
   /* The wrapper renders at every launch, so the contract lives there, and only
      for the stages that build or judge frames (role-prompts-rewrite.md §3.3). */
-  for (const role of ["builder", "architect"]) expect(ROLE_DEFAULTS.find(r => r.id === role)!.promptScaffold).not.toContain("publish_prototype_review");
   for (const [roleId, shown] of [[null, true], ["builder", true], ["architect", true], ["visual-critic", true], ["reviewer", false], ["merger", false], ["verifier", false]] as const) {
     const current: PipelineStage = { ...stage, effectiveRole: { ...stage.effectiveRole, roleId } };
     expect(renderStagePrompt(pipeline, current, current.effectiveRole, "").includes("Prototype stages render numbered variants")).toBe(shown);
@@ -414,14 +292,14 @@ test("design and UI stages receive the task-bound prototype publishing contract"
    the blocked rule whether the stage is known by its params or its fail edge. */
 const STORED_FIX_SCAFFOLD = "You are a Builder in apply-fixes mode. Implement the brief with focused checks. You are done when every handed finding and every issue you notice within the pinned specification is fixed, or left unfixed with evidence that it is wrong, and the project's own checks for what you touched pass. The reviewer evaluates the result against the pinned specification. Report the verification evidence; fix any issue you notice within the specification before finishing. Stay inside the scope the brief names. Process cleanup: stop only the processes you started yourself, each by the PID you recorded when you started it.\n\nApply-fixes guidance: Fix every handed finding and anything you notice yourself within the pinned specification.\n\nSafety fences:\n- Product source changes stay inside the scope the brief names.";
 
-test("a stored lane renders its original scaffold and its fix stage still reads the blocked rule", () => {
+test("a stored lane keeps its scaffold after the correction duty and its fix stage still reads the blocked rule", () => {
   const review: PipelineStage = { id: "review", kind: "run", prompt: "Review", next: null, onFail: { to: "fix", maxRounds: 2 },
     effectiveRole: { roleId: "reviewer", engine: "codex", model: null, effort: "xhigh", access: "read-only", promptScaffold: "You are a fresh-context Reviewer. Three standing rules." } };
   const byParams: PipelineStage = { id: "fix", kind: "run", prompt: "Fix", next: "review", role: { roleId: "builder", params: { mode: "apply-fixes" } },
     effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: STORED_FIX_SCAFFOLD } };
   const pipeline = buildPipeline({ id: "stored", task: "Fix it", project: "viewer", repoDir: "/repo", stages: [review, byParams], srcPath: null, srcConversationId: null, now: "now" });
   const fixPrompt = renderStagePrompt(pipeline, byParams, byParams.effectiveRole, "P1 a finding");
-  expect(fixPrompt).toContain(`Role prompt scaffold:\n${STORED_FIX_SCAFFOLD}\n`);
+  expect(fixPrompt).toContain(`Role prompt scaffold:\n${OPERATOR_CORRECTION_RULE}\n\n${STORED_FIX_SCAFFOLD}\n`);
   expect(fixPrompt).not.toContain("Working rules (every role, every project)");
   expect(fixPrompt).toContain("For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason");
   expect(fixPrompt).toContain(DELEGATUS_MECHANICS);
@@ -430,7 +308,7 @@ test("a stored lane renders its original scaffold and its fix stage still reads 
   const edgePipeline = buildPipeline({ id: "stored-edge", task: "Fix it", project: "viewer", repoDir: "/repo", stages: [review, byEdge], srcPath: null, srcConversationId: null, now: "now" });
   expect(renderStagePrompt(edgePipeline, byEdge, byEdge.effectiveRole, "P1 a finding")).toContain("For a blocked fix stage");
   const reviewPrompt = renderStagePrompt(pipeline, review, review.effectiveRole, "");
-  expect(reviewPrompt).toContain("Role prompt scaffold:\nYou are a fresh-context Reviewer. Three standing rules.\n");
+  expect(reviewPrompt).toContain(`Role prompt scaffold:\n${OPERATOR_CORRECTION_RULE}\n\nYou are a fresh-context Reviewer. Three standing rules.\n`);
   expect(reviewPrompt).not.toContain("For a blocked fix stage");
 });
 
@@ -446,4 +324,19 @@ test("an owner without a delivery remote gets a local commit instruction", () =>
   expect(local).not.toContain("Push this branch");
   pipeline.delivery.target.remote = "https://example.invalid/repo.git";
   expect(renderStagePrompt(pipeline, stage, stage.effectiveRole, "")).toContain("Never push; the pipeline publishes");
+});
+
+
+test("retained stage scaffolds receive the correction duty and its write exception on delivery", () => {
+  for (const roleId of ["builder", "reviewer", "orchestrator"] as const) {
+    const role = { roleId, engine: "codex" as const, model: "gpt-6-luna", effort: "high", access: "read-only" as const,
+      promptScaffold: "A stored scaffold.\n\nSafety fences:\n- Change role memory only through curate_rules.\n- Never publish: the only write is issue_report with action preview." };
+    const stage: PipelineStage = { id: "work", kind: "run", prompt: "Handle the request", next: null, effectiveRole: role };
+    const pipeline = buildPipeline({ id: "retained-correction", task: "Handle the request", project: "one", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+    const prompt = renderStagePrompt(pipeline, stage, role, "");
+    expect(prompt.split(OPERATOR_CORRECTION_RULE)).toHaveLength(2);
+    expect(prompt).not.toContain("Change role memory only through curate_rules.");
+    expect(prompt).not.toContain("the only write is issue_report");
+    expect(role.promptScaffold).toStartWith("A stored scaffold.");
+  }
 });

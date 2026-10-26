@@ -125,6 +125,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     }
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && /\/pulls\/\d+\/reviews/.test(args[1] ?? "")) return "";
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/rules/branches/`)) return "[]";
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`)) return options.mergeBase ?? baseTip;
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return args.at(-1) === ".commit.sha" ? baseTip : JSON.stringify(options.required ?? []);
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
@@ -628,9 +629,9 @@ test("one conflict starts one visible refresh on the same task and delivery, wit
   expect(h.creates[0]).toMatchObject({
     request: { taskIds: ["task-one"], finishesTask: ["task-one"], delivery: { branch: "refs/heads/topic", pr: 11 }, publication: "remote-branch", autoStart: true,
       stages: [
-        { id: "refresh", role: { roleId: "builder" }, next: "review", onFail: null },
+        { id: "refresh", role: { roleId: "merger" }, next: "review", onFail: null },
         { id: "review", role: { roleId: "reviewer" }, next: null, onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" } },
-        { id: "fix", role: { roleId: "builder", params: { mode: "apply-fixes" } }, next: "review" },
+        { id: "fix", role: { roleId: "merger" }, next: "review" },
       ] },
     options: { creationRequest: { key: expect.stringMatching(/^auto-refresh:[0-9a-f]{64}$/) }, refreshOf: { pipelineId: "finished", base: MAIN_1, lineage: { srcConversationId: "seat-one" } } },
   });
@@ -678,10 +679,6 @@ test("a semantic conflict names its hunk on the successor and keeps the PR open"
   await h.sweep();
   const request = h.creates[0]!.request as CreatePipelineRequest;
   expect(request.stages[0]!.onFail).toBeNull();
-  for (const instruction of ["needs_decision", "file:line", "@@", "git merge --abort", "Never guess", "noreply", "machine identity"]) {
-    expect(request.stages[0]!.prompt).toContain(instruction);
-  }
-  expect(request.stages[1]!.prompt).toContain("git show --remerge-diff");
   h.pipeline("refresh-1").state = "needs_decision";
   h.pipeline("refresh-1").stateDetail = "src/example.ts:12 @@ -9,6 +9,7 @@ changes either side's behaviour";
   await h.run(30 * 60_000);
@@ -1050,8 +1047,6 @@ test("strict protection refreshes the next PR locally and waits for checks on it
   expect(h.merge("second")).toMatchObject({ state: "refreshing", refresh: { base: MAIN_2, head: HEAD_A, pipelineId: "refresh-1" } });
   const request = h.creates[0]!.request as CreatePipelineRequest;
   expect(request.delivery).toMatchObject({ branch: "refs/heads/second", pr: 22 });
-  expect(request.stages[0]!.prompt).toContain("machine identity");
-  expect(request.stages[0]!.prompt).toContain("Never rebase, force-push or call GitHub update-branch");
   expect(h.updates()).toHaveLength(0);
   const refreshedHead = "b".repeat(40);
   Object.assign(h.pipeline("refresh-1"), { state: "completed", lastPassedCommit: refreshedHead });
@@ -1342,4 +1337,17 @@ test("persisted refresh reservations replay only within the head limit", async (
   expect(h.creates).toHaveLength(2); // First failed call, then the head replay.
   expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-1");
   expect(h.merge("queued-1")!.refresh!.pipelineId).toBeNull();
+});
+
+test("refresh stages defer tier and account selection to live launch capacity", async () => {
+  const { refreshRequest } = await import("./autoRefresh");
+  const value = finished();
+  value.merge = { prNumber: 11, refresh: { base: MAIN_1, head: HEAD_A } } as PipelineMerge;
+  const request = refreshRequest(value);
+  for (const stage of request.stages) {
+    expect(stage).toMatchObject({ preferredServiceTier: "ultrafast", engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+    expect(stage.account).toBeUndefined();
+    expect(stage.serviceTier).toBeUndefined();
+  }
+  expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
 });

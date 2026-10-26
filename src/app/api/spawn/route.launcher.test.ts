@@ -144,6 +144,61 @@ test("a launcher named without the MCP service tag is refused before anything is
   expect(await malformed.json()).toEqual({ error: "notifyLauncher must be a boolean" });
 });
 
+for (const relation of ["parentConversationId", "reviews"] as const) {
+  test.each(["adopted", "rejected", "edited"] as const)(`tmux ${relation} authority is rechecked after spawn.intent: %s`, async decision => {
+    const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+    const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+    const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+    const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+    const { mutateTasks, loadTasks } = await import("@/lib/tasks/store");
+    const { patchTask } = await import("@/lib/tasks/commands");
+    const store = freshRegistry();
+    setAgentRegistryForTests(store);
+    process.env.LLV_SPAWN_TRANSPORT = "tmux";
+    const project = `tmux-authority-${relation}-${decision}`;
+    let dispatches = 0;
+    let intents = 0;
+    const artifact = path.join(sandbox, `${project}.jsonl`);
+    fs.writeFileSync(artifact, "retained investigation\n");
+    try {
+      const { task } = await admitProactiveTask({ ...candidate(project), project }, { ...context(), project }, undefined, authority());
+      await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+      const owner = store.beginSpawnRequest({ engine: "claude", cwd: sandbox, transport: "structured", taskIds: [task.id], explicitProject: project,
+        origin: { kind: "operator" }, clientAttemptId: `${project}-owner`,
+        launchProfile: emptyLaunchProfile({ cwd: sandbox, title: "Investigate the accepted outcome" }) });
+      if (owner.kind !== "created") throw new Error("expected parent reservation");
+      expect(owner.receipt.failureReporting?.taskIds).toContain(task.id);
+      store.settleSpawn(owner.receipt.launchId, { key: { engine: "claude", sessionId: project }, artifactPath: artifact,
+        cwd: sandbox, accountId: "claude-test", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+      const attempt = `${project}-child`;
+      const response = await POST.withDependencies(request({ clientAttemptId: attempt, project,
+        [relation]: owner.receipt.conversationId, ...(relation === "reviews" ? { role: "reviewer", roleParams: { diffSource: "Accepted scope" } } : {}) },
+      { "x-llv-spawn-capability": rotateOperatorSpawnCapability(), ...(relation === "parentConversationId" ? { "sec-fetch-site": "same-origin" } : {}) }), {
+        ...dependencies(store),
+        runtimeHostClient: () => ({ operation: async () => {
+          intents++;
+          if (decision === "rejected") await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+          if (decision === "edited") mutateTasks(tasks => {
+            const result = patchTask(tasks, task.id, { details: "A different scope after admission" });
+            if (!result.ok) throw new Error(result.error);
+            return { tasks: result.tasks, result: null };
+          });
+        } } as unknown as RuntimeHostClient),
+        spawnTmuxAgent: async () => { dispatches++; throw new Error("fixture reached tmux dispatch"); },
+      });
+      expect(intents).toBe(1);
+      expect(dispatches).toBe(decision === "adopted" ? 1 : 0);
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(store.spawnReceiptForClientAttempt(attempt)?.failureReporting?.taskIds).toContain(task.id);
+      expect(loadTasks().find(row => row.id === task.id)).toBeDefined();
+      expect(fs.readFileSync(artifact, "utf8")).toBe("retained investigation\n");
+    } finally {
+      process.env.LLV_SPAWN_TRANSPORT = "structured";
+      setAgentRegistryForTests(null);
+    }
+  });
+}
+
 test("an agent calling the route with its own capability is its own launcher", () => {
   const caller = { kind: "agent" as const, conversationId: `conversation_${crypto.randomUUID()}` as `conversation_${string}`, liveChildrenCap: 4 };
   const bare = new NextRequest("http://127.0.0.1/api/spawn");

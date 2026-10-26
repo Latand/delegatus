@@ -113,3 +113,61 @@ for (const [model, name] of [["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-5-5
     }
   });
 }
+
+test("while the first profile answer is pending the card reads, offers no Summarize, and one request goes out even when the same rules are re-read", async () => {
+  setLocale("en");
+  const originalFetch = globalThis.fetch;
+  const rules = sampleMemory();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const reads: string[] = [];
+  let answer: (() => void) | undefined;
+  globalThis.fetch = (async (url, init) => {
+    reads.push(`${init?.method ?? "GET"} ${String(url)}`);
+    await new Promise<void>(resolve => { answer = resolve; });
+    return Response.json(profileView(rules, "en", "sample", null));
+  }) as typeof fetch;
+  const draw = (value: typeof rules) => flushSync(() => root.render(<MemoryProfile rules={value} renderRules={() => <div />} />));
+  try {
+    draw(rules);
+    await tick();
+    expect(container.textContent).toContain(translate("en", "memoryProfile.reading"));
+    expect(container.textContent).not.toContain(translate("en", "memoryProfile.noneTitle"));
+    expect(container.querySelector("[data-profile-summarize]")).toBeNull();
+    draw({ ...rules, scopes: rules.scopes.map(scope => ({ ...scope })) });
+    await tick();
+    expect(reads.length).toBe(1);
+    answer?.(); await tick(); await tick();
+    expect(container.textContent).toContain(translate("en", "memoryProfile.noneTitle"));
+    expect(container.querySelector("[data-profile-summarize]")).not.toBeNull();
+    expect(reads.length).toBe(1);
+    expect(reads.every(read => read.startsWith("GET "))).toBe(true);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a refused first profile read ends the reading state, shows the error with a way to try again, and sends no summarization", async () => {
+  setLocale("en");
+  const originalFetch = globalThis.fetch;
+  const rules = sampleMemory();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const reads: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    reads.push(init?.method ?? "GET");
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch;
+  try {
+    flushSync(() => root.render(<MemoryProfile rules={rules} renderRules={() => <div />} />));
+    await tick(); await tick(); await tick();
+    expect(container.textContent).not.toContain(translate("en", "memoryProfile.reading"));
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container.querySelector("[data-profile-summarize]")).not.toBeNull();
+    expect(reads.includes("POST")).toBe(false);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});

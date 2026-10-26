@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Pipeline } from "./types";
+import { pipelineAttemptMayBeWorking } from "./attemptWorking";
+import type { Pipeline, PipelineStageHostRef } from "./types";
 import type { PipelineAttemptReference } from "@/lib/state/pipelineControllerReferences";
 
 type CloseBudget = { used: number; cancellations: number };
@@ -18,17 +19,24 @@ export function controllerCloseBudget(id: string): CloseBudget | undefined {
 }
 export const controllerReferences = (id: string) => scope.getStore()?.references?.get(id);
 
-type GuardIndex = { activation: Set<number>; survivor: Set<number>; membership: Set<string>; settled: Set<string> };
+type GuardIndex = { activation: Set<number>; survivor: Set<number>; membership: Set<string>; settled: Set<string>; working: Map<string, number[]> };
+type HostIdentity = Pick<PipelineStageHostRef, "conversationId" | "agentPath" | "paneId">;
+const hostKeys = (host: HostIdentity) => [["conversation", host.conversationId], ["path", host.agentPath], ["pane", host.paneId]]
+  .filter(([, value]) => value).map(key => JSON.stringify(key));
 const guardHost = globalThis as typeof globalThis & { __llvPipelineGuardIndexes?: WeakMap<Pipeline, GuardIndex> };
 const guardIndexes = guardHost.__llvPipelineGuardIndexes ??= new WeakMap<Pipeline, GuardIndex>();
 /** Built once per immutable decoded revision, outside ordinary warmed phases. */
 export function indexControllerGuards(pipeline: Pipeline): void {
   if (guardIndexes.has(pipeline)) return;
-  const index: GuardIndex = { activation: new Set(), survivor: new Set(), membership: new Set(), settled: new Set(pipeline.terminalReap?.settledAttempts) };
+  const index: GuardIndex = { activation: new Set(), survivor: new Set(), membership: new Set(), settled: new Set(pipeline.terminalReap?.settledAttempts), working: new Map() };
   pipeline.runs.forEach((run, r) => run.attempts.forEach((attempt, a) => {
     const position = r * 4294967296 + a + 1;
     if (attempt.activation) index.activation.add(position);
     if (attempt.unresolvedTermination) index.survivor.add(position);
+    if (pipelineAttemptMayBeWorking(attempt)) for (const key of hostKeys(attempt)) {
+      const positions = index.working.get(key);
+      if (positions) positions.push(position); else index.working.set(key, [position]);
+    }
     if (attempt.conversationId) index.membership.add(JSON.stringify(["conversation",attempt.conversationId]));
     if (attempt.launchId) {
       index.membership.add(JSON.stringify(["launch",false,attempt.launchId]));
@@ -61,6 +69,16 @@ export function controllerOffWindowGuard(pipeline: Pipeline, kind: "activation" 
   let selected = 0;
   for (const ref of refs) if (positions.has(ref.position)) selected++;
   return positions.size > selected;
+}
+/** An off-window round sharing this conversation, path or pane may still own
+ * a turn. Selected attempts are mutable in this tick and are checked directly. */
+export function controllerOffWindowWorkingHost(pipeline: Pipeline, host: HostIdentity): boolean | undefined {
+  const refs = controllerReferences(pipeline.id);
+  if (!refs) return undefined;
+  indexControllerGuards(pipeline);
+  const working = guardIndexes.get(pipeline)!.working;
+  const selected = new Set(refs.map(ref => ref.position));
+  return hostKeys(host).some(key => working.get(key)?.some(position => !selected.has(position)));
 }
 /** The same conversation → launch → legacy path precedence as task membership. */
 export function controllerAssignmentAttached(pipeline: Pipeline, assignment: { conversationId?: string | null; launchId?: string | null; path: string | null }): boolean | undefined {

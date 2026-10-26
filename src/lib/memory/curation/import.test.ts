@@ -304,3 +304,30 @@ test("groups longer than a page continue in bounded same-project passes without 
   }
   expect(bodies.join("")).toBe(rows.map(c => c.body).join(""));
 });
+
+test.each(["none", "rewrite"] as const)("GET /api/memory/source tells an undone import (%s later edit) as undone or partly undone, counts only", async later => {
+  const { GET } = await import("@/app/api/memory/source/route");
+  const read = async () => (await GET()).json();
+  const candidate = importCandidate(1); await seedImport([candidate]);
+  expect((await read()).import.undo).toBeUndefined();
+  const p = pass(); const id = await adoptOne(candidate, p);
+  patchPass(p.id, { state: "succeeded", endedAt: new Date(NOW + 1).toISOString() });
+  expect((await read()).import.undo).toBeUndefined();
+  if (later === "rewrite") {
+    const q = pass(IMPORT_PROJECT, NOW + 24 * 60 * 60_000);
+    applyCuration(q, scopeInput({ [candidate.suggestedScope]: [id] }, { rewrite: [{ id, rule: RULE + " Check its revision too.", note: "A later writer retained an extra condition." }] }), IMPORT_AT);
+    patchPass(q.id, { state: "succeeded", endedAt: new Date(NOW + 24 * 60 * 60_000 + 1).toISOString() });
+  }
+  revertCuratorPass(p.id, new Date(NOW + 26 * 60 * 60_000).toISOString());
+  const body = await read();
+  expect(body.import.undo).toEqual(later === "none" ? { state: "undone", kept: 0 } : { state: "partlyUndone", kept: 1 });
+  expect(JSON.stringify(body)).not.toContain(RULE);
+  expect(JSON.stringify(body)).not.toContain(root);
+  if (later === "none") {
+    /* The curator takes the re-pended candidate again: nothing is left to tell. */
+    const r = pass(IMPORT_PROJECT, NOW + 48 * 60 * 60_000); await readCuration(r, "imports");
+    applyCuration(r, scopeInput({ machine: [] }, { drop: [drop(candidate)] }), IMPORT_AT);
+    patchPass(r.id, { state: "succeeded", endedAt: new Date(NOW + 48 * 60 * 60_000 + 1).toISOString() });
+    expect((await read()).import.undo).toBeUndefined();
+  }
+});

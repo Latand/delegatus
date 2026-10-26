@@ -5,10 +5,15 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { emptyStore, installSnapshot, type RuntimeSnapshot } from "@/components/runtime/runtimeModel";
 import type { RuntimeBus, RuntimeBusState } from "@/hooks/runtimeBus";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { createFailedLegacyBufferProjection } from "@/lib/runtime/fixtures/failedLegacyBufferProjection";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
 import type { FileEntry } from "@/lib/types";
+import { resetOrchestratorSeatCacheForTests } from "./orchestrator/useOrchestratorSeat";
+import { cancelOutbox, enqueueOutbox, readOutbox, updateOutbox } from "./conversation/outbox";
+import { messageRowRecovery } from "./conversation/rowRecovery";
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 
 class TestResizeObserver {
   observe() {}
@@ -36,8 +41,9 @@ Object.assign(globalThis, {
   IntersectionObserver: undefined,
   ResizeObserver: TestResizeObserver,
 });
+let mobile = false;
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
-  matches: false,
+  matches: mobile && query.includes("max-width"),
   media: query,
   addEventListener() {},
   removeEventListener() {},
@@ -90,6 +96,9 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { BranchPane } = await import("./BranchPane");
+const { appendComposerDraft } = await import("./TmuxComposer");
+const originalFetch = globalThis.fetch;
+const composerStorage = installComposerStorageForTests();
 
 const roots = new Set<Root>();
 
@@ -102,9 +111,14 @@ afterEach(async () => {
   document.body.replaceChildren();
   localStorage.clear();
   sessionStorage.clear();
+  resetOrchestratorSeatCacheForTests();
+  globalThis.fetch = originalFetch;
+  mobile = false;
+  composerStorage.reset();
 });
 
 afterAll(() => {
+  composerStorage.uninstall();
   mock.module("@/hooks/runtimeBus", () => actualRuntimeBus);
   mock.module("@/hooks/useLogTail", () => actualLogTail);
   dom.close();
@@ -137,6 +151,18 @@ function liveLegacyFile(overrides: Partial<FileEntry> = {}): FileEntry {
   } as FileEntry;
 }
 
+/** Waits on an observed condition; the deadline only bounds a failure. */
+async function waitFor(what: string, condition: () => boolean, deadlineMs = 10_000): Promise<void> {
+  const until = performance.now() + deadlineMs;
+  while (!condition()) {
+    if (performance.now() > until) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(2);
+  }
+}
+
+/** One macrotask turn lets state set by an already-consumed response render. */
+const nextTurn = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
 function mount(file: FileEntry): HTMLElement {
   const host = document.createElement("div");
   document.body.append(host);
@@ -145,6 +171,189 @@ function mount(file: FileEntry): HTMLElement {
   flushSync(() => root.render(<BranchPane file={file} tasks={[]} isRoot />));
   return host;
 }
+
+for (const detailState of ["current", "failed", "empty", "older-than-page"] as const) test(`an open phone conversation retains retired-send fences and payloads (${detailState})`, async () => {
+  mobile = true;
+  const detailReadFails = detailState === "failed" || detailState === "empty";
+  const file = liveLegacyFile({ conversationId: `conversation_previous_${detailState}`, project: `viewer-${detailState}`, engine: "claude" });
+  let rotated = false;
+  const posts: string[] = [];
+  let detailedReads = 0;
+  const answered = { all: 0, detail: 0 };
+  const answer = async (body: unknown, kind: "all" | "detail", status = 200): Promise<Response> => {
+    const response = Response.json(body, { status });
+    const json = response.json.bind(response);
+    // Counted once the caller has consumed the body, so a count means "read".
+    response.json = async () => { const value = await json(); answered[kind] += 1; return value; };
+    return response;
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST" && (/^\/api\/(?:tmux|runtime\/send|orchestrator\/message)(?:\?|$)/.test(url)
+      || /^\/api\/runtime\/operations\/[^/]+(?:\?|$)/.test(url))) posts.push(url);
+    if (url.startsWith("/api/orchestrator/seat")) {
+      const kind = url.includes("scope=all") ? "all" : "detail";
+      if (rotated && kind === "detail") detailedReads += 1;
+      if (rotated && detailState === "failed" && kind === "detail") return answer({ error: "temporarily unavailable" }, kind, 503);
+      if (rotated && detailState === "empty" && kind === "detail") return answer({ seat: null, exists: false }, kind);
+      const current = rotated ? "conversation_current" : file.conversationId;
+      return answer({
+        seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
+          state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+        exists: true, viewerMcpRegistered: true,
+        previous: rotated && detailState !== "older-than-page"
+          ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
+        all: { conversationIds: [current], paths: [rotated ? "/fixtures/current.jsonl" : file.path],
+          previous: { conversationIds: rotated ? [file.conversationId] : [], paths: rotated ? [file.path] : [] } },
+      }, kind);
+    }
+    return Response.json({});
+  }) as typeof fetch;
+  enqueueOutbox(file.conversationId!, { id: "retired-message", text: "Saved operator message", images: 0, at: Date.now() });
+  updateOutbox(file.conversationId!, "retired-message", { state: "failed", error: "recipient replaced", settledAt: Date.now() });
+  const retained = await composerSubmissionPayloads.retain({ conversationId: file.conversationId!, key: "retained-message" }, {
+    text: "Retained operator payload", images: [], files: [],
+  });
+  await composerSubmissionPayloads.seal(retained, { route: "runtime", body: { conversationId: file.conversationId, text: "Retained operator payload", idempotencyKey: "retained-message" } });
+  expect(await composerSubmissionPayloads.beginAttempt(retained)).toBeTrue();
+  expect(composerSubmissionPayloads.consumeAttempt(retained)).toBeTrue();
+  expect(await composerSubmissionPayloads.observe(retained, {
+    conversationId: file.conversationId!, idempotencyKey: "retained-message", operationId: "retained-operation", revision: 1,
+    status: "failed", resend: "safe", at: new Date().toISOString(),
+  })).toBeTrue();
+  appendComposerDraft(file.conversationId!, "Unsent draft stays here");
+  const host = mount(file);
+  await waitFor("the first scope=all read", () => answered.all >= 1);
+  await nextTurn();
+  expect(host.querySelector("[data-retired-orchestrator]")).toBeNull();
+  rotated = true;
+  const readsBefore = answered.all;
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitFor("a scope=all read after rotation", () => answered.all > readsBefore);
+  await waitFor("the detailed seat read", () => detailedReads > 0 && answered.detail >= 1);
+  await waitFor("the retired banner", () => Boolean(host.querySelector("[data-retired-orchestrator]")));
+  if (!detailReadFails) await waitFor("the successor link", () => Boolean(host.querySelector("[data-retired-orchestrator] a")));
+  const banner = host.querySelector("[data-retired-orchestrator]");
+  expect(banner).not.toBeNull();
+  expect(banner!.querySelector("a")?.getAttribute("href") ?? null).toBe(detailReadFails ? null : "#c=conversation_current");
+  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+  expect(textarea.value).toBe("Unsent draft stays here");
+  expect(host.querySelector('[data-testid="composer-send-blocked"] button')).toBeNull();
+  const retry = host.querySelector("[data-outbox-retry=retired-message]") as HTMLButtonElement;
+  expect(retry).not.toBeNull();
+  expect(retry.disabled).toBeTrue();
+  retry.click();
+  const payloadRetry = host.querySelector("[data-payload-retry]") as HTMLButtonElement;
+  expect(payloadRetry).not.toBeNull();
+  expect(payloadRetry.disabled).toBeTrue();
+  payloadRetry.click();
+  expect(messageRowRecovery(file.conversationId!)?.retryOperation).toBeDefined();
+  messageRowRecovery(file.conversationId!)!.retryOperation!("retained-message");
+  await waitFor("the refusal status", () => host.querySelector('[data-testid="composer-status"]')?.textContent === translate("en", "retiredOrchestrator.sendBlocked"));
+  expect(posts).toEqual([]);
+  expect((await composerSubmissionPayloads.restore(retained))?.receipt?.status).toBe("failed");
+  expect(readOutbox(file.conversationId!).find(entry => entry.id === "retired-message")).toMatchObject({
+    text: "Saved operator message", state: "failed",
+  });
+});
+
+for (const entryArrives of ["before the banner", "after the banner"] as const) test(`a message queued ${entryArrives} for a retired orchestrator stays queued and cancellable`, async () => {
+  mobile = true;
+  const file = liveLegacyFile({ conversationId: "conversation_previous_queued", project: "viewer-queued", engine: "claude" });
+  const posts: string[] = [];
+  let answeredAll = 0;
+  let answeredDetail = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST" && /^\/api\/(?:tmux|runtime\/send|orchestrator\/message)(?:\?|$)/.test(url)) posts.push(url);
+    if (!url.startsWith("/api/orchestrator/seat")) return Response.json({});
+    const kind = url.includes("scope=all") ? "all" : "detail";
+    const response = Response.json({
+      seat: { project: file.project, conversationId: "conversation_current", path: "/fixtures/current.jsonl",
+        state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+      exists: true, viewerMcpRegistered: true,
+      previous: [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }],
+      all: { conversationIds: ["conversation_current"], paths: ["/fixtures/current.jsonl"],
+        previous: { conversationIds: [file.conversationId], paths: [file.path] } },
+    });
+    const json = response.json.bind(response);
+    response.json = async () => { const value = await json(); if (kind === "all") answeredAll += 1; else answeredDetail += 1; return value; };
+    return response;
+  }) as typeof fetch;
+  const id = file.conversationId!;
+  const enqueue = () => enqueueOutbox(id, { id: "queued-message", text: "Queued before the seat rotated", images: 0, at: Date.now() });
+  if (entryArrives === "before the banner") enqueue();
+  const host = mount(file);
+  await waitFor("the retired banner with its successor link", () => answeredAll >= 1 && answeredDetail >= 1
+    && Boolean(host.querySelector("[data-retired-orchestrator] a")));
+  if (entryArrives === "after the banner") enqueue();
+  await waitFor("the queued message row", () => host.textContent?.includes("Queued before the seat rotated") === true);
+  await nextTurn();
+  expect(readOutbox(id).find(entry => entry.id === "queued-message")?.state).toBe("queued");
+  expect(posts).toEqual([]);
+  cancelOutbox(id, "queued-message");
+  expect(readOutbox(id).find(entry => entry.id === "queued-message")).toBeUndefined();
+});
+
+test("a current seat that also appears in seat history is not retired and keeps sending open", async () => {
+  mobile = true;
+  const file = liveLegacyFile({ conversationId: "conversation_reseated", project: "viewer-reseated", engine: "claude" });
+  let answeredAll = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.startsWith("/api/orchestrator/seat")) return Response.json({});
+    const kind = url.includes("scope=all") ? "all" : "detail";
+    // A rollback re-seated this conversation; its earlier revocation stays in the record.
+    const response = Response.json({
+      seat: { project: file.project, conversationId: file.conversationId, path: file.path,
+        state: "active", seatEpoch: 3, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+      exists: true, viewerMcpRegistered: true,
+      previous: [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }],
+      all: { conversationIds: [file.conversationId], paths: [file.path],
+        previous: { conversationIds: [file.conversationId], paths: [file.path] } },
+    });
+    const json = response.json.bind(response);
+    response.json = async () => { const value = await json(); if (kind === "all") answeredAll += 1; return value; };
+    return response;
+  }) as typeof fetch;
+  const host = mount(file);
+  await waitFor("the scope=all read", () => answeredAll >= 1);
+  await nextTurn();
+  await nextTurn();
+  expect(host.querySelector("[data-retired-orchestrator]")).toBeNull();
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
+});
+
+test("the retired banner shows no unavailable line while the detail read is held, and a link once it answers", async () => {
+  mobile = true;
+  const file = liveLegacyFile({ conversationId: "conversation_previous_held", project: "viewer-held", engine: "claude" });
+  let releaseDetail: () => void = () => {};
+  const detailHeld = new Promise<void>(resolve => { releaseDetail = resolve; });
+  let detailRequested = false;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.startsWith("/api/orchestrator/seat")) return Response.json({});
+    const kind = url.includes("scope=all") ? "all" : "detail";
+    if (kind === "detail") { detailRequested = true; await detailHeld; }
+    return Response.json({
+      seat: { project: file.project, conversationId: "conversation_current", path: "/fixtures/current.jsonl",
+        state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+      exists: true, viewerMcpRegistered: true,
+      previous: [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }],
+      all: { conversationIds: ["conversation_current"], paths: ["/fixtures/current.jsonl"],
+        previous: { conversationIds: [file.conversationId], paths: [file.path] } },
+    });
+  }) as typeof fetch;
+  const host = mount(file);
+  await waitFor("the banner with the detail read in flight", () => detailRequested
+    && Boolean(host.querySelector("[data-retired-orchestrator]")));
+  await nextTurn();
+  expect(host.querySelector("[data-retired-orchestrator]")!.textContent).not.toContain(translate("en", "retiredOrchestrator.unavailable"));
+  expect(host.querySelector("[data-retired-orchestrator] a")).toBeNull();
+  releaseDetail();
+  await waitFor("the successor link", () => Boolean(host.querySelector("[data-retired-orchestrator] a")));
+  expect(host.querySelector("[data-retired-orchestrator]")!.textContent).not.toContain(translate("en", "retiredOrchestrator.unavailable"));
+});
 
 function installRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
   runtimeState = {

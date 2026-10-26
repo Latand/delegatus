@@ -666,6 +666,7 @@ function isStage(value: unknown): value is PipelineStage {
     (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
     (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
     (stage.serviceTier == null || typeof stage.serviceTier === "string") &&
+    (stage.preferredServiceTier === undefined || (typeof stage.preferredServiceTier === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(stage.preferredServiceTier))) &&
     validAgentMemoryMax(stage.agentMemoryMaxBytes) &&
     (stage.access === undefined || stage.access === "read-only" || stage.access === "read-write") &&
     (stage.sandbox === undefined || stage.sandbox === "full" || stage.sandbox === "restricted") &&
@@ -687,6 +688,7 @@ function isStage(value: unknown): value is PipelineStage {
   if (stage.model !== undefined && stage.model !== effective.model) return false;
   if (stage.effort !== undefined && stage.effort !== effective.effort) return false;
   if (stage.serviceTier != null && stage.serviceTier !== effective.serviceTier) return false;
+  if (stage.preferredServiceTier !== undefined && stage.preferredServiceTier !== effective.preferredServiceTier) return false;
   if (stage.access !== undefined && stage.access !== effective.access) return false;
   if (referencedRoleId === null && effective.promptScaffold !== null) return false;
   if (referencedRoleId !== null && !effective.promptScaffold?.trim()) return false;
@@ -1672,12 +1674,18 @@ export function pipelineRegistryHealth(): RegistryRecordIssue[] {
   });
 }
 
+function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
+  return pipeline.runs.some(run => run.attempts.some(attempt => attempt.conversationId || attempt.agentPath || attempt.paneId));
+}
+
 function pipelineControllerActive(pipeline: Pipeline): boolean {
   if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
   if (pipeline.activationCloseRequested) return true;
-  if (pipeline.state === "closed") return Boolean(pipeline.unconfirmedHosts?.length);
-  if (pipeline.state === "completed") {
-    return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
+  if (pipeline.state === "completed" || pipeline.state === "closed") {
+    // A scoped controller holds an attempt window. Keep its eligibility
+    // conservative; the scheduler checks host identity in the stored row.
+    return Boolean(pipeline.unconfirmedHosts?.length) || (!pipeline.terminalReap?.settledAt
+      && (pipeline.state === "completed" || controllerPipelineKeys()?.includes(pipeline.id) || pipelineHasRecordedHost(pipeline)));
   }
   return true;
 }
@@ -2152,6 +2160,9 @@ export function archivedPipelinesRevision(): number {
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
+  if (pipeline.unconfirmedHosts?.length) return false;
+  if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
+    && pipelineHasRecordedHost(pipeline)) return false;
   /* The task-finish sweep reads the hot collection and records its durable
      outcome on the marked lane. Keep that lane visible to the sweep while any
      linked mark is unresolved, including while another lane on the task is

@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { composeBatch, type InboxMember } from "./inboxBatch";
 import type { SeatRecipientVerdict } from "@/lib/orchestrator/seatChannel";
@@ -629,7 +630,10 @@ function reconfigureEffect(effect: StructuredDeliveryEffect): StructuredReconfig
 function deliveryEffect(effect: StructuredDeliveryEffect): DeliveryEffect | null {
   if (effect.kind === "runtime.native-queue") {
     try {
-      const command = parseRuntimeCommand("native-queue", effect.payload) as NativeQueueCommand;
+      // Effects were admitted before they were persisted. Parse them with the
+      // narrow legacy compatibility allowance rather than rejecting an
+      // already-admitted colon-delimited idempotency key as fresh API input.
+      const command = parseRuntimeCommand("native-queue", effect.payload, { durableReplay: true }) as NativeQueueCommand;
       if (!command.operationId) return null;
       return { ...command, operationId: command.operationId, eventSeq: effect.eventSeq };
     } catch { return null; }
@@ -3409,7 +3413,7 @@ export class StructuredDeliveryQueue {
       }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
+          if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
             if (effect.onlyIfIdle) {
               await transition("failed", { reason: "idle-retirement-deferred" });
               return { blocked: false, terminated: false };
@@ -3430,7 +3434,7 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
+        if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
