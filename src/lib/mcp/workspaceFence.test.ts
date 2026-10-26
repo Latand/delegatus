@@ -166,7 +166,8 @@ test("full result identities refuse colliding foreign and Unassigned projects be
     }
   }
   placeProject(store, owner, foreign, null);
-  searchReply = { items: [{ project: local, snippet: "Our message" }], total: 1, strongTotal: 1, nextCursor: null, projectScope: { resolved: own } };
+  searchReply = { items: [{ project: local, snippet: "Our message" }], total: 1, strongTotal: 1, nextCursor: null, projectScope: { resolved: own },
+    stats: { conversationsIndexed: 1, messagesIndexed: 1, fieldsSearched: [], tokenizer: "unicode" } };
   expect(await call("search_transcripts", { query: "message", clientRequestId: "permitted-compact" }))
     .toMatchObject({ ok: true, items: [{ project: shortId(local), snippet: "Our message" }] });
 });
