@@ -20,7 +20,7 @@ import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migrati
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
-import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
+import { agentRegistry, prepareAgentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
@@ -222,13 +222,14 @@ export async function fenceSpawnAdmissionRejection(
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   if (!clientAttemptId || !/^[A-Za-z0-9_-]{8,128}$/.test(clientAttemptId)) return null;
   try {
+    const registry = await prepareAgentRegistry(undefined, () => dependencies.registry());
     const requestDigest = spawnAdmissionBodyDigest(body);
     return await withAccountMutationLockAsync(() => recordSpawnAdmissionRejection({
       clientAttemptId,
       requestDigest,
       status,
       error,
-    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId)), { caller: "spawn refusal" });
+    }, () => registry.spawnReceiptForClientAttempt(clientAttemptId)), { caller: "spawn refusal" });
   } catch {
     return null;
   }
@@ -380,7 +381,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   let authenticatedCallerError: { error: string; status?: number } | null = null;
   if (agentInitiated) {
     try {
-      registryForCaller = dependencies.registry();
+      registryForCaller = await prepareAgentRegistry(req.signal, () => dependencies.registry());
       const caller = authenticatedAgentSpawnCaller(req, body.src, registryForCaller);
       if ("error" in caller) authenticatedCallerError = caller;
       else authenticatedCaller = caller;
@@ -510,7 +511,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (gap) return NextResponse.json({ error: gap }, { status: 409 });
   }
 
-  const registry = registryForCaller ?? dependencies.registry();
+  const registry = registryForCaller ?? await prepareAgentRegistry(req.signal, () => dependencies.registry());
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   const existingAttempt = clientAttemptId ? registry.spawnReceiptForClientAttempt(clientAttemptId) : null;
   if (!explicitTitle && !derivedTitle && !existingAttempt) {
@@ -671,7 +672,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const parentArtifactPath = parent?.artifactPath ?? null;
     const requestedTelegram = requestedMcpServers?.includes("telegram") === true;
     const parentRecord = parentConversationId
-      ? (registryForCaller ?? dependencies.registry()).conversation(parentConversationId as `conversation_${string}`)
+      ? registry.conversation(parentConversationId as `conversation_${string}`)
       : null;
     const parentProfile = parentRecord?.generations.at(-1)?.launchProfile;
     const seatParent = parentRecord?.agentRole === "orchestrator"

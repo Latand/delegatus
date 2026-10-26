@@ -4,6 +4,7 @@ import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import { reportSpawnHeaders, startDeferredSpawnWork, type ReportSpawnResult } from "@/lib/telegram/reportSpawn";
 import { withSystemRunTask } from "@/lib/tasks/systemRun";
+import { prepareAgentRegistry } from "./registry";
 
 /** The normal spawn lane, outside Next's request-scoped after(). */
 export async function launchAutonomousConversation(body: Record<string, unknown>, authorize?: () => void, options: { structured?: boolean } = {}): Promise<ReportSpawnResult> {
@@ -15,8 +16,12 @@ export async function launchAutonomousConversation(body: Record<string, unknown>
   authorize?.();
   const request = { headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER), json: async () => body } as unknown as NextRequest;
   // Loading the spawn lane is asynchronous; existing receipts keep their custody.
-  if (activeDrain() && !productionSpawnCommandDependencies.registry().spawnReceiptForClientAttempt(String(body.clientAttemptId))) {
-    return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } };
+  if (activeDrain()) {
+    const registry = await prepareAgentRegistry(undefined, () => productionSpawnCommandDependencies.registry());
+    authorize?.();
+    if (activeDrain() && !registry.spawnReceiptForClientAttempt(String(body.clientAttemptId))) {
+      return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } };
+    }
   }
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
     autonomousAdmissionHeld: () => !!activeDrain(), authorizeAutonomousLaunch: authorize, autonomousStructured: options.structured, defer: startDeferredSpawnWork });
