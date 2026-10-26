@@ -1855,6 +1855,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     const restart = async () => {
       const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
       const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(engine)});
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
         const ports = { ...defaultPipelinePorts(), exec: ${publicationFixtureExec.toString()},
           now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
