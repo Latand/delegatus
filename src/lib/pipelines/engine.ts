@@ -1,3 +1,4 @@
+import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
@@ -2635,7 +2636,7 @@ const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
     launch receipt proves nothing was dispatched rides it out on this budget
     with a slower backoff, because every round burns a real reservation and the
     admission attempts the spawn layer makes before it records the failure. */
-const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
+const SPAWN_HOST_WAIT_BUDGET_MS = DEPLOY_ADMISSION_BUDGET_MS;
 const SPAWN_HOST_RETRY_MAX_MS = 60_000;
 const SPAWN_RECOVERY_PARK_PREFIX = "stage spawn recovery stopped: ";
 /** How a recovery that spent its budget, rather than met a failure, opens its reason. */
