@@ -6,8 +6,8 @@
     "snapshotsObservedBy": "2026-10-26T16:33:00Z"
   },
   "candidateSourceBlobs": {
-    "src/lib/mcp/compactAnswers.ts": "043ff69b8da88fcb373e6d1bd16dd5bf310750b7",
-    "src/lib/mcp/compactAnswers.test.ts": "cac4f647a6cd891008d2f85fdf33edeba3d42437"
+    "src/lib/mcp/compactAnswers.ts": "1ee6d9f77c0ab26d0c083b29767c431bb61b7ec5",
+    "src/lib/mcp/compactAnswers.test.ts": "1d92ec23a74c988e928246e1dae971003c29bdc5"
   },
   "scope": "Additive stage metadata and compatible bounded result only; full and default compact projections retain their original bytes.",
   "method": [
@@ -176,5 +176,27 @@
     "types": "pass",
     "selectedCompletedSerialChecks": 12,
     "finalRedactionFixture": "pass; short neutral marker; same sensitive-key assertions"
+  },
+  "preLaunchRuntimeFixVerification": {
+    "reviewedSource": "36e6888776f1c1261ccc6bbe5ce94af802bb1903",
+    "regressionControl": "Both persisted pending and spawning cases fail at runtime:null on the reviewed implementation; both pass after the guard fix, including bound definitions with booked starts.",
+    "headCompactAnswers": {
+      "passed": 24,
+      "failed": 1
+    },
+    "baseCompactAnswers": {
+      "source": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+      "passed": 11,
+      "failed": 1
+    },
+    "preExistingFailure": "create_pipeline acknowledgement budget: 1974 bytes against a less-than-1600 limit on both head and base whole-file runs.",
+    "answerSizes": {
+      "passed": 8,
+      "failed": 0
+    },
+    "typecheck": "passed",
+    "frozenEvidence": "All 12 before/after JSON hashes, character and byte counts and three repeated o200k_base estimates match the existing samples.",
+    "isolation": "Detached private clones; matching dependencies; checkEnvironment then isolatedEnvironment; serial gate-slot; private HOME, config, state and TMPDIR; closed Viewer control port.",
+    "finalFixtureFormatting": "Quoted the prompt object key for the privacy gate; identical field and value to the behavior-checked fixture."
   }
 }

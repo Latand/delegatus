@@ -199,6 +199,9 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
      its report is already the authoritative completion record. */
   const reportedVerdict = selected?.report?.verdict;
   const verdict = selected?.verdict ?? reportedVerdict;
+  const hasRuntimeEvidence = selected && (selected.launchId || selected.conversationId || selected.agentPath
+    // Legacy launched records can predate both binding and launch identities.
+    || (!selected.definition && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
   const result = selected?.report && "result" in selected.report && typeof selected.report.result === "string"
     ? selected.report.result : null;
   return {
@@ -229,9 +232,10 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
     },
     attempt: selected ? {
       runtimeSwitch: selected.runtimeSwitches?.at(-1) ?? null,
-      /* This is the selected attempt's persisted runtime, including switches;
-         a requested switch target is not evidence that the runtime changed. */
-      runtime: selected.effectiveRole ? {
+      /* Role copying, definition binding and start booking precede dispatch.
+         A launch or conversation identity witnesses the persisted runtime,
+         including switches; a requested switch target does not. */
+      runtime: selected.effectiveRole && hasRuntimeEvidence ? {
         ...currentRuntimeSeat(selected),
         serviceTierSource: selected.effectiveRole.serviceTierSource ?? null,
       } : null,

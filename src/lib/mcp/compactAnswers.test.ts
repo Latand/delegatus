@@ -242,6 +242,7 @@ function metadataPipeline() {
   stage.role = { roleId: "builder", params: { mode: "plain", rounds: 2 } };
   Object.assign(stage.effectiveRole, { serviceTier: "priority", serviceTierSource: "explicit", preferredServiceTier: "priority" });
   const attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.launchId = "metadata-launch";
   attempt.accountId = "account-B";
   attempt.effectiveRole = { ...stage.effectiveRole, model: "gpt-6.1-sol", effort: "high", access: "read-only", serviceTier: "standard", serviceTierSource: "role-default" };
   attempt.definition = {
@@ -297,6 +298,48 @@ test("stage metadata follows account pin precedence without treating a requested
   expect(pipelineStageRead(pipeline, stage.id).attempt!.accountPin).toBe("account-E");
   attempt.runtimeAccountPin = null;
   expect(pipelineStageRead(pipeline, stage.id).attempt!.accountPin).toBeNull();
+});
+
+test.each(["pending", "spawning"] as const)("persisted %s attempts keep copied launch intent out of observed runtime", async (state) => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  Object.assign(attempt, {
+    n: 1, state, effectiveRole: structuredClone(stage.effectiveRole),
+    launchId: null, conversationId: null, agentPath: null, sessionId: null,
+    accountId: null, startedAt: null, completedAt: null, report: undefined, verdict: null,
+  });
+  delete attempt.definition;
+  // Keep the attempt selected without retaining an earlier launched attempt.
+  pipeline.runs[0]!.attempts = [attempt];
+  const read = async () => {
+    savePipelines([pipeline]);
+    const bindings = viewerMcpBindings();
+    const full = await bindings.get_pipeline({ pipelineId: pipeline.id, full: true });
+    const answer = await bindings.get_pipeline({ pipelineId: pipeline.id, stageId: stage.id });
+    expect(answer).toMatchObject({
+      stage: { configured: { account: "account-A", serviceTier: "priority", serviceTierSource: "explicit" } },
+      attempt: { n: attempt.n, state, runtime: null },
+    });
+    expect(await bindings.get_pipeline({ pipelineId: pipeline.id, full: true })).toEqual(full);
+  };
+  await read();
+  // Binding and booking the start happen before spawn admission, too.
+  attempt.definition = {
+    boundAt: "2026-10-26T10:00:00.000Z", stageDigest: "a".repeat(64),
+    "prompt": stage.prompt, account: stage.account!, role: null, sandbox: null, outputs: null,
+  };
+  attempt.startedAt = "2026-10-26T10:00:00.000Z";
+  await read();
+});
+
+test.each(["launchId", "conversationId", "agentPath", "startedAt"] as const)("legacy runtime remains known with only %s launch evidence", (field) => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  const evidence = { launchId: "legacy-launch", conversationId: "legacy-conversation", agentPath: "legacy-session.jsonl", startedAt: "2026-10-26T10:00:00.000Z" }[field];
+  Object.assign(attempt, { launchId: null, conversationId: null, agentPath: null, startedAt: null });
+  delete attempt.definition;
+  attempt[field] = evidence;
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.runtime).toMatchObject({
+    engine: "codex", model: "gpt-6.1-sol", accountId: "account-B", serviceTier: "standard", serviceTierSource: "role-default",
+  });
 });
 
 test("legacy metadata stays unknown and unstarted stages have no observed attempt", () => {
