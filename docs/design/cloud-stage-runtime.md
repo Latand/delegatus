@@ -1,15 +1,23 @@
-# Codex Cloud stage runtime — slice 1
+# Codex Cloud stage runtime
 
-A pipeline run stage with `runtime: "codex-cloud"` selects cloud execution for a
-read-only Codex reviewer or verifier with no declared worktree outputs. It must
-name an explicit `model`; inherited defaults cannot select its model. Omission
-of `runtime` preserves local execution. Builder and fix stages, diff application,
-and cloud runtime switching are deferred.
+A pipeline run stage selects `runtime: "local"` or `runtime: "codex-cloud"`.
+Cloud supports Codex reviewer, verifier and writable builder stages, including
+builders reached by a fail edge. Worktree output declarations remain local.
+An explicit Cloud stage names its model; a stage inheriting Cloud from the
+project binds the resolved role model into its definition.
 
-The project setting `codexCloudEnvironmentId` defaults to an empty string,
-which disables cloud execution. `GET /api/projects/settings?project=<project>`
-reads it; an operator-authorized, same-origin `PUT /api/projects/settings` sets
-or clears it. Other setting writes and canonical project aliases preserve it.
+The project setting `pipelineStageRuntime` defaults to `local`. Creation freezes
+the default into new Cloud definitions. `create_pipeline` and `override-stage`
+accept the runtime field; the voice gateway uses those same MCP schemas. An
+override affects the next attempt; an active attempt keeps its bound definition.
+Changing an active attempt between local and Cloud requires a new attempt.
+
+`codexCloudEnvironmentId` selects the project's environment and defaults to an
+empty string. An empty environment makes a new Cloud attempt fall back locally.
+Changing or clearing the environment during a Cloud attempt withdraws that
+attempt's authority. `GET /api/projects/settings` reads both settings. The
+same-origin, operator-authorized `PUT` sets them. Other setting writers and
+canonical project aliases preserve both fields.
 
 Example stage definition:
 
@@ -31,14 +39,14 @@ Example stage definition:
 
 `src/lib/pipelines/cloudStage.ts` defines `CloudStageClient`, supplied through
 `PipelinePorts.cloudClient` in `src/lib/pipelines/engine.ts`. The default is the
-hosted transport in `src/lib/pipelines/cloudHostedClient.ts`. A cloud stage refuses execution when
-there is no transport or its `supportsModel(model, reasoningEffort)` capability
-cannot honour the explicit configuration. Legacy cloud execution cannot honour
-that contract and has no adapter or fallback here. The transport supports
+hosted transport in `src/lib/pipelines/cloudHostedClient.ts`. A missing transport
+gets bounded retries and local fallback. A transport whose
+`supportsModel(model, reasoningEffort)` cannot honour the explicit configuration
+refuses execution. Legacy cloud execution has no adapter here. The transport supports
 GPT-6.1 Sol, including an explicit reasoning effort. The project setting keeps
 all remote work disabled until an operator supplies an ASB configuration ID.
 
-Hosted service-tier fidelity is unverified in slice 1. An explicit tier,
+Hosted service-tier fidelity is unverified. An explicit tier,
 including `default`, is refused at execution before submission. Saved stage
 definitions remain readable. The adapter also refuses direct submissions carrying a tier
 before authentication. An inherited role tier remains a preference: cloud runs
@@ -68,7 +76,7 @@ The interface isolates these operations from pipeline orchestration:
   resolved thread model before starting the paid turn. Read the final assistant
   message and confirm the actual model. Both a reported
   poll model and the final model must match the explicit stage model.
-- Expose diff retrieval for the next slice. Slice 1 never reads or applies it.
+- Export the writable stage's complete diff; read-only stages never request it.
 - Honour the provided abort signal, bound response sizes, refuse untrusted
   redirects, call `assertCurrent` immediately before remote effects after any
   asynchronous preparation, and remove credentials from every response and error.
@@ -118,10 +126,10 @@ Each operation opens and closes its own socket and native auth client under a
 deadline. Mutating RPCs are sent once. An unanswered launch remains ambiguous;
 the pipeline refuses automatic resubmission. Diff retrieval is available behind
 the interface, with 3,072-byte chunks, canonical base64, a 16 MiB bound and a
-cloud-computed SHA-256 checked before returning any patch. It reads tracked
-changes relative to the accepted head and launches no follow-up model turn.
-Slice 1 never calls it. Staging untracked build/fix changes and applying patches
-belong to slice 2.
+cloud-computed SHA-256 checked before returning any patch. It includes new,
+unignored files with intent-to-add and reads all changes relative to the
+accepted head. It launches no follow-up model turn. Writable stages leave their
+changes uncommitted for the lane controller.
 
 **Compatibility risk:** this is the desktop application's protocol, with no
 verified public API stability guarantee. The implementation adapts the verified
@@ -131,7 +139,12 @@ launched by the test suite. A backend protocol change, unavailable native
 loss of execution identity fails the stage. Credentials remain in memory; raw
 RPC errors and auth stderr are discarded. No performance gain is claimed.
 
-The existing account resolver enforces the project pool and explicit account.
+The existing account resolver enforces the project pool, capacity and explicit
+account. Each candidate's authenticated catalog must contain the project's
+environment. A durable cursor in project settings reserves accounts in rotation
+among the eligible accounts, under the settings file lock. Reservations survive
+restarts and concurrent controllers; selection scans no pipeline history. The
+Cloud receipt retains its account after a fallback selects a local account.
 The runtime rechecks lane and account authority around transport calls. It binds
 the stage definition at activation and includes the pinned specification,
 previous output, lane branch, base and exact accepted head in the cloud prompt.
@@ -142,14 +155,17 @@ fenced JSON verdict contract.
 
 | Contract | Producers and copies | Consumers and defaults |
 | --- | --- | --- |
-| Stage runtime and explicit model | MCP stage schema and pipeline HTTP inputs; `normalizeStages`; draft copies and role overrides; activation binds runtime and effective model | Store validation, stage digest and cloud dispatch; omitted runtime uses the existing local path |
-| Project environment | Settings HTTP PUT and `setCodexCloudEnvironmentId`; other setting writers spread the existing entry | Canonical project reads, settings GET and cloud admission; absent or cleared value is empty |
+| Stage runtime and explicit model | MCP stage schema and pipeline HTTP inputs; `normalizeStages`; draft copies and role overrides; activation binds runtime and effective model | Store validation, stage digest and cloud dispatch; omitted runtime inherits the project setting when a new definition is created |
+| Project settings | Operator settings PUT, `setCodexCloudEnvironmentId`, `setPipelineStageRuntime`; other writers spread the entry | Canonical project reads and settings GET; absent environment is empty and absent runtime is local |
+| Account rotation | `reserveCloudStageAccount` under the shared settings lock | Cloud launch after catalog admission; absent cursor selects the first eligible account |
 | Cloud attempt | Scoped controller-job checkpoints, serialized by the existing pipeline store | Attempt validation, indexed controller deadlines, API record reads and existing verdict settlement; absent for local attempts and before cloud admission |
 
 ## Controller and persistence
 
 An attempt's `cloud` field retains environment, branch, exact head, task ID and
-URL, actual model, poll count, next due time, deadline and terminal result/error.
+URL, account, actual model, poll count, next due time, deadline and terminal
+result/error. `executionRuntime` is `local`, `cloud` or `cloud-then-local`.
+`cloud.fallback` retains its server timestamp and bounded, redacted reason.
 `stageDigest.ts` includes the optional runtime; `store.ts` validates it and the
 receipt. Draft copies, role overrides and bound attempt definitions retain and
 validate the same stage contract. `controllerPass.ts` indexes the next poll and
@@ -160,11 +176,17 @@ lease. Delays grow from two seconds to thirty seconds. A persisted thirty minute
 deadline spans restarts; each job additionally has a thirty second deadline.
 The Viewer tick never sleeps waiting for cloud work. This change claims no
 performance gain. The clean accepted head must match the published branch before
-submission and completion. Internal, released, unpublished or moved lanes fail.
+submission and completion. Internal, released or moved lanes fail. A first Cloud stage publishes the
+accepted base through the existing publication journal before remote checkout.
 
 The existing verdict parser and settlement path normalize findings and handle
-pass, fail, decision requests and fail edges into local fix stages. Cloud errors,
-model mismatches and timeouts fail the attempt with their cause. Interrupted
+pass, fail, decision requests and fail edges into local or Cloud fix stages.
+Confirmed failed Cloud turns, missing environments, Cloud limits and exhausted
+availability retries fall back to the same stage locally once. Transport reads
+retry at two and four seconds, retaining the task receipt and a durable limit
+of three failures. A total stage timeout also falls back once. The persisted
+fallback marker prevents a restarted controller from resubmitting to Cloud.
+Model, receipt, authority, patch and custody failures retain their refusal. Interrupted
 submission with no receipt refuses automatic resubmission because its outcome is
 unknown. A receipt resumes polling after restart. Superseded replies cannot
 replace another receipt or advance a paused lane. Delivery takeover can clear the
@@ -175,13 +197,24 @@ Clearing or changing the project environment setting also withdraws authority
 before another remote effect. A known submission receipt can still be retained
 for inspection; the attempt fails instead of polling or accepting a verdict.
 
+Writable results pass through `cloudStagePatch.ts`. It stores the patch and a
+SHA-256 receipt outside the worktree and computes the expected tree in a private
+index. Application requires the accepted head and an unchanged lane index and
+worktree. The applying intent is persisted before `git apply --index`. After an
+interruption, the exact expected index tree and matching worktree prove that the
+apply landed; a partial apply or unrelated edit refuses recovery and preserves
+the files. The normal stage settlement then commits with hooks and publishes
+through its existing custody path. A failed hook preserves the lane's refusal.
+
 `src/lib/pipelines/cloudStage.test.ts` covers the transport contract and durable
 record validation. `src/lib/pipelines/cloudHostedClient.test.ts` uses a fake
 socket and fake auth/catalog to exercise hosted launch, status, final-message
 reads, identity guards, permission handling, aborts and chunk checksums.
 `src/lib/pipelines/engine.cloud.test.ts` uses only fake
 transports to check arguments, model fidelity, polling, real-process restart
-receipts, races, verdicts and errors. `src/app/api/projects/settings/route.test.ts`
+receipts, races, verdicts and errors. It also uses real Git repositories,
+pre-commit hooks and bare remotes for Cloud builder/fix settlement.
+`cloudStagePatch.test.ts` checks refusal paths and fresh-process apply recovery. `src/app/api/projects/settings/route.test.ts`
 checks setting persistence, defaults and authority refusals. No live cloud task
 or account credential is needed for these checks.
 

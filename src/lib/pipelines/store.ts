@@ -305,6 +305,7 @@ function isAttempt(value: unknown, index: number): boolean {
   return (
     attempt.n === index + 1 &&
     (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
+    (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
@@ -448,7 +449,7 @@ function isAttemptDefinition(value: unknown): boolean {
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
   const role = definition.role;
-  return (definition.runtime === undefined || definition.runtime === "codex-cloud")
+  return (definition.runtime === undefined || definition.runtime === "local" || definition.runtime === "codex-cloud")
     && validAgentMemoryMax(definition.agentMemoryMaxBytes)
     && typeof definition.boundAt === "string"
     && typeof definition.stageDigest === "string"

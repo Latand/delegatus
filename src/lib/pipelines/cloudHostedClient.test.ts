@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import type WebSocket from "ws";
-import { createHostedCloudStageClient, type HostedCloudDependencies } from "./cloudHostedClient";
+import { createHostedCloudStageClient, CloudSubmissionNotStartedError, type HostedCloudDependencies } from "./cloudHostedClient";
 import type { CloudTaskAccess, CloudStageClient } from "./cloudStage";
 
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
@@ -62,6 +62,37 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
     authCalls: () => authCalls, supersede: () => { current = false; },
     respond: (fn: typeof handle) => { handle = fn; } };
 }
+
+test.each([200, 403, 404] as const)("account catalog admission handles HTTP %i before any Cloud work", async status => {
+  const f = fixture({ fetch: async () => status === 200 ? Response.json({ id: environmentId, repositories: [{ mount_path: environment.cwd }] }) : new Response(null, { status }) });
+  expect(await f.client.hasEnvironment(f.access)).toBe(status === 200);
+  expect(f.frames).toHaveLength(0);
+  expect(f.sockets).toHaveLength(0);
+  expect(f.authCalls()).toBe(1);
+});
+
+test.each(["initialize", "turn/start"])("a lost %s reply preserves whether any model turn could have started", async seam => {
+  const f = fixture();
+  f.respond((frame, socket) => {
+    if (frame.method === seam) { socket.terminate(); return undefined; }
+    return f.original(frame, socket);
+  });
+  const error = await f.client.submit(f.input).catch(error => error);
+  expect(error.category).toBe("unavailable");
+  expect(error instanceof CloudSubmissionNotStartedError).toBe(seam === "initialize");
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(seam === "initialize" ? 0 : 1);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+test("account catalog admission keeps an unavailable cause and refuses withdrawal during authentication", async () => {
+  const unavailable = fixture({ fetch: async () => { throw Object.assign(new Error("private diagnostic"), { code: "ECONNRESET" }); } });
+  const error = await unavailable.client.hasEnvironment(unavailable.access).catch(error => error);
+  expect(error.category).toBe("unavailable");
+  expect(error.message).not.toContain("private diagnostic");
+  const withdrawn = fixture({ authenticate: async () => { withdrawn.supersede(); return { token: "fixture-auth" }; } });
+  await expect(withdrawn.client.hasEnvironment(withdrawn.access)).rejects.toThrow("lane moved");
+  expect(withdrawn.fetches).toHaveLength(0);
+});
 
 test("hosted launch pins model, effort, permissions, ASB configuration and published branch before the work turn", async () => {
   const f = fixture();
@@ -260,8 +291,11 @@ test.each(["success", "foreign", "missing", "changed-head", "cursor"])("final me
   else await expect(f.client.readFinalMessage(f.access)).rejects.toThrow("Codex Cloud");
 });
 
-test.each(["success", "checksum", "chunk"])("chunked diff export verifies %s without launching a turn", async failure => {
-  const f = fixture(), patch = Buffer.from("fixture diff\n".repeat(600)), checksum = createHash("sha256").update(patch).digest("hex");
+test.each(["success", "unicode", "invalid-utf8", "checksum", "chunk"])("chunked diff export verifies %s without launching a turn", async failure => {
+  const f = fixture();
+  const content = Buffer.from((failure === "unicode" ? "файл diff\n" : "fixture diff\n").repeat(600));
+  const patch = failure === "invalid-utf8" ? Buffer.concat([content, Buffer.from([0xff])]) : content;
+  const checksum = createHash("sha256").update(patch).digest("hex");
   let commands = 0;
   f.respond((frame, socket) => {
     if (frame.method === "command/exec") {
@@ -271,7 +305,7 @@ test.each(["success", "checksum", "chunk"])("chunked diff export verifies %s wit
     }
     return f.original(frame, socket);
   });
-  if (failure === "success") expect(await f.client.readDiff(f.access)).toBe(patch.toString());
+  if (["success", "unicode"].includes(failure)) expect(await f.client.readDiff(f.access)).toBe(patch.toString());
   else await expect(f.client.readDiff(f.access)).rejects.toThrow("Codex Cloud diff");
   expect(commands).toBe(failure === "chunk" ? 2 : 4);
   expect(f.frames.some(frame => frame.method === "turn/start" || frame.method === "thread/resume")).toBe(false);

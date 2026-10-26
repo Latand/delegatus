@@ -23,6 +23,11 @@ export type CloudStageAttempt = {
   thread?: CloudThreadReference;
   model: string | null;
   error?: string;
+  accountId?: string;
+  failures?: number;
+  fallbackEligible?: boolean;
+  fallback?: { at: string; reason: string };
+  patch?: { digest: string; tree: string; applied?: boolean; applying?: boolean };
   result?: ParsedStageVerdict | RejectedStageVerdict;
 };
 
@@ -52,7 +57,9 @@ export interface CloudStageClient {
     assertCurrent: () => void }): Promise<{ taskId: string; taskUrl: string; thread?: CloudThreadReference }>;
   poll(input: CloudTaskAccess): Promise<CloudTaskObservation>;
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string }>;
-  /** Reserved for subsequent slices. Read-only stages never request/apply a diff. */
+  /** Catalog read under this account's subscription, before any work is submitted. */
+  hasEnvironment(input: { account: AccountContext; environmentId: string; signal: AbortSignal; assertCurrent: () => void }): Promise<boolean>;
+  /** Read-only stages never request/apply a diff. */
   readDiff(input: CloudTaskAccess): Promise<string>;
 }
 
@@ -95,6 +102,15 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
     && (row.thread === undefined || validCloudThreadReference(row.thread))
     && (row.model === null || typeof row.model === "string")
     && (row.error === undefined || typeof row.error === "string")
+    && (row.accountId === undefined || typeof row.accountId === "string")
+    && (row.failures === undefined || Number.isSafeInteger(row.failures) && Number(row.failures) >= 0 && Number(row.failures) <= 3)
+    && (row.fallbackEligible === undefined || typeof row.fallbackEligible === "boolean")
+    && (row.fallback === undefined || typeof record(row.fallback).reason === "string"
+      && typeof record(row.fallback).at === "string" && Number.isFinite(Date.parse(String(record(row.fallback).at))))
+    && (row.patch === undefined || /^[a-f0-9]{64}$/.test(String(record(row.patch).digest))
+      && /^[a-f0-9]{40}$/.test(String(record(row.patch).tree))
+      && (record(row.patch).applied === undefined || typeof record(row.patch).applied === "boolean")
+      && (record(row.patch).applying === undefined || typeof record(row.patch).applying === "boolean"))
     && (row.result === undefined || typeof result.output === "string"
       && (typeof result.failureReason === "string" || stageVerdictFrom(result.verdict) !== null))
     && (!["polling", "completed"].includes(String(row.phase)) || typeof row.taskId === "string")
@@ -103,11 +119,13 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
 }
 
 export function cloudStageConfigurationError(stage: Pick<PipelineStage, "runtime" | "kind" | "effectiveRole" | "outputs" | "model">): string | null {
-  if (stage.runtime === undefined) return null;
-  if (stage.runtime !== "codex-cloud") return "stage runtime must be codex-cloud or omitted";
-  if (stage.kind !== "run" || !["reviewer", "verifier"].includes(stage.effectiveRole.roleId ?? "")
-    || stage.effectiveRole.engine !== "codex" || stage.effectiveRole.access !== "read-only" || stage.outputs?.length) {
-    return "codex-cloud requires a read-only Codex reviewer or verifier run stage without worktree outputs";
+  if (stage.runtime === undefined || stage.runtime === "local") return null;
+  if (stage.runtime !== "codex-cloud") return "stage runtime must be local or codex-cloud";
+  const role = stage.effectiveRole;
+  const reviewer = ["reviewer", "verifier"].includes(role.roleId ?? "") && role.access === "read-only";
+  const builder = role.roleId === "builder" && role.access === "read-write";
+  if (stage.kind !== "run" || role.engine !== "codex" || (!reviewer && !builder) || stage.outputs?.length) {
+    return "codex-cloud requires a Codex reviewer, verifier or writable builder run stage without worktree outputs";
   }
   if (typeof stage.model !== "string" || !stage.model.trim() || stage.model !== stage.effectiveRole.model) {
     return "codex-cloud requires an explicit stage model matching the bound role model";
