@@ -10,32 +10,28 @@ const status = {
   previous: [{ conversationId: file.conversationId, path: file.path }],
 } as OrchestratorSeatStatus;
 
-test("a recorded former seat names the current conversation without changing identity", () => {
-  expect(retiredOrchestratorFor(file, status)).toEqual({ successorConversationId: "conversation_current" });
-  expect(retiredOrchestratorFor({ path: file.path, project: file.project }, status)).toEqual({ successorConversationId: "conversation_current" });
+const linked = (successorConversationId: string) => ({ successorConversationId, pending: false });
+const unlinked = { successorConversationId: null, pending: false };
+
+test("a former seat names the current conversation without changing identity", () => {
+  expect(retiredOrchestratorFor(file, status)).toEqual(linked("conversation_current"));
+  expect(retiredOrchestratorFor({ path: file.path, project: file.project }, status)).toEqual(linked("conversation_current"));
 });
 
-test("the current designation wins over an entry retained in seat history", () => {
-  expect(retiredOrchestratorFor(file, { ...status, seat: { ...status.seat!, conversationId: file.conversationId } })).toBeNull();
-});
-
-test("another project's history and unknown seat evidence cannot retire a conversation", () => {
-  expect(retiredOrchestratorFor({ conversationId: "conversation_worker", path: "/fixtures/worker.jsonl", project: "viewer" }, status)).toBeNull();
-  expect(retiredOrchestratorFor(file, null)).toBeNull();
+test("an unanswered detail read is pending, and a failed one is settled without a link", () => {
+  expect(retiredOrchestratorFor(file, null)).toEqual({ successorConversationId: null, pending: true });
+  expect(retiredOrchestratorFor(file, null, true)).toEqual(unlinked);
+  expect(retiredOrchestratorFor(file, status, true)).toEqual(unlinked);
 });
 
 test("whole-history retirement survives a missing detail record or recent-page omission", () => {
-  expect(retiredOrchestratorFor(file, null, false, true)).toEqual({ successorConversationId: null });
-  expect(retiredOrchestratorFor(file, { ...status, seat: null, previous: [] }, false, true)).toEqual({ successorConversationId: null });
-  expect(retiredOrchestratorFor(file, { ...status, previous: [] }, false, true)).toEqual({ successorConversationId: "conversation_current" });
-  expect(retiredOrchestratorFor(file, { ...status, seat: { ...status.seat!, project: "elsewhere" } }, false, true))
-    .toEqual({ successorConversationId: null });
-  expect(retiredOrchestratorFor(file, { ...status, seat: { ...status.seat!, conversationId: file.conversationId } }, false, true))
-    .toEqual({ successorConversationId: null });
+  expect(retiredOrchestratorFor(file, { ...status, seat: null, previous: [] })).toEqual(unlinked);
+  expect(retiredOrchestratorFor(file, { ...status, previous: [] })).toEqual(linked("conversation_current"));
+  expect(retiredOrchestratorFor(file, { ...status, seat: { ...status.seat!, project: "elsewhere" } })).toEqual(unlinked);
+  expect(retiredOrchestratorFor(file, { ...status, seat: { ...status.seat!, conversationId: file.conversationId } })).toEqual(unlinked);
 });
 
-test("failed refresh and a missing current transcript keep retirement without inventing navigation", () => {
-  expect(retiredOrchestratorFor(file, status, true)).toEqual({ successorConversationId: null });
-  expect(retiredOrchestratorFor(file, { ...status, exists: false })).toEqual({ successorConversationId: null });
-  expect(retiredOrchestratorFor(file, { ...status, seat: null })).toEqual({ successorConversationId: null });
+test("a missing current transcript keeps retirement without inventing navigation", () => {
+  expect(retiredOrchestratorFor(file, { ...status, exists: false })).toEqual(unlinked);
+  expect(retiredOrchestratorFor(file, { ...status, seat: null })).toEqual(unlinked);
 });

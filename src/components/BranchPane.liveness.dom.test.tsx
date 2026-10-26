@@ -295,6 +295,66 @@ for (const entryArrives of ["before the banner", "after the banner"] as const) t
   expect(readOutbox(id).find(entry => entry.id === "queued-message")).toBeUndefined();
 });
 
+test("a current seat that also appears in seat history is not retired and keeps sending open", async () => {
+  mobile = true;
+  const file = liveLegacyFile({ conversationId: "conversation_reseated", project: "viewer-reseated", engine: "claude" });
+  let answeredAll = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.startsWith("/api/orchestrator/seat")) return Response.json({});
+    const kind = url.includes("scope=all") ? "all" : "detail";
+    // A rollback re-seated this conversation; its earlier revocation stays in the record.
+    const response = Response.json({
+      seat: { project: file.project, conversationId: file.conversationId, path: file.path,
+        state: "active", seatEpoch: 3, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+      exists: true, viewerMcpRegistered: true,
+      previous: [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }],
+      all: { conversationIds: [file.conversationId], paths: [file.path],
+        previous: { conversationIds: [file.conversationId], paths: [file.path] } },
+    });
+    const json = response.json.bind(response);
+    response.json = async () => { const value = await json(); if (kind === "all") answeredAll += 1; return value; };
+    return response;
+  }) as typeof fetch;
+  const host = mount(file);
+  await waitFor("the scope=all read", () => answeredAll >= 1);
+  await nextTurn();
+  await nextTurn();
+  expect(host.querySelector("[data-retired-orchestrator]")).toBeNull();
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
+});
+
+test("the retired banner shows no unavailable line while the detail read is held, and a link once it answers", async () => {
+  mobile = true;
+  const file = liveLegacyFile({ conversationId: "conversation_previous_held", project: "viewer-held", engine: "claude" });
+  let releaseDetail: () => void = () => {};
+  const detailHeld = new Promise<void>(resolve => { releaseDetail = resolve; });
+  let detailRequested = false;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.startsWith("/api/orchestrator/seat")) return Response.json({});
+    const kind = url.includes("scope=all") ? "all" : "detail";
+    if (kind === "detail") { detailRequested = true; await detailHeld; }
+    return Response.json({
+      seat: { project: file.project, conversationId: "conversation_current", path: "/fixtures/current.jsonl",
+        state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+      exists: true, viewerMcpRegistered: true,
+      previous: [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }],
+      all: { conversationIds: ["conversation_current"], paths: ["/fixtures/current.jsonl"],
+        previous: { conversationIds: [file.conversationId], paths: [file.path] } },
+    });
+  }) as typeof fetch;
+  const host = mount(file);
+  await waitFor("the banner with the detail read in flight", () => detailRequested
+    && Boolean(host.querySelector("[data-retired-orchestrator]")));
+  await nextTurn();
+  expect(host.querySelector("[data-retired-orchestrator]")!.textContent).not.toContain(translate("en", "retiredOrchestrator.unavailable"));
+  expect(host.querySelector("[data-retired-orchestrator] a")).toBeNull();
+  releaseDetail();
+  await waitFor("the successor link", () => Boolean(host.querySelector("[data-retired-orchestrator] a")));
+  expect(host.querySelector("[data-retired-orchestrator]")!.textContent).not.toContain(translate("en", "retiredOrchestrator.unavailable"));
+});
+
 function installRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
   runtimeState = {
     store: installSnapshot(snapshot),

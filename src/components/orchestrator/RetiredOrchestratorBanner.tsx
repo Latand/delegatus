@@ -10,24 +10,26 @@ import { useOrchestratorSeat, useSeatConversations } from "./useOrchestratorSeat
 
 export interface RetiredOrchestrator {
   successorConversationId: string | null;
+  /** The detail read has not answered yet, so a missing successor is not known. */
+  pending: boolean;
 }
 
+/** Called only for a conversation the shared poll lists as a former seat and
+ * not as a current one; the detail page of history cannot undo that. */
 export function retiredOrchestratorFor(
   file: Pick<FileEntry, "conversationId" | "path" | "project">,
   status: OrchestratorSeatStatus | null,
   failed = false,
-  knownPrevious = false,
-): RetiredOrchestrator | null {
-  if (!status) return knownPrevious ? { successorConversationId: null } : null;
+): RetiredOrchestrator {
+  if (!status) return { successorConversationId: null, pending: !failed };
   const current = status.seat;
   const sameConversation = Boolean((file.conversationId && current?.conversationId === file.conversationId)
     || current?.path === file.path);
-  if (!knownPrevious && !failed && sameConversation) return null;
-  const previous = status.previous?.some(seat =>
-    (file.conversationId && seat.conversationId === file.conversationId) || seat.path === file.path);
-  if (!previous && !knownPrevious) return null;
-  return { successorConversationId: !sameConversation && !failed && status.exists && current?.project === file.project
-    ? current.conversationId ?? null : null };
+  return {
+    successorConversationId: !sameConversation && !failed && status.exists && current?.project === file.project
+      ? current.conversationId ?? null : null,
+    pending: false,
+  };
 }
 
 /** The shared seat poll already supplies the board's historical identities.
@@ -42,7 +44,7 @@ export function useRetiredOrchestrator(file: FileEntry, enabled = true): Retired
   if (!previous) return null;
   // The shared response names every former seat; the detail history is only
   // a recent page. Neither a missing record nor that page can undo retirement.
-  return retiredOrchestratorFor(file, read.status, read.failed, true);
+  return retiredOrchestratorFor(file, read.status, read.failed);
 }
 
 export function RetiredOrchestratorBanner({ retirement }: { retirement: RetiredOrchestrator }) {
@@ -60,7 +62,7 @@ export function RetiredOrchestratorBanner({ retirement }: { retirement: RetiredO
           className="inline-flex min-h-11 items-center justify-center gap-1 self-start rounded-control border border-brand bg-brand px-2.5 text-label font-bold text-on-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-8">
           {t("retiredOrchestrator.open")} <ArrowRight className="h-3.5 w-3.5" aria-hidden />
         </a>
-      ) : <p className="text-caption text-muted">{t("retiredOrchestrator.unavailable")}</p>}
+      ) : retirement.pending ? null : <p className="text-caption text-muted">{t("retiredOrchestrator.unavailable")}</p>}
     </div>
   );
 }
