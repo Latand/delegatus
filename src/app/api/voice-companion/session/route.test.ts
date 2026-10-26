@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { FakeLiveProvider } from "@/lib/voiceCompanion/fakeProvider";
 import { fixtureBoardReads } from "@/lib/voiceCompanion/boardReads.fixture";
 
@@ -27,7 +28,7 @@ function fixture(reports: import("@/lib/bridge/types").BridgeReportV1[] = []) {
   return { service, admission, provider };
 }
 function request(body: unknown, headers = {}) {
-  return new NextRequest("http://127.0.0.1/api/voice-companion/session", { method: "POST", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers }, body: JSON.stringify(body) });
+  return new NextRequest("http://127.0.0.1/api/voice-companion/session", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers }, body: JSON.stringify(body) });
 }
 test("operator admission precedes minting; frontend cannot submit tool calls, transcripts or usage", async () => {
   const f = fixture();
@@ -45,7 +46,7 @@ test("operator admission precedes minting; frontend cannot submit tool calls, tr
     { type: "usage", usd: 0 }, { type: "confirmation", proposalId: "fake", decision: "send", via: "speech" }])
     expect((await POST(request({ action: "command", sessionId: minted.sessionId, command }))).status).toBe(400);
   expect((await POST(request({ ...input, sdp: "different" }))).status).toBe(400);
-  expect((await GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&after=0`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }))).headers.get("cache-control")).toBe("no-store");
+  expect((await GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&after=0`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }))).headers.get("cache-control")).toBe("no-store");
   await POST(request({ action: "close", sessionId: minted.sessionId }));
   expect(f.provider.attached).toBe(0);
 });
@@ -66,7 +67,7 @@ test("a new server instance closes an orphaned minted session and preserves inco
   f.provider.disconnect(minted.providerId);
 });
 
-const get = (sessionId: string) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${sessionId}&after=0`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+const get = (sessionId: string) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${sessionId}&after=0`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
 
 test("reopening a closed transcript ingests fresh standalone reports once without speaking", async () => {
   const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
@@ -79,7 +80,7 @@ test("reopening a closed transcript ingests fresh standalone reports once withou
     origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
   for (let visit = 0; visit < 2; visit++) {
     const response = await GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&view=transcript`,
-      { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+      { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     expect(response.status).toBe(200);
     const record = await response.json();
     expect(record.entries.filter((entry: { kind: string }) => entry.kind === "report")).toMatchObject([
@@ -205,7 +206,7 @@ test("a mint whose answer was lost keeps its reservation and blocks every new pa
   // Only the operator, who can see the provider's own usage, releases it; the charge stays as it is, incomplete.
   const { PUT: settingsPUT } = await import("../settings/route");
   const released = await settingsPUT(new NextRequest("http://127.0.0.1/api/voice-companion/settings", { method: "PUT",
-    headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ releaseUncertainSession: true }) }));
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ releaseUncertainSession: true }) }));
   expect(await released.json()).toMatchObject({ uncertainSession: false, incomplete: true });
   expect(later.storage.read().sessions[row.id]).toMatchObject({ remoteOpen: false });
   expect(later.storage.read().sessions[row.id].mintUncertain).toBeUndefined();
@@ -252,7 +253,7 @@ test("the operator can read the complete transcript after close, while foreign a
   await f.service.drain(session.sessionId);
   await f.service.close(session.sessionId);
   const read = (headers = {}) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${session.sessionId}&view=transcript`,
-    { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers } }));
+    { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers } }));
   expect((await read({ "sec-fetch-site": "cross-site" })).status).toBe(403);
   expect((await read({ "x-llv-spawn-capability": "agent" })).status).toBe(403);
   const response = await read();
@@ -277,7 +278,7 @@ test("session events and transcript return the same usage contract; context chan
   const events = await (await get(minted.sessionId)).json();
   expect(events.usage).toEqual(f.service.storage.usageFor(minted.sessionId));
   const transcript = await GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&view=transcript`,
-    { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+    { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
   expect((await transcript.json()).usage).toEqual(events.usage);
   for (const project of [undefined, 42, ""]) expect((await POST(request({ action: "context", sessionId: minted.sessionId, project }))).status).toBe(400);
   await f.service.close(minted.sessionId);

@@ -1,3 +1,4 @@
+import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -33,7 +34,8 @@ import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liven
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
-import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
+import { randomUUID } from "node:crypto";
+import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
@@ -68,6 +70,7 @@ function registryProcess(state: HostState): ProcessIdentity | null {
 
 export function codexHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "codex-app-server",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -85,6 +88,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
 
 export function claudeHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "claude-broker",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -107,6 +111,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
 
 export function copilotHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "copilot-acp",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -238,7 +243,7 @@ async function bindStructuredHostPersistence(
   try {
     await persist(await host.health());
   } catch (error) {
-    await host.release();
+    await withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release());
     throw error;
   }
 
@@ -314,7 +319,7 @@ async function bindStructuredHostPersistence(
     try { await releaseClaim(); } finally {
       /* A release that could not record its child's tree sends nothing and
          says so; the child keeps its own fence, so nothing here awaits it. */
-      void host.release().catch(() => undefined);
+      void withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release()).catch(() => undefined);
     }
   };
   const persistPending = async () => {
@@ -632,9 +637,13 @@ async function terminateVerifiedProcess(processIdentity: ProcessIdentity): Promi
   const status = processIdentityStatus(processIdentity);
   if (status === "dead") return true;
   if (processIdentity.pid === process.pid || status !== "alive") return false;
-  try { process.kill(processIdentity.pid, "SIGTERM"); } catch { /* process exited */ }
+  const withdraw = recordHostStop(processIdentity, "SIGTERM", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") { withdraw?.(); return processIdentityProvenDead(processIdentity); }
+  try { process.kill(processIdentity.pid, "SIGTERM"); } catch { withdraw?.(); }
   if (await waitForVerifiedProcessExit(processIdentity, ORPHAN_TERM_GRACE_MS)) return true;
-  try { process.kill(processIdentity.pid, "SIGKILL"); } catch { /* process exited */ }
+  const withdrawKill = recordHostStop(processIdentity, "SIGKILL", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") { withdrawKill?.(); return processIdentityProvenDead(processIdentity); }
+  try { process.kill(processIdentity.pid, "SIGKILL"); } catch { withdrawKill?.(); }
   return waitForVerifiedProcessExit(processIdentity, ORPHAN_KILL_GRACE_MS);
 }
 
@@ -697,6 +706,7 @@ async function endRecordedStructuredTree(
     kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
+    stopOrigin: { path: source, operationId: sessionKeyId(key) },
     retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
@@ -775,7 +785,8 @@ export async function reapSeveredStructuredHost(
   const liveness = await conversationTurnLiveness(registry, conversationId, dependencies);
   if (liveness?.state !== "severed") return null;
   if (sessionKeyId(liveness.key) !== sessionKeyId(key)) return null;
-  return { reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason };
+  return withHostStopOrigin({ path: "registry-recovery", operationId: randomUUID() }, async () =>
+    ({ reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason }));
 }
 
 /** Admits consecutive dead-process reconciles in one hold. It answers a
@@ -792,13 +803,18 @@ export async function demoteSkippedStructuredRegistryHosts(
   orphanStop: StructuredOrphanStopDependencies = {},
   assertActive: () => void = () => {},
   admitBatch?: StructuredDemotionBatchAdmission,
+  preparedSnapshot?: RegistryFile,
 ): Promise<void> {
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const reuse = preparedSnapshot && registryStartupSelectionUnchanged(preparedSnapshot) === true;
+  const prepared = reuse ? preparedSnapshot : typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
   const rows: AgentRegistryEntry[] = [];
   const selected = prepared ? await startupStructuredHostEntries(prepared, assertActive) : registry.structuredHostEntries();
   await withViewerOperation("runtime.startup", () => forEachCooperatively(selected, entry => {
     performanceSpans.sync("runtime.startup.select", () => {
-      if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
+      if (entry.structuredHost && !shouldAdopt(entry)) {
+        const current = reuse ? startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)] : entry;
+        if (current?.structuredHost && (!reuse || !shouldAdopt(current))) rows.push(current);
+      }
     });
   }, { batchSize: 16, timeBudgetMs: 8 }));
   /* A row whose recorded process is gone settles in one write. A startup
@@ -942,11 +958,13 @@ export async function adoptCodexRegistryHosts(
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
     assertActive?: () => void;
+    /** Selection only; ownership and grants are rechecked by key. */
+    preparedSnapshot?: RegistryFile;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const prepared = dependencies.preparedSnapshot ?? (typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined);
   const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
@@ -1039,7 +1057,7 @@ export async function adoptCodexRegistryHosts(
                 claimed.claimEpoch,
                 "dead",
               );
-              await error.host.release();
+              await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
@@ -1099,10 +1117,12 @@ export async function adoptClaudeRegistryHosts(
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
     assertActive?: () => void;
+    /** Selection only; ownership and grants are rechecked by key. */
+    preparedSnapshot?: RegistryFile;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const prepared = dependencies.preparedSnapshot ?? (typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined);
   const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
@@ -1186,7 +1206,7 @@ export async function adoptClaudeRegistryHosts(
                 claimed.claimEpoch,
                 "dead",
               );
-              await error.host.release();
+              await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
@@ -1246,11 +1266,15 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   registry: AgentRegistry,
   shouldRetain: StructuredHostAdoptionFilter = entry => restartCutEvidenceHolds(sessionKeyId(entry.key)),
   assertActive: () => void = () => {},
+  preparedSnapshot?: RegistryFile,
 ): Promise<void> {
-  const prepared = await registry.prepareReadOnlySnapshot();
+  const reuse = preparedSnapshot && registryStartupSelectionUnchanged(preparedSnapshot) === true;
+  const prepared = reuse ? preparedSnapshot : await registry.prepareReadOnlySnapshot();
   const rows = await startupStructuredHostEntries(prepared, assertActive);
-  for (const [index, observed] of rows.entries()) {
-    if (!observed.structuredHost?.process) continue;
+  for (const [index, selected] of rows.entries()) {
+    if (!selected.structuredHost?.process) continue;
+    const observed = reuse ? startupHostSnapshot(registry, selected.key).entries[sessionKeyId(selected.key)] : selected;
+    if (!observed?.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
     await registry.deliveryWriteOrBusy({ label: "registry.dead-hosts" }, () => {
       assertActive();

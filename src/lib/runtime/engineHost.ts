@@ -133,6 +133,7 @@ export type RuntimeEvent =
   | { kind: "session-status"; status: "active" | "idle" | "unhosted" | "dead"; activeFlags?: string[]; seq: number };
 
 export interface HostState {
+  exitProcess?: import("@/lib/processIdentity").ProcessIdentity;
   signalDomain?: AgentSignalDomain;
   /** Present when this launch runs without the signal boundary. */
   signalBoundary?: SignalBoundaryOff;

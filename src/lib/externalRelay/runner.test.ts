@@ -3096,6 +3096,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
 for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
   const { NextRequest } = await import("next/server");
   const { PATCH } = await import("@/app/api/external-relay/relays/[id]/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
   const completions: unknown[] = [], stops: string[] = [];
   let notify!: () => void, release!: () => void;
   const reached = new Promise<void>(r => { notify = r; });
@@ -3124,7 +3125,7 @@ for (const phase of ["running", "pending"] as const) test(`owner cutoff through 
     await reached;
     const origin = "http://127.0.0.1:8899";
     const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
-      method: "PATCH", headers: { origin, host: "127.0.0.1:8899", "content-type": "application/json" },
+      method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899", "content-type": "application/json" },
       body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
     }), { params: Promise.resolve({ id: paired.id }) });
     expect(response.status).toBe(200);

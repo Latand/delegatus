@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { POST as ghostPOST } from "@/app/api/orchestrator/ghost/route";
 import { POST as rotatePOST } from "@/app/api/orchestrator/rotate/route";
 import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
@@ -840,7 +841,7 @@ for (const [name, handler] of [["seat", seatPOST], ["rotate", rotatePOST], ["gho
   for (const malformed of [false, true]) {
     test(`real ${name} route marks ${malformed ? "invalid JSON" : "cross-origin"} before admission`, async () => {
       const response = await handler(new NextRequest(`http://127.0.0.1/api/orchestrator/${name}`, {
-        method: "POST", headers: { host: "127.0.0.1", ...(malformed ? {} : { origin: "https://example.com" }) },
+        method: "POST", headers: { host: "127.0.0.1", ...(malformed ? { cookie: `llv_operator=${soloBrowserSession()}` } : { origin: "https://example.com" }) },
         body: "{",
       }));
       expect(response.status).toBe(malformed ? 400 : 403);

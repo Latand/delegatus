@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { prototypeButtonState } from "@/components/prototypeReview/prototypeReviewStore";
 import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST } from "./http";
@@ -28,7 +29,7 @@ const TASK = "task-delivery";
 const roots: string[] = [];
 function task() { return { id: TASK, project: "project-a", status: "inbox" as const, placement: "unplaced" as const, text: "Pick the layout", assignments: [], sources: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }; }
 function request(body?: unknown) {
-  return new NextRequest(`http://localhost/api/tasks/${TASK}/prototypes`, { headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+  return new NextRequest(`http://localhost/api/tasks/${TASK}/prototypes`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 beforeEach(async () => { await resetPrototypeDeliveryWorkerForTests(); saveTasks([task()]); });
 afterEach(async () => { await resetPrototypeDeliveryWorkerForTests(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });

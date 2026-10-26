@@ -1156,6 +1156,8 @@ export interface SeatTickProjectState {
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
+  /** Last finished lane examined for local ancestry, persisted across checks. */
+  localFinishedLaneCursor?: string | null;
   lastWakeAt: string | null;
   lastWakeReasons: SeatTickWakeReasonKind[];
   /** Consecutive wakes carrying this reason that changed nothing. */
@@ -1402,7 +1404,8 @@ export interface SeatTickCheckInput {
   /** True only when this check actually verified the PR set. Gated reads keep
       their prior digest evidence without claiming the set is empty. */
   pullRequestsObserved?: boolean;
-  /** Ephemeral provenance for the gates and lane associations of the PR read. */
+  /** Ephemeral eligibility key for this check's PR observation. Lane movement
+      refreshes the local agenda while the PR observation keeps its captured associations. */
   pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
   /** Lanes the seat itself launched whose stage has settled (#1749). Empty for

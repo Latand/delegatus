@@ -29,7 +29,15 @@ function catalogRow(value: unknown): value is Record<string, unknown> {
 /** Catalog evidence only: missing or unreadable rows never imply availability. */
 export function codexModelServiceTiers(home: string, model: string): CodexTierOffer[] | null {
   const row = catalogModels(home)?.find(value => catalogRow(value) && value.slug === model);
-  if (!catalogRow(row) || !Array.isArray(row.service_tiers)) return null;
+  if (!catalogRow(row)) return null;
+  // Older native caches expose speed names rather than service-tier records.
+  // An explicit service_tiers array (including an empty one) is authoritative.
+  if (!Array.isArray(row.service_tiers)) {
+    if (!Array.isArray(row.additional_speed_tiers)) return null;
+    const ids = new Set(row.additional_speed_tiers.flatMap(value =>
+      value === "fast" ? ["priority"] : value === "ultrafast" ? ["ultrafast"] : []));
+    return [...ids].map(id => ({ id, name: id }));
+  }
   return row.service_tiers.filter((tier): tier is CodexTierOffer => !!tier && typeof tier.id === "string" && SERVICE_TIER_PATTERN.test(tier.id))
     .map(tier => ({ id: tier.id, name: typeof tier.name === "string" ? tier.name : tier.id }));
 }

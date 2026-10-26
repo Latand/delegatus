@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -569,6 +569,37 @@ const SECRET_STDERR = {
   "a key clipped past the read bound": `bind refused\n-----BEGIN PRIVATE KEY-----\n${KEY_BODY}\n${KEY_BODY}\n`,
   "a bearer value and a private path": `bind refused\nAuthorization: ${["Bea", "rer"].join("")} ${"abcdefghij".repeat(3)}\n@ROOT@/private/file\n`,
 };
+test.skipIf(process.platform !== "linux").each(["closed", "rejected"] as const)("a launcher with %s spawn readiness keeps its cause and completes cleanup", async (readiness) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-ready-close-"));
+  const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "python3"), readiness === "closed"
+    ? "#!/bin/sh\nprintf 'bind refused during readiness\\n' >&2\nexit 9\n"
+    : "#!/bin/sh\nexec /bin/sleep 60\n", { mode: 0o755 });
+  let child: ChildProcess | undefined;
+  const start = ((command: string, args: readonly string[], options: SpawnOptions) => {
+    const launched = spawn(command, args, options);
+    child = launched;
+    launched.stderr?.resume();
+    Object.assign(launched, { spawnReady: new Promise<void>((resolve, reject) => readiness === "closed"
+      ? launched.once("close", () => resolve())
+      : launched.once("spawn", () => reject(new Error("launcher readiness refused")))) });
+    return launched;
+  }) as typeof spawn;
+  try {
+    const env = fallbackEnv(root, { PATH: `${bin}:/usr/bin:/bin` });
+    await expect(spawnSignalSandbox("/bin/true", [], { env, stdio: ["ignore", "pipe", "pipe"] }, start))
+      .rejects.toThrow(readiness === "closed" ? "agent signal sandbox unavailable: bind refused during readiness" : "launcher readiness refused");
+    if (readiness === "closed") expect(child!.exitCode).toBe(9);
+    else expect(child!.signalCode).toBe("SIGKILL");
+    expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-signal-"))).toEqual([]);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, "close"); child.kill("SIGKILL"); await closed;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const [secret, text] of Object.entries(SECRET_STDERR)) for (const channel of ["pipe", "file"] as const) {
   test.skipIf(process.platform !== "linux")(`a launcher that fails after printing ${secret} on its ${channel} reports the cause without the secret`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-wrapper-secret-"));

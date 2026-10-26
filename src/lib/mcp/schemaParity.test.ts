@@ -1118,6 +1118,18 @@ test("seat_tick_settings advertises and forwards the independent curation timer"
   });
 });
 
+test("seat_tick_settings forwards the maintenance window without stripping it", async () => {
+  let received: unknown;
+  const window = { timeZone: "Europe/Paris", weekdays: [1, 3, 5], startHour: 9, endHour: 17 };
+  await withProtocolClient(inertBindings({ seat_tick_settings: async args => { received = args; return { changed: true }; } }), async client => {
+    const result = await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "maintenance-window-parity", maintenance: { enabled: true, window } } });
+    expect(result.isError).not.toBe(true);
+    expect(received).toMatchObject({ maintenance: { enabled: true, window } });
+    await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "maintenance-window-clear", maintenance: { window: null } } });
+    expect(received).toMatchObject({ maintenance: { window: null } });
+  });
+});
+
 test("Cloud execution choices are available through MCP with strict values", async () => {
   let received: unknown;
   await withProtocolClient(inertBindings({ pipeline_checks: async args => { received = args; return { effective: args.execution }; } }), async client => {
