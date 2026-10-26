@@ -66,7 +66,7 @@ test("a reported estimate is a progress bar with its value, age and author", () 
   const bar = host.querySelector<HTMLElement>(".task-progress")!;
   expect(bar.getAttribute("role")).toBe("progressbar");
   expect(bar.getAttribute("aria-valuenow")).toBe("35");
-  expect(bar.getAttribute("aria-valuetext")).toBe("Agent estimate ≈35% · 18m ago · Builder");
+  expect(bar.getAttribute("aria-valuetext")).toBe("Agent estimate ≈35% · 18m ago · Builder");
   expect(bar.getAttribute("aria-label")).toBe("Agent estimate for «Import contacts»");
   expect(bar.style.getPropertyValue("--task-progress-value")).toBe("35%");
   expect(bar.dataset.taskProgress).toBe("fresh");
@@ -106,7 +106,7 @@ test("an estimate older than a day is drawn striped and called the last one", ()
 test("the words are Ukrainian under the Ukrainian interface", () => {
   setLocale("uk");
   const t = (key: string, vars?: Record<string, string | number>) => translate("uk", key as never, vars as never);
-  expect(progressLine(t as never, estimate(35, minutesAgo(18), { kind: "operator" }), NOW)).toBe("Оцінка агента ≈35% · 18 хв тому · оператор");
+  expect(progressLine(t as never, estimate(35, minutesAgo(18), { kind: "operator" }), NOW)).toBe("Оцінка агента ≈35% · 18 хв тому · оператор");
 });
 
 test("the dot's popover carries the estimate on a second line; the phone's passive dot has none", () => {
@@ -115,7 +115,7 @@ test("the dot's popover carries the estimate on a second line; the phone's passi
   flushSync(() => dot.dispatchEvent(new (globalThis as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent("click", { bubbles: true })));
   const pop = document.querySelector("[data-card-state-pop]")!;
   expect(pop.textContent).toBe("Working for 5m");
-  expect(document.querySelector("[data-card-progress-line]")!.textContent).toBe("Agent estimate ≈65% · 12m ago · Builder");
+  expect(document.querySelector("[data-card-progress-line]")!.textContent).toBe("Agent estimate ≈65% · 12m ago · Builder");
   expect(dot.getAttribute("aria-label")).toContain("Agent estimate ≈65%");
   const phone = mount({ progress: estimate(65, minutesAgo(12)), running: false, color: null }, true);
   expect(phone.querySelector("[data-card-state-dot]")).toBeNull();

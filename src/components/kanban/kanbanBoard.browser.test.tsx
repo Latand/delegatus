@@ -39515,6 +39515,8 @@ describe("task progress estimate", () => {
     { id: "t-compact", status: "done", value: 100, running: false, stale: true, role: null, age: "2d", coloured: false },
   ];
 
+  const FROZEN = new Date("2026-10-26T12:00:00.000Z");
+
   browserTest("the bar sits beside the dot, fills to the estimate and glows only while work runs", async () => {
     const out = path.resolve(".artifacts/task-progress-bar");
     fs.rmSync(out, { recursive: true, force: true });
@@ -39533,8 +39535,12 @@ describe("task progress estimate", () => {
         /* The reduced-motion frame is taken at one width and one theme per language. */
         if (motion === "reduce" && (frame.name !== "desktop-1440" || theme !== "light")) continue;
         const label = `${frame.name}-${lang}-${theme}${motion === "reduce" ? "-reduced" : ""}`;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages&progress=1#p=atlas`, { width: frame.width, height: frame.height }, theme, lang, motion, frame.phone);
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: frame.width, height: frame.height }, theme, lang, motion, frame.phone);
         try {
+          /* The fixture dates every estimate from the page's clock, and the board's clock ticks on: a frozen clock
+             keeps «18m ago» true however long the machine takes to reach a card. */
+          await page.clock.setFixedTime(FROZEN);
+          await page.goto(`${server.base}?scenario=stages&progress=1#p=atlas`);
           await page.waitForSelector(frame.phone ? "[data-phone-card]" : "[data-kanban-card]", { state: "attached" });
           const shots: Buffer[] = [];
           for (const spec of CARDS_UNDER_TEST) {
@@ -39672,10 +39678,34 @@ describe("task progress estimate", () => {
             const norm = (text: string | null) => (text ?? "").replace(/ /g, " ");
             if (norm(r.valueText) !== wantLine) fail(`accessible value "${norm(r.valueText)}" is not "${wantLine}"`);
             shots.push(await card.screenshot());
+            if (frame.phone && motion === "no-preference") {
+              /* The phone's face is one button whose label replaces what is inside it: the estimate is read into it, and
+                 the opened task says it in words, since the passive dot opens no popover. */
+              const face = norm(await card.getAttribute("aria-label"));
+              readings.push({ label, card: spec.id, phoneFaceLabel: face });
+              if (!face.includes(wantLine)) fail(`phone card label "${face}" leaves out "${wantLine}"`);
+              await card.click();
+              const shown = page.locator("[data-phone-task-progress]");
+              await shown.waitFor({ timeout: 10_000 }).catch(() => fail("the opened task shows no estimate"));
+              if (await shown.count()) {
+                await shown.scrollIntoViewIfNeeded();
+                const words = norm(await shown.textContent());
+                readings.push({ label, card: spec.id, phoneTaskLine: words });
+                if (words !== wantLine) fail(`opened task says "${words}", not "${wantLine}"`);
+                const whole = await shown.evaluate((element) => {
+                  const range = document.createRange(); range.selectNodeContents(element);
+                  return [...range.getClientRects()].every((rect) => rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight);
+                });
+                if (!whole) fail("the opened task's estimate line is cut by the window");
+                await page.screenshot({ path: path.join(out, `${label}-${spec.id}-task.png`) });
+              }
+              await page.goBack();
+              await card.waitFor({ state: "attached" });
+            }
             if (!frame.phone && (spec.id === "t-search" || spec.id === "t-upload") && motion === "no-preference") {
-              /* A mouse on the dot opens its popover, above the dot as every state popover does; its second line says
-                 value, age and author. It may cover the start of its own card's title while it is open, never another
-                 card's text, and it stays in the window. */
+              /* A mouse on the dot opens its popover beside the state line, after its words (the prototype's README,
+                 «Where the desktop popover opens»); its second line says value, age and author. It covers no text of
+                 its own card or another, and stays inside its card and the window. */
               for (const closed of [true, false]) {
                 const collapsed = (await card.getAttribute("data-collapsed")) === "1";
                 if (closed !== collapsed) {
@@ -39712,16 +39742,33 @@ describe("task progress estimate", () => {
                     }
                   }
                   const cardBox = host.getBoundingClientRect();
+                  /* The words that open each drawn line of the estimate: a narrow bubble wraps after a «·», never before one. */
+                  const lineStarts: string[] = [];
+                  const words = line.firstChild!;
+                  let lineTop = -Infinity;
+                  for (let at = 0; at < (words.textContent ?? "").length; at += 1) {
+                    const range = document.createRange(); range.setStart(words, at); range.setEnd(words, at + 1);
+                    const rect = range.getClientRects()[0];
+                    if (!rect || rect.width === 0 || rect.top <= lineTop + 2) continue;
+                    lineTop = rect.top;
+                    lineStarts.push((words.textContent ?? "").slice(at, at + 12).trim());
+                  }
                   return {
+                    lineStarts,
                     text: line.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
                     box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width }, insideCard: box.right <= cardBox.right && box.bottom <= cardBox.bottom && box.left >= cardBox.left && box.top >= cardBox.top - 1,
                     own, foreign,
+                    card: { left: cardBox.left, top: cardBox.top, right: cardBox.right, bottom: cardBox.bottom },
+                    stateLineTop: host.querySelector(".card-state")!.getBoundingClientRect().top,
                   };
                 }, cardSelector);
                 readings.push({ label, card: spec.id, cardState: closed ? "closed" : "open", popover: popRead });
                 if (norm(popRead.text) !== wantLine) fail(`popover line "${norm(popRead.text)}"`);
                 if (!popRead.inside) fail(`${closed ? "closed" : "open"} card: popover leaves the window`);
                 if (popRead.foreign.length) fail(`${closed ? "closed" : "open"} card: popover covers another card's text ${JSON.stringify(popRead.foreign)}`);
+                if (popRead.own.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's text ${JSON.stringify(popRead.own)}`);
+                if (!popRead.insideCard) fail(`${closed ? "closed" : "open"} card: popover leaves its card`);
+                if (popRead.lineStarts.some((start) => start.startsWith("·"))) fail(`${closed ? "closed" : "open"} card: a popover line opens with a separator ${JSON.stringify(popRead.lineStarts)}`);
                 await page.screenshot({ path: path.join(out, `${label}-${spec.id}-popover-${closed ? "closed" : "open"}.png`) });
                 await page.mouse.move(2, 2);
               }

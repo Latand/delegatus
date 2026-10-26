@@ -34,11 +34,11 @@ const NBSP = " ";
 export function progressLine(t: TFunction, progress: TaskProgress, nowMs: number): string {
   const setAt = Date.parse(progress.setAt);
   const ageMs = Math.max(0, nowMs - setAt);
-  /* The age never splits («12 хв» / «тому»): a narrow bubble wraps after the «·». */
+  /* The age never splits («12 хв» / «тому»), and each «·» stays with the word before it: a narrow bubble wraps after the «·», never opens a line with one. */
   const age = fmtAgeSeconds(ageMs / 1000).replace(/ /g, NBSP);
   const by = progress.by;
   const who = by.kind === "operator" ? t("cardState.progress.byOperator") : by.role ? roleNameById(t, by.role) : t("cardState.progress.byAgent");
-  return t(ageMs > PROGRESS_STALE_MS ? "cardState.progress.lineStale" : "cardState.progress.line", { value: progress.value, age, who });
+  return t(ageMs > PROGRESS_STALE_MS ? "cardState.progress.lineStale" : "cardState.progress.line", { value: progress.value, age, who }).replace(/ · /g, `${NBSP}· `);
 }
 
 export function TaskProgressBar({ info, title, nowMs }: { info: CardProgress; title: string; nowMs: number }) {

@@ -62,7 +62,7 @@ test("absent and cleared estimates stay absent, including after restart and stat
   const changed = patchTask(set.tasks, task.id, { progress: 100 }, later, { statusActor: { kind: "operator" } });
   if (!changed.ok) throw new Error(changed.error);
   expect(changed.task.progress).toEqual({ value: 100, setAt: later, by: { kind: "operator" } });
-  expect(changed.task.updatedAt).toBe(later);
+  expect(changed.task.updatedAt).toBe(task.updatedAt);
   expect(taskRevision(changed.task)).not.toBe(taskRevision(set.task));
   for (const status of ["assigned", "blocked", "done", "inbox"] as const) {
     const preserved = patchTask(changed.tasks, task.id, { status }, later, { statusActor: agent });
@@ -75,6 +75,24 @@ test("absent and cleared estimates stay absent, including after restart and stat
   saveTasks(clear.tasks, file);
   expect(Object.hasOwn(loadTasks(file)[0]!, "progress")).toBe(false);
   expect(Object.hasOwn(compactTask(loadTasks(file)[0]!), "progress")).toBe(false);
+});
+
+/* An estimate carries its own setAt, so reporting one is presentation of the
+   task: ages, ranking and the seat tick's quiet guard read updatedAt. */
+test("an estimate alone or with presentation keeps updatedAt and moves the revision; with work it advances", () => {
+  for (const patch of [{ progress: 40 }, { color: "teal", progress: 40 }, { progress: null }, { icon: "bug", priority: "high", progress: 40 }]) {
+    const prior = { ...task, progress: { value: 10, setAt: now, by: agent } };
+    const result = patchTask([prior], task.id, patch, later, { statusActor: agent });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.task.updatedAt).toBe(task.updatedAt);
+    expect(taskRevision(result.task)).not.toBe(taskRevision(prior));
+  }
+  for (const patch of [{ text: "Implement progress bar", progress: 40 }, { status: "assigned", progress: 40 }, { note: "Halfway", progress: 40 }]) {
+    const result = patchTask([task], task.id, patch, later, { statusActor: agent });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.task.updatedAt).toBe(later);
+    expect(result.task.progress).toEqual({ value: 40, setAt: later, by: agent });
+  }
 });
 
 describe("validation before writing", () => {

@@ -9,6 +9,7 @@ const GAP = 6;
 const EDGE = 8;
 
 type Box = { top: number; bottom: number; left: number; right: number; width: number };
+export type BubblePosition = { left: number; top: number; maxWidth?: number };
 
 /**
  * Where a bubble of `size` goes against `anchor`: on the asked side when it
@@ -48,6 +49,7 @@ export function TooltipBubble({
   align = "center",
   className,
   within,
+  place,
   children,
 }: {
   /** For the anchor's `aria-describedby`, so a screen reader reads the bubble. */
@@ -58,16 +60,21 @@ export function TooltipBubble({
   className: string;
   /** The host's own box, read when the bubble is placed: the side that keeps the bubble inside it is preferred. */
   within?: () => { top: number; bottom: number } | null;
+  /** A placement of the host's own, tried first; it may narrow the bubble. Null falls back to above or below the anchor. */
+  place?: (bubble: HTMLElement) => BubblePosition | null;
   children: ReactNode;
 }) {
   const bubbleRef = useRef<HTMLSpanElement>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [position, setPosition] = useState<BubblePosition | null>(null);
 
   useLayoutEffect(() => {
     const measure = () => {
       const anchor = anchorRef.current;
       const bubble = bubbleRef.current;
       if (!anchor || !bubble) return;
+      bubble.style.maxWidth = "";
+      const own = place?.(bubble);
+      if (own) { setPosition(own); return; }
       setPosition(
         tooltipPlacement(
           anchor.getBoundingClientRect(),
@@ -86,7 +93,7 @@ export function TooltipBubble({
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [anchorRef, side, align, within]);
+  }, [anchorRef, side, align, within, place]);
 
   if (typeof document === "undefined") return null;
   return createPortal(

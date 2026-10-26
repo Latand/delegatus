@@ -200,7 +200,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   60: "d424c6e968bb1c646b975e88e3827eff2d13513abaedaafb81ee242f69d32175",
   // v61 prepares reports automatically and ends reporting on a decline.
   61: "600201a2ca27c689eb5aa190ad62fbdd94718c704d6058d633add78bf7e85c55",
-  62: "b2cbadbbf65003137d99da71fbdb0d2b4ae0a989b792e38141f18a9773ea49ea",
+  // v62 asks the seat to keep each task's progress estimate current.
+  62: "d9e797abb190da19be331819e4cbf65555e320c50654efd50a435faa3645eada",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what

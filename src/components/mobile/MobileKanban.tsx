@@ -22,6 +22,7 @@ import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
 import { cardAnswers, cardState, formAnswerTarget, type CardState } from "@/components/kanban/cardState";
 import { CardStateLine } from "@/components/kanban/CardStateLine";
+import { progressLine } from "@/components/kanban/TaskProgressBar";
 import { TaskSpendMarks, useTaskSpendLabel } from "@/components/kanban/TaskSpend";
 import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
@@ -536,7 +537,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
   /* The task's limit spend: passive marks on the state line, read into the face's one label. */
   const spendTask = item.kind === "task" && card.task && !remote ? card.task.id : null;
   const spendLabel = useTaskSpendLabel(spendTask);
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project, state ? spendLabel : null].filter(Boolean).join(", ");
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project, state && item.kind === "task" && card.task?.progress ? progressLine(t, card.task.progress, nowMs) : null, state ? spendLabel : null].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (

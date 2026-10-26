@@ -541,8 +541,9 @@ export function createTask(
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(key !== undefined ? { matched: false } : {}), ...(notes.length ? { notes } : {}) };
 }
 
-/** Presentation of a task, never work on it: `updatedAt` stays (see below). */
-const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind"]);
+/** Presentation of a task, never work on it: `updatedAt` stays (see below). A
+    progress estimate carries its own `setAt`, so reporting one moves no age either. */
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind", "progress"]);
 
 function editTaskWorkLinks(
   task: BoardTask,
