@@ -1,0 +1,6 @@
+/* The product's stylesheet, plus the utilities this prototype's own markup
+   uses: globals.css generates utilities from src/ only, so it names this
+   directory as a second source. The driver compiles this file in place of
+   globals.css when it serves the fixture. */
+@import "../../../../src/app/globals.css";
+@source "./";

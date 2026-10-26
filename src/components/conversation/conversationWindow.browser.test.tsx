@@ -5809,3 +5809,108 @@ describe("owner confirmation of one Telegram file send", () => {
     fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
   }, 120_000);
 });
+
+/* docs/design/start-pipeline-from-conversation/prototype-v2: three numbered
+   variants of starting a pipeline from the open conversation, drawn over the
+   real board, reader, phone shell, task screen and pipeline screen, each frame
+   carrying its own caption. The fixture lives beside the design doc with a
+   stylesheet of its own (the product's plus that directory as a Tailwind
+   source), which this block compiles and serves in place of globals.css. Frames
+   and readings go to .artifacts/start-pipeline-from-conversation-v2/. */
+describe("start pipeline from conversation prototype v2", () => {
+  browserTest("three variants, two frames each, desktop and phone, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/start-pipeline-from-conversation-v2");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(path.join(out, "review"), { recursive: true });
+    const dir = "docs/design/start-pipeline-from-conversation/prototype-v2";
+    const postcss = (await import("postcss")).default;
+    const tailwind = (await import("@tailwindcss/postcss")).default;
+    const sharp = (await import("sharp")).default;
+    const css = await postcss([tailwind()]).process(fs.readFileSync(`${dir}/prototype.css`, "utf8"), { from: path.resolve(`${dir}/prototype.css`) });
+    const served = await serveEvidenceFixture(out, `${dir}/prototype.fixture.tsx`, {
+      "/style.css": () => new Response(css.css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const device = phone ? "phone" : "desktop";
+        const viewport = { width, height: phone ? 844 : 900 };
+        for (const variant of [1, 2, 3]) {
+          const frames: string[] = [];
+          for (const frame of ["a", "b"] as const) {
+            const name = `variant-${variant}${frame}-${device}-${lang}-${theme}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?variant=${variant}&frame=${frame}&lang=${lang}&theme=${theme}`, viewport, theme, lang, "reduce", phone);
+            try {
+              /* The board under a loaded machine needs a while for its first paint. */
+              await page.waitForSelector("body[data-proto-ready]", { timeout: 180_000, state: "attached" });
+              /* The menus place themselves after a layout pass; the fonts settle with them. */
+              await page.waitForTimeout(600);
+              const reading = await page.evaluate((coarse) => {
+                const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+                const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+                const clipped: string[] = [];
+                const offscreen: string[] = [];
+                const small: string[] = [];
+                const texts: string[] = [];
+                for (const element of document.querySelectorAll<HTMLElement>("[data-proto-new], [data-proto-caption]")) {
+                  const clippers: DOMRect[] = [];
+                  for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+                    const style = getComputedStyle(node);
+                    if (style.overflowX !== "visible" || style.overflowY !== "visible" || style.clipPath !== "none") clippers.push(node.getBoundingClientRect());
+                  }
+                  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const text = walker.currentNode.textContent?.trim();
+                    if (!text) continue;
+                    const range = document.createRange();
+                    range.selectNodeContents(walker.currentNode);
+                    for (const rect of range.getClientRects()) {
+                      if (rect.width === 0 || rect.height === 0) continue;
+                      texts.push(text);
+                      if (!within(rect, screen)) offscreen.push(text);
+                      else if (clippers.some((box) => !within(rect, box))) clipped.push(text);
+                    }
+                  }
+                  /* Every control the prototype adds is reachable: 44 px tall under a finger, 24 under a pointer. */
+                  for (const control of element.querySelectorAll<HTMLElement>("button, [role^='menuitem'], a[href]")) {
+                    const box = control.getBoundingClientRect();
+                    if (box.width === 0 || box.height === 0) continue;
+                    const hit = control.closest("[data-proto-hit]") ? Number(control.closest<HTMLElement>("[data-proto-hit]")!.dataset.protoHit) : box.height;
+                    if (Math.max(hit, box.height) < (coarse ? 44 : 24)) small.push(`${(control.textContent ?? control.getAttribute("aria-label") ?? "").trim()} ${Math.round(box.width)}×${Math.round(box.height)}`);
+                  }
+                }
+                const caption = document.querySelector("[data-proto-caption]")?.getBoundingClientRect();
+                return { ready: document.body.dataset.protoReady, clipped, offscreen, small, texts: texts.length, captionHeight: caption ? Math.round(caption.height) : null, scrollWidth: document.documentElement.scrollWidth, innerWidth };
+              }, phone);
+              await page.screenshot({ path: path.join(out, `${name}.png`) });
+              frames.push(path.join(out, `${name}.png`));
+              const own = [
+                ...reading.clipped.map((text) => `${name}: clipped «${text}»`),
+                ...reading.offscreen.map((text) => `${name}: off screen «${text}»`),
+                ...reading.small.map((text) => `${name}: small control ${text}`),
+                ...(reading.scrollWidth > reading.innerWidth ? [`${name}: the page scrolls sideways`] : []),
+                ...pageErrors.map((error) => `${name}: page error ${error}`),
+              ];
+              failures.push(...own);
+              readings.push({ name, viewport, ...reading, pageErrors, failures: own });
+            } finally { await context.close(); }
+          }
+          /* One image per variant and device for the review: the phone's two frames side by side, the desktop's one under the other. */
+          const gap = 16;
+          const canvas = theme === "dark" ? { r: 17, g: 18, b: 24, alpha: 1 } : { r: 244, g: 241, b: 236, alpha: 1 };
+          const composite = sharp({
+            create: phone
+              ? { width: viewport.width * 2 + gap, height: viewport.height, channels: 4, background: canvas }
+              : { width: viewport.width, height: viewport.height * 2 + gap, channels: 4, background: canvas },
+          }).composite(frames.map((file, index) => phone ? { input: file, left: index * (viewport.width + gap), top: 0 } : { input: file, left: 0, top: index * (viewport.height + gap) }));
+          await composite.png().toFile(path.join(out, "review", `variant-${variant}-${device}-${lang}-${theme}.png`));
+        }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ fixture: `${dir}/prototype.fixture.tsx`, frames: readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_200_000);
+});
