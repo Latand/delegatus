@@ -194,13 +194,15 @@ test("owner and unscoped installation seat retain their existing reach", async (
 test("named launch and migration accounts cannot escape the workspace pool", async () => {
   setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-a"] } });
   for (const key of ["accountId", "targetAccountId"]) {
-    expect(await call("conversation_migration", { conversationId: "conversation_member", action: "switch", [key]: "account-b" })).toMatchObject(REFUSED);
+    expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", [key]: "account-b" })).toMatchObject(REFUSED);
     for (const engine of ["claude", "copilot", "unknown"]) {
-      expect(await call("conversation_migration", { conversationId: "conversation_member", action: "switch", engine, [key]: "account-b" })).toMatchObject(REFUSED);
+      expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", engine, [key]: "account-b" })).toMatchObject(REFUSED);
     }
   }
   expect(await call("spawn_agent", { cwd: root, engine: "codex", accountId: "account-b" })).toMatchObject(REFUSED);
   expect(dispatched).toEqual([]);
+  expect((await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", accountId: "account-a", clientRequestId: "allowed-migration" })).ok).toBe(true);
+  expect(dispatched).toEqual(["/api/conversations/conversation_member/migration"]);
 });
 
 test("an unidentified caller cannot use a forged source or member id to obtain installation reach", async () => {
