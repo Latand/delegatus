@@ -669,10 +669,6 @@ export const en = {
   "rail.createFailed": "Couldn't create the project",
 
   // ProjectDashboard
-  "dash.branchesLive": { one: "{count} branch running", other: "{count} branches running" },
-  "dash.trees": { one: "{count} tree", other: "{count} trees" },
-  "dash.recentConvos": { one: "{count} recent conversation", other: "{count} recent conversations" },
-  "dash.quietTrees": { one: "{count} quiet tree", other: "{count} quiet trees" },
   "dash.openProjects": "Open project list",
   "dash.createMenu": "Create",
   "dash.moreMenu": "More actions",
@@ -7625,6 +7621,11 @@ export const en = {
   "soundCaption.batch.yourMove": "Needs you: {count}",
   "soundCaption.batch.fault": { one: "{count} fault", other: "{count} faults" },
   "soundCaption.openAria": "Open: {label}",
+  "retiredOrchestrator.title": "Previous orchestrator",
+  "retiredOrchestrator.body": "This conversation no longer manages the project. Your messages and drafts stay here.",
+  "retiredOrchestrator.open": "Open current orchestrator",
+  "retiredOrchestrator.unavailable": "The current orchestrator is unavailable.",
+  "retiredOrchestrator.sendBlocked": "This orchestrator is retired, so sending is closed here.",
   "laneReview.menu": "Review changes",
   "laneReview.phoneRow": "Changed files",
   "laneReview.kind": "Changes",
