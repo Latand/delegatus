@@ -142,6 +142,8 @@ export async function persistCodexHost(
 
 export interface StructuredHostPersistenceOptions {
   cursorDebounceMs?: number;
+  /** Delay between refused checkpoints; each attempt retains the writer's own deadline. */
+  checkpointRetryMs?: number;
   /** Termination ladder seams for the tree a host stop captured (#2790). */
   terminationStop?: StructuredOrphanStopDependencies;
   /** How long a captured tree that outlived its ladder waits before the next one. */
@@ -166,6 +168,10 @@ export const DEFAULT_CURSOR_DEBOUNCE_MS = 30_000;
     its claim. The write waits; nothing about the host is decided by it. */
 class StructuredHostWriteHeld extends Error {
   constructor() { super("structured host row is held by a captured termination tree"); }
+}
+
+class StructuredHostClaimLost extends Error {
+  constructor() { super("structured host writer claim is stale"); }
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
@@ -212,7 +218,8 @@ async function bindStructuredHostPersistence(
   options: StructuredHostPersistenceOptions,
 ): Promise<StructuredHostPersistenceStop> {
   host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
-  let lastPersistedState!: HostState;
+  const initialState = await host.health();
+  let lastPersistedState = structuredClone(initialState);
   /* Whether the tree holding the row is the one this host's own stop
      captured. Another stop's capture is that stop's to finish, so this
      binding gives its terminal write up to it; its own it finishes itself. */
@@ -235,26 +242,22 @@ async function bindStructuredHostPersistence(
       if ((!terminal || ownCapture) && registry.structuredHostWriteHeldByTermination(key, claimOwner, writerClaimEpoch)) {
         throw new StructuredHostWriteHeld();
       }
-      throw new Error("structured host writer claim is stale");
+      throw new StructuredHostClaimLost();
     }
     lastPersistedState = structuredClone(state);
     return persisted;
   };
-  try {
-    await persist(await host.health());
-  } catch (error) {
-    await withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release());
-    throw error;
-  }
-
   const cursorDebounceMs = Number.isFinite(options.cursorDebounceMs)
     ? Math.max(0, options.cursorDebounceMs!)
     : DEFAULT_CURSOR_DEBOUNCE_MS;
+  const checkpointRetryMs = Number.isFinite(options.checkpointRetryMs)
+    ? Math.min(30_000, Math.max(1, options.checkpointRetryMs!))
+    : 1_000;
   let failed = false;
   let stopped = false;
   let claimReleased = false;
   let pendingState: HostState | null = null;
-  let lastQueuedState = lastPersistedState;
+  let lastQueuedState = initialState;
   let cursorTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe = () => {};
   /* A host stop signals its child's process group, and a tool that left the
@@ -323,38 +326,55 @@ async function bindStructuredHostPersistence(
     }
   };
   const persistPending = async () => {
+    if (failed || stopped) return;
     const state = pendingState;
+    const material = lastQueuedState;
     pendingState = null;
     clearCursorTimer();
-    if (state) await persist(state);
+    if (!state) return;
+    const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
+    try {
+      await persist(state, terminal);
+      if (terminal) {
+        claimReleased = true;
+        stopped = true;
+        unsubscribe();
+      }
+    } catch (error) {
+      // A flush must still report that it did not land. Keep its newest state
+      // for the paced retry, without releasing a host whose claim is unproven.
+      if (error instanceof StructuredHostClaimLost) {
+        await fail();
+      } else if (terminal && error instanceof StructuredHostWriteHeld) {
+        heldTerminal = state;
+        settleHeldTerminal();
+      } else if (lastQueuedState === material) {
+        pendingState ??= state;
+        clearCursorTimer();
+        schedulePending(error instanceof StructuredHostWriteHeld ? cursorDebounceMs : checkpointRetryMs);
+      }
+      throw error;
+    }
   };
-  const schedulePending = () => {
+  const schedulePending = (delayMs = cursorDebounceMs) => {
     if (cursorTimer !== null) return;
     cursorTimer = setTimeout(() => {
       void enqueue(async () => {
         cursorTimer = null;
         if (failed || stopped || pendingState === null) return;
-        const state = pendingState;
-        const material = lastQueuedState;
         try {
           await persistPending();
         } catch (error) {
-          /* A refused checkpoint has two meanings. Held by a captured termination
-             tree while this writer still owns its claim, it waits one more
-             period: a withdrawn stop lets it land, and a termination that
-             proceeds ends the process itself. Only a lost claim means another
-             writer owns the row, and only that ends this host. */
-          if (error instanceof StructuredHostWriteHeld) {
-            if (lastQueuedState === material) {
-              pendingState ??= state;
-              schedulePending();
-            }
-            return;
+          /* Admission or storage failures leave ownership unproven. Retain
+             the newest checkpoint and wait before trying again. A captured
+             tree keeps its existing cadence; only a proven lost claim ends
+             this host. */
+          if (!(error instanceof StructuredHostClaimLost) && !(error instanceof StructuredHostWriteHeld)) {
+            console.warn("[runtime] host checkpoint deferred", error);
           }
-          await fail();
         }
       }).catch(() => {});
-    }, cursorDebounceMs);
+    }, delayMs);
     cursorTimer.unref?.();
   };
   const settleHeldTerminal = () => {
@@ -380,11 +400,12 @@ async function bindStructuredHostPersistence(
             unsubscribe();
             return;
           } catch (error) {
-            if (!(error instanceof StructuredHostWriteHeld)) {
+            if (error instanceof StructuredHostClaimLost) {
               heldTerminal = null;
               await fail();
               return;
             }
+            if (!(error instanceof StructuredHostWriteHeld)) console.warn("[runtime] terminal host checkpoint deferred", error);
           }
         }
         settleTimer = setTimeout(() => {
@@ -407,14 +428,38 @@ async function bindStructuredHostPersistence(
     } catch (error) {
       /* A held final checkpoint is dropped; the caller stopping this binding
          keeps deciding about the host. */
-      if (!(error instanceof StructuredHostWriteHeld)) {
+      if (error instanceof StructuredHostClaimLost) {
         await fail();
         return;
       }
+      if (!(error instanceof StructuredHostWriteHeld)) throw error;
     }
+    if (heldTerminal !== null) {
+      stopped = true;
+      unsubscribe();
+      return;
+    }
+    pendingState = null;
+    clearCursorTimer();
     unsubscribe();
     await releaseClaim();
     stopped = true;
+  });
+
+  // Queue the initial write before subscribing; subscription emits synchronously,
+  // and later states must stay behind it while admission waits.
+  const initialWrite = enqueue(async () => {
+    try {
+      await persist(initialState);
+    } catch (error) {
+      if (error instanceof StructuredHostClaimLost) throw error;
+      console.warn("[runtime] initial host checkpoint deferred", error);
+      if (lastQueuedState === initialState) {
+        pendingState ??= initialState;
+        clearCursorTimer();
+        schedulePending(checkpointRetryMs);
+      }
+    }
   });
 
   unsubscribe = host.onStateChange((observed) => {
@@ -443,13 +488,15 @@ async function bindStructuredHostPersistence(
           unsubscribe();
         }
       } catch (error) {
-        if (error instanceof StructuredHostWriteHeld) {
-          if (terminal) {
+        if (!(error instanceof StructuredHostClaimLost)) {
+          if (!(error instanceof StructuredHostWriteHeld)) console.warn("[runtime] host checkpoint deferred", error);
+          if (terminal && error instanceof StructuredHostWriteHeld) {
             heldTerminal = state;
             settleHeldTerminal();
           } else if (lastQueuedState === state) {
             pendingState ??= state;
-            schedulePending();
+            clearCursorTimer();
+            schedulePending(error instanceof StructuredHostWriteHeld ? cursorDebounceMs : checkpointRetryMs);
           }
           return;
         }
@@ -457,6 +504,17 @@ async function bindStructuredHostPersistence(
       }
     }).catch(() => {});
   });
+  try {
+    await initialWrite;
+  } catch (error) {
+    failed = true;
+    stopped = true;
+    pendingState = null;
+    clearCursorTimer();
+    unsubscribe();
+    await withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release());
+    throw error;
+  }
   if (stopped) unsubscribe();
   const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
   hostPersistence.set(host, binding);
