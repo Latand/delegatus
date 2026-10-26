@@ -1358,6 +1358,8 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
 async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+    const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+    registerPipelineTick(async () => {});
     const fs = await import("node:fs");
     const crashLog = ${JSON.stringify(crashLog ?? null)};
     const fixtureExec = ${publicationFixtureExec.toString()};
@@ -1908,6 +1910,8 @@ test("permanent capacity deadlines stop after three retries across controller re
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
       const script = `import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(engine)};
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
         const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
         for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
