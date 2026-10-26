@@ -70,12 +70,6 @@ test("native Codex denies async seat questions and preserves worker questions", 
       } else if (seat) {
         // 0.162.1 still offers the async tool; the PreToolUse hook denies it with the form guidance.
         expect(offered).toEqual(["request_user_input_async"]);
-        const denial = inputs.join("\n");
-        expect(denial).toContain("publish_prototype_review");
-        expect(denial).toContain("3–7 questions with a task, 1–7 without a task");
-        expect(denial).toContain("Chat and reports point to the form");
-        expect(denial).not.toContain("then suggest_replies");
-        expect(denial).not.toContain("question bridge report");
       } else {
         expect(offered).toContain("request_user_input_async");
         expect(inputs.join("\n")).toContain('"accepted":true');

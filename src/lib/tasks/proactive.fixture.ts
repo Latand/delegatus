@@ -8,7 +8,7 @@ export const authority = (now = NOW, startedAt = new Date(NOW).toISOString()) =>
   seat: () => ({ conversationId: "seat", epoch: 1 }),
 });
 if (import.meta.main) {
-  const { admitProactiveTask, readProactiveAllowance, rejectProactiveCandidate } = await import("./proactive");
+  const { admitProactiveTask, readProactiveAllowance, rejectProactiveCandidate, decideProactiveTask, proactiveCandidateDecision, proactiveDecisionToken } = await import("./proactive");
   const [file, key, action, project = "atlas", startedAt = context().startedAt] = process.argv.slice(2);
   const now = Date.parse(startedAt);
   try {
@@ -17,6 +17,12 @@ if (import.meta.main) {
       const { persistProjectAliases } = await import("@/lib/projects/aliases");
       if (!persistProjectAliases([{ source: project, target: key!, displayName: "Atlas" }])) throw new Error("alias refused");
       result = {};
+    } else if (action === "adopt" || action === "decision") {
+      const { loadTasks } = await import("./store");
+      const task = loadTasks(file!).find(task => task.proactive?.candidateKey === key);
+      if (!task) throw new Error("task not found");
+      if (action === "adopt") await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task, file!), file!, () => new Date(now).toISOString());
+      result = { ...proactiveCandidateDecision(task, file!), token: proactiveDecisionToken(task, file!) };
     } else if (action === "allowance") result = readProactiveAllowance(project, startedAt, now, file!);
     else if (action === "reject") { await rejectProactiveCandidate(project, key!, file!); result = {}; }
     else {

@@ -1460,6 +1460,234 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
   return readings;
 }
 
+/** The lane review sheet (docs/design/lane-diff-comments.md §6–§7), shared by
+ * the board and phone drivers. The fixture's lane `p-stop-once` reads a real
+ * repository through the real route handlers; only the delivery to a
+ * conversation and the runtime receipt are stubbed. Desktop: every state at
+ * 1440, 1024 and 640 px. Phone: the read-only list and one open file at 390 px.
+ * Each frame is checked for its state's text in view and not covered, the
+ * gutter targets for 24 px, the footer clear of the last diff row and the
+ * board behind the sheet inert. */
+export async function captureLaneReviewFrames(browser: Browser, out: string, phone: boolean) {
+  const os = await import("node:os");
+  const { NextRequest } = await import("next/server");
+  const { translate } = await import("@/lib/i18n");
+  const { createLaneRepo, LANE_BRANCH } = await import("@/lib/laneReview/gitFixture");
+  const { laneChangesGET, laneReviewPOST } = await import("@/lib/laneReview/http");
+  const { realExec } = await import("@/lib/workflows/provision");
+  type PipelineRecord = import("@/lib/pipelines/types").Pipeline;
+  type Attempt = import("@/lib/pipelines/types").PipelineStageAttempt;
+
+  const ID = "p-stop-once";
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lane-review-driver-"));
+  const lane = createLaneRepo(repoRoot);
+  /* A second file with two hunks far apart, so the diff column scrolls. */
+  lane.git("checkout", "-q", "main");
+  lane.write("src/long.ts", Array.from({ length: 120 }, (_, i) => `export const value${i + 1} = ${i + 1};`).join("\n") + "\n");
+  const mainTip = lane.commit("long file");
+  lane.git("update-ref", "refs/remotes/origin/main", mainTip);
+  lane.git("checkout", "-q", LANE_BRANCH);
+  lane.git("merge", "-q", "--no-edit", "main");
+  lane.write("src/long.ts", fs.readFileSync(path.join(lane.dir, "src/long.ts"), "utf8").replace("value10 = 10;", "value10 = 100;").replace("value110 = 110;", "value110 = 1100;"));
+  const tip = lane.commit("long file edits");
+  lane.git("checkout", "-q", "--detach");
+  const writer = { n: 1, startedAt: "2026-10-23T08:00:00.000Z", conversationId: "conversation-build", effectiveRole: { access: "read-write", engine: "claude" } } as unknown as Attempt;
+  const pipeline = lane.pipeline({ id: ID, runs: [{ stageId: "build", attempts: [writer] }] }) as PipelineRecord;
+  let deliverStatus = 200;
+  let hold: Promise<void> | null = null;
+  let operationReceipt: { status: string; resend?: string } = { status: "delivered" };
+  const deps = {
+    pipeline: (id: string) => (id === ID ? pipeline : null),
+    exec: realExec,
+    deliver: async () => deliverStatus === 200
+      ? Response.json({ ok: true, operationId: "op-lane-review", receipt: { status: "queued" } })
+      : Response.json({ error: "runtime host is unavailable" }, { status: deliverStatus }),
+  };
+  const server = await serveEvidenceFixture(out, undefined, {
+    [`/api/pipelines/${ID}/changes`]: async (request: Request) => {
+      if (hold) await hold;
+      return laneChangesGET(new NextRequest(request), ID, deps);
+    },
+    [`/api/pipelines/${ID}/review`]: (request: Request) => laneReviewPOST(new NextRequest(request), ID, deps),
+    "/api/runtime/operations/op-lane-review": () => Response.json({ operationId: "op-lane-review", receipt: operationReceipt }),
+  });
+  const short = (sha: string) => sha.slice(0, 10);
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const widths = phone ? [390] : [1440, 1024, 640];
+  try {
+    for (const width of widths) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      lane.git("update-ref", `refs/heads/${LANE_BRANCH}`, tip);
+      operationReceipt = { status: "delivered" };
+      const height = phone ? 844 : 900;
+      const label = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}`;
+      const fail = (text: string) => failures.push(`${label}: ${text}`);
+      const tr = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-stops&laneReview=1`, { width, height }, theme, lang, "reduce", phone);
+      /* One state's frame: its defining text is on the first screen and nothing covers it. */
+      const frame = async (state: string, selector: string, expected: string | RegExp) => {
+        const target = page.locator(selector).first();
+        await target.waitFor({ timeout: 15_000 });
+        const reading = await target.evaluate((element, viewport) => {
+          const box = element.getBoundingClientRect();
+          const x = Math.min(viewport.width - 1, Math.max(0, box.left + Math.min(box.width / 2, 40)));
+          const y = Math.min(viewport.height - 1, Math.max(0, box.top + box.height / 2));
+          const hit = document.elementFromPoint(x, y);
+          return { text: (element.textContent ?? "").replace(/\s+/g, " ").trim(), box: [box.left, box.top, box.right, box.bottom].map(Math.round), inView: box.top >= 0 && box.left >= 0 && box.bottom <= viewport.height && box.right <= viewport.width && box.width > 0, hitInside: Boolean(hit && (element === hit || element.contains(hit) || hit.contains(element))) };
+        }, { width, height });
+        if (!(typeof expected === "string" ? reading.text.includes(expected) : expected.test(reading.text))) fail(`${state}: ${selector} reads ${JSON.stringify(reading.text)}, expected ${String(expected)}`);
+        if (!reading.inView) fail(`${state}: ${selector} is not on the first screen (${reading.box.join(",")})`);
+        if (!reading.hitInside) fail(`${state}: ${selector} is covered at its centre`);
+        const geometry = phone ? null : await page.evaluate(() => {
+          const sheet = document.querySelector("[data-lane-review]");
+          const footer = document.querySelector("[data-lane-review-footer]")?.getBoundingClientRect();
+          const scroller = document.querySelector<HTMLElement>("[data-lane-review-diff]");
+          const gutters = [...document.querySelectorAll("[data-lane-review-line]")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0);
+          /* Edit and Delete under a saved comment: each a 24 px target, with room between them. */
+          const actionBoxes = [...document.querySelectorAll("[data-lane-review-comment-actions] button")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0);
+          const actionGap = [...document.querySelectorAll("[data-lane-review-comment-actions]")].map((group) => {
+            const [edit, remove] = [...group.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
+            return edit && remove ? remove.left - edit.right : null;
+          }).filter((gap): gap is number => gap !== null);
+          let lastRowClear = true;
+          if (scroller && footer) {
+            const before = scroller.scrollTop;
+            scroller.scrollTop = scroller.scrollHeight;
+            const rows = scroller.querySelectorAll("[data-lane-review-rows] > div");
+            const last = rows[rows.length - 1]?.getBoundingClientRect();
+            lastRowClear = !last || last.bottom <= footer.top + 0.5;
+            scroller.scrollTop = before;
+          }
+          const board = document.querySelector(".kb-body");
+          return {
+            open: Boolean(sheet),
+            gutterMin: gutters.length ? Math.min(...gutters.map((box) => Math.min(box.width, box.height))) : null,
+            actionMin: actionBoxes.length ? Math.min(...actionBoxes.map((box) => Math.min(box.width, box.height))) : null,
+            actionGapMin: actionGap.length ? Math.min(...actionGap) : null,
+            lastRowClear,
+            boardInert: Boolean(board?.closest("[inert]")),
+          };
+        });
+        if (geometry) {
+          if (geometry.gutterMin !== null && geometry.gutterMin < 24) fail(`${state}: a gutter target is ${geometry.gutterMin}px`);
+          if (geometry.actionMin !== null && geometry.actionMin < 24) fail(`${state}: an Edit or Delete target is ${geometry.actionMin}px`);
+          if (geometry.actionGapMin !== null && geometry.actionGapMin < 8) fail(`${state}: Edit and Delete are ${geometry.actionGapMin}px apart`);
+          if (!geometry.lastRowClear) fail(`${state}: the footer covers the last diff row`);
+          if (!geometry.boardInert) fail(`${state}: the board behind the sheet is not inert`);
+        }
+        const file = `${label}-${state}.png`;
+        await page.screenshot({ path: path.join(out, file) });
+        readings.push({ label, state, file, ...reading, ...(geometry ?? {}) });
+      };
+      try {
+        if (phone) {
+          await page.locator('[data-phone-card="task:t-stop-once"]').click();
+          await page.locator(`[data-phone-task-lane="${ID}"] [data-open-stages="${ID}"]`).first().click();
+          await page.locator('[data-mobile2-bar] [data-mobile2-open="menu"]').click();
+          await page.locator('[data-mobile2-menu-row="changes"]').click();
+          await frame("list", "[data-lane-review-phone-note]", tr("laneReview.phoneNote"));
+          await page.locator('[data-lane-review-phone-file="src/app.ts"]').click();
+          await frame("file", '[data-mobile2-lane-review] li:has([data-lane-review-phone-file="src/app.ts"])', "line five");
+          const opened = await page.locator("[data-mobile2-lane-review]").evaluate((element) => ({
+            paths: (element.textContent ?? "").split("src/app.ts").length - 1,
+            marked: element.querySelector('[data-lane-review-phone-file="src/app.ts"]')?.getAttribute("aria-expanded"),
+            chevron: Boolean(element.querySelector('[data-lane-review-phone-file="src/app.ts"] svg')),
+          }));
+          if (opened.paths !== 1 || opened.marked !== "true" || !opened.chevron) fail(`the opened phone file is repeated or unmarked: ${JSON.stringify(opened)}`);
+          const controls = await page.locator("[data-mobile2-lane-review] [data-lane-review-line], [data-mobile2-lane-review] textarea, [data-lane-review-send]").count();
+          if (controls) fail(`the phone draws ${controls} comment controls`);
+          const rows = await page.locator("[data-lane-review-phone-file]").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+          if (rows.some((h) => h < 44)) fail(`a phone row is under 44 px: ${rows.join(", ")}`);
+        } else {
+          const card = page.locator('[data-kanban-board] .card[data-id="task:t-stop-once"]');
+          await card.waitFor({ state: "attached", timeout: 30_000 });
+          if (!(await card.isVisible())) {
+            const status = await card.evaluate((element) => element.closest("[data-status]")?.getAttribute("data-status") ?? null);
+            if (status) await page.locator(`.tabs-nav [data-tab="${status}"]`).click();
+          }
+          await card.scrollIntoViewIfNeeded();
+          let release = () => {};
+          hold = new Promise<void>((resolve) => { release = resolve; });
+          await page.locator('[data-menu="task:t-stop-once"]').click();
+          await page.locator(`.menu [data-cm-shown] [data-cm-section="lane:${ID}"]`).click();
+          await page.locator('.menu [data-cm-shown] [data-cm-item="review-changes"]').click();
+          await frame("loading", "[data-lane-review-files]", tr("laneReview.loading"));
+          hold = null;
+          release();
+          await page.locator('[data-lane-review-state="ready"]').waitFor({ timeout: 15_000 });
+          await page.locator('[data-lane-review-file="src/app.ts"]').click();
+          await page.locator('[data-lane-review-line="new:5"]').click();
+          await page.locator("[data-lane-review-editor] textarea").fill(lang === "en" ? "Keep the old name: callers still import it." : "Залиште стару назву: її ще імпортують.");
+          await frame("editor", "[data-lane-review-editor]", lang === "en" ? "Save" : "Зберегти");
+          const editorFooter = (await page.locator("[data-lane-review-status]").textContent()) ?? "";
+          if (/(^|\s)0\s/.test(editorFooter) || editorFooter !== tr("laneReview.footerTarget", { stage: "build", engine: "Claude" })) fail(`editor: the footer reads ${JSON.stringify(editorFooter)}, expected only the target`);
+          await page.locator("[data-lane-review-save]").click();
+          await page.locator('[data-lane-review-line="new:26"]').click();
+          await page.locator("[data-lane-review-editor] textarea").fill(lang === "en" ? "Why the extra line?" : "Навіщо додатковий рядок?");
+          await page.locator("[data-lane-review-save]").click();
+          await frame("ready", "[data-lane-review-status]", tr("laneReview.footer", { count: 2, stage: "build", engine: "Claude" }));
+
+          /* The branch moves: two lines on top, and the commented 25b edited. */
+          lane.git("checkout", "-q", LANE_BRANCH);
+          lane.write("src/app.ts", `line 0a\nline 0b\n${fs.readFileSync(path.join(lane.dir, "src/app.ts"), "utf8").replace("line 25b\n", "line 25c\n")}`);
+          const moved = lane.commit("moves after the review began");
+          lane.git("checkout", "-q", "--detach");
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await frame("stale", "[data-lane-review-stale]", tr("laneReview.stale", { old: short(tip), new: short(moved), count: 2 }));
+          await page.locator("[data-lane-review-reanchor]").click();
+          await frame("reanchored", "[data-lane-review-reanchored]", tr("laneReview.reanchored", { moved: 1, detached: 1 }));
+          await page.locator("[data-lane-review-needs-line]").waitFor();
+
+          deliverStatus = 503;
+          await page.locator("[data-lane-review-send]").click();
+          await frame("failed", "[data-lane-review-failed]", tr("laneReview.failed", { reason: tr("laneReview.reason.unavailable") }));
+          deliverStatus = 200;
+          await page.locator("[data-lane-review-send]").click();
+          await page.locator("[data-lane-review-sent]").waitFor({ timeout: 15_000 });
+          await page.waitForFunction(() => document.querySelector("[data-lane-review-sent]")?.getAttribute("data-receipt") === "delivered");
+          await frame("sent", "[data-lane-review-sent]", new RegExp(`build.*${tr("laneReview.delivered")}`));
+          const footerStyle = () => page.locator("[data-lane-review-sent]").evaluate((element) => {
+            const style = getComputedStyle(element);
+            return { color: style.color, weight: Number(style.fontWeight), size: style.fontSize };
+          });
+          const delivered = await footerStyle();
+          /* A send that was not delivered or not confirmed leads with the outcome in its own tone and weight. */
+          for (const [state, receipt, expected] of [
+            ["unconfirmed", { status: "uncertain", resend: "verify-first" }, new RegExp(`^${tr("laneReview.sentUnconfirmed", { stage: "build", time: "" }).split("(")[0]!.trim()}`)],
+            ["rejected", { status: "rejected", resend: "safe" }, new RegExp(`^${tr("laneReview.sentFailed", { stage: "build", time: "" }).split("(")[0]!.trim()}`)],
+          ] as const) {
+            operationReceipt = receipt;
+            await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+            await page.waitForFunction((name) => document.querySelector("[data-lane-review-sent]")?.getAttribute("data-receipt") === name, state === "rejected" ? "failed" : state);
+            await frame(state, "[data-lane-review-sent]", expected);
+            const style = await footerStyle();
+            if (style.color === delivered.color || style.weight <= delivered.weight) fail(`${state}: the receipt line keeps the delivered line's colour ${delivered.color} or weight ${delivered.weight}: ${JSON.stringify(style)}`);
+          }
+
+          lane.git("update-ref", `refs/heads/${LANE_BRANCH}`, lane.git("rev-parse", "main"));
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+          const main = lane.git("rev-parse", "main");
+          await frame("empty", "[data-lane-review-empty]", tr("laneReview.empty"));
+          const emptySheet = await page.locator("[data-lane-review]").evaluate((element) => ({ text: element.textContent ?? "", files: element.querySelectorAll("[data-lane-review-files]").length }));
+          if (emptySheet.text.split(short(main)).length - 1 > 2) fail(`empty: the pair ${short(main)} is named more than twice`);
+          if (emptySheet.files) fail("empty: an empty file column remains");
+        }
+        if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        fail(String(error));
+        await page.screenshot({ path: path.join(out, `${label}-error.png`) }).catch(() => undefined);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    server.stop();
+    lane.cleanup();
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+  return { readings, failures };
+}
 
 /** Shared creation journey, called by the board and phone evidence drivers. */
 export async function captureTaskDueFrames(browser: Browser, base: string, out: string, phone: boolean) {

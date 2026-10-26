@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
@@ -37,7 +38,7 @@ test("task dispatch attributes an admitted agent caller and keeps human dispatch
   };
   const send = (agent: boolean) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/tasks/task-agent-dispatch/send", {
     method: "POST",
-    headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json",
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json",
       ...(agent ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {}) },
     body: JSON.stringify({ paths: [path.join(state, "recipient.jsonl")] }),
   }), { params: Promise.resolve({ id: task.id }) }, dependencies);
@@ -114,7 +115,7 @@ test("one authorized task fan-out records one durable operator gesture across re
   };
   const request = () => new NextRequest("http://127.0.0.1/api/tasks/task-fanout-one/send", {
     method: "POST",
-    headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
     body: JSON.stringify({ paths: files.map((file) => file.path), clientRequestId: "task-send-gesture-one" }),
   });
   const context = { params: Promise.resolve({ id: task.id }) };

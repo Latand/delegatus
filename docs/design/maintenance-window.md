@@ -20,10 +20,16 @@ curation timer keeps its own settings. Existing settings without a window retain
 their cadence.
 
 Hours follow the named IANA zone at each real instant, including DST changes.
-Validation and scheduling use the full IANA data shipped by the pinned
-`moment-timezone` dependency (currently 2026e). Updating that dependency and its
-lockfile refreshes the rules independently of the supported Bun runtime's Intl
-data. This includes Morocco's return to permanent UTC on 2026-09-20.
+Validation and scheduling use the platform's `Intl.DateTimeFormat` with an
+explicit time zone and a 0–23 hour cycle. No timezone package is required.
+The supported Bun runtime predates some IANA 2026b–2026e changes, so
+`src/lib/boardMaintenance/window.ts` retains their effective instants and
+permanent zones for Casablanca, El Aaiun, Vancouver, Edmonton, Inuvik and
+Winnipeg. Earlier instants use each named zone's historical rules. These
+entries follow the [IANA Africa](https://data.iana.org/time-zones/tzdb/africa)
+and [North America](https://data.iana.org/time-zones/tzdb/northamerica) records,
+with aliases from [backward links](https://data.iana.org/time-zones/tzdb/backward);
+review them when updating runtime timezone data or when those rules change.
 Missing hours have no opening; repeated hours are both eligible. The existing
 elapsed-time cooldown and durable run claim still prevent duplicate launches.
 The bounded lookahead includes a second weekly opening when a clock change

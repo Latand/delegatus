@@ -1,6 +1,8 @@
 import { expect, mock, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
+import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 
 const pipeline = {
   id: "pipeline-1",
@@ -31,6 +33,7 @@ const refusedClose = {
   stillRunning: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null, error: "host is unreachable" }],
 };
 let forwardedActor: unknown;
+let patchCalls = 0;
 mock.module("@/lib/pipelines/engine", () => ({
   getPipelines: () => ({ pipelines: [pipeline] }),
   getPipeline: (id: string) => {
@@ -40,6 +43,7 @@ mock.module("@/lib/pipelines/engine", () => ({
   createPipelineFromRequest: () => ({ pipeline }),
   tickPipelines: async () => ({ pipelines: [], changed: false }),
   patchPipeline: async (id: string, body: unknown, _ports: unknown, actor: unknown) => {
+    patchCalls++;
     forwardedActor = actor;
     if (id !== pipeline.id) return { error: "pipeline not found", status: 404 };
     if ((body as { repoDir?: string }).repoDir === "/blocked") {
@@ -221,7 +225,7 @@ test("pipeline PATCH forwards repository-admission fields from final revalidatio
   const response = await PATCH(
     new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
       method: "PATCH",
-      headers: { host: "127.0.0.1" },
+      headers: { host: "127.0.0.1", cookie: `llv_operator=${soloBrowserSession()}` },
       body: JSON.stringify({ action: "update-draft", repoDir: "/blocked" }),
     }),
     { params: Promise.resolve({ id: "pipeline-1" }) },
@@ -257,4 +261,50 @@ test("apply-now passes the admitted operator actor into the pipeline mutation", 
   const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", { method: "PATCH", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "override-stage", stageId: "build", model: "gpt-6.1-sol", applyNow: true }) }), { params: Promise.resolve({ id: "pipeline-1" }) });
   expect(response.status).toBe(200);
   expect(forwardedActor).toEqual({ kind: "operator" });
+});
+
+
+test("changing a draft root requires a session or verified MCP dispatch before the engine runs", async () => {
+  const untrustedHeaders: Record<string, string>[] = [{}, { "sec-fetch-site": "same-origin" }, { "x-llv-internal-service": "mcp.invalid" }];
+  for (const headers of untrustedHeaders) {
+    const before = patchCalls;
+    const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH", headers: { host: "127.0.0.1", ...headers },
+      body: JSON.stringify({ action: "update-draft", repoDir: "/private" }),
+    }), { params: Promise.resolve({ id: "pipeline-1" }) });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("verified session") });
+    expect(patchCalls).toBe(before);
+  }
+  for (const headers of [{ cookie: `llv_operator=${soloBrowserSession()}` }, internalServiceHeaders("mcp")]) {
+    const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH", headers: { host: "127.0.0.1", ...headers },
+      body: JSON.stringify({ action: "update-draft", repoDir: "/project" }),
+    }), { params: Promise.resolve({ id: "pipeline-1" }) });
+    expect(response.status).toBe(200);
+  }
+});
+
+test("a draft root edit rechecks session authority after resolving route parameters", async () => {
+  const previous = process.env.LLV_TOKEN;
+  const request = new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+    method: "PATCH", headers: { host: "127.0.0.1", cookie: `llv_operator=${soloBrowserSession()}` },
+    body: JSON.stringify({ action: "update-draft", repoDir: "/project" }),
+  });
+  // Resolve only when the handler awaits params, after its body has been read.
+  const params = {
+    then(resolve: (value: { id: string }) => void) {
+      process.env.LLV_TOKEN = "changed-fixture-generation";
+      resolve({ id: "pipeline-1" });
+    },
+  } as Promise<{ id: string }>;
+  const before = patchCalls;
+  try {
+    const response = await PATCH(request, { params });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("verified session") });
+    expect(patchCalls).toBe(before);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
+  }
 });

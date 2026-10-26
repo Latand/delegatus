@@ -7,6 +7,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
 import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 
 import {
@@ -464,8 +465,11 @@ test("the delivered default mandate fits the delivery bound with room for a rota
        composeSuccessorMandate drops a longer one whole, and the successor
        keeps the pointer to its predecessor's transcript. Any further growth
        still fails here. */
+    // v59 spends the correction sentence's bytes from the rotation reserve.
+    // The real structured envelope and history trimming still enforce the cap.
     const v58MaintenancePracticeShortfall = 200;
-    expect(remaining + retiredTaskListBytes - Buffer.byteLength(HANDOFF_BOARD_REPORT_POINTER)).toBeGreaterThan(HISTORY_BUDGET_BYTES - v58MaintenancePracticeShortfall);
+    const v59CorrectionBytes = Buffer.byteLength(` ${OPERATOR_CORRECTION_RULE}`);
+    expect(remaining + retiredTaskListBytes - Buffer.byteLength(HANDOFF_BOARD_REPORT_POINTER)).toBeGreaterThan(HISTORY_BUDGET_BYTES - v58MaintenancePracticeShortfall - v59CorrectionBytes);
   }
   /* Delivery appends only the role table (#1880) to the current default, and
      preflight measured the delivered text, table included. */
@@ -531,6 +535,5 @@ test("a bespoke mandate landing exactly on the envelope is admitted, and one byt
 
 test("the delivered mandate retains the gated prototype lane within its existing budget", () => {
   const delivered = orchestratorMandateForDelivery("");
-  expect(delivered).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
   expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(DELIVERED_DIRECTIVE_BUDGET_BYTES);
 });

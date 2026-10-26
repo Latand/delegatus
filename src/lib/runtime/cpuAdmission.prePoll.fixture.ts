@@ -4,7 +4,9 @@ import type { Database } from "bun:sqlite";
 
 import { processIdentityStatus, type ProcessIdentity } from "../processIdentity";
 import { procBackend } from "../proc";
-import { CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, type CpuQueueWait } from "./cpuAdmission";
+import { CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS } from "./cpuAdmission";
+
+type CpuQueueWait = { since: number; position: number; remainingMs: number };
 
 type Ticket = { seq: number; key: string; since: number; owner: string | null };
 

@@ -1,5 +1,18 @@
 # Maintenance window verification
 
+## Dependency removal (2026-10-26)
+
+`src/lib/boardMaintenance/window.ts` now uses `Intl.DateTimeFormat` for named
+zone validation and local weekdays and hours. The manifest and lockfile no
+longer add `moment-timezone` or its `moment` dependency. The historical
+verification below describes earlier revisions.
+
+The existing DST and 2026 rule-change expectations remain. Effective instants
+and permanent zones preserve the IANA changes absent from Bun 1.4.0's Intl
+data; the design document names the sources and affected zones. Additional
+tests cover midnight, weekdays across UTC dates, exact transition boundaries,
+Canadian aliases and the following winter.
+
 Origin: Codex Cloud (GPT-6.1 Sol), result 03. The supplied patch changes 13
 files. It was applied after advancing the owned branch to main at
 `800a26ebc10ca2db855d12a71320f75c5f2fb955`.

@@ -1,3 +1,4 @@
+import { registryWriterDetail } from "./registryWriter";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
@@ -6,7 +7,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
-import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
+import { recordBlockingWait, withWaitCorrelation, currentWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
 import fs from "node:fs";
@@ -116,7 +117,8 @@ import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrig
 import { normalizePendingPermissions, normalizePendingQuestions, normalizePendingToolUses, type PendingPermissionRequest, type PendingQuestionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
-import { admitRecoveredLaunch, admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, admitReservedLaunch, productionLaunchMembershipPorts, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
@@ -4712,8 +4714,8 @@ export const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by
     nothing was written, so the durable state is what it was before the step,
     and the next pass resumes from it. */
 export class RegistryWriterBusyError extends Error {
-  constructor(readonly label: string) {
-    super(`${REGISTRY_WRITER_BUSY} (${label})`);
+  constructor(readonly label: string, readonly holder?: string) {
+    super(`${REGISTRY_WRITER_BUSY} (${label})${holder ? `; ${holder}` : ""}`);
     this.name = "RegistryWriterBusyError";
   }
 }
@@ -5401,7 +5403,7 @@ export class AgentRegistry {
     try {
       fs.mkdirSync(staging, 0o700);
       fd = fs.openSync(path.join(staging, "owner.json"), "wx", 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ ...owner, token }), "utf8");
+      fs.writeFileSync(fd, JSON.stringify({ ...owner, token, callSite: currentWaitCorrelation()?.label ?? "registry synchronous write", acquiredAt: Date.now() }), "utf8");
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
@@ -5736,7 +5738,7 @@ export class AgentRegistry {
       {@link RegistryWriterBusyError} when the lock stayed held. */
   async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
     const written = await this.whenWriterHeld(correlation, write);
-    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label);
+    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label, this.writerHolderDetail());
     return written.value;
   }
 
@@ -5767,7 +5769,7 @@ export class AgentRegistry {
       if (this.admittedJsonWriter) return { acquired: true, value: withWaitCorrelation(correlation, write) };
       const lock = `${this.filename}.write-lock`;
       fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-      const claim = this.tryAcquireLock(lock, captureProcessIdentity(process.pid));
+      const claim = withWaitCorrelation(correlation, () => this.tryAcquireLock(lock, captureProcessIdentity(process.pid)));
       if (!claim) {
         if (options.recordRefusal !== false) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
           durationMs: 0, correlation, subject: "agent-registry", refused: true });
@@ -6531,12 +6533,25 @@ export class AgentRegistry {
       terminal rejection receipt when the initiating origin is a denied role
       or the child would exceed the nesting-depth ceiling. */
   /** Bounded, non-blocking admission for request and controller paths. */
-  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
+  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void, options: {
+    /** Absolute monotonic cutoff supplied by a caller with a persisted budget. */
+    deadline?: number;
+  } = {}): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
-    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    // One bounded admission slice; the pipeline persists its longer lane deadline.
+    // Membership can need a separate state writer, so two seconds is not enough
+    // to admit and then record it under load.
+    const deadline = Math.min(options.deadline ?? Infinity, performance.now() + (this.writerDeadlineMs ?? 30_000));
+    const busy = (label: string) => new RegistryWriterBusyError(label, this.writerHolderDetail());
     const remaining = () => Math.max(0, deadline - performance.now());
-    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
-    if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
+    const check = (label: string) => {
+      if (performance.now() >= deadline) throw busy(label);
+      guard?.();
+    };
+    check(`${caller} admission`);
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input),
+      () => check(`${caller} admission`), { waitMs: remaining() });
+    if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -6545,7 +6560,7 @@ export class AgentRegistry {
       const admission = await waitForStateLock(`${caller}.membership`, async () => {
         try {
           return await withAccountMutationLockAsync(() => {
-            guard?.();
+            check(`${caller} membership`);
             return this.admitSpawnMembership(input, result);
           }, { caller: `${caller} membership`, waitMs: remaining() });
         } catch (error) {
@@ -6557,11 +6572,21 @@ export class AgentRegistry {
         await new Promise<void>(resolve => setImmediate(resolve));
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, guard, { waitMs: remaining() });
-        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+        }, () => check(`${caller} membership record`), { waitMs: remaining() });
+        if (!recorded.acquired) throw busy(`${caller} membership record`);
       }
     }
+    check(`${caller} admission`);
     return result;
+  }
+
+  private writerHolderDetail(): string {
+    if (this.sqliteStore) return registryWriterDetail(this.sqliteStore.filename);
+    try {
+      const lock = `${this.filename}.write-lock`;
+      const writer = JSON.parse(fs.readFileSync(this.lockOwnerFile(lock), "utf8")) as ProcessIdentity & { callSite?: string; acquiredAt?: number };
+      return `holder=${writer.callSite ?? "legacy registry writer"} pid=${writer.pid} age=${Math.max(0, Date.now() - (writer.acquiredAt ?? fs.statSync(lock).mtimeMs))}ms`;
+    } catch { return "holder=writer changed before inspection; retry admission"; }
   }
 
   /** Acquire each writer without waiting while the other is held. A failed
@@ -6582,6 +6607,7 @@ export class AgentRegistry {
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
+    let backoffMs = 5;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
     const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
       const deadline = performance.now() + remainingMs;
@@ -6617,7 +6643,9 @@ export class AgentRegistry {
           acquiredAt = undefined;
           if (inherited || performance.now() >= deadline) return result;
           waited = true;
-          await new Promise<void>(resolve => setTimeout(resolve, 5));
+          const delayMs = Math.min(Math.max(0, deadline - performance.now()), backoffMs * (0.5 + Math.random() * 0.5));
+          await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+          backoffMs = Math.min(250, backoffMs * 2);
         }
       } finally {
         if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
@@ -6660,7 +6688,7 @@ export class AgentRegistry {
       if (result.kind !== "created") return;
       if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
       else this.failSpawn(result.receipt.launchId, reason);
-    });
+    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
   }
 
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -6681,7 +6709,8 @@ export class AgentRegistry {
   /** Recovery may replace a task deleted while the launch waited. Persist the
       newly admitted targets before execution or failure reporting can resume. */
   async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
-    const admission = admitRecoveredLaunch(receipt);
+    const admission = admitRecoveredLaunch(receipt, { ...productionLaunchMembershipPorts,
+      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
     if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
       this.recordSpawnMembership(receipt, admission.taskIds));
   }
@@ -6937,6 +6966,10 @@ export class AgentRegistry {
         }
       }
       const createdAt = now();
+      // Preserve related authority at reservation, before membership can wait
+      // or recovery can lose the request's reviewer/parent selectors.
+      const retainedTaskIds = [...new Set([conversationId, parentConversationId, reviewsConversationId].filter((id): id is ViewerConversationId => !!id)
+        .flatMap(id => registryReceiptsForConversation(file, id).flatMap(row => row.failureReporting?.taskIds ?? [])))];
       const receipt: SpawnReceipt = {
         launchId: crypto.randomUUID(),
         clientAttemptId: input.clientAttemptId ?? null,
@@ -6982,7 +7015,8 @@ export class AgentRegistry {
         delegationDepth: childDepth,
         rejection,
         membershipAdmitted: false,
-        failureReporting: { failedAt: rejection ? createdAt : null, lifecycle: false, notice: false, task: false },
+        failureReporting: { failedAt: rejection ? createdAt : null, lifecycle: false, notice: false, task: false,
+          ...(retainedTaskIds.length ? { taskIds: retainedTaskIds } : {}) },
         ...(rejection ? { failureAnnouncementSuppressed: true as const, failureRepairState: "handled" as const } : {}),
         launchProfile: profile,
         explicitProject,

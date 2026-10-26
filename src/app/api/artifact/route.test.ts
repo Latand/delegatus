@@ -7,16 +7,26 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-route-"));
-const { GET } = await import("./route");
+const { GET: serve } = await import("./route");
+const responses: Response[] = [];
+async function GET(...args: Parameters<typeof serve>) {
+  const response = await serve(...args); responses.push(response); return response;
+}
 
 const savedHome = process.env.HOME;
+const savedState = process.env.LLV_STATE_DIR;
 let home = "";
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(sandbox, "home-"));
-  process.env.HOME = home;
+  process.env.HOME = path.dirname(home);
+  process.env.LLV_STATE_DIR = path.join(home, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
 });
-afterEach(() => {
+afterEach(async () => {
+  for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
+  if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
   delete process.env.LLV_ARTIFACT_MAX_BYTES;
   delete process.env.LLV_EVIDENCE_ROOTS;
@@ -214,7 +224,7 @@ test("cross-origin callers are rejected before any disk access", async () => {
 
 test("~ and file:// spellings resolve inside the allowed root", async () => {
   write("linked/readme.md", "hello\n");
-  for (const spelling of ["~/linked/readme.md", `file://${home}/linked/readme.md`]) {
+  for (const spelling of [`~/${path.basename(home)}/linked/readme.md`, `file://${home}/linked/readme.md`]) {
     const res = await GET(request({ path: spelling }));
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("hello\n");
@@ -287,4 +297,39 @@ test("a .png link in an evidence root to a home file that is no image is refused
   const res = await GET(request({ path: link }));
   expect(res.status).toBe(403);
   expect(await errorCode(res)).toBe("access-denied");
+});
+
+
+test("file routes refuse unrelated home files while admitting registered projects and worktrees", async () => {
+  // The publication gate isolates under the default evidence root; this case tests project admission alone.
+  process.env.LLV_EVIDENCE_ROOTS = "";
+  const { GET: image } = await import("../image/route");
+  const state = process.env.LLV_STATE_DIR!;
+  const catalog = path.join(state, "project-catalog.json");
+  const previous = fs.existsSync(catalog) ? fs.readFileSync(catalog) : null;
+  fs.mkdirSync(state, { recursive: true });
+  const project = path.join(home, "project");
+  const worktree = path.join(home, "checkout");
+  fs.mkdirSync(project); fs.mkdirSync(worktree);
+  fs.writeFileSync(catalog, JSON.stringify({ files: { a: { cwd: project, projectRoot: project }, b: { cwd: worktree, projectRoot: project } } }));
+  try {
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    for (const route of [GET, image]) {
+      const privateFile = write("personal/notes.png", png);
+      const refused = await route(request({ path: privateFile }));
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).not.toContain(png.toString("base64"));
+      for (const dir of ["project", "checkout"]) {
+        const file = write(`${dir}/render.png`, png);
+        const response = await route(request({ path: file }));
+        expect(response.status).toBe(200);
+        await response.arrayBuffer();
+      }
+      const escape = path.join(project, "escape.png");
+      if (!fs.existsSync(escape)) fs.symlinkSync(privateFile, escape);
+      expect((await route(request({ path: escape }))).status).toBe(403);
+    }
+  } finally {
+    if (previous) fs.writeFileSync(catalog, previous); else fs.rmSync(catalog, { force: true });
+  }
 });

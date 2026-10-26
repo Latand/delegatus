@@ -1,3 +1,5 @@
+import { backoffDelayMs } from "../deadline";
+
 /** A retry deadline survives unrelated wakes. Success alone resets the budget. */
 export class RetryBackoff {
   private failures = 0;
@@ -13,5 +15,5 @@ export class RetryBackoff {
   reset(): void { this.failures = 0; this.nextAt = 0; }
 
   /** The wait the next {@link fail} sets. */
-  nextDelayMs(): number { return Math.min(30_000, 1_000 * 2 ** Math.min(this.failures, 5)); }
+  nextDelayMs(): number { return backoffDelayMs(this.failures + 1, { baseMs: 1_000, maxMs: 30_000, jitter: 0 }); }
 }

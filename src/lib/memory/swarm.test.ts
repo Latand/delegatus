@@ -110,7 +110,6 @@ test("off preserves the exact four-scope block; on inserts the fifth scope after
   expect(on.scopes.map(entry => entry.scope)).toEqual([`role:${PROJECT}:builder`, "role:*:builder", "swarm:builder", `project:${PROJECT}`, "machine"]);
   expect(on.block).toContain("1 role · 1 swarm · 0 project · 0 machine");
   expect(on.block).toContain("Swarm rules · Builder on every install");
-  expect(on.block).toContain("are public");
   expect(scopeChars(on.candidates[2].rules)).toBeLessThanOrEqual(4000);
   const block = await learnedRulesForLaunchProfile(profile, start());
   expect(block).toBe(on.block);

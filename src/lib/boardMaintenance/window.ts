@@ -1,5 +1,3 @@
-import moment from "moment-timezone";
-
 /** Local wall-clock hours; ISO weekdays: Monday=1, Sunday=7. */
 export interface MaintenanceWindow {
   timeZone: string;
@@ -12,11 +10,30 @@ export interface MaintenanceWindow {
 // week's opening too, with a day of margin for offset changes.
 export const MAINTENANCE_WINDOW_SEARCH_MS = 15 * 86_400_000;
 
-// The pinned dependency ships IANA data independently of Bun's Intl snapshot.
-// Admit only published names, including aliases and case-insensitive spellings.
-const timeZones = new Set(moment.tz.names().map(name => name.toLowerCase()));
-function windowZone(timeZone: string) {
-  return timeZones.has(timeZone.toLowerCase()) ? moment.tz.zone(timeZone) : null;
+// IANA 2026b–2026e changes absent from the supported Bun's Intl snapshot.
+// Keep pre-transition history in the named zone; Intl supplies the calendar
+// fields in the permanent zone afterward.
+// Sources: https://data.iana.org/time-zones/tzdb/{africa,northamerica,backward}
+const permanentZones = new Map<string, { since: number; timeZone: string }>([
+  ["Africa/Casablanca", { since: Date.parse("2026-09-20T01:00:00Z"), timeZone: "UTC" }],
+  ["Africa/El_Aaiun", { since: Date.parse("2026-09-20T01:00:00Z"), timeZone: "UTC" }],
+  ["America/Vancouver", { since: Date.parse("2026-11-01T09:00:00Z"), timeZone: "Etc/GMT+7" }],
+  ["America/Edmonton", { since: Date.parse("2026-11-01T08:00:00Z"), timeZone: "Etc/GMT+6" }],
+  ["America/Inuvik", { since: Date.parse("2026-11-01T08:00:00Z"), timeZone: "Etc/GMT+6" }],
+  ["America/Winnipeg", { since: Date.parse("2026-11-01T07:00:00Z"), timeZone: "Etc/GMT+5" }],
+]);
+// Intl may preserve an alias in resolvedOptions().timeZone.
+const zoneAliases = new Map([
+  ["Canada/Pacific", "America/Vancouver"],
+  ["Canada/Mountain", "America/Edmonton"],
+  ["America/Yellowknife", "America/Edmonton"],
+  ["Canada/Central", "America/Winnipeg"],
+  ["America/Rainy_River", "America/Winnipeg"],
+]);
+function windowFormatter(timeZone: string) {
+  // Intl also accepts numeric offsets; the settings contract requires a name.
+  if (typeof timeZone !== "string" || !timeZone || /^[+-]/.test(timeZone)) throw new RangeError("Invalid maintenance time zone");
+  return new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short", hour: "numeric", hourCycle: "h23" });
 }
 
 export function normalizeMaintenanceWindow(value: unknown): MaintenanceWindow | null {
@@ -27,19 +44,23 @@ export function normalizeMaintenanceWindow(value: unknown): MaintenanceWindow | 
     || !w.weekdays.every(d => Number.isInteger(d) && d >= 1 && d <= 7)
     || !Number.isInteger(w.startHour) || !Number.isInteger(w.endHour)
     || w.startHour < 0 || w.endHour > 24 || w.startHour >= w.endHour) return null;
-  if (!windowZone(w.timeZone)) return null;
+  try { windowFormatter(w.timeZone); }
+  catch (error) {
+    if (error instanceof RangeError) return null;
+    throw error;
+  }
   return { timeZone: w.timeZone, weekdays: [...new Set(w.weekdays)].sort((a, b) => a - b), startHour: w.startHour, endHour: w.endHour };
 }
 
 function windowPredicate(window: MaintenanceWindow) {
-  const zone = windowZone(window.timeZone);
-  if (!zone) throw new RangeError("Invalid maintenance time zone");
+  const named = windowFormatter(window.timeZone);
+  const name = named.resolvedOptions().timeZone;
+  const permanent = permanentZones.get(zoneAliases.get(name) ?? name);
+  const corrected = permanent ? windowFormatter(permanent.timeZone) : named;
   return (at: number) => {
-    // Zone offsets are minutes west of UTC. Read UTC fields of the shifted
-    // instant so the process's own time zone never enters the calculation.
-    const local = new Date(at - zone.utcOffset(at) * 60_000);
-    const day = local.getUTCDay() || 7;
-    const hour = local.getUTCHours();
+    const parts = (permanent && at >= permanent.since ? corrected : named).formatToParts(at);
+    const day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(parts.find(p => p.type === "weekday")!.value) + 1;
+    const hour = Number(parts.find(p => p.type === "hour")!.value);
     return window.weekdays.includes(day) && hour >= window.startHour && hour < window.endHour;
   };
 }
