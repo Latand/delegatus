@@ -555,8 +555,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
     }
     decision = decideMerge(merge, view, required, now);
     if (read.refreshOf && merge.state === "merging" && decision.kind !== "merged" && !mergeEligible(read)) {
-      await commit(ports, read, live => {
-        if (live.refreshOf && !mergeEligible(live)) block(live, MERGE_REASONS.refreshReviewRequired, now);
+      await commit(ports, read, (currentMerge, current) => {
+        if (current.refreshOf && !mergeEligible(current)) block(currentMerge, MERGE_REASONS.refreshReviewRequired, now);
       });
       return;
     }
