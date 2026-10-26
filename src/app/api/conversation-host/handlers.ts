@@ -27,6 +27,7 @@ import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { ConversationMessage, DeliveryOutcome } from "@/lib/delivery";
+import type { ConversationActionResult } from "@/lib/conversation/actions";
 import type { StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import type { AccountChoiceActor } from "@/lib/accounts/accountOverrides";
@@ -88,6 +89,8 @@ interface SendResponse {
   operationId?: string;
   receipt?: { operationId: string; status: string };
 }
+
+type ConversationHostPostBody = SendResponse | ApiError | ConversationActionResult["body"];
 
 async function currentTranscriptHosts(dependencies: ConversationHostDependencies, files?: FileEntry[]) {
   const entries = files ?? (await dependencies.completedFileScan()).snapshot.files;
@@ -224,11 +227,11 @@ export async function conversationHostGET(req: NextRequest): Promise<NextRespons
   }
 }
 
-export function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<SendResponse | ApiError>>;
+export function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<ConversationHostPostBody>>;
 // HTTP mounts expose the one-argument signature; their framework context is
 // never an actor option. The explicit overload is for trusted in-process sends.
-export function conversationHostPOST(req: NextRequest): Promise<NextResponse<SendResponse | ApiError>>;
-export async function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<SendResponse | ApiError>> {
+export function conversationHostPOST(req: NextRequest): Promise<NextResponse<ConversationHostPostBody>>;
+export async function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<ConversationHostPostBody>> {
   const ingressAt = new Date().toISOString();
   const dependencies = conversationHostDependencies();
   const rejection = rejectCrossOrigin(req);
@@ -250,7 +253,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   // the synthetic request it built carries no session cookie.
   const inProcessPerson = trustedActor?.kind === "operator" || trustedActor?.kind === "member";
 
-  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
+  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -272,6 +275,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       model?: unknown;
       effort?: unknown;
       fast?: unknown;
+      serviceTier?: unknown;
       accountId?: unknown;
     };
   } catch {
