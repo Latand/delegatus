@@ -309,6 +309,8 @@ export interface McpToolCallContext {
   binding?: McpRequestBinding;
   /** Revalidate this invocation's native generation at the transport boundary. */
   assertCaller?: () => void;
+  /** Trusted authorization of full result identities, before display compaction. */
+  assertResult?: (result: McpToolResult) => void;
   /** Persist a newly created orchestrator recipient before its first send. */
   bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
@@ -2739,6 +2741,7 @@ export function createMcpToolService(
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
+        context.assertResult?.(result);
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         if (effectiveArgs.full !== true) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {

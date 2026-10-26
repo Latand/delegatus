@@ -150,17 +150,24 @@ test("transcript search suppresses global fallback and cross-workspace duplicate
   expect(scoped.stats).toBeUndefined();
 });
 
-test("compact project prefixes cannot disclose rows from a colliding foreign workspace", async () => {
+test("full result identities refuse colliding foreign and Unassigned projects before compaction", async () => {
   const local = `dir-${"a".repeat(32)}`, foreign = `dir-${"a".repeat(8)}${"b".repeat(24)}`;
-  placeProject(store, owner, local, W1); placeProject(store, owner, foreign, W2);
-  searchReply = { items: [{ project: local, snippet: "Our message" }, { project: foreign, snippet: "Foreign secret" }],
-    total: 2, strongTotal: 2, nextCursor: null, projectScope: { resolved: own },
-    stats: { conversationsIndexed: 2, messagesIndexed: 2, fieldsSearched: [], tokenizer: "unicode" } };
-  const compact = await call("search_transcripts", { query: "message" });
-  expect(compact).toMatchObject({ ok: true, items: [] });
-  const full = await call("search_transcripts", { query: "message", full: true, clientRequestId: "search-full" });
-  expect(full).toMatchObject({ ok: true, items: [{ project: local, snippet: "Our message" }] });
-  expect(JSON.stringify(full)).not.toContain("Foreign secret");
+  placeProject(store, owner, local, W1);
+  for (const workspace of [null, W2]) {
+    placeProject(store, owner, foreign, workspace);
+    for (const resolved of [own, foreign]) for (const full of [false, true]) {
+      searchReply = { items: [{ project: local, snippet: "Our message" }, { project: foreign, snippet: "Foreign secret" }],
+        total: 2, strongTotal: 2, nextCursor: null, projectScope: { resolved },
+        stats: { conversationsIndexed: 2, messagesIndexed: 2, fieldsSearched: [], tokenizer: "unicode" } };
+      const answer = await call("search_transcripts", { query: "message", full, clientRequestId: `collision-${workspace}-${resolved}-${full}` });
+      expect(answer).toMatchObject(REFUSED);
+      expect(JSON.stringify(answer)).not.toContain("Foreign secret");
+    }
+  }
+  placeProject(store, owner, foreign, null);
+  searchReply = { items: [{ project: local, snippet: "Our message" }], total: 1, strongTotal: 1, nextCursor: null, projectScope: { resolved: own } };
+  expect(await call("search_transcripts", { query: "message", clientRequestId: "permitted-compact" }))
+    .toMatchObject({ ok: true, items: [{ project: shortId(local), snippet: "Our message" }] });
 });
 
 test("member collection reads default to their project, and explicit sibling projects remain reachable", async () => {
@@ -269,6 +276,16 @@ test("an awaited read cannot disclose its result after membership changes", asyn
   const result = call("board_snapshot"); await started;
   store.removeWorkspaceMember(W1, member.id); release();
   expect(await result).toMatchObject(REFUSED);
+});
+
+test("revocation after raw result checks is rechecked before returning a compact answer", async () => {
+  let checks = 0;
+  const answer = await service.callTool("get_task", { taskId: "task_0" }, { assertResult() {
+    checks++;
+    queueMicrotask(() => store.removeWorkspaceMember(W1, member.id));
+  } });
+  expect(checks).toBe(1);
+  expect(answer).toMatchObject(REFUSED);
 });
 
 test("the real control retry rechecks membership before another HTTP request", async () => {

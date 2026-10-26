@@ -983,6 +983,8 @@ a caller can explicitly select another project in the same workspace.
 Installation-wide tools refuse for a member-bound caller. Checks repeat at
 binding and HTTP dispatch, inside task writes and before a read result is
 returned. Unknown or inaccessible targets disclose no resource content.
+Full result identities are checked before display compaction, so a foreign or
+Unassigned project's short prefix cannot impersonate an allowed project.
 Transcript search discards the unscoped fallback and installation-wide corpus
 and duplicate metadata.
 

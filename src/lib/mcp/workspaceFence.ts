@@ -175,7 +175,28 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         return value;
       };
       return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
-        const result = await service.callTool(tool, args, context);
+        const result = await service.callTool(tool, args, { ...context, assertResult(answer) {
+          context?.assertResult?.(answer);
+          assert();
+          if (!answer.ok) return;
+          if (tool === "search_transcripts") {
+            const scope = answer.projectScope as { resolved?: string } | undefined;
+            // The outer fence discards an unscoped search fallback wholesale.
+            if (!scope?.resolved) return;
+            if (!allowed(scope.resolved)) denied();
+          }
+          // A shortened foreign key can collide with an allowed key, including
+          // an Unassigned project absent from the workspace directory. Judge
+          // every row while the core still holds its full identity.
+          const seen = new WeakSet<object>();
+          const visit = (value: unknown): void => {
+            if (!value || typeof value !== "object" || seen.has(value)) return;
+            seen.add(value);
+            if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied();
+            for (const item of Object.values(value)) visit(item);
+          };
+          visit(answer);
+        } });
         assert();
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
