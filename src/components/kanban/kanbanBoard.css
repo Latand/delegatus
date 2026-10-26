@@ -917,6 +917,7 @@
      second click mid-way reverses from where the box is.
    - The Stages sheet rises 8 px and fades in, and its scrim fades. The sheet
      unmounts on close, so the exit is instant.
+   - The agent window fades in where it stands; its exit is instant.
    A pressed button is 4 % smaller, so a press that began near its edge could
    end past it and the click would land on what is behind. While it is held,
    an invisible layer keeps its whole unpressed box: 2 % of each side plus the
@@ -932,6 +933,12 @@
     transition: height var(--motion-base) var(--ease-standard), content-visibility var(--motion-base) allow-discrete;
   }
   .kb .card .history[open]::details-content, .kb .draft-added[open]::details-content { height: auto; }
+  /* The agent window fades in, its field and scrim with it, once its reader
+     has come to rest (useReaderReady): opacity only, at its final box, so
+     nothing in it moves while it appears. A switch or a close inside the open
+     window keeps it on screen and does not fade it again. */
+  .kb .agent-window-layer[data-agent-window] > * { animation: kb-conversation-in var(--motion-base) var(--ease-standard); }
+  @keyframes kb-conversation-in { from { opacity: 0; } to { opacity: 1; } }
   .kb .gsheet-scrim { transition: opacity var(--motion-base) var(--ease-standard); }
   .kb .gsheet { transition: translate var(--motion-slow) var(--ease-standard), opacity var(--motion-base) var(--ease-standard); }
   @starting-style {
