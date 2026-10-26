@@ -5820,7 +5820,13 @@ describe("owner confirmation of one Telegram file send", () => {
 describe("start pipeline from conversation prototype v2", () => {
   browserTest("three variants, two frames each, desktop and phone, en and uk, light and dark", async () => {
     const out = path.resolve(".artifacts/start-pipeline-from-conversation-v2");
-    fs.rmSync(out, { recursive: true, force: true });
+    /* LLV_PROTO_FRAMES=2b-phone-uk,3b-desktop renders only the frames whose
+       name contains one of the terms (a fix round's re-look); the rest of the
+       directory stays, and a variant's review composite is rebuilt only when
+       both of its frames were drawn in this run. */
+    const only = (process.env.LLV_PROTO_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    if (!only.length) fs.rmSync(out, { recursive: true, force: true });
     fs.mkdirSync(path.join(out, "review"), { recursive: true });
     const dir = "docs/design/start-pipeline-from-conversation/prototype-v2";
     const postcss = (await import("postcss")).default;
@@ -5842,10 +5848,25 @@ describe("start pipeline from conversation prototype v2", () => {
           const frames: string[] = [];
           for (const frame of ["a", "b"] as const) {
             const name = `variant-${variant}${frame}-${device}-${lang}-${theme}`;
+            if (!wanted(name)) continue;
             const { context, page, pageErrors } = await openFixture(browser, `${served.base}?variant=${variant}&frame=${frame}&lang=${lang}&theme=${theme}`, viewport, theme, lang, "reduce", phone);
             try {
               /* The board under a loaded machine needs a while for its first paint. */
-              await page.waitForSelector("body[data-proto-ready]", { timeout: 180_000, state: "attached" });
+              await page.waitForSelector("body[data-proto-ready], body[data-proto-press]", { timeout: 180_000, state: "attached" });
+              /* The product's controls a frame opens (a ⋯, a fold, a stage pill)
+                 are pressed with a real pointer once the layout and the fonts
+                 have settled, the way an operator presses them: a scripted
+                 click leaves a focus ring on the menu's first row and can
+                 measure its anchor before the card has its final height. */
+              const presses = await page.evaluate(() => JSON.parse(document.body.dataset.protoPress ?? "[]") as string[]);
+              if (presses.length) {
+                await page.evaluate(() => document.fonts.ready);
+                await page.waitForTimeout(300);
+                for (const selector of presses) await page.click(selector, { timeout: 60_000 });
+                await page.waitForSelector("body[data-proto-ready]", { timeout: 60_000, state: "attached" });
+              }
+              /* The fixture shows the transcript's top row whole once the fonts are in. */
+              await page.waitForSelector("body[data-proto-aligned]", { timeout: 60_000, state: "attached" });
               /* The menus place themselves after a layout pass; the fonts settle with them. */
               await page.waitForTimeout(600);
               const reading = await page.evaluate((coarse) => {
@@ -5883,7 +5904,43 @@ describe("start pipeline from conversation prototype v2", () => {
                   }
                 }
                 const caption = document.querySelector("[data-proto-caption]")?.getBoundingClientRect();
-                return { ready: document.body.dataset.protoReady, clipped, offscreen, small, texts: texts.length, captionHeight: caption ? Math.round(caption.height) : null, scrollWidth: document.documentElement.scrollWidth, innerWidth };
+                /* Nothing drawn over the strip covers its words: a popover opened
+                   from a pill stands above the strip, never on it. A sheet is a
+                   modal over the whole screen, so a frame with one is exempt. */
+                const covered: string[] = [];
+                if (!document.querySelector('[aria-modal="true"]')) {
+                  for (const strip of document.querySelectorAll<HTMLElement>("[data-proto-strip]")) {
+                    const walker = document.createTreeWalker(strip, NodeFilter.SHOW_TEXT);
+                    while (walker.nextNode()) {
+                      const text = walker.currentNode.textContent?.trim();
+                      if (!text) continue;
+                      const range = document.createRange();
+                      range.selectNodeContents(walker.currentNode);
+                      for (const rect of range.getClientRects()) {
+                        if (rect.width === 0 || rect.height === 0) continue;
+                        for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+                          const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+                          if (hit && !strip.contains(hit)) covered.push(text);
+                        }
+                      }
+                    }
+                  }
+                }
+                /* The brief the composer holds is whole: its field grew to its text. */
+                const field = document.querySelector<HTMLTextAreaElement>("[data-composer-field]");
+                const briefCut = field && field.value.length > 0 ? field.scrollHeight > field.clientHeight + 1 : false;
+                /* A dialog's scrim is what stands over the agent window beside it. */
+                const dialog = document.querySelector<HTMLElement>("[data-proto-dialog]");
+                let scrim: { over: boolean; alpha: number } | null = null;
+                if (dialog) {
+                  const panel = dialog.querySelector<HTMLElement>('[role="dialog"]')!.getBoundingClientRect();
+                  /* Beside the panel on the desktop; above it on the phone, where the sheet-shaped panel spans the width. */
+                  const [x, y] = panel.left > 16 ? [Math.round(panel.left / 2), Math.round(innerHeight / 2)] : [Math.round(innerWidth / 2), Math.round(panel.top / 2)];
+                  const over = document.elementFromPoint(x, y) === dialog;
+                  const alpha = Number(/\/\s*([\d.]+)\)|,\s*([\d.]+)\)/.exec(getComputedStyle(dialog).backgroundColor)?.slice(1).find(Boolean) ?? (getComputedStyle(dialog).backgroundColor.startsWith("rgba") ? 0 : 1));
+                  scrim = { over, alpha };
+                }
+                return { ready: document.body.dataset.protoReady, clipped, offscreen, small, covered: [...new Set(covered)], briefCut, scrim, texts: texts.length, captionHeight: caption ? Math.round(caption.height) : null, scrollWidth: document.documentElement.scrollWidth, innerWidth };
               }, phone);
               await page.screenshot({ path: path.join(out, `${name}.png`) });
               frames.push(path.join(out, `${name}.png`));
@@ -5892,6 +5949,9 @@ describe("start pipeline from conversation prototype v2", () => {
                 ...reading.offscreen.map((text) => `${name}: off screen «${text}»`),
                 ...reading.small.map((text) => `${name}: small control ${text}`),
                 ...(reading.scrollWidth > reading.innerWidth ? [`${name}: the page scrolls sideways`] : []),
+                ...reading.covered.map((text) => `${name}: covered «${text}»`),
+                ...(reading.briefCut ? [`${name}: the composer cuts the brief`] : []),
+                ...(reading.scrim && !(reading.scrim.over && reading.scrim.alpha > 0.2) ? [`${name}: the dialog's scrim does not dim the window (${JSON.stringify(reading.scrim)})`] : []),
                 ...pageErrors.map((error) => `${name}: page error ${error}`),
               ];
               failures.push(...own);
@@ -5899,6 +5959,7 @@ describe("start pipeline from conversation prototype v2", () => {
             } finally { await context.close(); }
           }
           /* One image per variant and device for the review: the phone's two frames side by side, the desktop's one under the other. */
+          if (frames.length < 2) continue;
           const gap = 16;
           const canvas = theme === "dark" ? { r: 17, g: 18, b: 24, alpha: 1 } : { r: 244, g: 241, b: 236, alpha: 1 };
           const composite = sharp({

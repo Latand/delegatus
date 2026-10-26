@@ -4,3 +4,13 @@
    globals.css when it serves the fixture. */
 @import "../../../../src/app/globals.css";
 @source "./";
+
+/* Two rules the implementation carries into the product's own stylesheets
+   (kanbanBoard.css); they are here so the frames show the finished look.
+   1. The draft bubble reserves room for its Edit pill: the product's 64 px
+      fits «Edit», and «Змінити» with its icon is 86 px with the pill's right
+      offset, so the first line of a Ukrainian brief ran under the pill.
+   2. The board's popover has no destructive row yet; its title keeps the row
+      colour, so the danger utility on the button was overridden. */
+.kb .msg.user.draft .bubble { padding-right: 104px; }
+.kb .popover .row.danger .title { color: var(--color-danger); }

@@ -27,7 +27,7 @@
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { Check, GitBranch, Play, Workflow, X } from "lucide-react";
+import { Check, GitBranch, Pencil, Play, Workflow, X } from "lucide-react";
 
 import { setLocale, translate, type Locale, type MessageKey } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
@@ -39,6 +39,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { BranchPane } from "@/components/BranchPane";
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
+import { CHAT_TONE_DOT, CHAT_TONE_TEXT, chatStateBits } from "@/components/mobile/mobileChatState";
 import { MobileConversationMenu } from "@/components/mobile/MobileConversationMenu";
 import { MobileSheet, MobileSheetRow } from "@/components/mobile/MobileSheet";
 import { MobileTaskScreen } from "@/components/mobile/MobileTaskScreen";
@@ -198,19 +199,23 @@ const TYPED = L(
 );
 
 const role = (roleId: string, access: "read-only" | "read-write") => ({ roleId, engine: "claude", model: "claude-opus-5-5", effort: "high", access, promptScaffold: null });
+/* The «Build → Review» template as the product creates it: each stage id is
+   its role id (`deriveStageId`), so `stageDisplayName` names the stage by the
+   role in the operator's language («Білдер → Рев'юер»). The review's fail edge
+   returns to the builder stage, so no third stage carries an id the product
+   could only humanize in English («Reviewer fix»). */
 const STAGES = [
-  { id: "build", kind: "run", role: { roleId: "builder" }, prompt: `{{task}}\n\n${BRIEF}`, next: "review", effectiveRole: role("builder", "read-write") },
-  { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "{{task}}", next: null, onFail: { to: "fix", maxRounds: 2 }, effectiveRole: role("reviewer", "read-only") },
-  { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "{{prev.output}}", next: "review", effectiveRole: role("builder", "read-write") },
+  { id: "builder", kind: "run", role: { roleId: "builder" }, prompt: `{{task}}\n\n${BRIEF}`, next: "reviewer", effectiveRole: role("builder", "read-write") },
+  { id: "reviewer", kind: "run", role: { roleId: "reviewer" }, prompt: "{{task}}", next: null, onFail: { to: "builder", maxRounds: 2, onExhausted: "advance" }, effectiveRole: role("reviewer", "read-only") },
 ] as unknown as Pipeline["stages"];
-const [BUILD_NAME, REVIEW_NAME, FIX_NAME] = STAGES.map((stage) => stageDisplayName(t as never, stage)) as [string, string, string];
+const [BUILD_NAME, REVIEW_NAME] = STAGES.map((stage) => stageDisplayName(t as never, stage)) as [string, string];
 
 /* Variant 3, frame b: the draft lane the card holds before the start. */
 const DRAFT_LANE: Pipeline = {
   id: "pl_csv", task: TASK_TITLE, taskIds: ["t-csv"], project: PROJECT, repoDir: `/work/${PROJECT}`,
   worktreeDir: `/work/${PROJECT}/${WORKTREE_LABEL}`, branch: BRANCH, baseBranch: "main", baseRef: "main", lastPassedCommit: "",
   stages: STAGES, runs: [],
-  cursor: { stageId: "build", state: "pending", input: null, activatedBy: null },
+  cursor: { stageId: "builder", state: "pending", input: null, activatedBy: null },
   state: "draft", pausedState: null, stateDetail: null,
   srcPath: SOURCE_PATH, srcConversationId: SOURCE_ID,
   createdAt: iso(0.5), closedAt: null, updatedAt: iso(0.5),
@@ -241,20 +246,21 @@ if (VARIANT === 2) { try { sessionStorage.clear(); } catch { /* opaque origin */
 const WORDS = {
   start: L("Start pipeline", "Запустити пайплайн"),
   startWhy: L("The brief and the branch come from this conversation", "Опис задачі й гілка — з цієї розмови"),
-  fromConversation: L("From the conversation", "З розмови"),
   conversation: L("Conversation", "Розмова"),
   briefTaken: L(`Brief taken from 7 messages · ${DIRTY.length} uncommitted files stay in the checkout`, `Опис узято з 7 повідомлень · ${DIRTY.length} незакомічені файли лишаються в робочій копії`),
   runAsPipeline: L("Run as a pipeline", "Запустити як пайплайн"),
   runAsPipelineHint: L("This message becomes the pinned task; the stages are chosen next", "Це повідомлення стане закріпленою задачею; етапи — наступним кроком"),
-  pinned: L("this message becomes the pinned task", "це повідомлення стане закріпленою задачею"),
+  pinned: L("This message becomes the pinned task.", "Це повідомлення стане закріпленою задачею."),
   addStage: L("Stage", "Етап"),
-  enterStarts: L("Enter starts the pipeline instead of sending. Esc returns to a plain message.", "Enter запускає пайплайн замість відправки. Esc повертає до звичайного повідомлення."),
+  enterStarts: L("Enter starts the pipeline; Esc returns to a plain message.", "Enter запускає пайплайн; Esc повертає до звичайного повідомлення."),
   stageOf: (k: number, n: number) => L(`stage ${k} of ${n}`, `етап ${k} з ${n}`),
   removeStage: L("Remove this stage", "Прибрати цей етап"),
   fromConversationRow: L("Pipeline from conversation…", "Пайплайн з розмови…"),
   startDraft: L("Start", "Запустити"),
   startDraftLong: L("Start pipeline", "Запустити пайплайн"),
-  draftNote: L("Build's first message is the brief from the conversation. Edit it, then start.", "Перше повідомлення Build — опис із розмови. Поправте, якщо треба, і запускайте."),
+  firstMessage: L(`${BUILD_NAME}'s first message`, `Перше повідомлення: ${BUILD_NAME}`),
+  firstMessageWhy: L("The brief from the conversation · not sent yet", "Опис із розмови · ще не надіслано"),
+  edit: L("Edit", "Змінити"),
 };
 
 const ROLE_WHY: Record<string, string> = {
@@ -278,16 +284,16 @@ const CAPTIONS: Record<Variant, Record<Frame, string>> = {
   },
   2: {
     a: L("The brief is typed in the composer; the Send button's menu offers “Run as a pipeline”.", "Доручення набрано в композері; меню кнопки «Надіслати» пропонує «Запустити як пайплайн»."),
-    b: L("A stage chain appears above the composer: a pill opens its role, “+” adds a stage; Enter starts.", "Над композером стає ланцюжок етапів: плашка відкриває свою роль, «+» додає етап; Enter запускає."),
+    b: L("A stage chain appears above the composer: a pill opens its role, “+” adds a stage; the Send button becomes “Start pipeline”.", "Над композером стає ланцюжок етапів: плашка відкриває свою роль, «+» додає етап; кнопка «Надіслати» стає «Запустити пайплайн»."),
   },
   3: {
     a: L("The task card's ⋯ menu gets “Pipeline from conversation…”, naming the conversation and its branch.", "У меню картки задачі ⋯ — пункт «Пайплайн з розмови…» з назвою розмови і гілкою."),
-    b: L("A draft lane lands on the card: Build's first message is the brief from the conversation, editable in place; “Start” launches it.", "На картці з’являється чернетка пайплайна: перше повідомлення Build — опис із розмови, його можна правити; «Запустити» стартує."),
+    b: L(`A draft lane lands on the card: ${BUILD_NAME}'s first message is the brief from the conversation, editable in place; “Start” launches it.`, `На картці з’являється чернетка пайплайна: перше повідомлення етапу «${BUILD_NAME}» — опис із розмови, його можна правити; «Запустити» стартує.`),
   },
 };
-/* The phone's pipeline screen keeps the brief behind each stage's ⚙, so its caption says so. */
+/* The phone's pipeline screen shows the brief under the stages, so its caption says so. */
 const PHONE_CAPTIONS: Partial<Record<`${Variant}${Frame}`, string>> = {
-  "3b": L("The pipeline screen holds the draft lane: three stages with their roles, ⚙ opens Build's first message (the brief from the conversation), “Start pipeline” launches it.", "Екран пайплайна тримає чернетку: три етапи з ролями, ⚙ відкриває перше повідомлення Build (опис із розмови), «Запустити пайплайн» стартує."),
+  "3b": L(`The pipeline screen holds the draft lane: the stages with their roles, ${BUILD_NAME}'s first message (the brief from the conversation) with Edit under them, “Start pipeline” at the foot.`, `Екран пайплайна тримає чернетку: етапи з ролями, під ними перше повідомлення етапу «${BUILD_NAME}» (опис із розмови) з кнопкою «Змінити», внизу — «Запустити пайплайн».`),
 };
 const FRAME_LABEL: Record<Frame, string> = { a: L("a", "а"), b: L("b", "б") };
 
@@ -329,10 +335,22 @@ function useInsertedHost(find: () => { parent: Element; before: Element | null }
   return host;
 }
 
-/** Presses the product's own control once it exists: the reader's ⋯, the card's ⋯, a stage pill. */
+/** The product's own controls a frame presses, in order: the reader's ⋯, the
+    card's ⋯, the card's fold, a stage pill. The driver presses them with a real
+    pointer (`body[data-proto-press]` lists the selectors), the way an operator
+    does: a scripted `click()` moves focus with no pointer behind it, so
+    Chromium draws a focus ring on the menu's first item, and it fires before
+    the card's layout has settled, so the menu measures a stale anchor. Opened
+    by hand (`&press=self`), the fixture presses them itself. */
+const PRESS_SELF = params.get("press") === "self";
 function usePress(selector: string | null) {
   useEffect(() => {
     if (!selector) return;
+    if (!PRESS_SELF) {
+      const listed = JSON.parse(document.body.dataset.protoPress ?? "[]") as string[];
+      document.body.dataset.protoPress = JSON.stringify([...listed, selector]);
+      return;
+    }
     let done = false;
     const press = () => {
       const target = document.querySelector<HTMLElement>(selector);
@@ -346,6 +364,45 @@ function usePress(selector: string | null) {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [selector]);
+}
+
+/** A frame whose transcript is scrolled to its tail: the row at the top edge
+    is shown whole when the feed's bottom padding has the room, so no line is
+    cut under the window header. Runs once the frame is ready and the fonts
+    are in; the frame stays at its tail (the feed's tail magnet keeps a small
+    distance). */
+function useWholeTopRow() {
+  useEffect(() => {
+    let cancelled = false;
+    const align = () => {
+      for (const scroller of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+        const box = scroller.getBoundingClientRect();
+        const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+        let cut = 0;
+        let lastBottom = box.top;
+        while (walker.nextNode()) {
+          if (!walker.currentNode.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(walker.currentNode);
+          for (const rect of range.getClientRects()) {
+            if (rect.height === 0) continue;
+            if (rect.top < box.top && rect.bottom > box.top) cut = Math.max(cut, box.top - rect.top);
+            if (rect.bottom <= box.bottom) lastBottom = Math.max(lastBottom, rect.bottom);
+          }
+        }
+        const slack = box.bottom - lastBottom;
+        if (cut > 0 && cut <= slack) scroller.scrollTop -= Math.ceil(cut);
+      }
+      document.body.dataset.protoAligned = "";
+    };
+    const whenReady = () => {
+      if (cancelled) return;
+      if (!document.body.dataset.protoReady) { requestAnimationFrame(whenReady); return; }
+      void document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => { if (!cancelled) align(); })));
+    };
+    whenReady();
+    return () => { cancelled = true; };
+  }, []);
 }
 
 /** The driver waits for this: the frame's defining element is on screen. */
@@ -455,20 +512,20 @@ function TemplatePickerFromConversation() {
     <div data-pipeline-picker-state="ready" data-proto-dialog="" className={`fixed inset-0 ${Z.modal} flex items-end justify-center bg-black/40 sm:items-center`} role="presentation">
       <div role="dialog" aria-modal="true" aria-label={t("pipelineTemplates.title")} data-proto-new="" className="w-full max-w-[460px] rounded-t-surface bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 sm:rounded-surface sm:pb-3">
         <div className="mb-1 flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="text-title font-bold text-primary">{t("pipelineTemplates.title")}</div>
-            <div className="text-ui text-muted">{WORDS.fromConversation}</div>
-          </div>
+          <div className="min-w-0 flex-1 text-title font-bold text-primary">{t("pipelineTemplates.title")}</div>
           <button type="button" aria-label={t("common.close")} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
+        {/* Where the picker's repository field stands: the conversation, its title whole on its own line, its branch under it. */}
         <div className="mb-2 flex flex-col gap-1">
           <span className="text-label font-semibold text-secondary">{WORDS.conversation}</span>
-          <div className="flex min-h-11 min-w-0 items-center gap-2 rounded-control border border-border bg-canvas px-3" data-proto-source="">
+          <div className="flex min-h-11 min-w-0 items-center gap-2 rounded-control border border-border bg-canvas px-3 py-1.5" data-proto-source="">
             <span className="h-2 w-2 shrink-0 rounded-full bg-success" aria-hidden />
-            <span className="min-w-0 flex-1 truncate text-ui font-semibold text-primary">{SOURCE_TITLE}</span>
-            <BranchChip />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="min-w-0 text-ui font-semibold leading-snug text-primary">{SOURCE_TITLE}</span>
+              <span className="flex min-w-0"><BranchChip className="min-w-0 max-w-full" /></span>
+            </span>
           </div>
         </div>
         <div className="mb-2 flex min-h-8 items-center gap-2 text-ui font-semibold text-muted" aria-live="polite">
@@ -509,11 +566,20 @@ function TemplatePickerFromConversation() {
 /* ---------- variant 2: the Send menu and the chain over the composer ---------- */
 
 const findSendButton = () => document.querySelector("[data-composer-send]");
+const findComposerForm = () => document.querySelector("[data-conversation-body] form") ?? document.querySelector("form:has([data-composer-field])");
 
-/** The composer's own Send menu (ComposerBar.tsx `ComposerMenu`), with the new action among its rows. */
-function SendMenuWithPipeline() {
+/** The composer's own Send menu (ComposerBar.tsx `ComposerMenu`), with the new
+    action among its rows, its right edge on the composer's (over the Send
+    button the transcript's timestamps poked out beside it). On the desktop it
+    opens where the product opens it, over the Send button; on the phone the
+    typed brief is right above that button, so the menu opens over the
+    composer's top edge instead and the brief stays readable while the operator
+    chooses. */
+function SendMenuWithPipeline({ phone }: { phone: boolean }) {
   const rect = useRect(findSendButton);
-  if (!rect) return null;
+  const form = useRect(findComposerForm);
+  if (!rect || !form) return null;
+  const top = phone ? form.top : rect.top;
   return (
     <div data-proto-new="" data-proto-send-menu="">
       <ComposerMenu
@@ -523,66 +589,125 @@ function SendMenuWithPipeline() {
           { id: "start-pipeline", label: WORDS.runAsPipeline, description: WORDS.runAsPipelineHint, icon: Workflow, onSelect: () => {} },
         ]}
         onClose={() => {}}
-        position={{ bottom: Math.round(window.innerHeight - rect.top + 6), right: Math.round(window.innerWidth - rect.right) }}
+        position={{ bottom: Math.round(window.innerHeight - top + 6), right: Math.round(window.innerWidth - form.right) }}
         owner={document}
       />
     </div>
   );
 }
 
+/** Variant 2b: once «Run as a pipeline» is on, the composer's own Send button
+    says what Enter now does. The product's button is kept (its slot, its
+    fill, its hint); the prototype adds the words beside its arrow, the way the
+    phone's wide slots («Queue», «Respawn») carry theirs. */
+function SendAsStart({ phone }: { phone: boolean }) {
+  useEffect(() => {
+    let labelled: HTMLElement | null = null;
+    const apply = () => {
+      const button = document.querySelector<HTMLButtonElement>("[data-composer-send]");
+      if (!button || button.querySelector("[data-proto-send-label]")) return Boolean(button);
+      const visual = phone ? button.querySelector<HTMLElement>("[data-composer-send-visual]") : null;
+      const label = document.createElement("span");
+      label.dataset.protoSendLabel = "";
+      label.dataset.protoNew = "";
+      label.className = phone ? "pr-1 text-ui font-semibold" : "pl-1.5 pr-1 text-ui font-semibold";
+      /* The phone's toolbar row holds the model chip, the clip and the mic beside it: the short word. */
+      label.textContent = phone ? WORDS.startDraft : WORDS.start;
+      (visual ?? button).append(label);
+      if (phone) {
+        /* The product's wide slot: the 44 px target keeps its height and grows to its words. */
+        button.classList.remove("w-11");
+        button.classList.add("min-w-11", "px-0.5");
+        visual?.classList.add("px-2.5");
+      } else {
+        button.classList.add("gap-0.5", "pr-2.5");
+      }
+      button.setAttribute("aria-label", WORDS.start);
+      button.title = WORDS.start;
+      labelled = button;
+      return true;
+    };
+    if (apply()) return;
+    const observer = new MutationObserver(() => { if (apply()) observer.disconnect(); });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => { observer.disconnect(); labelled?.querySelector("[data-proto-send-label]")?.remove(); };
+  }, [phone]);
+  return null;
+}
+
 const CHAIN = [
-  { id: "build", name: BUILD_NAME, roleId: "builder", side: false },
-  { id: "review", name: REVIEW_NAME, roleId: "reviewer", side: false },
-  { id: "fix", name: FIX_NAME, roleId: "builder", side: true },
+  { id: "builder", name: BUILD_NAME, roleId: "builder" },
+  { id: "reviewer", name: REVIEW_NAME, roleId: "reviewer" },
 ] as const;
 const ROLES = ["builder", "reviewer", "verifier", "architect"] as const;
 /** A 44 px hit area on a 22 px pill: the pill is `position: relative` (pipelineBlock.css). */
 const HIT = "after:absolute after:inset-x-0 after:-inset-y-[11px] after:content-['']";
 
-/** The chain over the composer: the pipeline block's own pills (pipelineBlock.css), each waiting, and a dashed «+». */
+/** The chain over the composer: the pipeline block's own pills (pipelineBlock.css),
+    each waiting, the review's fail edge as the «↺» glyph of the block's own
+    edge lines, and a dashed «+». On the desktop the heading, the pills and the note share one
+    line, so a popover opened above a pill covers none of the strip's words; the
+    phone stacks the heading and the pills (the Send menu's hint already said
+    the message becomes the pinned task, and the strip's height comes out of
+    the composer's budget, which has to keep the brief whole). */
 function ChainStrip({ phone, onPill }: { phone: boolean; onPill: (element: HTMLElement | null) => void }) {
-  return (
-    <div data-proto-new="" data-proto-strip="" className={`${phone ? "mx-3" : ""} mb-1.5 flex shrink-0 flex-col gap-1.5 rounded-control border border-border bg-sunken px-3 py-2`}>
-      <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-label font-semibold text-secondary">
-        <Workflow className="h-3.5 w-3.5 shrink-0 self-center text-accent" aria-hidden />
-        <span>{WORDS.runAsPipeline}</span>
-        <span className="font-normal text-muted">· {WORDS.pinned}</span>
-      </div>
-      {/* Each pill keeps the block's 22 px look; its hit area reaches 44 px through an invisible extension. */}
-      <div className="pblock" data-density="task" data-proto-chain="" data-proto-hit="44">
-        <div className="pb-pills">
-          {CHAIN.map((stage, index) => (
-            <span key={stage.id} className="pb-step">
-              {index ? <span className="pb-arrow" aria-hidden>{stage.side ? "↺" : "→"}</span> : null}
-              <button
-                type="button"
-                ref={stage.id === "review" ? onPill : undefined}
-                className={`pb-pill tone-idle waiting ${HIT}${stage.side ? " side" : ""}${stage.id === "review" ? " selected" : ""}`}
-                data-stage={stage.id}
-                aria-haspopup="dialog"
-                aria-expanded={stage.id === "review"}
-                title={`${stage.name} · ${roleNameById(t as never, stage.roleId)}`}
-              >
-                <span className="pmark" data-mark="ring" aria-hidden />
-                <span className="pb-name">{stage.name}</span>
-              </button>
-            </span>
-          ))}
-          <span className="pb-step">
-            <button type="button" className={`pb-pill tone-idle waiting more ${HIT}`} data-proto-add-stage="" aria-label={L("Add a stage", "Додати етап")}>
-              <span className="pb-name">+ {WORDS.addStage}</span>
+  const pills = (
+    <div className="pblock" data-density="task" data-proto-chain="" data-proto-hit="44">
+      <div className="pb-pills">
+        {CHAIN.map((stage, index) => (
+          <span key={stage.id} className="pb-step">
+            {index ? <span className="pb-arrow" aria-hidden>→</span> : null}
+            <button
+              type="button"
+              ref={stage.id === "reviewer" ? onPill : undefined}
+              className={`pb-pill tone-idle waiting ${HIT}${stage.id === "reviewer" ? " selected" : ""}`}
+              data-stage={stage.id}
+              aria-haspopup="dialog"
+              aria-expanded={stage.id === "reviewer"}
+              title={`${stage.name} · ${roleNameById(t as never, stage.roleId)}`}
+            >
+              <span className="pmark" data-mark="ring" aria-hidden />
+              <span className="pb-name">{stage.name}</span>
             </button>
+            {/* The review's fail edge, the glyph the block's own edge lines use («↺ …»). */}
+            {stage.id === "reviewer" ? <span className="pb-arrow" aria-hidden title={t("kanban.loopRest", { from: REVIEW_NAME, to: BUILD_NAME, count: 2 })}>↺</span> : null}
           </span>
-        </div>
+        ))}
+        <span className="pb-step">
+          <button type="button" className={`pb-pill tone-idle waiting more ${HIT}`} data-proto-add-stage="" aria-label={L("Add a stage", "Додати етап")}>
+            <span className="pb-name">+ {WORDS.addStage}</span>
+          </button>
+        </span>
       </div>
-      <span className="text-caption text-muted">{WORDS.enterStarts}</span>
+    </div>
+  );
+  const heading = (
+    <span className="flex min-w-0 items-center gap-1.5 text-label font-semibold text-secondary">
+      <Workflow className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+      <span className="whitespace-nowrap">{WORDS.runAsPipeline}</span>
+    </span>
+  );
+  if (phone) {
+    return (
+      <div data-proto-new="" data-proto-strip="" className="mx-3 mb-1.5 flex shrink-0 flex-col gap-1.5 rounded-control border border-border bg-sunken px-3 py-2">
+        {heading}
+        {pills}
+      </div>
+    );
+  }
+  return (
+    <div data-proto-new="" data-proto-strip="" className="mb-1.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-border bg-sunken px-3 py-1.5">
+      {heading}
+      {/* The block sizes itself from its container, so its slot is the row's remaining width. */}
+      <div className="min-w-[320px] flex-1">{pills}</div>
+      <span className="ml-auto text-caption text-muted">{WORDS.pinned} {WORDS.enterStarts}</span>
     </div>
   );
 }
 
 /** The role rows of one pill: the board's popover on the desktop (kanbanMenus.tsx), a sheet on the phone. */
 function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | null }) {
-  const title = `${REVIEW_NAME} · ${WORDS.stageOf(2, 3)}`;
+  const title = `${REVIEW_NAME} · ${WORDS.stageOf(2, CHAIN.length)}`;
   /* The pill stands inside the board, whose `.kb` scopes the popover's styles. */
   const scope = anchor?.closest(".kb") ?? null;
   if (phone) {
@@ -615,7 +740,7 @@ function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | n
   return createPortal(
     <KanbanPopover anchor={anchor} within={anchor.closest<HTMLElement>("[data-proto-strip]")} label={title} onClose={() => {}} initialFocus="[aria-checked='true']">
       <div data-proto-new="" data-proto-roles="">
-        <div className="head">{REVIEW_NAME} <span className="n">· {WORDS.stageOf(2, 3)}</span></div>
+        <div className="head">{REVIEW_NAME} <span className="n">· {WORDS.stageOf(2, CHAIN.length)}</span></div>
         {ROLES.map((roleId) => (
           <button key={roleId} type="button" role="menuitemradio" aria-checked={roleId === "reviewer"} className="row w-full text-left">
             <span className="t">
@@ -626,7 +751,8 @@ function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | n
           </button>
         ))}
         <div className="sep my-1 h-px bg-border" role="separator" />
-        <button type="button" role="menuitem" className="row w-full text-left text-danger">
+        {/* The destructive row in the board's danger colour (`.row.danger`, prototype.css). */}
+        <button type="button" role="menuitem" className="row danger w-full text-left">
           <span className="t"><span className="title">{WORDS.removeStage}</span></span>
         </button>
       </div>
@@ -635,7 +761,10 @@ function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | n
   );
 }
 
-/** Variant 2b: the strip goes over the composer's form, and the review pill's choice opens. */
+/** Variant 2b: the strip goes over the composer's form, the Send button says
+    «Start pipeline», and the review pill's choice is open: the board's popover
+    on the desktop, the sheet on the phone (it covers the strip it opened from,
+    and names the pill in its title). */
 function ChainOverComposer({ phone }: { phone: boolean }) {
   const host = useInsertedHost(findComposerSpot);
   const [pill, setPill] = useState<HTMLElement | null>(null);
@@ -643,13 +772,13 @@ function ChainOverComposer({ phone }: { phone: boolean }) {
   return (
     <>
       {createPortal(<ChainStrip phone={phone} onPill={setPill} />, host)}
-      {/* The phone's role sheet would cover the strip it opens from, so the phone frame shows the strip. */}
-      {phone ? null : <RoleChoice phone={phone} anchor={pill} />}
+      <SendAsStart phone={phone} />
+      <RoleChoice phone={phone} anchor={pill} />
     </>
   );
 }
 function findComposerSpot() {
-  const form = document.querySelector("[data-conversation-body] form") ?? document.querySelector("form:has([data-composer-field])");
+  const form = findComposerForm();
   return form ? { parent: form.parentElement!, before: form } : null;
 }
 
@@ -672,11 +801,41 @@ function findLaneHeadSpot() {
   return tail ? { parent: tail, before: tail.firstElementChild } : null;
 }
 
+/** Phone 3b: the brief the start launches, under the stage list, as the
+    screen's own sections are drawn (the linked-tasks section's heading and
+    row shapes): the first message's text, whole, and the product's Edit. */
+function PhoneBriefSection() {
+  const host = useInsertedHost(findPhoneBriefSpot, "div");
+  if (!host) return null;
+  return createPortal(
+    <section data-proto-new="" data-proto-brief="" className="flex shrink-0 flex-col gap-1.5">
+      <h3 className="flex min-h-[30px] items-center gap-1.5 text-ui font-semibold text-secondary">{WORDS.firstMessage}</h3>
+      <div className="flex flex-col gap-2 rounded-[12px] bg-quiet px-3 py-2.5 ring-1 ring-inset ring-border">
+        <p className="m-0 whitespace-pre-line text-body leading-[1.4] text-primary">{BRIEF}</p>
+        <div className="flex min-h-11 items-center gap-2">
+          <span className="min-w-0 flex-1 text-label text-muted">{WORDS.firstMessageWhy}</span>
+          <button type="button" className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-control border border-border bg-card px-3 text-ui font-semibold text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+            {WORDS.edit}
+          </button>
+        </div>
+      </div>
+    </section>,
+    host,
+  );
+}
+/** After the stage list, before the screen's other sections. */
+function findPhoneBriefSpot() {
+  const body = document.querySelector("[data-mobile2-pipeline-body]");
+  const block = body?.querySelector('[data-pipeline="pl_csv"]');
+  const top = block ? [...body!.children].find((child) => child.contains(block)) ?? null : null;
+  return body && top ? { parent: body, before: top.nextElementSibling } : null;
+}
+
 /** Phone 3b: the pipeline screen's foot carries the start, the way the task screen's foot carries «+ Agent». */
 function PhoneLaneStart() {
   return (
-    <div data-proto-new="" data-proto-start-dock="" className="flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
-      <p className="m-0 text-label text-muted">{WORDS.draftNote}</p>
+    <div data-proto-new="" data-proto-start-dock="" className="flex shrink-0 flex-col border-t border-border bg-card px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
       <button type="button" className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-control bg-brand px-4 text-body font-semibold text-on-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
         <Play className="h-4 w-4" aria-hidden />
         {WORDS.startDraftLong}
@@ -696,10 +855,10 @@ function DesktopScreen() {
       : null,
   );
   /* The unfolded card draws its lane at task density, whose waiting pills open their draft panel. */
-  usePress(VARIANT === 3 && FRAME === "b" ? '[data-pipeline="pl_csv"][data-density="task"] button.pb-pill[data-stage="build"]' : null);
+  usePress(VARIANT === 3 && FRAME === "b" ? '[data-pipeline="pl_csv"][data-density="task"] button.pb-pill[data-stage="builder"]' : null);
   useReady(
     FRAME === "a" ? (VARIANT === 2 ? "[data-testid='composer-send-menu']" : "[data-proto-row]")
-      : VARIANT === 1 ? "[data-proto-dialog]" : VARIANT === 2 ? "[data-proto-roles]" : "[data-draft-stage='build'] .bubble",
+      : VARIANT === 1 ? "[data-proto-dialog]" : VARIANT === 2 ? "[data-proto-roles]" : "[data-draft-stage='builder'] .bubble",
   );
   return (
     <div className="flex h-dvh min-h-0 flex-col bg-canvas text-primary" data-proto-screen={`${VARIANT}${FRAME}`}>
@@ -726,7 +885,7 @@ function DesktopScreen() {
       </div>
       {VARIANT === 1 && FRAME === "a" ? <DesktopMenuRow label={WORDS.start} why={WORDS.startWhy} find={findReaderMenuSpot} /> : null}
       {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation /> : null}
-      {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline /> : null}
+      {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline phone={false} /> : null}
       {VARIANT === 2 && FRAME === "b" ? <ChainOverComposer phone={false} /> : null}
       {VARIANT === 3 && FRAME === "a" ? <DesktopMenuRow label={WORDS.fromConversationRow} why={<>{SOURCE_TITLE} · <span className="whitespace-nowrap">{BRANCH}</span></>} find={findCardMenuSpot} /> : null}
       {VARIANT === 3 && FRAME === "b" ? <LaneStart /> : null}
@@ -740,14 +899,25 @@ function PhoneChat() {
   const noop = () => undefined;
   useReady(
     FRAME === "a" ? (VARIANT === 2 ? "[data-testid='composer-send-menu']" : "[data-proto-row]")
-      : VARIANT === 1 ? "[data-proto-dialog]" : "[data-proto-strip]",
+      : VARIANT === 1 ? "[data-proto-dialog]" : "[data-proto-roles]",
   );
+  /* The bar's state word is the product's own (`chatStateBits`, as the chat
+     screen's bar and the conversation sheet read it), so the bar and the sheet agree. */
+  const bits = chatStateBits(t as never, SOURCE, { nowMs: NOW_MS });
   return (
     <div data-testid="mobile-chat-shell" className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden overflow-x-clip bg-canvas text-primary">
       <MobileShell
         screen="chat"
         screenId={SOURCE_ID}
-        title={<MobileBarTitle meta={<span className="truncate text-label text-muted">{L("idle · 11 min", "чекає · 11 хв")} · Opus 5.5 · high</span>}>{SOURCE_TITLE}</MobileBarTitle>}
+        title={(
+          <MobileBarTitle meta={(
+            <span className="flex min-w-0 items-center gap-1 truncate text-label text-muted">
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]}`} aria-hidden />
+              <span className={`truncate ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+              <span className="shrink-0">· Opus 5.5 · high</span>
+            </span>
+          )}>{SOURCE_TITLE}</MobileBarTitle>
+        )}
         back
         renderSheet={() => null}
       >
@@ -760,7 +930,7 @@ function PhoneChat() {
         </>
       ) : null}
       {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation /> : null}
-      {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline /> : null}
+      {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline phone /> : null}
       {VARIANT === 2 && FRAME === "b" ? <ChainOverComposer phone /> : null}
     </div>
   );
@@ -776,6 +946,7 @@ function PhoneTask() {
         <div className="flex min-h-0 flex-1 flex-col">
           <MobilePipelineScreen pipeline={DRAFT_LANE} files={FILES} tasks={TASKS} now={NOW} onOpenConversation={noop} cameFromTask="t-csv" />
         </div>
+        <PhoneBriefSection />
         <PhoneLaneStart />
       </div>
     );
@@ -817,6 +988,7 @@ function PhoneScreen() {
 function Screen() {
   const phone = useIsMobile();
   useLayoutEffect(() => { document.body.style.margin = "0"; }, []);
+  useWholeTopRow();
   return phone ? <PhoneScreen /> : <DesktopScreen />;
 }
 
