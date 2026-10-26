@@ -65,6 +65,10 @@ export function assembleReplay(stateDir: string, output: string) {
     fs.copyFileSync(snapshot, path.join(destination, "source.sqlite")); fs.chmodSync(path.join(destination, "source.sqlite"), 0o600);
     const items: { id: string; stratum: string; digest: string }[] = [], dropped: { id: string; reason: string }[] = [];
     for (const p of pipelines.sort((a, b) => hash(a.id).localeCompare(hash(b.id)))) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(p.id)) {
+        dropped.push({ id: p.id, reason: "unsafe item id" });
+        continue;
+      }
       const attempts = p.runs.flatMap(run => run.attempts.map(a => ({ ...a, stage: p.stages.find(s => s.id === run.stageId)! }))).filter(a => a.stage);
       const role = (a: typeof attempts[number]) => a.effectiveRole?.roleId ?? a.stage.role?.roleId;
       const first = attempts.filter(a => role(a) === "builder" && !a.stage.onFail && !a.activatedBy && Number.isFinite(time(a.startedAt))).sort((a, b) => time(a.startedAt) - time(b.startedAt))[0];
@@ -77,8 +81,8 @@ export function assembleReplay(stateDir: string, output: string) {
       const fix = attempts.filter(a => role(a) === "builder" && a.activatedBy?.edge === "fail" && a.activatedBy.stageId === review.stage.id && a.activatedBy.attempt === review.n).sort((a, b) => time(a.startedAt) - time(b.startedAt))[0];
       const request = fix && requests.find(r => r.pipelineId === p.id && r.stageId === fix.stage.id && r.attempt === fix.n);
       if (!request || !(request.ruleIds.length || request.rewrote)) continue;
+      let createdFolder: string | undefined;
       try {
-        if (!/^[a-zA-Z0-9_-]+$/.test(p.id)) throw Error("unsafe item id");
         if (!first.definition?.prompt || !p.task || !p.spec || !first.effectiveRole?.promptScaffold) throw Error("frozen input missing");
         if (!Number.isFinite(time(request.at)) || time(request.at) <= time(review.completedAt)) throw Error("lesson chronology unavailable");
         const matchesSource = (source: RoleMemoryRule["source"] | undefined) => source && "pipelineId" in source && source.pipelineId === p.id && source.stageId === fix!.stage.id && source.attempt === fix!.n;
@@ -131,6 +135,7 @@ export function assembleReplay(stateDir: string, output: string) {
           ruleDigest: hash(learnedRuleLines), blockDigest: hash(learnedRuleBlock), testGuidance: guidance,
           engineMemory: "off in every replay arm; historical files unavailable", rendering: "current renderer, frozen role and definition; inline replay" };
         const folder = path.join(destination, "items", p.id); fs.mkdirSync(folder, { mode: 0o700 });
+        createdFolder = folder;
         // A temporary bare repository supplies a named ref without modifying the source repository.
         const bare = path.join(scratch, "base");
         fs.rmSync(bare, { recursive: true, force: true });
@@ -144,7 +149,7 @@ export function assembleReplay(stateDir: string, output: string) {
         write(`oracle/${p.id}.json`, { findings: matching, rules: after, review: { stage: review.stage.id, attempt: review.n }, reproductionFormat: "verbatim finding; not executed or inferred" });
         items.push({ id: p.id, stratum, digest: hash(JSON.stringify(frozenInput)) });
       } catch (error) {
-        fs.rmSync(path.join(destination, "items", p.id), { recursive: true, force: true });
+        if (createdFolder) fs.rmSync(createdFolder, { recursive: true, force: true });
         const reason = error instanceof Error && /^(unsafe|frozen|lesson|no finding|rule text|scope|outside|relay|unresolved|unfrozen)/.test(error.message) ? error.message : "base commit or bundle unavailable";
         dropped.push({ id: p.id, reason });
       }

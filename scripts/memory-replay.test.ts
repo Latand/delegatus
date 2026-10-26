@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { Database } from "bun:sqlite";
 
 const script = path.resolve(import.meta.dir, "memory-replay.ts");
-function fixture(scenario = "complete") {
+function fixture(scenario = "complete", rejectedId = "../../sentinel") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-replay-test-"));
   try {
     const repo = path.join(root, "repo"), state = path.join(root, "state"), out = path.join(root, "out");
@@ -47,16 +47,32 @@ function fixture(scenario = "complete") {
     put("pipelines", "live", { ...pipeline, id: "live", task: "Read https://example.invalid/task" });
     put("role_memory", "live-request", { ...memory[4], pipelineId: "live", ruleIds: ["live-new"] });
     put("role_memory", "live-new", { ...memory[3], id: "live-new", source: { pipelineId: "live", stageId: "fix", attempt: 1 } });
+    if (scenario === "unsafe-id") {
+      put("pipelines", "unsafe", { ...pipeline, id: rejectedId });
+      put("role_memory", "unsafe-request", { ...memory[4], pipelineId: rejectedId });
+    }
     memory.forEach((row, i) => put("role_memory", String(i), row)); db.close();
+    const sentinel = path.join(root, "sentinel");
+    fs.mkdirSync(sentinel);
+    const protectedFiles = [sentinel, state, repo].map(dir => path.join(dir, "keep.txt"));
+    for (const file of protectedFiles) fs.writeFileSync(file, "existing data\n");
     const before = fs.readFileSync(path.join(state, "state.sqlite"));
-    execFileSync(process.execPath, [script, "--state-dir", state, "--output", out], { env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, LLV_STATE_DIR: state } });
+    const gitConfig = path.join(root, "gitconfig");
+    fs.writeFileSync(gitConfig, scenario === "bundle-failure" ? "[protocol \"file\"]\n\tallow = never\n" : "");
+    execFileSync(process.execPath, [script, "--state-dir", state, "--output", out], { env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, LLV_STATE_DIR: state, GIT_CONFIG_GLOBAL: gitConfig } });
+    for (const file of protectedFiles) expect(fs.readFileSync(file, "utf8")).toBe("existing data\n");
+    expect(fs.readFileSync(path.join(state, "state.sqlite"))).toEqual(before);
+    expect(git("rev-parse", "main")).toBe(base);
     const manifest = JSON.parse(fs.readFileSync(path.join(out, "manifest.json"), "utf8"));
-    if (scenario === "history" || scenario === "mismatch") {
+    if (scenario === "history" || scenario === "mismatch" || scenario === "bundle-failure") {
       expect(manifest.items).toHaveLength(0); expect(manifest.dropped).toHaveLength(2);
-      expect(manifest.dropped.some((r: { reason: string }) => r.reason.includes(scenario === "history" ? "retained history" : "finding class"))).toBe(true);
+      const reason = scenario === "history" ? "retained history" : scenario === "mismatch" ? "finding class" : "base commit or bundle unavailable";
+      expect(manifest.dropped.some((r: { reason: string }) => r.reason.includes(reason))).toBe(true);
+      expect(fs.readdirSync(path.join(out, "items"))).toEqual([]);
       return;
     }
-    expect(manifest.items).toHaveLength(1); expect(manifest.dropped).toHaveLength(1);
+    expect(manifest.items).toHaveLength(1); expect(manifest.dropped).toHaveLength(scenario === "unsafe-id" ? 2 : 1);
+    if (scenario === "unsafe-id") expect(manifest.dropped).toContainEqual({ id: rejectedId, reason: "unsafe item id" });
     const input = JSON.parse(fs.readFileSync(path.join(out, "items", "lane", "input.json"), "utf8"));
     expect(input.baseCommit).toBe(base); expect(input.message).toContain("Frozen relay");
     expect(input.rules.map((r: { text: string }) => r.text)).toEqual(["Original guidance"]);
@@ -64,7 +80,6 @@ function fixture(scenario = "complete") {
     const oracle = JSON.parse(fs.readFileSync(path.join(out, "oracle", "lane.json"), "utf8"));
     expect(oracle.findings[0].reproduction).toContain("run shape probe");
     expect(oracle.rules[0].text).toBe("Validate every schema");
-    expect(fs.readFileSync(path.join(state, "state.sqlite"))).toEqual(before);
     execFileSync("git", ["bundle", "verify", path.join(out, "items", "lane", "base.bundle")], { cwd: repo, stdio: "pipe" });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
@@ -75,3 +90,9 @@ test("replay rejects a lesson with no matching finding class", () => fixture("mi
 test("replay freezes the rule at the lesson time before a later rewrite", () => fixture("rewrite"));
 
 test("replay resolves a rewrite from its attempt provenance after the lesson request", () => fixture("request-rewrite"));
+
+test.each(["../../sentinel", "../../state", "../../repo", "../oracle", "..", ".", ""])(
+  "replay preserves existing sibling and source directories when rejecting id %j",
+  id => fixture("unsafe-id", id),
+);
+test("replay removes its created item directory when bundling fails", () => fixture("bundle-failure"));
