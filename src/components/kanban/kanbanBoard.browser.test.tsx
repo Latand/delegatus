@@ -36662,8 +36662,7 @@ describe("pipeline from a PR or issue link", () => {
     ] as const;
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
-      for (const width of [390, 1280]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
-        const height = width === 390 ? 844 : 900;
+      for (const [width, height] of [[390, 844], [1000, 700], [1440, 900]] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
         const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "attach" ? entry.name : "picker"),
           { width, height }, scheme, lang, "reduce", width === 390);
         try {
@@ -36678,7 +36677,10 @@ describe("pipeline from a PR or issue link", () => {
             expect(await page.locator("[data-pipeline-link-task]").innerText()).toContain("Review the board's pull request flow on the phone");
           }
           if (entry.name === "fork") {
-            expect(await page.locator("[data-pipeline-link-fork]").innerText()).toContain("contributor/atlas");
+            /* The row names the fork once and shows no raw URL, on one line. */
+            const push = page.locator("[data-pipeline-link-push]");
+            expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: "contributor/atlas" }));
+            expect(await push.evaluate((node) => node.getClientRects().length === 1 && node.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(node).lineHeight))).toBe(true);
             expect(await page.locator("[data-pipeline-link-warning]").count()).toBe(1);
           }
           if (entry.name === "issue") expect(await page.locator("[data-pipeline-link-no-task]").count()).toBe(1);
@@ -36691,6 +36693,22 @@ describe("pipeline from a PR or issue link", () => {
             expect(await page.locator("[data-pipeline-link-attach-retry]").innerText()).toBe(translate(lang, "pipelineTemplates.retry"));
             expect(await page.locator("[data-pipeline-link-attach-skip]").innerText()).toBe(translate(lang, "pipelineLink.openDraft"));
             expect(await page.locator("[data-pipeline-link-input]").isDisabled()).toBe(true);
+            /* The alert sits under the link input, Retry is the filled button, and the heading is whole. */
+            const placed = await page.evaluate(() => {
+              const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+              const fill = (selector: string) => getComputedStyle(document.querySelector(selector)!).backgroundColor;
+              const heading = document.querySelector("[role=dialog] .text-title")!;
+              const range = document.createRange();
+              range.selectNodeContents(heading);
+              const scroller = document.querySelector("[data-pipeline-picker-scroll]")!.getBoundingClientRect();
+              return {
+                alertBelowInput: box("[data-pipeline-link-attach-failed]").top >= box("[data-pipeline-link-input]").bottom,
+                retryFilled: fill("[data-pipeline-link-attach-retry]") !== fill("[data-pipeline-link-attach-skip]"),
+                headingWhole: range.getBoundingClientRect().top >= scroller.top && range.getBoundingClientRect().bottom <= scroller.bottom,
+                alertVisible: box("[data-pipeline-link-attach-failed]").bottom <= scroller.bottom,
+              };
+            });
+            expect(placed).toEqual({ alertBelowInput: true, retryFilled: true, headingWhole: true, alertVisible: true });
           }
           if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
           if (entry.name === "rewritten") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: "contributor/atlas" }));
@@ -36700,8 +36718,9 @@ describe("pipeline from a PR or issue link", () => {
           const text = await scope.innerText();
           expect(text).not.toMatch(/pipelineLink\.|groupOverride\.|pipelineTemplates\./);
           /* The whole surface sits in the viewport, and no line inside it is cut sideways. */
-          const geometry = await scope.evaluate((root) => {
-            const box = root.getBoundingClientRect();
+          const geometry = await scope.evaluate((dialog) => {
+            const root = dialog.querySelector("[data-pipeline-picker-scroll]")!;
+            const box = dialog.getBoundingClientRect();
             const clipped = [...root.querySelectorAll("span, dd, dt, label, legend, div")]
               .filter((node) => node.children.length === 0 && (node.textContent ?? "").trim() && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).textOverflow !== "ellipsis")
               .map((node) => (node.textContent ?? "").slice(0, 60));
@@ -36713,12 +36732,23 @@ describe("pipeline from a PR or issue link", () => {
           expect(geometry.bottom).toBeLessThanOrEqual(height + 1);
           expect(geometry.clipped).toEqual([]);
           expect(pageErrors).toEqual([]);
+          /* On a desktop window the first two templates are whole on the first screen. */
+          if (entry.name === "pr" && width >= 1000) {
+            const whole = await page.evaluate(() => {
+              const scroller = document.querySelector("[data-pipeline-picker-scroll]")!.getBoundingClientRect();
+              return [...document.querySelectorAll("[role=dialog] button.min-h-11")].slice(0, 2).map((button) => {
+                const rect = button.getBoundingClientRect();
+                return rect.top >= scroller.top && rect.bottom <= scroller.bottom;
+              });
+            });
+            expect(whole).toEqual([true, true]);
+          }
           const screenshot = `${width}-${scheme}-${lang}-${entry.name}.png`;
           await page.screenshot({ path: path.join(out, screenshot) });
           /* A sheet taller than the phone scrolls: its end gets its own frame. */
           let end: string | null = null;
           if (geometry.scrollHeight > geometry.clientHeight + 1) {
-            await scope.evaluate((root) => { root.scrollTop = root.scrollHeight; });
+            await scope.evaluate((dialog) => { const root = dialog.querySelector("[data-pipeline-picker-scroll]")!; root.scrollTop = root.scrollHeight; });
             end = `${width}-${scheme}-${lang}-${entry.name}-end.png`;
             await page.screenshot({ path: path.join(out, end) });
           }

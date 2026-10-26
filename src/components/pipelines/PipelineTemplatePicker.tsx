@@ -79,6 +79,7 @@ export function PipelineTemplatePicker({
   const [answer, setAnswer] = useState<LinkAnswer | null>(null);
   const [taskChoice, setTaskChoice] = useState<{ source: PipelineLinkSource; taskId: string | null } | null>(null);
   const pasted = useRef(false);
+  const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const requestedRepo = repoInput.trim();
@@ -169,6 +170,16 @@ export function PipelineTemplatePicker({
     setState({ ...failed, error: failure, retrying: false });
   };
 
+  const attachFailed = state.phase === "attach-failed";
+  useEffect(() => {
+    if (!attachFailed) return;
+    /* The sheet is still scrolled from the template click: bring the heading and the alert back. */
+    const sheet = scroller.current;
+    if (!sheet) return;
+    sheet.scrollTop = 0;
+    sheet.querySelector("[data-pipeline-link-attach-failed]")?.scrollIntoView?.({ block: "nearest" });
+  }, [attachFailed]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || creating) return;
@@ -198,148 +209,152 @@ export function PipelineTemplatePicker({
         role="dialog"
         aria-modal="true"
         aria-label={t("pipelineTemplates.title")}
-        className="max-h-[100dvh] w-full max-w-[460px] overflow-y-auto overscroll-contain rounded-t-surface bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 sm:max-h-[calc(100dvh-2rem)] sm:rounded-surface sm:pb-3"
+        className="flex max-h-[100dvh] w-full max-w-[460px] flex-col overflow-hidden rounded-t-surface bg-card shadow-2 sm:max-h-[calc(100dvh-2rem)] sm:rounded-surface"
       >
-        <div className="mb-1 flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="text-title font-bold text-primary">{t("pipelineTemplates.title")}</div>
-            <div className="text-ui text-muted">{t("pipelineTemplates.subtitle")}</div>
+        <div
+          ref={scroller}
+          data-pipeline-picker-scroll
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-3"
+        >
+          <div className="mb-1 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-title font-bold text-primary">{t("pipelineTemplates.title")}</div>
+              <div className="text-ui text-muted">{t("pipelineTemplates.subtitle")}</div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={creating}
+              aria-label={t("common.close")}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={creating}
-            aria-label={t("common.close")}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <X className="h-4 w-4" aria-hidden />
-          </button>
-        </div>
-        <label className="mb-2 flex flex-col gap-1">
-          <span className="text-label font-semibold text-secondary">{t("pipelineTemplates.repoDir")}</span>
-          <input
-            value={shownRepoDir}
-            disabled={formLocked}
-            autoFocus={!repoDir.trim()}
-            onInput={(event) => {
-              const value = event.currentTarget.value;
-              setRepoInput(value);
-              setState(value.trim()
-                ? { phase: "checking" }
-                : { phase: "blocked", code: "missing", path: "" });
-            }}
-            className="h-11 w-full rounded-control border border-border bg-canvas px-3 text-ui font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
-          />
-        </label>
-        <div className="mb-2 flex min-h-8 items-center gap-2 text-ui font-semibold text-muted" aria-live="polite">
-          {state.phase === "checking" ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" aria-hidden />{t("pipelineTemplates.checking")}</> : null}
-          {state.phase === "ready" ? <span className="text-success">{t("pipelineTemplates.ready")}</span> : null}
-          {state.phase === "creating" ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" aria-hidden />{t("pipelineTemplates.creating")}</> : null}
-          {state.phase === "attach-failed" ? (
-            <span data-pipeline-link-attach-failed className="flex w-full flex-col gap-1.5 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger" role="alert">
-              <span className="min-w-0 break-words">{t("pipelineLink.attachFailed", { link: state.source.attachLink ?? "", error: state.error })}</span>
-              <span className="flex flex-wrap gap-2">
+          <label className="mb-2 flex flex-col gap-1">
+            <span className="text-label font-semibold text-secondary">{t("pipelineTemplates.repoDir")}</span>
+            <input
+              value={shownRepoDir}
+              disabled={formLocked}
+              autoFocus={!repoDir.trim()}
+              onInput={(event) => {
+                const value = event.currentTarget.value;
+                setRepoInput(value);
+                setState(value.trim()
+                  ? { phase: "checking" }
+                  : { phase: "blocked", code: "missing", path: "" });
+              }}
+              className="h-11 w-full rounded-control border border-border bg-canvas px-3 text-ui font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            />
+          </label>
+          <div className={`mb-2 flex min-h-8 items-center gap-2 text-ui font-semibold text-muted ${state.phase === "attach-failed" ? "hidden" : ""}`} aria-live="polite">
+            {state.phase === "checking" ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" aria-hidden />{t("pipelineTemplates.checking")}</> : null}
+            {state.phase === "ready" ? <span className="text-success">{t("pipelineTemplates.ready")}</span> : null}
+            {state.phase === "creating" ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" aria-hidden />{t("pipelineTemplates.creating")}</> : null}
+            {state.phase === "blocked" ? (
+              <span className="flex w-full items-start gap-2 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger" role="alert">
+                <span className="min-w-0 flex-1">{blockedMessage}</span>
                 <button
                   type="button"
-                  data-pipeline-link-attach-retry
-                  disabled={state.retrying}
-                  className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
-                  onClick={() => void retryAttach()}
+                  className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
+                  onClick={() => {
+                    // Retrying an empty input has no request to wait for (#404):
+                    // stay blocked instead of stranding a "checking" spinner.
+                    if (repoInput.trim()) setState({ phase: "checking" });
+                    setRetry((value) => value + 1);
+                  }}
                 >
                   {t("pipelineTemplates.retry")}
                 </button>
-                <button
-                  type="button"
-                  data-pipeline-link-attach-skip
-                  disabled={state.retrying}
-                  className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
-                  onClick={() => onCreated(state.pipeline)}
-                >
-                  {t("pipelineLink.openDraft")}
-                </button>
               </span>
-            </span>
-          ) : null}
-          {state.phase === "blocked" ? (
-            <span className="flex w-full items-start gap-2 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger" role="alert">
-              <span className="min-w-0 flex-1">{blockedMessage}</span>
-              <button
-                type="button"
-                className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
-                onClick={() => {
-                  // Retrying an empty input has no request to wait for (#404):
-                  // stay blocked instead of stranding a "checking" spinner.
-                  if (repoInput.trim()) setState({ phase: "checking" });
-                  setRetry((value) => value + 1);
-                }}
-              >
-                {t("pipelineTemplates.retry")}
-              </button>
-            </span>
-          ) : null}
-        </div>
-        <label className="mb-2 flex flex-col gap-1">
-          <span className="text-label font-semibold text-secondary">{t("pipelineLink.label")}</span>
-          <input
-            data-pipeline-link-input
-            value={linkInput}
+            ) : null}
+          </div>
+          <label className="mb-2 flex flex-col gap-1">
+            <span className="text-label font-semibold text-secondary">{t("pipelineLink.label")}</span>
+            <input
+              data-pipeline-link-input
+              value={linkInput}
+              disabled={formLocked}
+              inputMode="url"
+              spellCheck={false}
+              placeholder={t("pipelineLink.placeholder")}
+              onPaste={() => { pasted.current = true; }}
+              onInput={(event) => setLinkInput(event.currentTarget.value)}
+              className="h-11 w-full rounded-control border border-border bg-canvas px-3 text-ui font-semibold text-primary placeholder:font-normal placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            />
+          </label>
+          <LinkSourcePreview
+            link={link}
             disabled={formLocked}
-            inputMode="url"
-            spellCheck={false}
-            placeholder={t("pipelineLink.placeholder")}
-            onPaste={() => { pasted.current = true; }}
-            onInput={(event) => setLinkInput(event.currentTarget.value)}
-            className="h-11 w-full rounded-control border border-border bg-canvas px-3 text-ui font-semibold text-primary placeholder:font-normal placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            onTask={(taskId) => { if (link.phase === "resolved") setTaskChoice({ source: link.source, taskId }); }}
+            attachFailure={state.phase === "attach-failed" ? { link: state.source.attachLink ?? "", error: state.error, retrying: state.retrying, onRetry: () => void retryAttach(), onOpen: () => onCreated(state.pipeline) } : null}
+            scroller={scroller}
           />
-        </label>
-        <LinkSourcePreview link={link} disabled={formLocked} onTask={(taskId) => { if (link.phase === "resolved") setTaskChoice({ source: link.source, taskId }); }} />
-        <div className="flex flex-col gap-1">
-          {templates.map((template) => (
+          <div className="flex flex-col gap-1">
+            {templates.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                disabled={!ready}
+                onClick={() => void create(template)}
+                className="flex min-h-11 w-full flex-col justify-center gap-1 rounded-control px-3 py-2 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+              >
+                <span className="text-body font-semibold text-primary">{t(template.labelKey)}</span>
+                <span className="flex flex-wrap items-center gap-1" aria-hidden>
+                  {template.stages.map((stage, index) => (
+                    <span key={index} className="flex items-center gap-1">
+                      {index ? <span className="text-label font-bold text-strong">→</span> : null}
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-caption font-semibold ${
+                          stage.kind === "review-loop" ? "bg-accent-soft text-accent" : "bg-sunken text-secondary"
+                        }`}
+                      >
+                        {stage.kind === "review-loop" ? "⟳ " : ""}
+                        {stage.roleId || t("pipelineTemplates.noRole")}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              </button>
+            ))}
             <button
-              key={template.id}
               type="button"
               disabled={!ready}
-              onClick={() => void create(template)}
-              className="flex min-h-11 w-full flex-col justify-center gap-1 rounded-control px-3 py-2 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+              onClick={() => void create(null)}
+              className="flex min-h-11 w-full flex-col justify-center gap-0.5 rounded-control border border-dashed border-strong px-3 py-2 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
             >
-              <span className="text-body font-semibold text-primary">{t(template.labelKey)}</span>
-              <span className="flex flex-wrap items-center gap-1" aria-hidden>
-                {template.stages.map((stage, index) => (
-                  <span key={index} className="flex items-center gap-1">
-                    {index ? <span className="text-label font-bold text-strong">→</span> : null}
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-caption font-semibold ${
-                        stage.kind === "review-loop" ? "bg-accent-soft text-accent" : "bg-sunken text-secondary"
-                      }`}
-                    >
-                      {stage.kind === "review-loop" ? "⟳ " : ""}
-                      {stage.roleId || t("pipelineTemplates.noRole")}
-                    </span>
-                  </span>
-                ))}
-              </span>
+              <span className="text-body font-semibold text-primary">{t("pipelineTemplates.blank")}</span>
+              <span className="text-label text-muted">{t("pipelineTemplates.blankHint")}</span>
             </button>
-          ))}
-          <button
-            type="button"
-            disabled={!ready}
-            onClick={() => void create(null)}
-            className="flex min-h-11 w-full flex-col justify-center gap-0.5 rounded-control border border-dashed border-strong px-3 py-2 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
-          >
-            <span className="text-body font-semibold text-primary">{t("pipelineTemplates.blank")}</span>
-            <span className="text-label text-muted">{t("pipelineTemplates.blankHint")}</span>
-          </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
+type AttachFailure = { link: string; error: string; retrying: boolean; onRetry: () => void; onOpen: () => void };
+
+/** Where the lane pushes when that differs from the PR's own repository: a
+    fork, or a named remote other than origin. A raw URL names no remote. */
+function pushTarget(head: NonNullable<PipelineLinkSource["head"]>, t: TFunction): string | null {
+  const remote = head.remote !== "origin" && !/^[a-z][a-z0-9+.-]*:|^[^/\s]+@[^/\s]+:/i.test(head.remote) ? head.remote : null;
+  if (!head.fork && !remote) return null;
+  const place = head.fork ? t("pipelineLink.fork", { repository: head.repository }) : head.repository;
+  return remote ? `${place} · ${remote}` : place;
+}
+
 /**
  * What a pasted link resolved to: the repository, base and head the draft
  * will use, and the task it joins. Read-only apart from the task choice.
  */
-function LinkSourcePreview({ link, disabled, onTask }: { link: LinkState; disabled: boolean; onTask: (taskId: string | null) => void }) {
+function LinkSourcePreview({ link, disabled, onTask, attachFailure }: {
+  link: LinkState;
+  disabled: boolean;
+  onTask: (taskId: string | null) => void;
+  /** The draft exists and attaching the link failed: shown where the start hint was. */
+  attachFailure: AttachFailure | null;
+}) {
   const { t } = useLocale();
   if (link.phase === "empty") return null;
   if (link.phase === "resolving") {
@@ -358,6 +373,7 @@ function LinkSourcePreview({ link, disabled, onTask }: { link: LinkState; disabl
   }
   const { source } = link;
   const head = source.head;
+  const pushes = head ? pushTarget(head, t) : null;
   const row = "grid grid-cols-[minmax(72px,auto)_1fr] gap-x-2";
   return (
     <div data-pipeline-link-state="resolved" data-pipeline-link-source={source.kind} className="mb-2 flex flex-col gap-1.5 rounded-control border border-border bg-sunken px-3 py-2 text-ui">
@@ -373,12 +389,10 @@ function LinkSourcePreview({ link, disabled, onTask }: { link: LinkState; disabl
           <dt className="text-muted">{t("pipelineLink.head")}</dt>
           <dd className="break-all font-semibold text-secondary">{head ? `${head.branch} · ${head.sha.slice(0, 7)}` : t("pipelineLink.headNew")}</dd>
         </div>
-        {head && (head.fork || head.remote !== "origin") ? (
+        {pushes ? (
           <div className={row}>
             <dt className="text-muted">{t("pipelineLink.pushesTo")}</dt>
-            <dd data-pipeline-link-fork={head.fork ? "" : undefined} data-pipeline-link-push className="break-all font-semibold text-secondary">
-              {`${head.fork ? t("pipelineLink.fork", { repository: head.repository }) : head.repository} · ${head.remote}`}
-            </dd>
+            <dd data-pipeline-link-fork={head?.fork ? "" : undefined} data-pipeline-link-push className="break-words font-semibold text-secondary">{pushes}</dd>
           </div>
         ) : null}
       </dl>
@@ -389,7 +403,7 @@ function LinkSourcePreview({ link, disabled, onTask }: { link: LinkState; disabl
         <fieldset data-pipeline-link-task className="flex flex-col gap-0.5" disabled={disabled}>
           <legend className="mb-0.5 text-label font-semibold text-secondary">{t("pipelineLink.task")}</legend>
           {[...source.tasks.map((task) => ({ id: task.id as string | null, text: task.text })), { id: null, text: t("pipelineLink.taskNone") }].map((option) => (
-            <label key={option.id ?? ""} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-control px-1 hover:bg-canvas">
+            <label key={option.id ?? ""} className="flex min-h-6 cursor-pointer items-center gap-2 rounded-control px-1 hover:bg-canvas pointer-coarse:min-h-11">
               <input
                 type="radio"
                 name="pipeline-link-task"
@@ -402,10 +416,36 @@ function LinkSourcePreview({ link, disabled, onTask }: { link: LinkState; disabl
             </label>
           ))}
         </fieldset>
+      ) : null}
+      {attachFailure ? (
+        <span data-pipeline-link-attach-failed className="flex flex-col gap-1.5 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-label font-semibold text-danger" role="alert">
+          <span className="min-w-0 break-words">{t("pipelineLink.attachFailed", { link: attachFailure.link, error: attachFailure.error })}</span>
+          <span className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-pipeline-link-attach-retry
+              disabled={attachFailure.retrying}
+              className="min-h-8 shrink-0 rounded-control bg-danger px-3 text-label font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
+              onClick={attachFailure.onRetry}
+            >
+              {t("pipelineTemplates.retry")}
+            </button>
+            <button
+              type="button"
+              data-pipeline-link-attach-skip
+              disabled={attachFailure.retrying}
+              className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
+              onClick={attachFailure.onOpen}
+            >
+              {t("pipelineLink.openDraft")}
+            </button>
+          </span>
+        </span>
       ) : (
-        <span data-pipeline-link-no-task className="text-label text-muted">{t("pipelineLink.noTask")}</span>
+        <span data-pipeline-link-no-task={source.tasks.length ? undefined : ""} className="text-label text-muted">
+          {t(source.tasks.length ? (head ? "pipelineLink.startHintPr" : "pipelineLink.startHintIssue") : (head ? "pipelineLink.noTaskStartPr" : "pipelineLink.noTaskStartIssue"))}
+        </span>
       )}
-      <span className="text-label text-muted">{t(head ? "pipelineLink.startHintPr" : "pipelineLink.startHintIssue")}</span>
     </div>
   );
 }

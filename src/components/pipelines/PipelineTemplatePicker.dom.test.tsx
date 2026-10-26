@@ -401,7 +401,7 @@ test("an issue with no linked task says the draft gets its own task and a new br
   expect(preview.textContent).toContain("Issue #7");
   expect(preview.textContent).toContain("a new pipeline branch");
   expect(host.querySelector("[data-pipeline-link-task]")).toBeNull();
-  expect(host.querySelector("[data-pipeline-link-no-task]")?.textContent).toContain("the draft gets its own task");
+  expect(host.querySelector("[data-pipeline-link-no-task]")?.textContent).toContain("the draft gets its own.");
 });
 
 test("a late answer for an earlier link cannot replace the answer for the link now in the field", async () => {
@@ -466,6 +466,10 @@ test("an issue draft whose attach failed stays open with the reason, and Retry a
   expect(blank.disabled).toBe(true);
   expect(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!.disabled).toBe(true);
   expect(host.querySelector("[data-pipeline-link-state='resolved']")).not.toBeNull();
+  /* It sits under the link it is about, not in the repository status slot. */
+  const linkInput = host.querySelector("[data-pipeline-link-input]")!;
+  expect(linkInput.compareDocumentPosition(alert()!) & 4).toBe(4);
+  expect(host.querySelector("[data-pipeline-link-state='resolved']")!.contains(alert())).toBe(true);
 
   /* A failed retry shows the new reason and keeps the draft. */
   const retry = () => host.querySelector<HTMLButtonElement>("[data-pipeline-link-attach-retry]")!;
@@ -497,13 +501,19 @@ test("an issue draft whose attach failed can be opened without the link", async 
   expect(createdDrafts).toEqual([pipeline]);
 });
 
-test("a same-repository PR whose origin pushes elsewhere shows where the lane pushes", async () => {
-  const source = { ...PR_SOURCE, head: { ...PR_SOURCE.head, repository: "owner/project", remote: "https://github.com/owner/project.git", fork: false, maintainerCanModify: null } };
-  globalThis.fetch = linkFetch(() => ({ status: 200, body: { ok: true, repoDir: "/canonical/repo", source } }), []);
-  const host = mount(<PipelineTemplatePicker repoDir="/alias/repo" onCreate={async () => ({ pipeline })} onCreated={() => undefined} onClose={() => undefined} />);
-  await settle();
-  paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/pull/41");
-  await linkState(host, "resolved");
-  expect(host.querySelector("[data-pipeline-link-fork]")).toBeNull();
-  expect(host.querySelector("[data-pipeline-link-push]")?.textContent).toBe("owner/project · https://github.com/owner/project.git");
+test("a fork whose remote is a bare URL names the fork once, and a named remote other than origin is added to the row", async () => {
+  const forkByUrl = { ...PR_SOURCE, head: { ...PR_SOURCE.head, remote: "https://github.com/contributor/project.git" } };
+  const named = { ...PR_SOURCE, head: { ...PR_SOURCE.head, repository: "owner/project", remote: "mirror", fork: false, maintainerCanModify: null } };
+  const plain = { ...PR_SOURCE, head: { ...PR_SOURCE.head, repository: "owner/project", remote: "origin", fork: false, maintainerCanModify: null } };
+  const rows: Array<string | undefined> = [];
+  for (const source of [forkByUrl, named, plain]) {
+    globalThis.fetch = linkFetch(() => ({ status: 200, body: { ok: true, repoDir: "/canonical/repo", source } }), []);
+    const host = mount(<PipelineTemplatePicker repoDir="/alias/repo" onCreate={async () => ({ pipeline })} onCreated={() => undefined} onClose={() => undefined} />);
+    await settle();
+    paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/pull/41");
+    await linkState(host, "resolved");
+    rows.push(host.querySelector("[data-pipeline-link-push]")?.textContent);
+    expect(host.querySelector("[data-pipeline-link-fork]") !== null).toBe(source === forkByUrl);
+  }
+  expect(rows).toEqual(["fork contributor/project", "owner/project · mirror", undefined]);
 });
