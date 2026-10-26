@@ -322,6 +322,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
+import { spawnConversation } from "./spawnConversation";
 import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["set-delivery-remote", "start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
@@ -3339,10 +3340,25 @@ async function getConversation(
      while the corpus scan is degraded. A transcript path continues through the
      root-validated bounded reader below. */
   if (tailLines > 0 && requestedId) {
-    const answer = selectedConversationTail(
-      { conversationId: requestedId, maxLines: Math.max(1, Math.min(tailLines, SELECTED_TAIL_MAX_LINES)) },
-      selectedDependencies,
-    );
+    let answer: ReturnType<typeof selectedConversationTail>;
+    try {
+      answer = selectedConversationTail(
+        { conversationId: requestedId, maxLines: Math.max(1, Math.min(tailLines, SELECTED_TAIL_MAX_LINES)) },
+        selectedDependencies,
+      );
+    } catch (error) {
+      if (error instanceof McpToolRefusal && [
+        "selected_context_unresolved", "selected_conversation_has_no_transcript",
+        "selected_conversation_transcript_absent", "selected_conversation_unreadable",
+      ].includes(text(error.details.code))) {
+        const launch = spawnConversation(requestedId);
+        if (launch && (!launch.transcriptPath || !fs.existsSync(launch.transcriptPath))) {
+          throwIfCallEnded(context);
+          return redactPayload({ ...launch, ...selectedContextEcho(selected.target) });
+        }
+      }
+      throw error;
+    }
     throwIfCallEnded(context);
     return redactPayload({
       conversationId: answer.record.conversationId,
@@ -3357,7 +3373,13 @@ async function getConversation(
   const conversation = requestedId
     ? agentRegistry().conversation(requestedId as `conversation_${string}`)
     : agentRegistry().conversationForPath(requestedPath);
-  const transcriptPath = conversation?.generations.at(-1)?.path ?? requestedPath;
+  const pendingLaunch = requestedId && !conversation?.generations.length ? spawnConversation(requestedId) : null;
+  const transcriptPath = conversation?.generations.at(-1)?.path ?? pendingLaunch?.transcriptPath ?? requestedPath;
+  if (!transcriptPath && requestedId) {
+    throwIfCallEnded(context);
+    if (pendingLaunch) return redactPayload({ ...pendingLaunch, ...selectedContextEcho(selected.target) });
+    throw new Error("conversation not found");
+  }
   const pathTailLines = tailLines > 0 && !requestedId
     ? Math.max(1, Math.min(tailLines, SELECTED_TAIL_MAX_LINES))
     : undefined;
@@ -3366,6 +3388,13 @@ async function getConversation(
     ...(pathTailLines === undefined ? {} : { tailLines: pathTailLines }),
   });
   const entry = targeted?.entry;
+  if (!entry && requestedId) {
+    const launch = spawnConversation(requestedId);
+    if (launch) {
+      throwIfCallEnded(context);
+      return redactPayload({ ...launch, ...selectedContextEcho(selected.target) });
+    }
+  }
   if (!entry || (entry.engine !== "claude" && entry.engine !== "codex")) throw new Error("conversation not found");
   if (pathTailLines !== undefined) {
     if (!targeted?.tail) throw new Error("conversation tail is unavailable");
@@ -6978,6 +7007,14 @@ async function agentActivity(
         ? { evidenceDeadlineMs: Math.min(DEFAULT_EVIDENCE_DEADLINE_MS, remainingMs) }
         : {}),
     }, sources);
+    if (text(args.conversationId) && snapshot.conversations.length === 0) {
+      const launch = spawnConversation(text(args.conversationId));
+      throwIfCallEnded(context);
+      if (launch) return redactPayload({
+        ...snapshot, count: 1, conversations: [launch], journaled: 0,
+        selection: { ...snapshot.selection, matched: 1, selected: 1 },
+      });
+    }
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
     const liveOnly = args.liveOnly === true && args.includeGone !== true;
     const conversations = liveOnly ? snapshot.conversations.filter(livenessRecordIsLive) : snapshot.conversations;
