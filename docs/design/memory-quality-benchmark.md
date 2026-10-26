@@ -813,6 +813,8 @@ read-only, uses `VACUUM INTO` for a consistent private snapshot, and reads the
 It keeps `source.sqlite` and its SHA-256 with the export. The source database and
 repository refs are never changed. The output directory and files have private
 permissions. The command prints only eligible, dropped and pilot counts.
+The checkout and source-state checks resolve the output parent's real path,
+including symlinks, before creating the export.
 
 `manifest.json` lists all eligible items, rejection reasons, and the deterministic
 4/3/3 pilot chosen by SHA-256 of pipeline ids. A short stratum remains short;
@@ -840,6 +842,9 @@ objects, missing relays, unresolved placeholders, live references, unmatched
 finding/rule classes, unavailable write provenance, and attempts outside the
 retained scope history. Scope succession or transfers recorded as moves are
 rejected because the four-scope reconstruction cannot establish their delivered
+order. A later archive, merge or rewrite without a saved pre-change order also
+drops the item with `scope order unavailable`; the exporter does not guess where
+a removed or reordered rule belonged. Saved `before` lists restore the exact
 order. This exporter does not yet consume the delivery ledger or reproduce
 swarm selections; use it for historical four-scope cohorts described here.
 It does not build a replay launcher or claim that engine memory has been disabled

@@ -34,14 +34,14 @@ function historicalRule(rules: RoleMemoryRule[], id: string, at: number) {
 
 export function assembleReplay(stateDir: string, output: string) {
   // Reject output inside a checkout or the source tree before writing anything.
-  const destination = path.resolve(output);
-  let ancestor = path.dirname(destination);
+  const existingParent = fs.realpathSync(path.dirname(path.resolve(output)));
+  const destination = path.join(existingParent, path.basename(path.resolve(output)));
+  let ancestor = existingParent;
   while (true) {
     if (fs.existsSync(path.join(ancestor, ".git"))) throw Error("output must be outside a checkout");
     const parent = path.dirname(ancestor); if (parent === ancestor) break; ancestor = parent;
   }
   const source = fs.realpathSync(stateDir);
-  const existingParent = fs.realpathSync(path.dirname(destination));
   if (existingParent === source || existingParent.startsWith(source + path.sep)) throw Error("output must be outside source state");
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "memory-replay-"));
   try {
@@ -112,8 +112,10 @@ export function assembleReplay(stateDir: string, output: string) {
           for (const h of history.reverse()) {
             if (time(h.at) <= at) break;
             if (h.before) { active = [...h.before]; continue; }
+            // Archives lose their index; merges and rewrites can move existing ids.
+            // Without a saved order, reversing these operations would invent input.
+            if (h.archived.length || h.merged?.length || h.rewritten?.length) throw Error("scope order unavailable");
             active = active.filter(id => !h.added.includes(id) && !h.restored?.includes(id));
-            for (const id of h.archived) if (!active.includes(id)) active.unshift(id);
           }
           return active.reverse().map(id => ({ scope, ...historicalRule(rules, id, at) }));
         });
