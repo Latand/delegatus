@@ -2685,7 +2685,7 @@ function clientAttemptId(pipeline: Pipeline, stage: PipelineStage, attempt: Pipe
 
 /** Admission commits its receipt before onReserved records the launch on the
  * attempt. Only the durable request keys can prove a launch never began. */
-function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string | null {
+function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
   if (attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId || attempt.report || attempt.verdict || attempt.activation) {
     return "stage launch recovery cannot prove no dispatch began: the attempt retains conversation or turn evidence";
   }
@@ -2699,10 +2699,14 @@ function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, a
       const key = call === 0 ? base : `handshake_retry_${call}_${base}`.slice(0, 128);
       const receipt = registry.spawnReceiptForClientAttempt(key);
       if (!receipt) continue;
+      const projected = ports.spawnReceipt(receipt.launchId);
       const safelyRetired = receipt.state === "failed"
         && receipt.retryClaim?.claimId === `${pipeline.id}:${stage.id}:${receipt.launchId}`
-        && attempt.retiredLaunches?.some(retired => retired.launchId === receipt.launchId
-          && retired.conversationId === receipt.conversationId && retired.error === receipt.error);
+        && projected?.state === "failed"
+        && projected.launchId === receipt.launchId
+        && projected.conversationId === receipt.conversationId
+        && projected.retryClaimId === receipt.retryClaim.claimId
+        && (projected.neverBegan === true || projected.roleMemoryRetrySafe === true);
       if (!safelyRetired) {
         return "stage launch recovery cannot prove no dispatch began: a reserved receipt is not recorded on the attempt; its first-message delivery must be reconciled";
       }
@@ -15258,7 +15262,7 @@ export async function patchPipeline(
       const unreservedSpawnRetry = stage?.kind === "run" && attempt && !attempt.launchId
         && isStructuredSpawnPark(pipeline, attempt) && pipeline.state === "needs_decision";
       if (unreservedSpawnRetry) {
-        const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
+        const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt, ports);
         if (refusal) return { error: refusal, status: 409 };
       }
       if (!unreservedSpawnRetry && stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
@@ -15500,7 +15504,7 @@ export async function patchPipeline(
       }
       if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       if (unreservedSpawnRetry) {
-        const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
+        const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt, ports);
         if (refusal) return { error: refusal, status: 409 };
         // Later account recovery must not reopen this attempt if its error changes.
         attempt.state = "failed";

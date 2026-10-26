@@ -1,7 +1,7 @@
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
-import { RegistryReadError } from "@/lib/agent/registry";
+import { RegistryReadError, type AgentRegistry as AgentRegistryInstance } from "@/lib/agent/registry";
 import { expect, test, AgentRegistry, fs, path, setAgentRegistryForTests, loadPipelines, savePipelines,
-  patchPipeline, tickPipelines, reserveActivationOnly, spyOn } from "./engine.fixture";
+  patchPipeline, tickPipelines, reserveActivationOnly, spyOn, defaultPipelinePorts } from "./engine.fixture";
 
 async function unreservedPark(replacement = true) {
   const h = await reserveActivationOnly();
@@ -38,7 +38,16 @@ async function unreservedPark(replacement = true) {
     memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "plan", slot: `plan:${attempt.n}`,
       round: attempt.n, role: "architect", stageOrder: 0, parentConversationId: null }],
   });
+  const reserveUnadmitted = (call: number) => (registry as unknown as {
+    reserveSpawnRequest(input: Parameters<AgentRegistryInstance["beginSpawnRequest"]>[0]): ReturnType<AgentRegistryInstance["beginSpawnRequest"]>;
+  }).reserveSpawnRequest({
+    engine: attempt.effectiveRole.engine, cwd: lane.worktreeDir!, transport: "structured", clientAttemptId: key(call),
+    role: "architect", launchProfile: { title: "Retry stage fixture" },
+    memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "plan", slot: `plan:${attempt.n}`,
+      round: attempt.n, role: "architect", stageOrder: 0, parentConversationId: null }],
+  });
   return { h, lane, attempt, registry, registryPath, key, reserve,
+    reserveUnadmitted,
     close: () => { registry.close(); setAgentRegistryForTests(null); } };
 }
 
@@ -56,52 +65,79 @@ test.each([{ replacement: false }, { replacement: true }])("retry-stage starts a
   } finally { f.close(); }
 });
 
-test.each([false, true])("retry-stage accepts safely retired receipt history after restart=%s", async restart => {
+test.each([false, true])("retry-stage accepts safely retired receipts beyond the history cap after restart=%s", async restart => {
   const f = await unreservedPark();
-  let restartedRegistry: InstanceType<typeof AgentRegistry> | undefined;
   try {
-    const reserved = f.reserve(0);
-    expect(reserved.kind).toBe("created");
-    const receipt = reserved.receipt;
-    expect(f.registry.failSpawn(receipt.launchId, "runtime host failed before dispatch")).toBe(true);
-    expect(f.registry.claimFailedSpawnForRetry(receipt.launchId, `${f.lane.id}:plan:${receipt.launchId}`).kind).toBe("claimed");
-    f.attempt.retiredLaunches = [{ launchId: receipt.launchId, conversationId: receipt.conversationId,
-      error: "runtime host failed before dispatch", retiredAt: f.h.ports.now() }];
+    for (let call = 2; call < 28; call++) {
+      const reserved = f.reserveUnadmitted(call);
+      expect(reserved.kind).toBe("created");
+      const receipt = reserved.receipt;
+      expect(f.registry.retireUnconsumedSpawn(f.key(call), "runtime host failed before dispatch")).toBe(true);
+      expect(defaultPipelinePorts().spawnReceipt(receipt.launchId)?.neverBegan).toBe(true);
+      expect(f.registry.claimFailedSpawnForRetry(receipt.launchId, `${f.lane.id}:plan:${receipt.launchId}`).kind).toBe("claimed");
+      f.attempt.retiredLaunches = [...f.attempt.retiredLaunches ?? [], {
+        launchId: receipt.launchId, conversationId: receipt.conversationId,
+        error: "runtime host failed before dispatch", retiredAt: f.h.ports.now(),
+      }].slice(-25);
+    }
+    f.attempt.spawnCalls = 28;
+    expect(f.attempt.retiredLaunches).toHaveLength(25);
+    f.h.ports.spawnReceipt = defaultPipelinePorts().spawnReceipt;
     savePipelines([f.lane]);
 
     if (restart) {
       f.registry.close();
       const child = Bun.spawn([process.execPath, "-e", `
-        const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine.ts");
+        const { defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
         const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
         const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
         const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
         const registry = new AgentRegistry(process.env.LLV_TEST_RETRY_REGISTRY);
         setAgentRegistryForTests(registry); registerPipelineTick(async () => {});
         const lane = loadPipelines()[0];
-        const result = await patchPipeline(lane.id, { action: "retry-stage" }, { ...defaultPipelinePorts(),
+        const spawned = [];
+        const ports = { ...defaultPipelinePorts(),
           now: () => "2026-10-25T07:00:00Z", exec: async () => ({ code: 0, stdout: "", stderr: "" }),
           worktreePresent: () => true, drainHold: () => null,
-        });
-        console.log(JSON.stringify({ status: result.status ?? 200, error: result.error ?? null }));
+          cpuPressureHold: () => null, structuredDeliveryPublication: () => "ready",
+          engineReadiness: () => "connected",
+          resolveProjectSpawn: (engine, request) => ({ kind: "available", account: {
+            engine, accountId: request.requestedId ?? "retry-test-account", kind: "managed",
+            home: process.env.LLV_STATE_DIR, transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+          } }),
+          preflightRepo: repoDir => ({ ok: true, repoDir, gitCommonDir: repoDir + "/.git", worktreeParent: repoDir + "/.." }),
+          spawnAgent: async (input, onReserved) => {
+            spawned.push(input.clientAttemptId);
+            const result = { launchId: "fresh-launch", conversationId: "fresh-conversation", sessionId: "fresh-session",
+              ["trans" + "cript"]: "/fresh-stage.jsonl", paneId: null, accountId: null };
+            await onReserved(result);
+            return result;
+          },
+        };
+        const result = await patchPipeline(lane.id, { action: "retry-stage" }, ports);
+        if (!result.error) { await tickPipelines([], ports); await tickPipelines([], ports); }
+        const current = loadPipelines()[0].runs.find(run => run.stageId === "plan").attempts.at(-1);
+        console.log(JSON.stringify({ status: result.status ?? 200, error: result.error ?? null,
+          spawned, state: loadPipelines()[0].state, stateDetail: loadPipelines()[0].stateDetail,
+          cursor: loadPipelines()[0].cursor, attempt: { n: current.n, state: current.state, launchId: current.launchId, spawnCalls: current.spawnCalls } }));
         registry.close(); process.exit(0);
       `], { env: { ...process.env, LLV_TEST_RETRY_REGISTRY: f.registryPath }, stdout: "pipe", stderr: "pipe",
         signal: AbortSignal.timeout(20_000) });
       const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       expect({ code, errors }).toMatchObject({ code: 0 });
-      expect(JSON.parse(output.trim())).toMatchObject({ status: 200, error: null });
-      restartedRegistry = new AgentRegistry(f.registryPath);
-      setAgentRegistryForTests(restartedRegistry);
+      expect(JSON.parse(output.trim())).toMatchObject({ status: 200, error: null,
+        spawned: [`pipeline_${f.lane.id}_plan_${f.attempt.n + 1}`],
+        attempt: { n: f.attempt.n + 1, state: "running", launchId: "fresh-launch", spawnCalls: 1 } });
     }
     else {
       expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).not.toHaveProperty("error");
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      const current = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+      expect(current).toMatchObject({ n: 3, state: "running", launchId: "launch-1", spawnCalls: 1 });
+      expect(f.h.spawnInputs).toHaveLength(1);
     }
-    await tickPipelines([], f.h.ports);
-    await tickPipelines([], f.h.ports);
-    const current = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
-    expect(current).toMatchObject({ n: 3, state: "running", launchId: "launch-1", spawnCalls: 1 });
-    expect(f.h.spawnInputs).toHaveLength(1);
-  } finally { restartedRegistry?.close(); f.close(); }
+  } finally { f.close(); }
 });
 
 test("retry-stage refuses a failed receipt whose retirement is not recorded", async () => {
