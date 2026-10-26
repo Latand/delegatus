@@ -1014,7 +1014,13 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
       if (!settleLookup) return Response.json({ outcome: "unknown" });
       return Response.json({ outcome: "admitted", operationId: captured.operationId, receipt: settlement });
     }
-    if (String(input) === `/api/runtime/operations/${captured.operationId}` && !init?.method) return Response.json({ receipt: captured });
+    /* Background reads of the original operation are allowed; any mutation
+       of it is recorded and refused. */
+    if (String(input) === `/api/runtime/operations/${captured.operationId}`) {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Response.json({ receipt: captured });
+      calls.push(`unexpected:${method}`);
+    }
     if (init?.method === "POST" && ["/api/runtime/send", "/api/tmux"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
     return new Response("{}", { status: 404 });
   }) as typeof fetch;

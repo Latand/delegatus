@@ -19,7 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { FileEntry } from "@/lib/types";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 const dom = new Window();
@@ -203,8 +203,19 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
     await new Promise((r) => setTimeout(r, 0));
   });
 
-  // Exhaust the bounded observation window without fabricating a terminal receipt.
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+  /* The bounded observation window ends without a terminal receipt: wait for
+     the composer to release the generation (its durable record drops the
+     reconciling marker and shows the unconfirmed notice) instead of sleeping
+     past the window. */
+  const stillReconciling = () => (JSON.parse(sessionStorage.getItem("llvPendingSend:conv-stale-key") ?? "[]") as { key: string; reconciling?: true }[])
+    .some(entry => entry.key === sends[0]!.idempotencyKey && entry.reconciling);
+  const released = () => !stillReconciling() && Boolean(host.textContent?.includes(translate("en", "composer.deliveryUnconfirmed")));
+  const deadline = performance.now() + 5_000;
+  while (!released() && performance.now() < deadline) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+  }
+  expect(stillReconciling()).toBe(false);
+  expect(host.textContent).toContain(translate("en", "composer.deliveryUnconfirmed"));
 
   /* The operator types a genuinely NEW message. It must leave under a FRESH
      key carrying ITS OWN text — never the stale generation's key or bytes. */

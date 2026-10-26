@@ -314,8 +314,13 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
         const chunk = result as LogChunk;
         // A healthy idle heartbeat changes neither the transcript nor status.
         // The first answer and recovery from an error must still clear loading/error.
+        // The snapshot is still saved: it carries the catalog size, which can
+        // move while the transcript is idle and later rejects a truncated file.
         if (healthyChunk.current && !anchorRef.current && !chunk.data
-          && chunk.offset === offsetRef.current && chunk.size === sizeRef.current) return;
+          && chunk.offset === offsetRef.current && chunk.size === sizeRef.current) {
+          saveSnapshot(target);
+          return;
+        }
         if (offsetRef.current > chunk.size) {
           if (anchorRef.current) discardRestored(target);
           else {

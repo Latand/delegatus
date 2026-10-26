@@ -194,3 +194,26 @@ test("an unchanged stream heartbeat does not render its reader again", async () 
   expect(host.querySelector("output")?.getAttribute("data-error")).toBe("");
   expect(host.querySelector("output")?.textContent).toBe("first");
 });
+
+test("a catalog catch-up during idle heartbeats still rejects a later truncated transcript before paint", async () => {
+  const path = "fixtures/idle-catalog-catch-up.jsonl";
+  const data = '{"message":"one"}\n{"message":"two"}\n';
+  const size = data.length;
+  const at = (catalogSize: number): FileEntry => ({ ...entry(path), size: catalogSize });
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Probe file={at(1)} />));
+  const subscriber = await waitForSubscriber(path);
+  deliver(subscriber, { data, start: 0, offset: size, size });
+  expect(host.querySelector("output")?.textContent).toBe('{"message":"one"}|{"message":"two"}');
+
+  /* The catalog catches up while the transcript is idle: only heartbeats arrive. */
+  flushSync(() => root.render(<Probe file={at(size)} />));
+  deliver(subscriber, { data: "", start: size, offset: size, size });
+  flushSync(() => root.unmount());
+  host.remove();
+
+  mount(at(size - 1));
+  expect(dom.document.querySelector("output")?.textContent).toBe("");
+});
