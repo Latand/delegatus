@@ -5,12 +5,12 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { emptyStore, installSnapshot, type RuntimeSnapshot } from "@/components/runtime/runtimeModel";
 import type { RuntimeBus, RuntimeBusState } from "@/hooks/runtimeBus";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { createFailedLegacyBufferProjection } from "@/lib/runtime/fixtures/failedLegacyBufferProjection";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
 import type { FileEntry } from "@/lib/types";
 import { resetOrchestratorSeatCacheForTests } from "./orchestrator/useOrchestratorSeat";
-import { enqueueOutbox, readOutbox, updateOutbox } from "./conversation/outbox";
+import { cancelOutbox, enqueueOutbox, readOutbox, updateOutbox } from "./conversation/outbox";
 import { messageRowRecovery } from "./conversation/rowRecovery";
 import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
@@ -151,6 +151,18 @@ function liveLegacyFile(overrides: Partial<FileEntry> = {}): FileEntry {
   } as FileEntry;
 }
 
+/** Waits on an observed condition; the deadline only bounds a failure. */
+async function waitFor(what: string, condition: () => boolean, deadlineMs = 10_000): Promise<void> {
+  const until = performance.now() + deadlineMs;
+  while (!condition()) {
+    if (performance.now() > until) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(2);
+  }
+}
+
+/** One macrotask turn lets state set by an already-consumed response render. */
+const nextTurn = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
 function mount(file: FileEntry): HTMLElement {
   const host = document.createElement("div");
   document.body.append(host);
@@ -167,16 +179,25 @@ for (const detailState of ["current", "failed", "empty", "older-than-page"] as c
   let rotated = false;
   const posts: string[] = [];
   let detailedReads = 0;
+  const answered = { all: 0, detail: 0 };
+  const answer = async (body: unknown, kind: "all" | "detail", status = 200): Promise<Response> => {
+    const response = Response.json(body, { status });
+    const json = response.json.bind(response);
+    // Counted once the caller has consumed the body, so a count means "read".
+    response.json = async () => { const value = await json(); answered[kind] += 1; return value; };
+    return response;
+  };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (init?.method === "POST" && (/^\/api\/(?:tmux|runtime\/send|orchestrator\/message)(?:\?|$)/.test(url)
       || /^\/api\/runtime\/operations\/[^/]+(?:\?|$)/.test(url))) posts.push(url);
     if (url.startsWith("/api/orchestrator/seat")) {
-      if (rotated && !url.includes("scope=all")) detailedReads += 1;
-      if (rotated && detailState === "failed" && !url.includes("scope=all")) return Response.json({ error: "temporarily unavailable" }, { status: 503 });
-      if (rotated && detailState === "empty" && !url.includes("scope=all")) return Response.json({ seat: null, exists: false });
+      const kind = url.includes("scope=all") ? "all" : "detail";
+      if (rotated && kind === "detail") detailedReads += 1;
+      if (rotated && detailState === "failed" && kind === "detail") return answer({ error: "temporarily unavailable" }, kind, 503);
+      if (rotated && detailState === "empty" && kind === "detail") return answer({ seat: null, exists: false }, kind);
       const current = rotated ? "conversation_current" : file.conversationId;
-      return Response.json({
+      return answer({
         seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
           state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
         exists: true, viewerMcpRegistered: true,
@@ -184,7 +205,7 @@ for (const detailState of ["current", "failed", "empty", "older-than-page"] as c
           ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
         all: { conversationIds: [current], paths: [rotated ? "/fixtures/current.jsonl" : file.path],
           previous: { conversationIds: rotated ? [file.conversationId] : [], paths: rotated ? [file.path] : [] } },
-      });
+      }, kind);
     }
     return Response.json({});
   }) as typeof fetch;
@@ -202,13 +223,16 @@ for (const detailState of ["current", "failed", "empty", "older-than-page"] as c
   })).toBeTrue();
   appendComposerDraft(file.conversationId!, "Unsent draft stays here");
   const host = mount(file);
-  for (let i = 0; i < 20; i += 1) await Bun.sleep(5);
+  await waitFor("the first scope=all read", () => answered.all >= 1);
+  await nextTurn();
   expect(host.querySelector("[data-retired-orchestrator]")).toBeNull();
   rotated = true;
+  const readsBefore = answered.all;
   document.dispatchEvent(new Event("visibilitychange"));
-  for (let i = 0; i < 80 && (!host.querySelector("[data-retired-orchestrator]") || !detailedReads
-    || (!detailReadFails && !host.querySelector("[data-retired-orchestrator] a"))); i += 1) await Bun.sleep(5);
-  await Bun.sleep(20);
+  await waitFor("a scope=all read after rotation", () => answered.all > readsBefore);
+  await waitFor("the detailed seat read", () => detailedReads > 0 && answered.detail >= 1);
+  await waitFor("the retired banner", () => Boolean(host.querySelector("[data-retired-orchestrator]")));
+  if (!detailReadFails) await waitFor("the successor link", () => Boolean(host.querySelector("[data-retired-orchestrator] a")));
   const banner = host.querySelector("[data-retired-orchestrator]");
   expect(banner).not.toBeNull();
   expect(banner!.querySelector("a")?.getAttribute("href") ?? null).toBe(detailReadFails ? null : "#c=conversation_current");
@@ -225,12 +249,50 @@ for (const detailState of ["current", "failed", "empty", "older-than-page"] as c
   payloadRetry.click();
   expect(messageRowRecovery(file.conversationId!)?.retryOperation).toBeDefined();
   messageRowRecovery(file.conversationId!)!.retryOperation!("retained-message");
-  for (let i = 0; i < 10; i += 1) await Bun.sleep(5);
+  await waitFor("the refusal status", () => host.querySelector('[data-testid="composer-status"]')?.textContent === translate("en", "retiredOrchestrator.sendBlocked"));
   expect(posts).toEqual([]);
   expect((await composerSubmissionPayloads.restore(retained))?.receipt?.status).toBe("failed");
   expect(readOutbox(file.conversationId!).find(entry => entry.id === "retired-message")).toMatchObject({
     text: "Saved operator message", state: "failed",
   });
+});
+
+for (const entryArrives of ["before the banner", "after the banner"] as const) test(`a message queued ${entryArrives} for a retired orchestrator stays queued and cancellable`, async () => {
+  mobile = true;
+  const file = liveLegacyFile({ conversationId: "conversation_previous_queued", project: "viewer-queued", engine: "claude" });
+  const posts: string[] = [];
+  let answeredAll = 0;
+  let answeredDetail = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST" && /^\/api\/(?:tmux|runtime\/send|orchestrator\/message)(?:\?|$)/.test(url)) posts.push(url);
+    if (!url.startsWith("/api/orchestrator/seat")) return Response.json({});
+    const kind = url.includes("scope=all") ? "all" : "detail";
+    const response = Response.json({
+      seat: { project: file.project, conversationId: "conversation_current", path: "/fixtures/current.jsonl",
+        state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+      exists: true, viewerMcpRegistered: true,
+      previous: [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }],
+      all: { conversationIds: ["conversation_current"], paths: ["/fixtures/current.jsonl"],
+        previous: { conversationIds: [file.conversationId], paths: [file.path] } },
+    });
+    const json = response.json.bind(response);
+    response.json = async () => { const value = await json(); if (kind === "all") answeredAll += 1; else answeredDetail += 1; return value; };
+    return response;
+  }) as typeof fetch;
+  const id = file.conversationId!;
+  const enqueue = () => enqueueOutbox(id, { id: "queued-message", text: "Queued before the seat rotated", images: 0, at: Date.now() });
+  if (entryArrives === "before the banner") enqueue();
+  const host = mount(file);
+  await waitFor("the retired banner with its successor link", () => answeredAll >= 1 && answeredDetail >= 1
+    && Boolean(host.querySelector("[data-retired-orchestrator] a")));
+  if (entryArrives === "after the banner") enqueue();
+  await waitFor("the queued message row", () => host.textContent?.includes("Queued before the seat rotated") === true);
+  await nextTurn();
+  expect(readOutbox(id).find(entry => entry.id === "queued-message")?.state).toBe("queued");
+  expect(posts).toEqual([]);
+  cancelOutbox(id, "queued-message");
+  expect(readOutbox(id).find(entry => entry.id === "queued-message")).toBeUndefined();
 });
 
 function installRuntimeSnapshot(snapshot: RuntimeSnapshot): void {

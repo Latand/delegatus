@@ -51,6 +51,9 @@ describe("retired orchestrator", () => {
         expect(await banner.getByRole("link").count()).toBe(0);
         expect(await banner.innerText()).toContain(translate("uk", "retiredOrchestrator.unavailable"));
         expect(await page.locator("[data-outbox-retry=retired-message]").isDisabled()).toBe(true);
+        // No successor: nothing on the screen tells the operator to open one.
+        expect(await page.locator("body").innerText()).not.toContain(translate("uk", "retiredOrchestrator.open"));
+        expect(await page.locator('[data-testid="composer-send-blocked"]').innerText()).toContain(translate("uk", "retiredOrchestrator.sendBlocked"));
         expect(await page.locator("textarea").inputValue()).toBe("Unsent draft stays here");
         expect(await page.evaluate(() => (window as unknown as { retiredOrchestrator: { sends(): number } }).retiredOrchestrator.sends())).toBe(0);
         await page.screenshot({ path: path.join(out, "uk-dark-390-unavailable.png"), fullPage: true });
@@ -77,6 +80,9 @@ describe("retired orchestrator", () => {
           expect(await draft.inputValue()).toBe("Unsent draft stays here");
           expect(await page.locator('[data-testid="composer-send-blocked"] button').count()).toBe(0);
           expect(await page.locator("[data-outbox-retry=retired-message]").isDisabled()).toBe(true);
+          // The call to action is the banner's link alone; the composer states the closed send without repeating it.
+          expect(await page.getByText(translate(lang, "retiredOrchestrator.open")).count()).toBe(1);
+          expect(await page.locator('[data-testid="composer-send-blocked"]').innerText()).toContain(translate(lang, "retiredOrchestrator.sendBlocked"));
           expect(await page.evaluate(() => (window as unknown as { retiredOrchestrator: { sends(): number } }).retiredOrchestrator.sends())).toBe(0);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`), fullPage: true });

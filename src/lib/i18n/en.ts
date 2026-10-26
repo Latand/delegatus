@@ -7629,7 +7629,7 @@ export const en = {
   "retiredOrchestrator.body": "This conversation no longer manages the project. Your messages and drafts stay here.",
   "retiredOrchestrator.open": "Open current orchestrator",
   "retiredOrchestrator.unavailable": "The current orchestrator is unavailable. This conversation remains read-only.",
-  "retiredOrchestrator.sendBlocked": "Open the current orchestrator to send a message.",
+  "retiredOrchestrator.sendBlocked": "This orchestrator is retired, so sending is closed here.",
   "laneReview.menu": "Review changes",
   "laneReview.phoneRow": "Changed files",
   "laneReview.kind": "Changes",

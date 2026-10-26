@@ -7533,7 +7533,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "retiredOrchestrator.body": "Ця розмова більше не керує проєктом. Ваші повідомлення й чернетки залишаються тут.",
   "retiredOrchestrator.open": "Відкрити чинного оркестратора",
   "retiredOrchestrator.unavailable": "Чинний оркестратор поки недоступний. Ця розмова залишається для перегляду.",
-  "retiredOrchestrator.sendBlocked": "Відкрийте чинного оркестратора, щоб надіслати повідомлення.",
+  "retiredOrchestrator.sendBlocked": "Цей оркестратор виведено з роботи, тому надсилання тут закрите.",
   "laneReview.menu": "Переглянути зміни",
   "laneReview.phoneRow": "Змінені файли",
   "laneReview.kind": "Зміни",
