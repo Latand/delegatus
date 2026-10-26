@@ -1128,18 +1128,25 @@ test("a newer delivery owner retires the completed predecessor merge with its su
   expect(loadPipelines().find(lane => lane.id === old.id)!.merge!.updatedAt).toBe(stamp);
 });
 
-test("a reloaded completed refresh with an exhausted review cannot dispatch its retained merge", async () => {
+test.each([
+  ["queued", "exhausted"], ["checking", "exhausted"], ["waiting-checks", "exhausted"],
+  ["queued", "skipped"], ["checking", "skipped"], ["waiting-checks", "skipped"],
+] as const)("a reloaded completed refresh with a %s merge and %s review cannot dispatch", async (mergeState, reviewOutcome) => {
   const parent = completedLane("refresh-parent");
-  const refresh = completedLane("refresh-review-exhausted");
+  const refresh = completedLane(`refresh-review-${mergeState}-${reviewOutcome}`);
   refresh.refreshOf = { pipelineId: "refresh-parent", base: "b".repeat(40) };
-  refresh.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
-  refresh.stages.push({ ...refresh.stages[0]!, id: "fix", next: null });
-  Object.assign(refresh.runs[1]!.attempts[0]!, { state: "failed", budgetSpent: true });
-  refresh.runs.push({ stageId: "fix", attempts: [{ ...refresh.runs[0]!.attempts[0]!,
-    activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true },
-  }] });
+  if (reviewOutcome === "exhausted") {
+    refresh.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
+    refresh.stages.push({ ...refresh.stages[0]!, id: "fix", next: null });
+    Object.assign(refresh.runs[1]!.attempts[0]!, { state: "failed", budgetSpent: true });
+    refresh.runs.push({ stageId: "fix", attempts: [{ ...refresh.runs[0]!.attempts[0]!,
+      activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true },
+    }] });
+  } else {
+    refresh.runs[1]!.attempts[0]!.state = "skipped";
+  }
   refresh.merge = {
-    state: "queued", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    state: mergeState, by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
     seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: iso(T0),
     mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: iso(T0),
   };
@@ -1148,7 +1155,7 @@ test("a reloaded completed refresh with an exhausted review cannot dispatch its 
     attempt: 1, base: "b".repeat(40), head: HEAD, key: "refresh-key", digest: "d".repeat(64), requestedAt: iso(T0), pipelineId: refresh.id,
   } });
   savePipelines([parent, refresh]);
-  expect(loadPipelines().find(lane => lane.id === refresh.id)!.merge!.state).toBe("queued");
+  expect(loadPipelines().find(lane => lane.id === refresh.id)!.merge!.state).toBe(mergeState);
   const writes: string[][] = [];
   const ports = productionAutoMergePorts({
     loadPipelines, now: () => T0, cachedState: () => null,
@@ -1168,7 +1175,7 @@ test("a refresh review that fails at the merge mutation fence refuses dispatch",
   refresh.refreshOf = { pipelineId: "refresh-parent", base: "b".repeat(40) };
   refresh.merge = {
     state: "queued", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
-    seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: iso(T0),
+    seenChecks: ["privacy-tracker-audit"], head: HEAD, headSeenAt: iso(T0 - MERGE_SETTLE_MS * 2), lastChecks: ["privacy-tracker-audit"], readAt: null, nextReadAt: null, requestedAt: iso(T0),
     mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: iso(T0),
   };
   savePipelines([refresh]);
@@ -1177,7 +1184,9 @@ test("a refresh review that fails at the merge mutation fence refuses dispatch",
     loadPipelines, now: () => T0, cachedState: () => null,
     run: async args => {
       if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: HEAD,
-        baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: [] });
+        baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: [{ __typename: "CheckRun", name: "privacy-tracker-audit",
+          workflowName: "Privacy tracker audit", status: "COMPLETED", conclusion: "SUCCESS",
+          startedAt: iso(T0 - MERGE_SETTLE_MS * 2), completedAt: iso(T0 - MERGE_SETTLE_MS) }] });
       if (args[1]?.includes("/reviews")) return "";
       if (args[0] === "api" && args[1]?.includes("/branches/")) return "null";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
