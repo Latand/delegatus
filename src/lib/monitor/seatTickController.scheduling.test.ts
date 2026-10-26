@@ -441,22 +441,17 @@ const childMode = process.env.LLV_SEAT_DEADLINE_TEST_MODE;
 test.skipIf(!childMode)("seat deadline subprocess case", async () => {
   const filename = process.env.LLV_SEAT_DEADLINE_TEST_STATE!;
   if (childMode === "expire") writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, filename);
-  let elapsed = 0;
-  let expireDeadline = () => {};
+  const clock = virtualClock();
   const rig = harness({ pipelines: OPEN_LANE, stateFile: filename, wakeState: "landed",
     ...(childMode === "expire" ? { deliverWith: async () => {
       const key = readSeatTickState(PROJECT, filename).outstandingWake?.clientMessageId;
       process.stdout.write(`DEADLINE_READY:${key ?? "missing"}\n`);
-      elapsed += 1000;
-      expireDeadline();
+      clock.advance(1000);
       return new Promise<DeliveryOutcome>(() => {});
     } } : {}) });
   rig.deps.workBudgetMs = 1000;
-  rig.deps.workClock = () => elapsed;
-  rig.deps.workScheduler = {
-    setTimeout: callback => { expireDeadline = callback; return 1 as never; },
-    clearTimeout: () => {},
-  };
+  rig.deps.workClock = clock.now;
+  rig.deps.workScheduler = clock.scheduler;
   rig.deps.sources!.prepareRead = async () => {
     await new Promise<void>(resolve => setTimeout(resolve, 1_500));
     process.stdout.write("PREPARATION_READY\n");
@@ -467,7 +462,7 @@ test.skipIf(!childMode)("seat deadline subprocess case", async () => {
     rig.deps.sources!.wakeState = async wake => {
       expect(wake.clientMessageId).toBe(key!);
       process.stdout.write(`RECOVERY_READY:${wake.clientMessageId}\n`);
-      elapsed += 250;
+      clock.advance(250);
       return "landed";
     };
   }

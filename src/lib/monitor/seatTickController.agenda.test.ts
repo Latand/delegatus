@@ -1,8 +1,8 @@
 import { expect, spyOn, test, fs, path, spawn, Database, SANDBOX, SESSIONS, SEAT_TICK_NO_SELF_SCHEDULE, reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, readSeatTickState, writeSeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, outcomeIdentity, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, ORCHESTRATOR_SHIPPED_CLOCK_OPENING, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, OVERDUE, outstandingWake, OPEN_LANE, terminalEvent, FINISHED_LANE, standingGap, MONITOR_PROMPT, PROMPT_HEADING, seatTickNoteRevisionForTest, promptSettings, LEDGER_NOTE, busyBoard, CURRENT_SEAT, REPLACEMENT_PROMPT, reservationLayer, HELD, heldWake, nextCheck, childFixture, childRig, ago, recordedWake } from "./seatTickController.fixture";
 import type { SeatTickRunRecord, AgentLivenessRecord, ConversationMessage } from "./seatTickController.fixture";
 
-function budgetLanes(long = false) {
-  return Array.from({ length: 20 }, (_, n) => ({
+function budgetLanes(long = false, count = 20) {
+  return Array.from({ length: count }, (_, n) => ({
     id: `lane${String(n).padStart(4, "0")}`,
     title: long ? `Exporter ${n} ${"title ".repeat(10)}`.slice(0, 48) : `Exporter ${n}`,
     reason: long ? `decision: ${"build stopped ".repeat(5)}`.slice(0, 48) : "decision: build stopped",
@@ -52,6 +52,55 @@ test(`a configured autonomy wake${turboEnabled ? " with Turbo" : ""} still deliv
     || /… \[summary; .+ holds the full item\]$/.test(detail)).toBe(true);
 });
 }
+
+test.each([42, 43])("%i routed lanes still wake when liveness spends its share", async count => {
+  for (const skipped of [false, true]) {
+    const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Check failed builds. ".repeat(25).slice(0, 500),
+      monitorPrompt: "Inspect the build and review queues. ".repeat(300).slice(0, 7_622),
+      autonomy: { enabled: true, startedAt: new Date(NOW).toISOString(), until: new Date(NOW + 8 * 60 * MINUTE).toISOString(),
+        endedAt: null, endReason: null, updatedAt: new Date(NOW).toISOString(),
+        setBy: { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null }, why: null, decisions: [] } };
+    const rig = harness({ state: OVERDUE, settings,
+      seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: 55 } });
+    let now = 0, next = 0;
+    const timers = new Map<number, { at: number; run: () => void }>();
+    Object.assign(rig.deps, { workBudgetMs: 800, workClock: () => now, workScheduler: {
+      setTimeout: (run: () => void, delay: number) => { const id = ++next; timers.set(id, { at: now + delay, run }); return id; },
+      clearTimeout: (id: unknown) => { timers.delete(id as number); },
+    } });
+    let reads = 0;
+    rig.deps.sources!.liveness = async () => {
+      if (skipped && ++reads === 1) {
+        now += 100;
+        for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
+      }
+      return [];
+    };
+    const lanes = budgetLanes(true, count);
+    rig.deps.sources!.workerAsks = async () => lanes.map(lane => ({ id: lane.id,
+      key: `lane:${lane.id}:decision`, label: `${lane.title}: ${lane.reason}`, sinceMs: lane.sinceMs, seatOwnedLane: lane }));
+    const result = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
+    expect(rig.sent).toHaveLength(1);
+    const text = rig.sent[0]!.text;
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text).toContain(settings.reason);
+    for (const lane of lanes) {
+      const row = text.split("\n").find(line => line.startsWith(`- ${lane.id}|`));
+      expect(row).toContain("decision:");
+      expect(row).toMatch(/decision: build stoppe(?:d|…)/);
+      const minutes = (NOW - lane.sinceMs) / MINUTE;
+      expect(row).toContain(minutes === 120 ? "2h" : `1h ${minutes - 60}m`);
+    }
+    const detail = text.split("\n").find(line => line.startsWith("- [ask] lane0000 — "))!;
+    expect(detail === `- [ask] lane0000 — ${lanes[0]!.title}: ${lanes[0]!.reason}`
+      || /… \[summary; .+ holds the full item\]$/.test(detail)).toBe(true);
+    expect(rig.written.at(-1)!.itemsShown!.length).toBeGreaterThan(0);
+    if (skipped) expect(text).toMatch(/skipped.*liveness/i);
+    expect(now).toBe(skipped ? 100 : 0);
+    expect(timers.size).toBe(0);
+  }
+});
 
 test("a full roster with unavailable sources makes detail progress and then respects cadence", async () => {
   const rig = harness({ state: OVERDUE, pullRequestsUnavailable: "command-failed",
