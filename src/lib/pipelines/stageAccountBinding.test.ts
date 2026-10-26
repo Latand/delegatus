@@ -603,11 +603,19 @@ test("stage tier narrows selection and the durable launch profile; role fallback
     expect(resolve.mock.calls.at(-1)?.[1]?.unavailableIds).toEqual([]);
     const ports = portsAllowing(null);
     ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" });
-    const created = await createPipelineFromRequest({ ...draft(), stages: [{ ...draft().stages[0]!, serviceTier: null }] }, ports, { allowOperatorDraftWithoutLineage: true });
-    expect(created.pipeline?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+    const created = await createPipelineFromRequest({ ...draft(), stages: [{ ...draft().stages[0]!, engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: null, preferredServiceTier: "ultrafast" }] }, ports, { allowOperatorDraftWithoutLineage: true });
+    expect(created.pipeline?.stages[0]).toMatchObject({ serviceTier: null, preferredServiceTier: "ultrafast", effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default", preferredServiceTier: "ultrafast" } });
     const priority = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", serviceTier: "priority" }, ports);
     expect(priority.error).toBeUndefined();
-    expect(priority.pipeline?.stages[0]).toMatchObject({ serviceTier: "priority", effectiveRole: { serviceTier: "priority", serviceTierSource: "explicit" } });
+    expect(priority.pipeline?.stages[0]).toMatchObject({ serviceTier: "priority", preferredServiceTier: "ultrafast", effectiveRole: { serviceTier: "priority", serviceTierSource: "explicit", preferredServiceTier: "ultrafast" } });
+    const model = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", model: "gpt-6-luna" }, ports);
+    expect(model.error).toBeUndefined();
+    const effort = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", effort: "xhigh" }, ports);
+    expect(effort.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === created.pipeline!.id)?.stages[0]).toMatchObject({
+      model: "gpt-6-luna", effort: "xhigh", preferredServiceTier: "ultrafast",
+      effectiveRole: { model: "gpt-6-luna", effort: "xhigh", preferredServiceTier: "ultrafast" },
+    });
   } finally { resolve.mockRestore(); }
 });
 
@@ -671,6 +679,14 @@ test("automatic ultrafast launch falls back to available priority inside the all
     expect(receipt.accountId).toBe(accountA.id);
     expect(receipt.launchProfile).toMatchObject({ serviceTier: "priority", fast: true });
     expect(receipt.launchProfile).not.toMatchObject({ serviceTier: "ultrafast" });
+
+    resolve.mockClear();
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, unavailableAccountIds: [accountB.id], clientAttemptId: "quota-excluded-ultrafast" }, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("runtime host");
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).toContain(accountB.id);
+    const quotaFallbackReceipt = agentRegistry().readOnlySnapshot().receipts[reserved.at(-1)!]!;
+    expect(quotaFallbackReceipt.accountId).toBe(accountA.id);
+    expect(quotaFallbackReceipt.launchProfile.serviceTier).toBe("priority");
 
     resolve.mockClear();
     observations.find(item => item.accountId === accountA.id)!.limits!.weekly!.usedPercent = 100;

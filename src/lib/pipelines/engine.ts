@@ -778,7 +778,8 @@ async function spawnPipelineAgent(
       };
       resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, attemptRequest);
       if (resolution.kind === "available") break;
-      if (resolution.kind !== "exhausted" || choice.tier === "priority" || choice.tier === "standard") break;
+      if (choice.tier === "ultrafast" && (resolution.kind === "exhausted" || resolution.kind === "unavailable")) continue;
+      break;
     }
   } else {
     resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, request);
@@ -15525,6 +15526,7 @@ export async function patchPipeline(
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
             serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
+            preferredServiceTier: resetRuntime ? undefined : target.preferredServiceTier,
             /* A read-only-locked role takes no access from the stage it replaces. */
             access: isReadOnlyLockedRole(roleRef?.roleId) ? undefined : target.access,
           },
@@ -15546,6 +15548,7 @@ export async function patchPipeline(
         target.model = resolved.role.model;
         target.effort = resolved.role.effort;
         target.serviceTier = req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier;
+        target.preferredServiceTier = resolved.role.preferredServiceTier;
         target.access = resolved.role.access;
         /* Belt-and-braces: resolvePipelineRole already enforces these bounds, but
            re-check so a future resolver change can never persist a poisoned record. */
