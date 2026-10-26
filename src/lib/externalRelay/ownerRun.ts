@@ -231,12 +231,14 @@ export interface OwnerRunPorts {
   now?(): number;
 }
 export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: string, target: RelayTargetSettings, authorize: () => void): Promise<StructuredMessageResult | null> {
-  const [{ agentRegistry }, { accountManager }, { enqueueStructuredMessage }, { listClaudeAccounts }, { listCodexAccounts }] = await Promise.all([
+  const [{ prepareAgentRegistry }, { accountManager }, { enqueueStructuredMessage }, { listClaudeAccounts }, { listCodexAccounts }] = await Promise.all([
     import("@/lib/agent/registry"), import("@/lib/accounts/manager"), import("@/lib/runtime/structuredMessageDelivery"),
     import("@/lib/accounts/claude"), import("@/lib/accounts/codex"),
   ]);
   authorize();
-  const conversation = agentRegistry().conversation(run.conversationId! as `conversation_${string}`);
+  const registry = await prepareAgentRegistry();
+  authorize();
+  const conversation = registry.conversation(run.conversationId! as `conversation_${string}`);
   const generation = conversation?.generations.at(-1);
   const refuse = (): StructuredMessageResult => ({ ok: false, structured: true, outcome: "failed", status: 409,
     admission: "refused", error: "automatic continuation unavailable: the conversation cannot be resumed" });
