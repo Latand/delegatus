@@ -1,0 +1,969 @@
+{
+  "capturedAt": "2026-10-26T09:17:59.204Z",
+  "sourceDigests": {
+    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "5461eccf0b0e633f67f160861b37affae7105c9270a1979e691b8f6402fba55e",
+    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "9c7c7e6b6926ded39fef0f8986306a72a8e4bf1fc7c91eec7760472913e923ef"
+  },
+  "readings": [
+    {
+      "name": "variant-1-1440-uk-light",
+      "variant": 1,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1697
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 257,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 191,
+      "timelineHeight": 721
+    },
+    {
+      "name": "variant-1-1440-uk-light-folded",
+      "variant": 1,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1359
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 257,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 191,
+      "timelineHeight": 383
+    },
+    {
+      "name": "variant-1-1440-uk-dark",
+      "variant": 1,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1697
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 257,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 191,
+      "timelineHeight": 721
+    },
+    {
+      "name": "variant-1-1440-en-light",
+      "variant": 1,
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1681
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 257,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 158,
+      "timelineHeight": 705
+    },
+    {
+      "name": "variant-1-1440-en-dark",
+      "variant": 1,
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1681
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 257,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 158,
+      "timelineHeight": 705
+    },
+    {
+      "name": "variant-1-820-uk-light",
+      "variant": 1,
+      "width": 820,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1974
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 297,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 225,
+      "timelineHeight": 897
+    },
+    {
+      "name": "variant-1-820-uk-dark",
+      "variant": 1,
+      "width": 820,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1974
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 297,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 225,
+      "timelineHeight": 897
+    },
+    {
+      "name": "variant-1-820-en-light",
+      "variant": 1,
+      "width": 820,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1893
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 297,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 208,
+      "timelineHeight": 849
+    },
+    {
+      "name": "variant-1-820-en-dark",
+      "variant": 1,
+      "width": 820,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1893
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 297,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 208,
+      "timelineHeight": 849
+    },
+    {
+      "name": "variant-2-1440-uk-light",
+      "variant": 2,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1666
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 308,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        3,
+        3,
+        4,
+        2,
+        3,
+        2,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 208,
+      "timelineHeight": 673
+    },
+    {
+      "name": "variant-2-1440-uk-light-folded",
+      "variant": 2,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1344
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 308,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 208,
+      "timelineHeight": 351
+    },
+    {
+      "name": "variant-2-1440-uk-dark",
+      "variant": 2,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1666
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 308,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        3,
+        3,
+        4,
+        2,
+        3,
+        2,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 208,
+      "timelineHeight": 673
+    },
+    {
+      "name": "variant-2-1440-en-light",
+      "variant": 2,
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1602
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 292,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        3,
+        3,
+        2,
+        3,
+        2,
+        2,
+        2,
+        3,
+        2,
+        3,
+        2
+      ],
+      "summaryHeight": 160,
+      "timelineHeight": 625
+    },
+    {
+      "name": "variant-2-1440-en-dark",
+      "variant": 2,
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1602
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 292,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        3,
+        3,
+        2,
+        3,
+        2,
+        2,
+        2,
+        3,
+        2,
+        3,
+        2
+      ],
+      "summaryHeight": 160,
+      "timelineHeight": 625
+    },
+    {
+      "name": "variant-2-820-uk-light",
+      "variant": 2,
+      "width": 820,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1973
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 364,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        4,
+        2,
+        5,
+        2,
+        3,
+        3,
+        2,
+        3,
+        3,
+        3,
+        2,
+        3
+      ],
+      "summaryHeight": 240,
+      "timelineHeight": 833
+    },
+    {
+      "name": "variant-2-820-uk-dark",
+      "variant": 2,
+      "width": 820,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1973
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 364,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        4,
+        2,
+        5,
+        2,
+        3,
+        3,
+        2,
+        3,
+        3,
+        3,
+        2,
+        3
+      ],
+      "summaryHeight": 240,
+      "timelineHeight": 833
+    },
+    {
+      "name": "variant-2-820-en-light",
+      "variant": 2,
+      "width": 820,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1877
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 348,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        3,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        3,
+        2,
+        3
+      ],
+      "summaryHeight": 192,
+      "timelineHeight": 737
+    },
+    {
+      "name": "variant-2-820-en-dark",
+      "variant": 2,
+      "width": 820,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1877
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 348,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        3,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        3,
+        2,
+        3
+      ],
+      "summaryHeight": 192,
+      "timelineHeight": 737
+    },
+    {
+      "name": "variant-3-1440-uk-light",
+      "variant": 3,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1695
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 265,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 173,
+      "timelineHeight": 737
+    },
+    {
+      "name": "variant-3-1440-uk-light-folded",
+      "variant": 3,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1341
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 265,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 173,
+      "timelineHeight": 399
+    },
+    {
+      "name": "variant-3-1440-uk-dark",
+      "variant": 3,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1695
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 265,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 173,
+      "timelineHeight": 737
+    },
+    {
+      "name": "variant-3-1440-en-light",
+      "variant": 3,
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1679
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 265,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 173,
+      "timelineHeight": 721
+    },
+    {
+      "name": "variant-3-1440-en-dark",
+      "variant": 3,
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 1440,
+        "height": 1679
+      },
+      "first": {
+        "summaryTop": 222,
+        "cardTop": 145,
+        "firstLineBottom": 265,
+        "innerHeight": 900,
+        "innerWidth": 1440
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 173,
+      "timelineHeight": 721
+    },
+    {
+      "name": "variant-3-820-uk-light",
+      "variant": 3,
+      "width": 820,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1971
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 305,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        5,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 222,
+      "timelineHeight": 913
+    },
+    {
+      "name": "variant-3-820-uk-dark",
+      "variant": 3,
+      "width": 820,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1971
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 305,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        5,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        3,
+        2,
+        2
+      ],
+      "summaryHeight": 222,
+      "timelineHeight": 913
+    },
+    {
+      "name": "variant-3-820-en-light",
+      "variant": 3,
+      "width": 820,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1907
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 305,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 190,
+      "timelineHeight": 849
+    },
+    {
+      "name": "variant-3-820-en-dark",
+      "variant": 3,
+      "width": 820,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 820,
+        "height": 1907
+      },
+      "first": {
+        "summaryTop": 262,
+        "cardTop": 185,
+        "firstLineBottom": 305,
+        "innerHeight": 900,
+        "innerWidth": 820
+      },
+      "noteLines": [
+        3,
+        2,
+        4,
+        2,
+        3,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 190,
+      "timelineHeight": 849
+    },
+    {
+      "name": "today-1440-uk-light",
+      "variant": 0,
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 1440,
+        "height": 989
+      },
+      "first": null,
+      "noteLines": [],
+      "summaryHeight": null,
+      "timelineHeight": null
+    },
+    {
+      "name": "today-820-uk-light",
+      "variant": 0,
+      "width": 820,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 820,
+        "height": 1088
+      },
+      "first": null,
+      "noteLines": [],
+      "summaryHeight": null,
+      "timelineHeight": null
+    }
+  ],
+  "failures": []
+}

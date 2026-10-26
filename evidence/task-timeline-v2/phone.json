@@ -1,0 +1,533 @@
+{
+  "capturedAt": "2026-10-26T09:22:42.136Z",
+  "sourceDigests": {
+    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "5461eccf0b0e633f67f160861b37affae7105c9270a1979e691b8f6402fba55e",
+    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "9c7c7e6b6926ded39fef0f8986306a72a8e4bf1fc7c91eec7760472913e923ef"
+  },
+  "readings": [
+    {
+      "name": "variant-1-390-uk-light",
+      "variant": 1,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2023
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 208,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "summaryHeight": 216,
+      "timelineHeight": 747
+    },
+    {
+      "name": "variant-1-390-uk-light-folded",
+      "variant": 1,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1686
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 208,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "summaryHeight": 216,
+      "timelineHeight": 410
+    },
+    {
+      "name": "variant-1-390-uk-dark",
+      "variant": 1,
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2023
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 208,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "summaryHeight": 216,
+      "timelineHeight": 747
+    },
+    {
+      "name": "variant-1-390-en-light",
+      "variant": 1,
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1995
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 215.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 729
+    },
+    {
+      "name": "variant-1-390-en-dark",
+      "variant": 1,
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1995
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 215.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 729
+    },
+    {
+      "name": "variant-2-390-uk-light",
+      "variant": 2,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2024
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-2-390-uk-light-folded",
+      "variant": 2,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1687
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 428
+    },
+    {
+      "name": "variant-2-390-uk-dark",
+      "variant": 2,
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2024
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-2-390-en-light",
+      "variant": 2,
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1988
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        2,
+        3,
+        2,
+        1,
+        2,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 729
+    },
+    {
+      "name": "variant-2-390-en-dark",
+      "variant": 2,
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1988
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        2,
+        3,
+        2,
+        1,
+        2,
+        2
+      ],
+      "summaryHeight": 199,
+      "timelineHeight": 729
+    },
+    {
+      "name": "variant-3-390-uk-light",
+      "variant": 3,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2002
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "summaryHeight": 188,
+      "timelineHeight": 747
+    },
+    {
+      "name": "variant-3-390-uk-light-folded",
+      "variant": 3,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1665
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "summaryHeight": 188,
+      "timelineHeight": 410
+    },
+    {
+      "name": "variant-3-390-uk-dark",
+      "variant": 3,
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2002
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "summaryHeight": 188,
+      "timelineHeight": 747
+    },
+    {
+      "name": "variant-3-390-en-light",
+      "variant": 3,
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1986
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        2,
+        2
+      ],
+      "summaryHeight": 154,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-3-390-en-dark",
+      "variant": 3,
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1986
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        2,
+        2
+      ],
+      "summaryHeight": 154,
+      "timelineHeight": 765
+    },
+    {
+      "name": "today-390-uk-light",
+      "variant": 0,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1307
+      },
+      "first": null,
+      "noteLines": [],
+      "summaryHeight": null,
+      "timelineHeight": null
+    }
+  ],
+  "failures": []
+}
