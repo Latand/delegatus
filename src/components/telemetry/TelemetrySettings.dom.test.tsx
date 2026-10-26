@@ -66,6 +66,17 @@ test("Got it hides the notice at once and a refusal shows it again with the erro
   expect(document.querySelector('[role="alert"]')?.textContent).toBe(translate("en", "telemetry.error"));
 });
 
+test("environment-locked telemetry hides the automatic and settings notices", async () => {
+  holdPuts({ enabled: false, locked: true, noticeDismissed: false });
+  await mount();
+  expect(document.querySelector("[data-telemetry-notice]") === null).toBe(true);
+  await act(async () => { openTelemetrySettings(); });
+  expect(toggle().disabled).toBe(true);
+  expect(toggle().checked).toBe(false);
+  const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
+  expect(document.body.textContent).not.toContain(telemetryNotice.en);
+});
+
 test("swarm consent starts off and a refused save restores it without changing ping consent", async () => {
   const server = holdPuts({ enabled: false, locked: true, noticeDismissed: true, swarmRules: false });
   await mount();

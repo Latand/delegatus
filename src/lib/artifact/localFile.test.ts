@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { descriptorPlace, openAdmitted, openedAt } from "./localFile";
+import { admittedAs, lexicalAllowedRoots, descriptorPlace, openAdmitted, openedAt } from "./localFile";
 
 /* Where an open file lies, asked of the platform this run is on. Linux and
    macOS each have their own mechanism, so the same cases run on both. */
@@ -80,4 +80,19 @@ test.skipIf(process.platform !== "linux")("Windows, which has no mechanism, keep
     try { expect(await descriptorPlace(through, linked, "win32")).toBeNull(); } finally { await through.close(); }
     await expect(openAdmitted(linked, "win32")).rejects.toMatchObject({ code: "ELOOP" });
   });
+});
+
+test("a catalog entry for the home directory never reopens unrelated personal files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "home-file-roots-")); roots.push(root);
+  const previous = { home: process.env.HOME, state: process.env.LLV_STATE_DIR };
+  const home = path.join(root, "home"); const state = path.join(root, "state");
+  try {
+    await fs.mkdir(home); await fs.mkdir(state);
+    process.env.HOME = home; process.env.LLV_STATE_DIR = state;
+    await fs.writeFile(path.join(state, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
+    expect(admittedAs(path.join(home, "personal", "notes.json"), lexicalAllowedRoots())).toBeNull();
+  } finally {
+    if (previous.home === undefined) delete process.env.HOME; else process.env.HOME = previous.home;
+    if (previous.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous.state;
+  }
 });

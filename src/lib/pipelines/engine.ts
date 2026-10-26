@@ -8,7 +8,7 @@ import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequest
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
-import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
+import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -162,7 +162,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
 import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
@@ -315,6 +315,8 @@ export interface PipelinePorts {
     "prompt": string;
     parentPath: string | null;
     clientAttemptId: string;
+    /** Per-call monotonic cutoff derived from the persisted controller wait. */
+    spawnAdmissionDeadline?: number;
     membership: DurableMembershipInput;
     /** Pipeline creator (#393): the container acts for the conversation that
         created it, so reviewer-isolation and depth admission key on this —
@@ -367,6 +369,7 @@ export interface PipelinePorts {
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
   stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true; recordedIdentity?: true; eligible?: () => boolean;
+    requireIdleEvidence?: true;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
     recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
@@ -732,6 +735,12 @@ async function spawnPipelineAgent(
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
   preparePrompt?: () => Promise<string>,
 ): Promise<PipelineStageSpawn> {
+  // Account/parent lookups and registry admission spend the same cutoff.
+  const deadline = input.spawnAdmissionDeadline ?? Infinity;
+  const assertAdmissionCurrent = () => {
+    if (performance.now() >= deadline) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+  };
+  assertAdmissionCurrent();
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
   // Filter after the reservation and Git setup, immediately before dispatch.
@@ -854,9 +863,10 @@ async function spawnPipelineAgent(
       supersedes,
       supersedesReason: "stage-retry",
     }, () => {
+      assertAdmissionCurrent();
       // A writer retry must recheck the drain before creating its receipt.
       if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
-    });
+    }, { deadline });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
   try {
     await onReserved({
@@ -913,6 +923,7 @@ async function spawnPipelineAgent(
         accountId: begun.receipt.accountId ?? account.accountId });
       return filtered;
     });
+    assertAdmissionCurrent();
   } catch (error) {
     await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage Git guard preparation or activation recheck failed before dispatch");
     throw error;
@@ -929,6 +940,7 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
+      authorize: assertAdmissionCurrent,
     });
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
@@ -965,6 +977,9 @@ export type StageStopProbes = {
   operationId?: string;
   automatic?: true;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
+  /** A possibly working attempt (working state or no turn-end stamp) cannot
+      authorize the orphan fallback. */
+  requireIdleEvidence?: true;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   client?: RuntimeHostClient | null;
   /** Injected into the identity-bound termination a socketless caller falls
@@ -1289,9 +1304,12 @@ export async function retirePipelineStageAgent(
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
-    /* No idle evidence can come from a host whose stream is gone. Its stage is
-       settled, so the orphan behind the terminal row is ended by identity. */
-    if (probe.orphaned()) return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+    /* A missing stream cannot prove the host is idle. Automatic retirement
+       leaves it retryable; callers without this fence may use its recorded identity. */
+    if (probe.orphaned()) {
+      if (probes.requireIdleEvidence) return { outcome: "deferred" };
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+    }
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;
     if (!client) return { outcome: "deferred" };
     const session = await client.readSession?.({ conversationId: probe.conversationId });
@@ -2082,7 +2100,7 @@ export function defaultPipelinePorts(
           : { outcome: "failed", error: "stage launch wrote native turn evidence while its host stopped" };
       })
       : options?.onlyIfIdle
-      ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
+      ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery, requireIdleEvidence: options.requireIdleEvidence })
       : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
         ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
     stopInterruptedStageAgent: async (target, options) => {
@@ -3726,6 +3744,7 @@ export function adoptAttempt(
     error: null,
   };
   run.attempts.push(attempt);
+  if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
   retainCloseHosts(pipeline);
   return attempt;
 }
@@ -5293,8 +5312,8 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   for (const asked of [attempt.commitRepair?.detail, attempt.publicationRepair?.detail]) {
     if (asked && !reason.includes(asked)) reason += `\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
   }
-  const action = "Fix the reported commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
-  return (reason.startsWith("committing the passed stage:") || attempt.commitRepair?.outcome?.status === "rejected")
+  const action = "Fix the reported staging/commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
+  return (/^(?:staging|committing) the passed stage:/.test(reason) || attempt.commitRepair?.outcome?.status === "rejected")
     && !reason.includes(action) ? `${reason}\n${action}` : reason;
 }
 
@@ -5307,7 +5326,7 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
   if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
     || !attempt || attempt.verdict?.status !== "pass"
     || (attempt.commitRepair?.outcome?.status !== "rejected"
-      && !attempt.error?.startsWith("committing the passed stage:")
+      && !/^(?:staging|committing) the passed stage:/.test(attempt.error ?? "")
       && !passedStageCustodyPark(pipeline, attempt))) return null;
   if (pipeline.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before retrying settlement", status: 409 };
   if (attempt.conversationId) {
@@ -7068,10 +7087,24 @@ async function spawnRunStage(
       }
       await persist();
       try {
+        // Fenced-message retries spend a persisted count.
+        // Their backoff record has no lane deadline to carry into admission.
+        const wait = attempt.fencedMessageRetries && attempt.controllerWait?.budgetMs === undefined
+          ? undefined : attempt.controllerWait;
+        const budgetMs = wait ? wait.budgetMs ?? SPAWN_CONTROLLER_WAIT_BUDGET_MS : SPAWN_HOST_WAIT_BUDGET_MS;
+        const remainingMs = unixMs(wait?.startedAt ?? activationNow) + budgetMs - unixMs(ports.now());
+        const spawnAdmissionDeadline = performance.now() + Math.max(0, remainingMs);
+        if (remainingMs <= 0) {
+          const failure = pipeline.stateDetail?.match(/^stage spawn deferred: (.*); retry at /)?.[1];
+          throw failure && (isTransientStructuredSpawnFailure(failure) || isLaunchAdmissionContention(new Error(failure))) ? new Error(failure)
+            : wait && budgetMs === SPAWN_CONTROLLER_WAIT_BUDGET_MS ? new Error("structured delivery controller is unavailable")
+            : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+        }
         assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
         spawned = await ports.spawnAgent({
           ...spawnInput,
           clientAttemptId: callId,
+          spawnAdmissionDeadline,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
           ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
@@ -7095,7 +7128,7 @@ async function spawnRunStage(
            not a rejected launch, so it gets the wall-clock wait budget; every
            other transient keeps the two immediate handshake retries (#1056),
            which stay well inside the controller's phase deadline. */
-        const accountMutationContention = isAccountMutationContention(message);
+        const accountMutationContention = isAccountMutationContention(message) || message.includes(REGISTRY_WRITER_BUSY);
         const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
         /* #1750: an unverified delivery must never take the immediate
            handshake retries below — those re-dispatch the prompt on sight.
@@ -11099,7 +11132,7 @@ function syncControllerWaitStateDetail(
   failure: string | null,
 ): void {
   const retryAfter = attempt.controllerWait?.retryAfter;
-  if (failure !== null && (isAccountMutationContention(failure) || isRuntimeHostUnavailableSpawnFailure(failure) || isPrepublicationSpawnFailure(failure)) && retryAfter !== undefined) {
+  if (failure !== null && (isAccountMutationContention(failure) || failure.includes(REGISTRY_WRITER_BUSY) || isRuntimeHostUnavailableSpawnFailure(failure) || isPrepublicationSpawnFailure(failure)) && retryAfter !== undefined) {
     pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(failure)}; retry at ${retryAfter}`;
   } else if (pipeline.stateDetail?.startsWith("stage spawn deferred: ")) {
     pipeline.stateDetail = null;
@@ -11140,6 +11173,7 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
   if (failure.startsWith("Codex callback ")) return isRuntimeHostUnavailableSpawnFailure(failure);
   return failure === SEND_LOST_REASON || isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
+    || failure.includes(REGISTRY_WRITER_BUSY)
     || isRuntimeHostUnavailableSpawnFailure(failure)
     || isUnverifiedDeliverySpawnFailure(failure)
     || isPrepublicationSpawnFailure(failure)
@@ -11162,6 +11196,7 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
 function spawnWaitBudget(failure: string): { budgetMs: number; retryMaxMs: number } | undefined {
   return isRuntimeHostUnavailableSpawnFailure(failure)
     || isAccountMutationContention(failure)
+    || failure.includes(REGISTRY_WRITER_BUSY)
     || isUnverifiedDeliverySpawnFailure(failure)
     || isPrepublicationSpawnFailure(failure)
     ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
@@ -11313,11 +11348,11 @@ const TERMINAL_REAP_MAX_ROUNDS = 5;
  * A stage may finish long before the pipeline: on a pass edge, a bounded repair
  * loop, or a parked decision. Waiting for whole-pipeline completion left each
  * finished host resident. The reap therefore follows attempt evidence through
- * the same identity-verified control path while `closed` stays the explicit
- * close action's job.
+ * the same identity-verified control path. Explicit close obligations retain
+ * their own frozen targets; old closed lanes without one use this idle reap.
  *
- * Only hosts whose attempt finished its turn (a verdict or a completion stamp)
- * are candidates, and the runtime gets the last word: a conversation it
+ * A completed lane or replaced attempt also releases its host even when an
+ * older writer left no completion stamp. The runtime gets the last word: a conversation it
  * reports actively running is preserved, as are the pipeline's creator
  * conversation and transcript. Settled attempt keys make this incremental: a
  * later terminal round opens another bounded batch without re-killing an older
@@ -11325,7 +11360,7 @@ const TERMINAL_REAP_MAX_ROUNDS = 5;
  * ceiling turns a survivor into a visible unconfirmed host.
  */
 async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePorts, pipelines: readonly Pipeline[]): Promise<boolean> {
-  if (!["running", "needs_decision", "needs_review", "paused", "completed"].includes(pipeline.state)) return false;
+  if (!["running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(pipeline.state)) return false;
   const refs = controllerReferences(pipeline.id);
   const unscopedSettled = refs ? undefined : new Set(pipeline.terminalReap?.settledAttempts ?? []);
   const alreadySettled = (key: string) => controllerSettledAttempt(pipeline,key) ?? unscopedSettled!.has(key);
@@ -11333,13 +11368,16 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
     .map((host) => `${host.stageId}:${host.attempt}`));
   const prior = pipeline.terminalReap;
   const otherCandidates = refs ? await controllerOtherTerminalHosts(pipeline.id, refs.map(ref => ref.position)) : false;
-  const candidates = launchedStageHosts(pipeline, Boolean(refs)).filter(({ target, turnSettled }) => turnSettled
+  const candidates = launchedStageHosts(pipeline, Boolean(refs), (stageId, n) => alreadySettled(`${stageId}:${n}`)
+    || unconfirmedAttempts.has(`${stageId}:${n}`)).filter(({ target, turnSettled, attempt }) => (turnSettled
+    || ["completed", "closed"].includes(pipeline.state)
+    || pipelineAttemptReleased(pipeline, attempt, currentAttempt(pipeline, target.stageId) ?? undefined))
     && !(target.conversationId && target.conversationId === pipeline.srcConversationId)
     && !(target.agentPath && target.agentPath === pipeline.srcPath)
     && !alreadySettled(`${target.stageId}:${target.attempt}`)
     && !unconfirmedAttempts.has(`${target.stageId}:${target.attempt}`));
   if (candidates.length === 0) {
-    if (otherCandidates || pipeline.state !== "completed" || prior?.settledAt) return false;
+    if (otherCandidates || !["completed", "closed"].includes(pipeline.state) || prior?.settledAt) return false;
     const settledAt = ports.now();
     pipeline.terminalReap = prior
       ? { ...prior, lastAt: settledAt, settledAttempts: [...(unscopedSettled ?? new Set(prior.settledAttempts ?? []))], settledAt }
@@ -11399,7 +11437,11 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       liveWork = true;
       continue;
     }
-    const result = await ports.stopStageAgent(target, { onlyIfIdle: true });
+    /* Release ends ownership, never a possibly open turn: a stamp can survive
+       a resume, so the working state alone also demands positive idle proof.
+       The candidate stands for every round that shares its host. */
+    const result = await ports.stopStageAgent(target, { onlyIfIdle: true,
+      ...(sharedHostMayBeWorking(pipeline, target) ? { requireIdleEvidence: true as const } : {}) });
     if (result.outcome === "deferred") {
       liveWork = true;
       continue;
@@ -13506,11 +13548,12 @@ function terminalizeAttemptForClose(candidate: StageHostCandidate, note: string,
  * board — this issue again, through another door. A legacy review attempt a
  * conversion kept is probed as the host it was, never labelled adopted.
  */
-function launchedStageHosts(pipeline: Pipeline, selected = false): StageHostCandidate[] {
+function launchedStageHosts(pipeline: Pipeline, selected = false, skip?: (stageId: string, n: number) => boolean): StageHostCandidate[] {
   const candidates: StageHostCandidate[] = [];
   const seen = new Set<string>();
   for (const run of (selected ? controllerRuns(pipeline) : pipeline.runs)) {
     for (const attempt of run.attempts) {
+      if (skip?.(run.stageId, attempt.n)) continue;
       if (selected && !controllerReferences(pipeline.id)?.some(ref => ref.stageId === run.stageId && ref.n === attempt.n && ref.firstHost)) continue;
       if (!attempt.conversationId && !attempt.agentPath && !attempt.paneId) continue;
       /* Rounds can share a host identity (a review round re-reads its reviewer
@@ -13538,6 +13581,15 @@ function launchedStageHosts(pipeline: Pipeline, selected = false): StageHostCand
     }
   }
   return candidates;
+}
+
+/** Rounds that share a conversation, path or pane are probed through one
+    candidate, so any of them that may own a turn fences that host's stop. */
+function sharedHostMayBeWorking(pipeline: Pipeline, target: PipelineStageHostRef): boolean {
+  const shares = (attempt: PipelineStageAttempt) => Boolean((target.conversationId && attempt.conversationId === target.conversationId)
+    || (target.agentPath && attempt.agentPath === target.agentPath) || (target.paneId && attempt.paneId === target.paneId));
+  return controllerRuns(pipeline).some(run => run.attempts.some(attempt => shares(attempt) && pipelineAttemptMayBeWorking(attempt)))
+    || controllerOffWindowWorkingHost(pipeline, target) === true;
 }
 
 /** A launched host plus whether its attempt's turn ended, which decides only

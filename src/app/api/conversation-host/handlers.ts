@@ -1,3 +1,4 @@
+import { dispatchConversationMessage } from "@/lib/conversation/messageDispatch";
 import { prepareMessageFiles } from "@/lib/longMessageFile";
 import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
 /**
@@ -25,7 +26,8 @@ import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
  */
 import { NextRequest, NextResponse } from "next/server";
 
-import type { DeliveryOutcome } from "@/lib/delivery";
+import type { ConversationMessage, DeliveryOutcome } from "@/lib/delivery";
+import type { StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import type { AccountChoiceActor } from "@/lib/accounts/accountOverrides";
 import { callerConversationId, directOperatorActivityAuthority, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
@@ -151,8 +153,9 @@ async function recordAuthorizedOperatorActivity(
   target: { pid: number; hasPid: boolean; filePath: string; conversationId: string },
   identity: { idempotencyKey?: string },
   kind: "message" | "dialog",
+  inProcessPerson = false,
 ): Promise<AuthorizedOperatorAction> {
-  if (!directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
+  if (!inProcessPerson && !directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
   const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan()).snapshot.files, target);
   dependencies.recordOperatorRequest(req, {
     kind,
@@ -243,6 +246,9 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   };
   const deniedActor = actorRejection();
   if (deniedActor) return deniedActor;
+  // A rechecked in-process operator or member is the person's own authority;
+  // the synthetic request it built carries no session cookie.
+  const inProcessPerson = trustedActor?.kind === "operator" || trustedActor?.kind === "member";
 
   let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
@@ -289,11 +295,16 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       || (body.files != null && (!Array.isArray(body.files) || body.files.length > 0))) {
       return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported" }, { status: 400 });
     }
+    // A team install answers a person without a live member session with the
+    // sign-in refusal its identity gate gives, before relay admission.
+    const anonymousRelay = refuseAnonymous(trustedActor ?? teamActor(req));
+    if (anonymousRelay) return anonymousRelay;
     const admitted = admitOrchestratorRelay(req, body.orchestratorRelayProject,
       typeof body.conversationId === "string" ? body.conversationId : "",
       typeof body.text === "string" ? body.text : "",
       typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
-      voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined);
+      voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined,
+      inProcessPerson);
     if (!admitted.ok) {
       return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
     }
@@ -385,6 +396,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
           target,
           clientMessageId ? { idempotencyKey: clientMessageId } : {},
           "dialog",
+          inProcessPerson,
         );
       } catch (error) {
         if (error instanceof OperatorActivityTargetConflictError) {
@@ -398,7 +410,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       actor: controlCaller ? { kind: "agent", conversationId: controlCaller } : { kind: "operator" },
       ...(["interrupt", "kill"].includes(explicitAction) ? { controlOrigin: controlCaller
         ? { kind: "agent" as const, conversationId: controlCaller }
-        : operatorBrowserRequest(req) ? { kind: "operator" as const } : API_CLIENT_ORIGIN } : {}),
+        : inProcessPerson || operatorBrowserRequest(req) ? { kind: "operator" as const } : API_CLIENT_ORIGIN } : {}),
       conversationId,
       transcriptPath: filePath,
       action: explicitAction,
@@ -530,6 +542,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       operatorTarget,
       clientMessageId ? { idempotencyKey: clientMessageId } : {},
       "message",
+      inProcessPerson,
     );
   } catch (error) {
     if (error instanceof OperatorActivityTargetConflictError) {
@@ -593,31 +606,22 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   };
   const attachmentField = () => (filePaths.length ? { filePaths, ...(textAttachment ? { textAttachment } : {}) } : {});
 
-  if (structuredHostsEnabled()) {
+  const structuredEnabled = structuredHostsEnabled();
+  if (structuredEnabled) {
     const revoked = actorRejection(); if (revoked) return revoked;
-    const structured = await dependencies.enqueueStructuredMessage({
-      path: filePath,
-      ...(conversationId ? { conversationId } : {}),
-      ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
-      // Only admission's authenticated durable send can choose a relay replay
-      // operation; caller-supplied operation IDs grant no such authority.
-      ...(relay?.operationId ? { operationId: relay.operationId } : {}),
-      text: payloadText.trim(),
-      ...(policy ? { policy } : {}),
-      images,
-      ...(origin ? { origin } : {}),
-    });
-    if (structured) {
-      recordDeliveryIngress(structured.operationId, ingressAt);
-      await releaseAttachments(structuredAttachmentOutcome(structured));
-      if (structured.ok) settleMessageAuthor(authorClaim);
-      const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
-      return NextResponse.json({ ...response, ...attachmentField() }, { status });
-    }
   }
-
-  const revoked = actorRejection(); if (revoked) return revoked;
-  const outcome = await dependencies.deliverConversationMessage({
+  const selected = await dispatchConversationMessage({
+    path: filePath,
+    ...(conversationId ? { conversationId } : {}),
+    ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
+    // Only admission's authenticated durable send can choose a relay replay
+    // operation; caller-supplied operation IDs grant no such authority.
+    ...(relay?.operationId ? { operationId: relay.operationId } : {}),
+    text: payloadText.trim(),
+    ...(policy ? { policy } : {}),
+    images,
+    ...(origin ? { origin } : {}),
+  } satisfies StructuredMessageRequest, {
     pid: hasPid ? pid : null,
     path: filePath,
     ...(conversationId ? { conversationId } : {}),
@@ -631,7 +635,23 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     ...(typeof body.model === "string" ? { resumeModel: body.model } : {}),
     ...(typeof body.effort === "string" ? { resumeEffort: body.effort } : {}),
     ...(typeof body.fast === "boolean" ? { resumeFast: body.fast } : {}),
+  } satisfies ConversationMessage, {
+    structured: request => structuredEnabled ? dependencies.enqueueStructuredMessage(request) : Promise.resolve(null),
+    legacy: async (request): Promise<DeliveryOutcome | NextResponse<ApiError>> => {
+      const revoked = actorRejection();
+      return revoked ?? dependencies.deliverConversationMessage(request);
+    },
   });
+  if (selected.transport === "structured") {
+    const structured = selected.result;
+    recordDeliveryIngress(structured.operationId, ingressAt);
+    await releaseAttachments(structuredAttachmentOutcome(structured));
+    if (structured.ok) settleMessageAuthor(authorClaim);
+    const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
+    return NextResponse.json({ ...response, ...attachmentField() }, { status });
+  }
+  const outcome = selected.result;
+  if (outcome instanceof NextResponse) return outcome;
   recordDeliveryIngress(outcome.operationId, ingressAt);
   /* `started` actuation is the uncertain case the image path also keeps: the
      agent may already hold the message, so its attachments stay readable. */

@@ -187,7 +187,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveCorrectionForRole, leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -2742,7 +2742,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
-    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
+    const answer = { correction: args.correction, lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
     /* The operator's own root conversation, in Delegatus mode only: proven by
        the registry, never by an argument (memory-source-switch.md §3.3). */
     const operator = () => {
@@ -2760,8 +2760,11 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     try {
       return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
     } catch (error) {
+      if (!(error instanceof RoleMemoryRefusal) || error.code !== "LESSON_NOT_AN_ATTEMPT" || caller.kind !== "agent") throw error;
+      // A registered role outside a pipeline may still leave an operator correction.
+      if (args.correction === true && caller.role && caller.conversationId) return { ...leaveCorrectionForRole({ conversationId: caller.conversationId, roleId: caller.role, project: dependencies.callerProject ? dependencies.callerProject() : productionCallerProject() }, answer) };
       // Only a conversation that holds no stage attempt at all may be the operator's.
-      const own = error instanceof RoleMemoryRefusal && error.code === "LESSON_NOT_AN_ATTEMPT" && caller.kind === "agent" ? operator() : null;
+      const own = operator();
       if (!own) throw error;
       return { ...leaveLessonForOperator(own, answer) };
     }

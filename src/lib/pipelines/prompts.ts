@@ -1,5 +1,5 @@
 import { shortId } from "@/lib/shortIds";
-import { DELEGATUS_MECHANICS } from "@/lib/roles/defaults";
+import { DELEGATUS_MECHANICS, OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
@@ -63,6 +63,14 @@ export function renderStagePrompt(
     roleScaffold = roleScaffold.replace(/\bat most \d+ workers\b/gu, `at most ${workerLimit} workers`);
   }
   if (roleScaffold) roleScaffold = replaceAll(roleScaffold, RELAY_PLACEHOLDER, previousOutput);
+  if (roleScaffold) {
+    // Retained pipelines carry the scaffold they were created with.
+    roleScaffold = roleScaffold
+      .replace("Change role memory only through curate_rules.", "Change role memory through curate_rules; use leave_lesson correction:true for an operator correction of your own work.")
+      .replace("Never publish: the only write is issue_report with action preview.", "Never publish: writes are issue_report with action preview and leave_lesson correction:true for an operator correction.");
+    if (!roleScaffold.includes(OPERATOR_CORRECTION_RULE)) roleScaffold = `${OPERATOR_CORRECTION_RULE}\n\n${roleScaffold}`;
+  }
+
   /* The controller persists the predecessor's output on the attempt whether or
      not the author placed the placeholder (#1678): a prompt that never names it
      used to render nothing, and the stage truthfully reported a missing input.

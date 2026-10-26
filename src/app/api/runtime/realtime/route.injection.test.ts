@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { agentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
@@ -51,13 +52,14 @@ function seatProject(project: string, conversationId: string, clientRequestId = 
   completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
 }
 
-function realtimeRequest(body: unknown, capability?: string): NextRequest {
+function realtimeRequest(body: unknown, capability?: string, headers: Record<string, string> = {}): NextRequest {
   return new NextRequest("http://127.0.0.1/api/runtime/realtime", {
     method: "POST",
     headers: {
       host: "127.0.0.1",
       "content-type": "application/json",
       ...(capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}),
+      ...headers,
     },
     body: JSON.stringify(body),
   });
@@ -177,23 +179,19 @@ test("status from an agent is not blocked: it writes nothing", async () => {
 /**
  * THE NO-CEREMONY CONTRACT, PINNED AT THE ROUTE.
  *
- * These two cases used to assert the opposite — that a browser presenting nothing
- * was refused `start`/`stop` until the operator pasted a secret. The operator's
- * final decision replaced that: this app is single-user and loopback-bound, the
- * route rejects cross-origin BEFORE consulting authority, so a same-origin browser
- * request IS the operator, and the transport guard's only job is refusing an AGENT
- * — which names itself by presenting its conversation capability.
- *
- * They live here as the regression, at the route rather than in the DOM, because
- * restoring `requireOperatorAuthority` on this handler is the exact way the
- * ceremony comes back: an empty capability header is `MISSING` to that function,
- * so both cases below flip from the host's 409 to a 403 the moment it returns.
+ * The operator never pastes or unlocks anything: the page navigation that
+ * opened the tab also set its session cookie, and every fetch from that tab
+ * carries it. Fetch Metadata such as `sec-fetch-site` is no proof, because a
+ * local script can stamp it, so the transport asks for that session and still
+ * refuses an agent, which names itself by presenting its conversation
+ * capability.
  */
-test("a plain browser tab — nothing presented — opens and closes the operator's call", async () => {
+test("a browser tab with the session its navigation opened starts and stops the operator's call", async () => {
   for (const action of ["start", "stop"]) {
     const response = await POST(new NextRequest("http://127.0.0.1/api/runtime/realtime", {
       method: "POST",
       headers: {
+        cookie: `llv_operator=${soloBrowserSession()}`,
         host: "127.0.0.1",
         origin: "http://127.0.0.1",
         "sec-fetch-site": "same-origin",
@@ -213,13 +211,14 @@ test("a plain browser tab — nothing presented — opens and closes the operato
   }
 });
 
-test("a stale value from an older process does not demote the browser below anonymous", async () => {
+test("a stale value from an older process does not demote the browser's session", async () => {
   /* Reaches the host rather than the gate: refused for want of a hosted realtime
      thread, not for want of authority. Presenting something the registry cannot map
      names no agent, so it must be no worse than presenting nothing. */
   const response = await POST(new NextRequest("http://127.0.0.1/api/runtime/realtime", {
     method: "POST",
     headers: {
+      cookie: `llv_operator=${soloBrowserSession()}`,
       host: "127.0.0.1",
       "content-type": "application/json",
       [VIEWER_SPAWN_CAPABILITY_HEADER]: crypto.randomBytes(32).toString("base64url"),
@@ -248,10 +247,14 @@ test("an agent cannot start or stop the operator's transport, and reaches no hos
   setCallerConversationResolverForTests(null);
 });
 
-test("a bare local caller stops the call it opened — no header, no secret, no cookie", async () => {
-  /* The second half of the regression: not even a `sec-fetch-site` hint, which is
-     the shape a fetch from an ordinary tab actually arrives in. */
-  const response = await POST(realtimeRequest({ conversationId: "conversation_root", action: "stop" }));
+test("a bare local caller is refused the transport; fetch metadata adds no authority", async () => {
+  for (const headers of [{}, { "sec-fetch-site": "same-origin", origin: "http://127.0.0.1" }] as Record<string, string>[]) {
+    const response = await POST(realtimeRequest({ conversationId: "conversation_root", action: "stop" }, undefined, headers));
+    expect(response.status).toBe(403);
+    expect((await response.json() as { error: string }).error).not.toContain("hosted");
+  }
+  const response = await POST(realtimeRequest({ conversationId: "conversation_root", action: "stop" }, undefined,
+    { cookie: `llv_operator=${soloBrowserSession()}` }));
   expect(response.status).toBe(409);
   expect((await response.json() as { error: string }).error).toContain("hosted");
 });

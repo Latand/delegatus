@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
@@ -236,9 +237,9 @@ test("a queued message is the operator's only from a Viewer page; a script's is 
   const post = (id: string, headers: Record<string, string>) => handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
     method: "POST", headers: { host: "localhost", ...headers }, body: JSON.stringify(command(id)),
   }), { client: () => f.client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [] });
-  expect((await post("op-page", { "sec-fetch-site": "same-origin" })).status).toBe(202);
-  /* A script sends no fetch metadata, whatever token it holds. */
-  expect((await post("op-script", {})).status).toBe(202);
+  expect((await post("op-page", { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" })).status).toBe(202);
+  /* Fetch metadata alone is no page: a script can stamp it, but holds no session. */
+  expect((await post("op-script", { "sec-fetch-site": "same-origin" })).status).toBe(202);
   const origins = Object.fromEntries(f.journal.nativeQueueRead(conversationId).map((entry) => [entry.entryId, entry.versions[0]!.origin]));
   expect(origins).toEqual({ "op-page": { kind: "operator" }, "op-script": { kind: "agent", role: "api-client" } });
   f.journal.close();
@@ -709,7 +710,7 @@ test.each(["add", "start", "send-now"] as const)("persistent drain holds authent
   }, () => f.host);
   const post = (id: string, manual = false) => handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
     method: "POST", headers: { host: "localhost",
-      ...(manual ? { "sec-fetch-site": "same-origin" } : { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }) },
+      ...(manual ? { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" } : { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }) },
     body: JSON.stringify(command(id, { action, origin: { kind: "operator" },
       ...(action !== "add" ? { turnId: null } : {}),
       ...(action === "send-now" ? { entryId: seed.operationId, expectedRevision: 1 } : {}) })),
@@ -1000,7 +1001,7 @@ function handOffFixture(name: string, sqlite = false) {
   return { f, root, registry, cleanup: () => { f.journal.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 function handOff(key: string, text = "queued for Codex") {
-  return new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+  return new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ kind: "native-queue", conversationId, idempotencyKey: key, action: "add", text, binding }) });
 }
 
@@ -1197,7 +1198,7 @@ test("a hand-off whose supplied operation id names another key's owner is refuse
   const dependencies = { client: () => client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
     registry: () => registry, progress };
   const named = (key: string, text: string, operationId: string, target = conversationId) =>
-    new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+    new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
       body: JSON.stringify({ kind: "native-queue", conversationId: target, idempotencyKey: key, action: "add", text, operationId, binding }) });
   try {
     const input = handOff("owner-a", "message A");
