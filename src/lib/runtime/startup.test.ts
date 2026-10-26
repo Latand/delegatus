@@ -28,6 +28,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { activateViewerRuntimeWhenCurrent, runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
+import * as darwinRuntime from "@/lib/proc/darwinIdentity";
 import {
   bindStructuredDeliveryQueue,
   hasStructuredDeliveryHost,
@@ -6675,13 +6676,18 @@ test("startup publishes fresh launch admission before a held registry census", a
   }
 });
 
-test.each(["cancel", "retire"] as const)("startup %s during generation lookup cannot publish launch admission", async change => {
+test.each(["cancel", "retire", "runtime"] as const)("startup %s during generation lookup cannot publish launch admission", async change => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-bind-fence-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const abort = new AbortController();
-  let active = true, startup: Promise<unknown> | undefined;
+  let active = true, compatible = true, startup: Promise<unknown> | undefined;
+  const requirement = darwinRuntime.assertDarwinStructuredRuntime;
+  const runtimeGuard = change === "runtime" ? spyOn(darwinRuntime, "assertDarwinStructuredRuntime").mockImplementation(() => {
+    if (!compatible) throw new Error("fixture runtime unsupported");
+    requirement();
+  }) : undefined;
   const client = runtimeClient(journal);
   client.startupGeneration = async () => { entered.resolve(); await release.promise; return "fixture-generation"; };
   try {
@@ -6695,15 +6701,18 @@ test.each(["cancel", "retire"] as const)("startup %s during generation lookup ca
     const refused = startup.then(() => null, error => error as Error);
     await entered.promise;
     if (change === "cancel") abort.abort(new Error("fixture startup cancelled"));
-    else active = false;
+    else if (change === "retire") active = false;
+    else compatible = false;
     release.resolve();
     const reason = await refused;
     expect(reason).toBeInstanceOf(Error);
-    expect(reason?.message).toBe(change === "cancel" ? "fixture startup cancelled" : "fixture release retired");
+    expect(reason?.message).toBe(change === "cancel" ? "fixture startup cancelled"
+      : change === "retire" ? "fixture release retired" : "fixture runtime unsupported");
     expect(hasStructuredDeliveryController(registry)).toBe(false);
   } finally {
     release.resolve();
     await startup?.catch(() => {});
+    runtimeGuard?.mockRestore();
     await bindStructuredDeliveryQueue([], { client: null });
     journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });

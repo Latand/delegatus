@@ -2193,6 +2193,7 @@ function startStructuredHostPass(
     // Publish launch admission before the registry census and transcript I/O.
     // Existing queued work stays fenced until startup evidence admits recovery.
     if (client && (replaced || !hasStructuredDeliveryController(registry))) {
+      assertDarwinStructuredRuntime();
       dependencies.signal?.throwIfAborted();
       dependencies.assertActive?.();
       await withViewerOperation("runtime.startup-bind", () =>
