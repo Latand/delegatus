@@ -191,16 +191,23 @@ monitor.tick();
 console.warn("[state transaction-hold] " + JSON.stringify({ collection: "fixture", heldMs: 103, role: process.env.LLV_STATE_OWNER }));
 setTimeout(() => {
   const line = "[performance summary] " + JSON.stringify({ role: process.env.LLV_STATE_OWNER });
-  process.stderr.write(line.slice(0, 12));
-  setTimeout(() => {
-    process.stderr.write(line.slice(12) + "\\n");
+  if (process.env.LLV_QUIET_DIAGNOSTICS === "1") {
+    process.stderr.write(line.slice(0, 12));
+    setTimeout(() => {
+      process.stderr.write(line.slice(12) + "\\n");
+      console.log("fixture diagnostics complete");
+    }, 25);
+  } else {
+    // Journal/debug deliberately stream fragments. Keep complete JSON records
+    // atomic in this fixture; the streaming cases below use one producer.
+    process.stderr.write(line + "\\n");
     console.log("fixture diagnostics complete");
-  }, 25);
+  }
 }, 200);
 `;
 }
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; readinessDelayMs?: number } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; readinessDelayMs?: number; viewerOutput?: string; hostOutput?: string } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
   const bin = path.join(fixture, "bin");
@@ -268,6 +275,7 @@ const server = Bun.serve({
   },
 });
 ${options.diagnostics ? runtimeDiagnostics("viewer") : ""}
+${options.viewerOutput ?? ""}
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
@@ -288,6 +296,7 @@ server.listen(socketPath, () => writeFileSync(fencePath, JSON.stringify({
   acquisitionId: "fixture-acquisition-id",
 })));
 ${options.diagnostics ? runtimeDiagnostics("runtime-host") : ""}
+${options.hostOutput ?? ""}
 const stop = () => server.close(() => {
   rmSync(socketPath, { force: true });
   rmSync(fencePath, { force: true });
@@ -760,6 +769,127 @@ test.each(["en", "uk"] as const)("the %s notice is printed once on first start a
     expect(child.exitCode).toBe(0);
   }
 });
+
+/* The marker and unfinished prefix share a pipe write. After observing the
+   marker, the test releases the other producer, without timer-based ordering. */
+for (const channel of ["stdout", "stderr"] as const) {
+  test(`an unfinished host diagnostic cannot swallow a Viewer error on ${channel}`, async () => {
+    const fixture = await checkoutFixture({
+      hostOutput: `{
+        const fs = await import("node:fs");
+        fs.writeSync(${channel === "stdout" ? 1 : 2}, 'host partial ready\\n[state transaction-hold] {"heldMs":');
+      }`,
+      viewerOutput: `{
+        const fs = await import("node:fs");
+        const timer = setInterval(() => {
+          if (!fs.existsSync(process.env.LLV_STATE_DIR + "/release-error")) return;
+          clearInterval(timer);
+          process.${channel}.write("Error: interleaved child failure\\n");
+        }, 10);
+      }`,
+    });
+    await mkdir(fixture.env.TMPDIR!, { recursive: true });
+    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+      cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const output = captureOutput(child);
+    await output.waitFor("host partial ready\n", 10_000);
+    await writeFile(path.join(fixture.env.LLV_STATE_DIR!, "release-error"), "1");
+    await output.waitFor("Error: interleaved child failure\n", 10_000);
+    expect(output.text()).not.toContain("[state transaction-hold]");
+  });
+}
+
+test("replacement runtime hosts cannot inherit an unfinished diagnostic", async () => {
+  const fixture = await checkoutFixture({ hostOutput: `{
+    const fs = await import("node:fs");
+    const generationFile = process.env.LLV_STATE_DIR + "/output-generation";
+    const generation = fs.existsSync(generationFile) ? Number(fs.readFileSync(generationFile, "utf8")) + 1 : 1;
+    fs.writeFileSync(generationFile, String(generation));
+    if (generation === 1) {
+      fs.writeSync(2, 'first host ready\\n[state transaction-hold] {"heldMs":');
+      const timer = setInterval(() => {
+        if (fs.existsSync(process.env.LLV_STATE_DIR + "/replace-host")) process.exit(0);
+      }, 10);
+      timer.unref();
+    } else fs.writeSync(2, "Error: replacement host output\\n");
+  }` });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor("first host ready\n", 10_000);
+  await writeFile(path.join(fixture.env.LLV_STATE_DIR!, "replace-host"), "1");
+  await output.waitFor("Error: replacement host output\n", 10_000);
+  expect(output.text().split("\n").filter(line => line.startsWith("[state transaction-hold]"))).toEqual([]);
+});
+
+test("a closed child pipe flushes an undecided prefix while the launcher stays alive", async () => {
+  const fixture = await checkoutFixture({ viewerOutput: `{
+    const fs = await import("node:fs");
+    fs.writeSync(2, "[state");
+    fs.closeSync(2);
+  }` });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor("[state", 10_000);
+  expect(child.exitCode).toBeNull();
+});
+
+test("the prefix classification bound preserves Unicode in forwarded errors", async () => {
+  const fixture = await checkoutFixture({ viewerOutput: 'process.stderr.write(" ".repeat(255) + "🔧 Error: prefix boundary\\n");' });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor(" ".repeat(255) + "🔧 Error: prefix boundary\n", 10_000);
+});
+
+for (const scenario of ["ordinary", "journal", "debug"] as const) {
+  test(`${scenario} forwards large fragmented newline-free output before shutdown`, async () => {
+    const fixture = await checkoutFixture({ viewerOutput: `{
+      const fs = await import("node:fs");
+      const chunk = Buffer.alloc(64 * 1024, ${JSON.stringify(scenario === "ordinary" ? " " : "x")});
+      ${scenario === "ordinary" ? "" : 'fs.writeSync(1, "[performance");'}
+      const timer = setInterval(() => {
+        if (!fs.existsSync(process.env.LLV_STATE_DIR + "/release-output")) return;
+        clearInterval(timer);
+        ${scenario === "ordinary" ? "" : 'fs.writeSync(1, " summary] ");'}
+        for (let i = 0; i < 64; i++) fs.writeSync(1, chunk);
+        fs.writeSync(1, "stream complete");
+      }, 10);
+    }` });
+    await mkdir(fixture.env.TMPDIR!, { recursive: true });
+    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+      cwd: path.dirname(path.dirname(fixture.cli)),
+      env: { ...fixture.env, LLV_LANG: "en", JOURNAL_STREAM: scenario === "journal" ? "1:1" : undefined,
+        DELEGATUS_DEBUG: scenario === "debug" ? "1" : undefined },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const output = captureOutput(child);
+    await output.waitFor("Open http://", 10_000);
+    if (scenario !== "ordinary") await output.waitFor("[performance", 10_000);
+    await writeFile(path.join(fixture.env.LLV_STATE_DIR!, "release-output"), "1");
+    await output.waitFor("stream complete", 10_000);
+    const prefix = scenario === "ordinary" ? "" : "[performance summary] ";
+    expect(output.text()).toContain(prefix + (scenario === "ordinary" ? " " : "x").repeat(4 * 1024 * 1024) + "stream complete");
+    expect(child.exitCode).toBeNull();
+  });
+}
 
 /* Use a real PTY for the interactive case; CLI children still use pipes, as
    they do in production. Journal metadata must override even a terminal. */

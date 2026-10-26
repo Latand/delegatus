@@ -8,6 +8,7 @@ import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
@@ -194,26 +195,33 @@ const m = MESSAGES[LANG];
    DELEGATUS_DEBUG=1 keeps Next's lines, and it is also what lets the children
    print their startup diagnostics (`src/lib/startupDiagnostics.ts`). An error
    is never dropped: it waits for the banner, or for the launcher to fail. */
-const NEXT_STARTUP_LINE = /^\s*(?:▲ Next\.js |- (?:Local|Network|Environments|Experiments):|✓ (?:Starting|Ready in|Running next\.config))/;
+const NEXT_STARTUP_PREFIXES = ["▲ Next.js ", "- Local:", "- Network:", "- Environments:", "- Experiments:", "✓ Starting", "✓ Ready in", "✓ Running next.config"];
+const TERMINAL_DIAGNOSTIC_PREFIXES = ["[viewer loop-gap] ", "[performance summary] ", "[state transaction-hold] "];
 const HELD_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 /* The name `src/lib/startupDiagnostics.ts` reads. */
 const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
 
-function withoutTerminalDiagnostics(text) {
-  return text
-    .split("\n")
-    .filter((line) => {
-      const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
-      return !NEXT_STARTUP_LINE.test(plain) && (process.env.JOURNAL_STREAM !== undefined
-        || !/^\[(?:viewer loop-gap|performance summary|state transaction-hold)\] /.test(plain));
-    })
-    .join("\n");
+/* Only the prefix is needed to classify a line. A malformed/very long prefix
+   is forwarded after this bound, so unknown output cannot grow an unbounded
+   unfinished line or hide a real error. */
+const OUTPUT_PREFIX_LIMIT = 256;
+
+function outputDisposition(line) {
+  const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
+  const next = plain.trimStart();
+  const diagnostics = process.env.JOURNAL_STREAM === undefined ? TERMINAL_DIAGNOSTIC_PREFIXES : [];
+  if (NEXT_STARTUP_PREFIXES.some(prefix => next.startsWith(prefix))
+    || diagnostics.some(prefix => plain.startsWith(prefix))) return "drop";
+  if (NEXT_STARTUP_PREFIXES.some(prefix => prefix.startsWith(next))
+    || diagnostics.some(prefix => prefix.startsWith(plain))
+    || /\x1b(?:\[[0-9;]*)?$/.test(plain)) return null;
+  return "pass";
 }
 
 function createStartupOutput() {
   const held = [];
   const tails = { stdout: "", stderr: "" };
-  const pending = { stdout: "", stderr: "" };
+  const sources = new Set();
   let failureFile = null;
   let failureRevision = null;
   let heldBytes = 0;
@@ -223,15 +231,22 @@ function createStartupOutput() {
     if (released) return;
     released = true;
     for (const [stream, text] of held.splice(0)) stream.write(text);
+    heldBytes = 0;
+  };
+  const emit = (stream, text) => {
+    if (!text.length) return;
+    if (released) {
+      stream.write(text);
+      return;
+    }
+    held.push([stream, text]);
+    heldBytes += Buffer.byteLength(text);
+    if (heldBytes > HELD_OUTPUT_LIMIT_BYTES) release();
   };
   return {
     finish() {
+      for (const source of sources) source.finish();
       release();
-      for (const channel of ["stdout", "stderr"]) {
-        const text = debug ? pending[channel] : withoutTerminalDiagnostics(pending[channel]);
-        pending[channel] = "";
-        if (text) process[channel].write(text);
-      }
     },
     setFailureFile(file, revision) { failureFile = file; failureRevision = revision; },
     persistFailure() {
@@ -244,22 +259,59 @@ function createStartupOutput() {
     setDebug(value) {
       debug = value;
     },
-    write(stream, chunk) {
+    /* One framer per producing pipe, recreated for every child generation.
+       Closed pipes remove their state instead of accumulating retired hosts. */
+    source(stream, input) {
       const channel = stream === process.stderr ? "stderr" : "stdout";
-      tails[channel] = (tails[channel] + String(chunk)).slice(-32 * 1024);
-      pending[channel] += String(chunk);
-      const end = pending[channel].lastIndexOf("\n") + 1;
-      const complete = pending[channel].slice(0, end);
-      pending[channel] = pending[channel].slice(end);
-      const text = debug ? complete : withoutTerminalDiagnostics(complete);
-      if (!text) return;
-      if (released) {
-        stream.write(text);
-        return;
-      }
-      held.push([stream, text]);
-      heldBytes += text.length;
-      if (heldBytes > HELD_OUTPUT_LIMIT_BYTES) release();
+      const decoder = new StringDecoder("utf8");
+      let prefix = "";
+      let disposition = null;
+      let finished = false;
+      const consume = (text) => {
+        let offset = 0;
+        while (offset < text.length) {
+          const newline = text.indexOf("\n", offset);
+          const end = newline < 0 ? text.length : newline + 1;
+          if (disposition === null) {
+            const take = Math.min(end - offset, OUTPUT_PREFIX_LIMIT - prefix.length);
+            prefix += text.slice(offset, offset + take);
+            offset += take;
+            disposition = outputDisposition(prefix);
+            if (disposition === null && (prefix.length === OUTPUT_PREFIX_LIMIT || offset === newline + 1)) disposition = "pass";
+            if (disposition !== null) {
+              // Keep any surrogate pair crossing the prefix bound in one write.
+              if (disposition === "pass") emit(stream, prefix + text.slice(offset, end));
+              prefix = "";
+              offset = end;
+            }
+          } else {
+            if (disposition === "pass") emit(stream, text.slice(offset, end));
+            offset = end;
+          }
+          if (newline >= 0 && offset === end) disposition = null;
+        }
+      };
+      const source = {
+        write(chunk) {
+          if (finished) return;
+          tails[channel] = (tails[channel] + String(chunk)).slice(-32 * 1024);
+          if (debug) emit(stream, chunk);
+          else consume(decoder.write(chunk));
+        },
+        finish() {
+          if (finished) return;
+          finished = true;
+          consume(decoder.end());
+          if (prefix && outputDisposition(prefix) !== "drop") emit(stream, prefix);
+          prefix = "";
+          sources.delete(source);
+        },
+      };
+      sources.add(source);
+      input?.once("end", () => source.finish());
+      input?.once("close", () => source.finish());
+      if (!input) source.finish();
+      return source;
     },
     release,
   };
@@ -552,7 +604,9 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   });
 
   /* A child that could not be spawned may have no stdio streams at all. */
-  child.stdout?.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
+  const stdout = startupOutput.source(process.stdout, child.stdout);
+  const stderr = startupOutput.source(process.stderr, child.stderr);
+  child.stdout?.on("data", (chunk) => stdout.write(chunk));
   child.stderr?.on("data", (chunk) => {
     const text = chunk.toString("utf8");
     if (text.includes("EADDRINUSE")) {
@@ -564,7 +618,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
       return;
     }
 
-    startupOutput.write(process.stderr, chunk);
+    stderr.write(chunk);
   });
 
   child.on("exit", async (code, signal) => {
@@ -724,10 +778,12 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     currentRelease = release;
     hooks.onStarted?.(child, release);
     /* A child that could not be spawned may have no stdio streams at all. */
-    child.stdout?.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
+    const stdout = startupOutput.source(process.stdout, child.stdout);
+    const stderr = startupOutput.source(process.stderr, child.stderr);
+    child.stdout?.on("data", (chunk) => stdout.write(chunk));
     child.stderr?.on("data", (chunk) => {
       state.stderrTail = `${state.stderrTail}${chunk}`.slice(-8_192);
-      startupOutput.write(process.stderr, chunk);
+      stderr.write(chunk);
     });
     child.once("exit", () => {
       if (current !== processHandle || stopping || state.stopping || state.readyAt === null) return;

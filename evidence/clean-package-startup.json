@@ -7295,5 +7295,165 @@
       "freshCacheErrorGone": true,
       "resourceIdentifiersAnonymized": true
     }
+  },
+  "outputFramingFix": {
+    "recordedAt": "2026-10-26T11:42:28.283887+00:00",
+    "reviewedRevision": "76012343b25690ef642f93d2859d5584c773e3f3",
+    "sourceSha256": {
+      "bin/cli.mjs": "05c4fc8c1222e91b411a42741b7a366e1119a589779926fb588a12574abfacb2",
+      "bin/cli.exposure.integration.test.ts": "1e32666c03415ea9e8a5c48943c98b488309d6008ac62cd81ec22c3ecad2d9bd"
+    },
+    "gateWrapperSha256": "01aa8dca559dc50fe16c69a508fd23dad71fcda0e318425fed7602c5c09ba714",
+    "runtime": "Bun 1.4.0",
+    "method": "A detached scratch clone pins the reviewed revision and the captured main ref. The final launcher and exposure test are copied into it. Each explicit test file, typecheck and touched-file ESLint run serially through the prescribed gate-slot wrapper, with checkEnvironment then isolatedEnvironment. A scratch-only preload opens the private temporary root and supplies a short procfs descriptor alias to keep Unix socket paths within the platform limit. Both comparison sides use that identical setup. No live state is used.",
+    "comparison": "Run the complete final exposure file with the fixed launcher, then restore only bin/cli.mjs from the reviewed revision and run the same complete file. Restore the final launcher before all lifecycle and compiler checks.",
+    "previousPackedInstallRecord": "hookEnvironmentRecovery retains its historical source hashes and complete 146-to-6-line package captures. This fix round records launcher-stream and lifecycle regressions; it does not replace those package captures.",
+    "prefixCarryLimitCodeUnits": 256,
+    "largeFragmentedOutputBytes": 4194304,
+    "streamingModes": [
+      "ordinary",
+      "journal",
+      "debug"
+    ],
+    "streamingAcceptance": "All bytes and the final marker arrive while the launcher is alive, without a newline. Journal and debug also expose the initial fragmented diagnostic prefix before the producer is released.",
+    "interleavingAcceptance": "An unfinished host timing diagnostic cannot consume the complete Viewer error on either stdout or stderr. Replacement host generations get independent framing; a closed pipe flushes an undecided prefix before launcher exit.",
+    "checks": [
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.exposure.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "cf226e41d6def6ddf33546a99a89af5a1a2c58da20c50a8d950ac0cd05eca079",
+        "pass": 31,
+        "fail": 0,
+        "skip": 0,
+        "label": "exposure-fixed"
+      },
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.exposure.integration.test.ts"
+        ],
+        "exitCode": 1,
+        "logSha256": "88a016c8d990f51ee6fd71ed05024228f83a43cfc57c8ddb63bf938c0cd15cbb",
+        "pass": 24,
+        "fail": 7,
+        "skip": 0,
+        "label": "exposure-prefix"
+      },
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.selfUpdate.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "62e82bbc192865a37fe6f5e1f13cab0d4d48a429b7b8262cf513bf2cb77d2b43",
+        "pass": 32,
+        "fail": 0,
+        "skip": 0,
+        "label": "cli.selfUpdate.integration.test"
+      },
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.selfUpdate.webRestart.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "29a81bec9eb915a6c4f3931bc288d94c90d59b6e8d339e0a6e54553d2ae3460b",
+        "pass": 39,
+        "fail": 0,
+        "skip": 0,
+        "label": "cli.selfUpdate.webRestart.integration.test"
+      },
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.selfUpdate.terminal.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "11b3acd52403328e435db67bb3ab7c793032906759f45e459bd1d1aca5591dac",
+        "pass": 33,
+        "fail": 0,
+        "skip": 29,
+        "label": "cli.selfUpdate.terminal.integration.test"
+      },
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.selfUpdate.divergedApply.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "77ebcd66804f5e3edc7fa3d6aaac34e428a427c0567f36974ce48a53c73c9a7b",
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "label": "cli.selfUpdate.divergedApply.integration.test"
+      },
+      {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "bin/cli.selfUpdate.coldRecovery.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "b865304e210bb75806801544b8064c9b7bafb36cda851b83d07e6621da78c01f",
+        "pass": 36,
+        "fail": 0,
+        "skip": 0,
+        "label": "cli.selfUpdate.coldRecovery.integration.test"
+      },
+      {
+        "command": [
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ],
+        "exitCode": 0,
+        "logSha256": "213d7658db538b7a477e95e9e4f4561ea1795a735d4d5a51852a9cf2a5c6e929",
+        "label": "types"
+      },
+      {
+        "command": [
+          "bun",
+          "node_modules/eslint/bin/eslint.js",
+          "bin/cli.mjs",
+          "bin/cli.exposure.integration.test.ts"
+        ],
+        "exitCode": 0,
+        "logSha256": "e17dd1488598e20a4a62e61850a172c10d49abe88d09f87b9c37025a1a7792cb",
+        "label": "lint"
+      }
+    ],
+    "preFixFailures": [
+      "a closed child pipe flushes an undecided prefix while the launcher stays alive",
+      "an unfinished host diagnostic cannot swallow a Viewer error on stderr",
+      "an unfinished host diagnostic cannot swallow a Viewer error on stdout",
+      "debug forwards large fragmented newline-free output before shutdown",
+      "journal forwards large fragmented newline-free output before shutdown",
+      "ordinary forwards large fragmented newline-free output before shutdown",
+      "replacement runtime hosts cannot inherit an unfinished diagnostic"
+    ],
+    "headPassed": 176,
+    "headSkipped": 29,
+    "privacy": "Explicit changed-source privacy scan passed with required committed fingerprints; commit hooks also inspect the final staged evidence.",
+    "mainRecheck": {
+      "revision": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+      "changedDuringChecks": false
+    },
+    "overlap": "PR #3252 was read as an actual diff. Its separate loop-monitor diagnostic-volume policy is unchanged."
   }
 }
