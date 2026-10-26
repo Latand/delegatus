@@ -1,5 +1,8 @@
 import path from "node:path";
-import { cancelSeatQuotaOnControl, readSeatQuotaControlPage, recoverSeatQuota, readSeatQuotaObligation, seatQuotaDispatchGuard, type SeatQuotaRecoveryPorts } from "../seatQuotaRecovery";
+import fs from "node:fs";
+import { cancelSeatQuotaOnControl, defaultSeatQuotaRecoveryPorts, readSeatQuotaControlPage, recoverSeatQuota, readSeatQuotaObligation, seatQuotaDispatchGuard, type SeatQuotaRecoveryPorts } from "../seatQuotaRecovery";
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { persistProjectAliases } from "@/lib/projects/aliases";
@@ -9,6 +12,71 @@ import { setSystemTime } from "bun:test";
 const phase = process.argv[2];
 const cut = Date.parse("2026-10-26T10:00:00Z");
 const reset = cut + 600_000;
+if (phase.startsWith("native-")) {
+  await nativeQuotaReplay();
+  process.exit(0);
+}
+
+async function nativeQuotaReplay() {
+  const scenario = process.argv[3];
+  const directory = process.env.LLV_STATE_DIR!;
+  const transcript = path.join(directory, "33333333-3333-\x34333-8333-333333333333.jsonl");
+  const later = reset + 3_600_000;
+  const positive = scenario === "positive";
+  const sampleAt = positive ? cut + 1000 : reset + 1;
+  let now = phase === "native-persist" ? cut - 1000 : positive ? cut + 361_001 : reset + 360_001;
+  if (phase === "native-release") now = positive ? reset : later;
+  setSystemTime(now);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const sample = (at: number, usedPercent: number) => registry.recordQuotaObservation({ engine: "claude", accountId: "account-a",
+    authenticated: true, authCheckedAt: new Date(at).toISOString(), observedAt: new Date(at).toISOString(), bootId: "quota-replay",
+    provenance: { source: "live", reason: null, staleSince: null },
+    limits: { session: { usedPercent, resetsAt: scenario === "unknown" ? null : later / 1000 }, weekly: null,
+      plan: "max", capturedAt: Math.floor(at / 1000) } });
+  let count = 0;
+  let refused = false;
+  const ports: SeatQuotaRecoveryPorts = { ...defaultSeatQuotaRecoveryPorts(), held: () => false, stopped: async () => false,
+    send: async (_request, allowed) => { if (await allowed()) count++; } };
+  try {
+    if (phase === "native-persist") {
+      fs.writeFileSync(transcript, [
+        { type: "user", timestamp: new Date(cut - 500).toISOString(), message: { role: "user", content: "check existing work" } },
+        { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+          message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+            content: [{ type: "text", text: "You've hit your session limit · resets 10:10am (UTC)" }] } },
+      ].map(row => JSON.stringify(row)).join("\n") + "\n");
+      registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: "account-a",
+        launchProfile: emptyLaunchProfile({ cwd: directory, project: "fixture", model: "opus" }),
+        turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date(now).toISOString() }]);
+      const conversation = registry.conversationForPath(transcript)!;
+      const delivery = registry.holdDelivery(conversation.id, "check existing work", "native-submission", "text", [], null,
+        { operationId: "native-operation" });
+      now = cut + 1; setSystemTime(now); registry.recordDeliveryOutcome(delivery.id, "delivered");
+      const at = new Date(cut - 60_000).toISOString();
+      beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate work", clientRequestId: "native-seat", mode: "existing", now: at });
+      completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: "native-seat", conversationId: conversation.id, path: transcript, now: at });
+      await recoverSeatQuota("fixture", ports);
+      // No recovery observes this sample until another process opens it after aging.
+      sample(sampleAt, positive ? 20 : 100);
+    } else {
+      // Replacing the sample after retention proves the hold is in the obligation.
+      if (phase === "native-replay") sample(cut + 1000, 20);
+      if (phase === "native-release" && scenario === "unknown") sample(now, 20);
+      if (phase === "native-recover") await recoverSeatQuota("fixture", ports);
+      try { (await seatQuotaDispatchGuard("fixture", ports))(); }
+      catch (error) {
+        if (!(error instanceof StructuredDispatchDeferredError)) throw error;
+        refused = true;
+      }
+      if (phase !== "native-guard" && phase !== "native-recover") await recoverSeatQuota("fixture", ports);
+    }
+    const row = readSeatQuotaObligation("fixture");
+    console.log(JSON.stringify({ id: row?.id, state: row?.state, resetsAt: row?.resetsAt,
+      capacityObservedAt: row?.capacityObservedAt, count, refused }));
+  } finally { registry.close(); setAgentRegistryForTests(null); setSystemTime(); }
+}
+
 const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "runtime.sqlite"), { now: () => reset });
 if (!journal.readSession({ conversationId: "conversation_seat" })) journal.append({ scope: { type: "session", id: "conversation_seat" },
   kind: "session-status", payload: { conversationId: "conversation_seat", sessionKey: { engine: "claude", sessionId: "seat-session" },

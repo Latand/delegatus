@@ -392,12 +392,19 @@ export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
         if (!evidence || stageTurnEvidenceCurrent(joinedEvidence) !== true) return null;
       }
       const observations = registry.quotaObservations("claude");
-      const quota = accountQuotaVerdict(observations, generation.accountId, Date.now(), generation.launchProfile.model);
-      const fresh = liveFreshObservation(observations.find(row => row.accountId === generation.accountId), Date.now());
-      const quotaStamp = JSON.stringify(observations.find(row => row.accountId === generation.accountId));
+      const sample = observations.find(row => row.accountId === generation.accountId);
+      const now = Date.now();
+      // Retain exhaustion confirmed when the durable live sample was taken,
+      // even if no recovery check ran before it aged. Positive capacity still
+      // requires freshness now; neither future nor unverified samples qualify.
+      const sampleAt = Math.max(Date.parse(sample?.observedAt ?? ""), Date.parse(sample?.authCheckedAt ?? ""));
+      const liveSample = sampleAt <= now && liveFreshObservation(sample, sampleAt);
+      const quota = accountQuotaVerdict(observations, generation.accountId, liveSample ? sampleAt : now, generation.launchProfile.model);
+      const fresh = liveFreshObservation(sample, now);
+      const quotaStamp = JSON.stringify(sample);
       return { accountId: generation.accountId, path: generation.path, evidence,
         request: request?.clientMessageId ? { operationId: request.command.operationId, clientMessageId: request.clientMessageId, createdAt: request.createdAt } : null,
-        capacity: fresh && quota.capacity === "available" ? "available" : fresh && quota.capacity === "exhausted" ? "exhausted" : "unknown",
+        capacity: fresh && quota.capacity === "available" ? "available" : liveSample && quota.capacity === "exhausted" ? "exhausted" : "unknown",
         observedAt: quota.observedAt ? Date.parse(quota.observedAt) : null, resetsAt: quota.resetsAt,
         stillCurrent: () => {
           const current = registry.conversation(seat.conversationId as ViewerConversationId);

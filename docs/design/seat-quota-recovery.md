@@ -25,7 +25,9 @@ identity; a project succession cannot discard an operator cancellation.
 An obligation becomes due at its recorded provider reset, or after a fresh live
 eligible sample newer than its exhaustion evidence. A newer exhausted sample
 updates the durable hold, including an unknown reset. Aging that sample cannot
-restore an earlier reset. No account is selected or changed by this recovery.
+restore an earlier reset, even when the first recovery check reads the durable
+sample after it has aged. Positive capacity still requires a fresh live sample.
+No account is selected or changed by this recovery.
 Dispatch preparation persists newer exhaustion through the same update as the
 ticker, so a restart between the refusal and the next tick preserves the hold.
 

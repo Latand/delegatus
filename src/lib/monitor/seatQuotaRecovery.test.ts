@@ -316,6 +316,39 @@ test.each(["exhaustion", "alias-control"])("%s remains fenced after reopening in
   expect(after.state).toBe(scenario === "exhaustion" ? "owed" : "cancelled");
 });
 
+test.each([
+  ["later", "guard"], ["later", "recover"], ["unknown", "guard"], ["unknown", "recover"],
+  ["positive", "guard"], ["positive", "recover"],
+])("delayed native quota %s evidence via %s survives restart and replay", async (scenario, entry) => {
+  const directory = path.join(root, `delayed-${++ordinal}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const fixture = path.join(import.meta.dir, "fixtures/seatQuotaReplay.ts");
+  const run = async (phase: string) => {
+    const child = Bun.spawn([process.execPath, fixture, `native-${phase}`, scenario], {
+      env: { ...process.env, LLV_STATE_DIR: directory }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit, error).toBe(0);
+    return JSON.parse(output.trim().split("\n").at(-1)!);
+  };
+  const before = await run("persist");
+  expect(before.state).toBe("owed");
+  expect(before.resetsAt).toBe(RESET / 1000);
+  const delayed = await run(entry);
+  expect(delayed.count).toBe(0);
+  expect(delayed.refused).toBe(true);
+  expect(delayed.id).toBe(before.id);
+  expect(delayed.state).toBe("owed");
+  expect(delayed.resetsAt).toBe(scenario === "positive" ? RESET / 1000 : scenario === "unknown" ? null : (RESET + 3_600_000) / 1000);
+  expect(delayed.capacityObservedAt).toBe(scenario === "positive" ? CUT : RESET + 1);
+  const replay = await run("replay");
+  expect(replay).toEqual(delayed);
+  const released = await run("release");
+  expect(released.id).toBe(before.id);
+  expect(released.refused).toBe(false);
+  expect(released.count).toBe(1);
+});
+
 test("a distinct delivered request gets its own native recovery boundary after two quota cuts", async () => {
   const directory = path.join(root, `replacement-${++ordinal}`);
   fs.mkdirSync(directory, { recursive: true }); process.env.LLV_STATE_DIR = directory;
