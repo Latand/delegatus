@@ -1,4 +1,6 @@
-import { MAX_STAGE_FINDING_CHARS, MAX_STAGE_REPORT_FINDINGS, MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
+import { normalizeTaskSummary } from "@/lib/tasks/summary";
+import type { TaskSummaryContent } from "@/lib/tasks/types";
+import { MAX_STAGE_RESULT_CHARS, MAX_STAGE_FINDING_CHARS, MAX_STAGE_REPORT_FINDINGS, MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
 import { STAGE_FINDING_SEVERITIES, type StageFinding, type StageFindingSeverity, type StageVerdict, type StageVerdictStatus } from "./types";
 
 const MAX_FINDINGS = MAX_STAGE_REPORT_FINDINGS;
@@ -332,13 +334,15 @@ export type StageCompletionInput = {
   verdict: unknown;
   findings?: unknown;
   summary?: unknown;
+  result?: unknown;
+  taskSummary?: unknown;
   blocked?: unknown;
   blockedReason?: unknown;
 };
 
 export type StageCompletionRefusal = { error: string; code: StageCompletionRefusalCode };
 export type StageCompletionRefusalCode = "STAGE_REPORT_INVALID" | "STAGE_REPORT_CONTRADICTORY";
-export type NormalizedStageCompletion = { verdict: StageVerdict; summary: string | null };
+export type NormalizedStageCompletion = { verdict: StageVerdict; summary: string | null; result: string | null; taskSummary: TaskSummaryContent | null };
 
 const STAGE_VERDICT_STATUSES: readonly StageVerdictStatus[] = ["pass", "fail", "needs_decision"];
 
@@ -390,5 +394,10 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   });
   if (!verdict) return refusal("the reported verdict is invalid: blocked must be boolean; blocked:true requires fail and a non-empty blockedReason of at most " + MAX_STAGE_REPORT_SUMMARY_CHARS + " characters; blockedReason requires blocked:true");
   const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
-  return { verdict, summary: summary || null };
+  if (input.result !== undefined && typeof input.result !== "string") return refusal(`result must be a string of at most ${MAX_STAGE_RESULT_CHARS} characters`);
+  const result = typeof input.result === "string" ? input.result.replace(/\s+/g, " ").trim() : "";
+  if (result.length > MAX_STAGE_RESULT_CHARS) return refusal(`result must be at most ${MAX_STAGE_RESULT_CHARS} characters`);
+  const taskSummary = input.taskSummary === undefined ? null : normalizeTaskSummary(input.taskSummary);
+  if (taskSummary && "error" in taskSummary) return refusal(taskSummary.error.replace(/^summary/, "taskSummary"));
+  return { verdict, summary: summary || null, result: result || null, taskSummary: taskSummary?.value ?? null };
 }

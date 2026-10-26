@@ -201,6 +201,8 @@ export interface BoardTask {
   prototypeReviewReplica?: import("@/lib/prototypeReview/types").PrototypeReviewReplica;
   /** Current situation, replaced by each writer; no thread. */
   note?: TaskNote;
+  /** Local; never crosses. */
+  summary?: TaskSummary;
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
@@ -306,5 +308,20 @@ export type TaskNoteAuthor =
 export interface TaskNote {
   text: string;
   author: TaskNoteAuthor;
+  updatedAt: string;
+}
+
+export const TASK_SUMMARY_HEADLINE_LIMIT = 120;
+export const TASK_SUMMARY_TEXT_LIMIT = 600;
+export const TASK_SUMMARY_LEFT_LIMIT = 200;
+export interface TaskSummaryContent {
+  headline: string;
+  text: string;
+  left?: string;
+}
+export type TaskSummaryAuthor = TaskNoteAuthor
+  | { kind: "stage"; pipelineId: string; stageId: string; attempt: number; conversationId: string | null };
+export interface TaskSummary extends TaskSummaryContent {
+  author: TaskSummaryAuthor;
   updatedAt: string;
 }

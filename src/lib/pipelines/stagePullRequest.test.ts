@@ -826,7 +826,7 @@ test("a legacy privacy rewrite checkpoint removes the old terminal marker before
     f.setRefused();
     f.setExpectedBody("Review passed.");
     f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict: "pass", summary: "Review passed." },
+    await engineModule.reportStageCompletion({ verdict: "pass", summary: "Review passed.", result: "Review result", taskSummary: { headline: "Reviewed", text: "Review complete." } },
       { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, f.h.ports);
     await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Review passed.")], f.h.ports);
     const legacyRefusal = loadPipelines().find(p => p.id === f.id)!;
@@ -855,6 +855,8 @@ test("a legacy privacy rewrite checkpoint removes the old terminal marker before
       const checkpoint = loadPipelines().find(p => p.id === f.id)!;
       const saved = checkpoint.runs[1]!.attempts[0]!;
       expect(saved.publicationTextRepair).toMatchObject({ state: "answered", sha: localReportSha });
+      expect(saved.report?.result).toBe("Review result");
+      expect(saved.report?.taskSummary).toEqual({ headline: "Reviewed", text: "Review complete." });
       expect(saved.terminalOutputPublication).toBeUndefined();
       expect(checkpoint.lastPassedCommit).toBe(localReportSha);
       return true;

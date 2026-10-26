@@ -115,7 +115,7 @@ import { killTmuxHostIfMatches, paneInfo, panePidMap } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
-import { clearEngineParkedTaskNote, parkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
+import { writeCompletedTaskSummary, clearEngineParkedTaskNote, parkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
 import { operatorLocale } from "@/lib/operator/settings";
 import { requestPipelineTick } from "./controllerSignal";
 import { servingControllerSupports } from "./controllerCapabilities";
@@ -2869,6 +2869,13 @@ async function writeEngineParkedTaskNote(pipeline: Pipeline, detail: string, att
   else await writeParkedTaskNote(pipeline, detail, attempt, reason, taskNoteAuthority.get(pipeline));
 }
 
+async function writeEngineTaskSummary(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt | null | undefined, now: string): Promise<void> {
+  const effect = () => writeCompletedTaskSummary(pipeline, stageId, attempt, now, taskNoteAuthority.get(pipeline));
+  const effects = stageSettlementEffects.get(pipeline);
+  if (effects) effects.push(effect);
+  else await effect();
+}
+
 async function clearEngineTaskNote(pipeline: Pipeline): Promise<void> {
   const effects = stageSettlementEffects.get(pipeline);
   if (effects) effects.push(() => clearEngineParkedTaskNote(pipeline, taskNoteAuthority.get(pipeline)));
@@ -4187,6 +4194,7 @@ async function advancePipeline(
     pipeline.stateDetail = detail;
     pipeline.pausedState = null;
     pipeline.closedAt = ports.now();
+    await writeEngineTaskSummary(pipeline, stage.id, attempt, pipeline.closedAt);
     /* A reap that settled while this final stage still ran never saw its host,
        and a completed pipeline with a settled reap leaves the controller index,
        so completion reopens it until a round has probed every attempt (#1728). */
@@ -16337,12 +16345,16 @@ export async function reportStageCompletion(
       actor,
       verdict: normalized.verdict,
       summary: normalized.summary,
+      ...(normalized.result ? { result: normalized.result } : {}),
+      ...(normalized.taskSummary ? { taskSummary: normalized.taskSummary } : {}),
       provenance,
       provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,
     };
     if (rewriteOwner) {
       if (prior) {
+        if (request.result === undefined && prior.result) report.result = prior.result;
+        if (request.taskSummary === undefined && prior.taskSummary) report.taskSummary = prior.taskSummary;
         report.verdict = prior.verdict;
         report.provenance = prior.provenance;
         report.provenanceFence = prior.provenanceFence;

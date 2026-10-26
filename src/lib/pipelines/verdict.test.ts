@@ -372,7 +372,7 @@ test("a completion call and a fenced JSON verdict normalise to one shape", () =>
       findings: ["P1 — the retry loop never ends"],
       rankedFindings: [{ severity: "P1", text: "the retry loop never ends" }],
     },
-    summary: "Left the loop open.",
+    summary: "Left the loop open.", result: null, taskSummary: null,
   });
   expect(fenced).toEqual({
     verdict: (called as { verdict: StageVerdict }).verdict,
@@ -401,7 +401,7 @@ test("findings are recorded most severe first, whichever input carried them", ()
         { severity: "P2", text: "third" },
       ],
     },
-    summary: null,
+    summary: null, result: null, taskSummary: null,
   });
   /* The same order out of a fenced block, and unranked findings come last. */
   expect(stageVerdictFrom({ status: "fail", findings: ["P2 - third", "no rank at all", "P0: first"] })).toEqual({
@@ -444,8 +444,8 @@ test("a completion call is refused for the shapes a fenced verdict is refused fo
 
 test("a completion call clamps its summary and accepts a verdict with no findings", () => {
   const long = normalizeStageCompletion({ verdict: "needs_decision", summary: "x".repeat(4_000) });
-  expect(long).toEqual({ verdict: { status: "needs_decision" }, summary: "x".repeat(2_000) });
-  expect(normalizeStageCompletion({ verdict: "pass", summary: "  " })).toEqual({ verdict: { status: "pass" }, summary: null });
+  expect(long).toEqual({ verdict: { status: "needs_decision" }, summary: "x".repeat(2_000), result: null, taskSummary: null });
+  expect(normalizeStageCompletion({ verdict: "pass", summary: "  " })).toEqual({ verdict: { status: "pass" }, summary: null, result: null, taskSummary: null });
 });
 
 test("a rankedFindings field in an agent's own fenced block is ignored, and a record round-trips", () => {
@@ -497,7 +497,7 @@ test("a completion finding at the schema bound keeps its whole body", () => {
       findings: [`P1 — ${"x".repeat(1_995)}`],
       rankedFindings: [{ severity: "P1", text: "x".repeat(1_995) }],
     },
-    summary: null,
+    summary: null, result: null, taskSummary: null,
   });
   const verdict = (called as { verdict: StageVerdict }).verdict;
   expect(verdict.findings![0]!.length).toBe(2_000);
@@ -512,7 +512,7 @@ test("blocked state is identical in fenced verdicts, reports, and stored verdict
   const verdict: StageVerdict = { status: "fail", blocked: true, blockedReason: "Required check service is unavailable" };
   const message = "Evidence.\n".repeat(5_000) + "\n```json\n" + JSON.stringify(verdict) + "\n```";
   expect(parseStageVerdict(message)).toEqual({ verdict, output: message.slice(0, 32_000) });
-  expect(normalizeStageCompletion({ verdict: "fail", blocked: true, blockedReason: "  Required check service is unavailable  " })).toEqual({ verdict, summary: null });
+  expect(normalizeStageCompletion({ verdict: "fail", blocked: true, blockedReason: "  Required check service is unavailable  " })).toEqual({ verdict, summary: null, result: null, taskSummary: null });
   expect(stageVerdictFrom(verdict)).toEqual(verdict);
   expect(stageVerdictFrom({ status: "fail", blocked: false })).toEqual({ status: "fail", blocked: false });
 });
@@ -531,4 +531,30 @@ test.each([
   expect(parseStageVerdict("```json\n" + JSON.stringify(value) + "\n```")).toBeNull();
   const { status, ...fields } = value;
   expect(normalizeStageCompletion({ verdict: status, ...fields })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+});
+
+
+test.each(["pass", "fail", "needs_decision"])("stage result and task summary normalize on %s", verdict => {
+  expect(normalizeStageCompletion({ verdict, result: "  Checked\nall   paths. ", taskSummary: { headline: "  Task  complete ", text: "Changed storage.\nReads now retain it.", left: "  " } }))
+    .toMatchObject({ result: "Checked all paths.", taskSummary: { headline: "Task complete", text: "Changed storage. Reads now retain it." } });
+  expect(normalizeStageCompletion({ verdict, result: "  " })).toMatchObject({ result: null, taskSummary: null });
+  expect(normalizeStageCompletion({ verdict, result: "x".repeat(160), taskSummary: { headline: "h".repeat(120), text: "t".repeat(600), left: "l".repeat(200) } }))
+    .toHaveProperty("result", "x".repeat(160));
+});
+
+test.each([
+  [{ result: "x".repeat(161) }, "result", "160"],
+  [{ result: 1 }, "result", "160"],
+  [{ result: null }, "result", "160"],
+  [{ taskSummary: { headline: "x".repeat(121), text: "Body" } }, "taskSummary.headline", "120"],
+  [{ taskSummary: { headline: "x\ny", text: "Body" } }, "taskSummary.headline", "120"],
+  [{ taskSummary: { headline: 42, text: "Body" } }, "taskSummary.headline", "120"],
+  [{ taskSummary: { headline: "x", text: "x".repeat(601) } }, "taskSummary.text", "600"],
+  [{ taskSummary: { headline: "x", text: "Body", left: "x".repeat(201) } }, "taskSummary.left", "200"],
+] as const)("stage report refuses invalid result or summary %#", (fields, field, limit) => {
+  const result = normalizeStageCompletion({ verdict: "pass", ...fields });
+  expect(result).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+  if (!("error" in result)) throw new Error("expected refusal");
+  expect(result.error).toContain(field);
+  expect(result.error).toContain(limit);
 });

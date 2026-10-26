@@ -14,6 +14,7 @@ import { admissionSnapshot } from "./groupHide";
 import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
 import { readTaskPriorityInput } from "./priority";
+import { readTaskSummaryInput } from "./summary";
 import { readTaskSteps } from "./steps";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
@@ -95,6 +96,7 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  summary?: unknown;
   dueReason?: unknown;
   findingKey?: unknown;
   /** Dashboard undo only, accepted with operator authority and both fences. */
@@ -590,6 +592,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "summary")) {
+    const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
+    const summary = readTaskSummaryInput(input.summary, now, author);
+    if (!summary.ok) return summary;
+    patch.summary = summary.summary;
+  }
   if (Object.hasOwn(input, "findingKey")) {
     const key = readFindingKey(input.findingKey);
     if (!key.ok) return key;
@@ -785,6 +793,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueHistory;
   }
   if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
+  if (Object.hasOwn(patch, "summary") && patch.summary === undefined) delete updated.summary;
   if (Object.hasOwn(patch, "findingKey") && patch.findingKey === undefined) delete updated.findingKey;
   if (Object.hasOwn(patch, "finding") && patch.finding === undefined) delete updated.finding;
   if (updated.placement === "unplaced") delete updated.pos;

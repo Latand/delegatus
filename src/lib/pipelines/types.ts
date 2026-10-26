@@ -1,5 +1,6 @@
 import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { TaskSummaryContent } from "@/lib/tasks/types";
 import type { BackgroundWait } from "./backgroundTasks";
 
 export type PipelineAccess = "read-only" | "read-write";
@@ -326,6 +327,8 @@ export type PipelineStageReport = {
   actor: PauseResumeActor;
   verdict: StageVerdict;
   summary: string | null;
+  result?: string;
+  taskSummary?: TaskSummaryContent;
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;

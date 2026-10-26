@@ -186,6 +186,7 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
 
 test("get_pipeline with stageId answers one stage's conclusion without prompts or transcripts (#1845)", async () => {
   const pipeline = reviewedPipeline();
+  pipeline.runs[0]!.attempts.at(-1)!.report!.result = "Review found two regressions.";
   savePipelines([pipeline]);
   const bindings = viewerMcpBindings();
 
@@ -206,6 +207,7 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
       verdict: "fail",
       findings: ["P0 — the route permits an unsafe write", "P1 — the route ignores the project filter"],
       summary: "One finding left.",
+      result: "Review found two regressions.",
     },
   });
 

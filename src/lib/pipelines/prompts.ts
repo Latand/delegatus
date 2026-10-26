@@ -138,7 +138,11 @@ export function renderStagePrompt(
        engine still reads the block exactly as before when no report arrived.
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
-    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    "Add result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.",
+    ...(!pipeline.refreshOf && pipeline.taskIds.length && (stage.next === null || pipeline.stages.some(gate => gate.onFail?.to === stage.id && gate.next === null))
+      ? ["This stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes."]
+      : []),
     ...(isFixStage(pipeline, stage)
       ? ["For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason (at most 2000 characters) in stage_report or the fallback JSON. Set blocked only when you cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Otherwise omit blocked or set it false; the fixer returns pass unless blocked."]
       : []),

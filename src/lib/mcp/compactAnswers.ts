@@ -213,6 +213,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       verdict: verdict?.status ?? null,
       findings: verdict?.findings ?? [],
       summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
+      result: selected.report?.result ?? null,
       decisionRequested: selected.decisionRequested === true,
       /* Findings handed to the fix stage after the budget was spent and never
          re-reviewed (#1868). */
