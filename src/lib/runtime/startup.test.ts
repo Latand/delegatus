@@ -4194,7 +4194,10 @@ test("startup refreshes a reused idle selection after a peer makes its host live
   const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
   registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" } } });
   const expectedHost = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost;
-  const peer = new SqliteAgentRegistryStore(sqliteFilename, { normalize: normalizeRegistry });
+  const peer = new SqliteAgentRegistryStore(sqliteFilename, {
+    initialSnapshot: () => { throw new Error("startup fixture is already imported"); },
+    normalize: normalizeRegistry,
+  });
   const open = fs.promises.open.bind(fs.promises);
   const transcriptReads: string[] = [];
   const observedReads = spyOn(fs.promises, "open").mockImplementation((...args) => {
