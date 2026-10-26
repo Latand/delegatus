@@ -370,6 +370,10 @@ export class TeamStore {
           added_by TEXT NOT NULL,
           PRIMARY KEY(workspace_id, member_id)
         );
+        CREATE TABLE IF NOT EXISTS workspace_defaults (
+          workspace_id TEXT PRIMARY KEY,
+          body TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS workspace_projects (
           project TEXT PRIMARY KEY,
           workspace_id TEXT NOT NULL,
@@ -689,6 +693,16 @@ export class TeamStore {
 
   /* ---- workspaces ------------------------------------------------------- */
 
+  workspaceDefaults(id: string): unknown {
+    const row = this.db.query<{ body: string }, [string]>("SELECT body FROM workspace_defaults WHERE workspace_id = ?").get(id);
+    return row ? JSON.parse(row.body) : undefined;
+  }
+
+  putWorkspaceDefaults(id: string, value: unknown): void {
+    this.db.query("INSERT INTO workspace_defaults(workspace_id, body) VALUES (?, ?) ON CONFLICT(workspace_id) DO UPDATE SET body = excluded.body")
+      .run(id, JSON.stringify(value));
+  }
+
   workspaceMemberships(memberId: string): { workspaceId: string; role: "manager" | "member" }[] {
     return this.db.query<{ workspaceId: string; role: "manager" | "member" }, [string]>(
       "SELECT workspace_id AS workspaceId, role FROM workspace_members WHERE member_id = ? ORDER BY workspace_id",
@@ -739,6 +753,7 @@ export class TeamStore {
   /** Also drops rows that still name it after an alias gave their project to
       another workspace's row, so a deleted workspace leaves nothing behind. */
   deleteWorkspace(id: string): boolean {
+    this.db.query("DELETE FROM workspace_defaults WHERE workspace_id = ?").run(id);
     this.db.query("DELETE FROM workspace_members WHERE workspace_id = ?").run(id);
     this.db.query("DELETE FROM workspace_projects WHERE workspace_id = ?").run(id);
     return this.db.query("DELETE FROM workspaces WHERE id = ?").run(id).changes > 0;
@@ -787,6 +802,11 @@ export class TeamStore {
       at: String(row.at),
       textDigest: str(row.text_digest),
     }));
+  }
+
+  latestConversationMember(conversationId: string): string | null {
+    return this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM message_authors WHERE conversation_id = ? ORDER BY at DESC, client_message_id DESC LIMIT 1")
+      .get(conversationId)?.member_id ?? null;
   }
 
   /** Activity's launch-chain fallback needs one author, without decoding messages. */

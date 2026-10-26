@@ -1,3 +1,5 @@
+import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { TeamError } from "@/lib/team/members";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { notifySeatChannel } from "./seatChannelSignal";
 import crypto from "node:crypto";
@@ -78,6 +80,7 @@ export interface OrchestratorSeatTrigger {
 }
 
 export interface OrchestratorSeat {
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
   project: string;
   /** Monotonic designation epoch; strictly increases across the whole file. */
   seatEpoch: number;
@@ -325,6 +328,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     : Boolean(engine || model);
   return {
     project: seat.project,
+    ...(seat.workspace ? { workspace: { ...seat.workspace } } : {}),
     seatEpoch: seat.seatEpoch,
     conversationId: seat.conversationId ?? null,
     path: seat.path ?? null,
@@ -980,6 +984,7 @@ export type BeginSeatIntentResult =
 export type NotReplayedSeatIntent = { kind: "not_replayed" };
 
 export interface BeginSeatIntentInput {
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
   project: string;
   mandate: string;
   /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
@@ -1018,6 +1023,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput & { repl
 export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent;
 export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent {
   return withAccountMutationLock(() => {
+    if (input.workspace && !workspacePrincipalAllows(input.workspace, input.project)) throw new TeamError("workspace_forbidden", "workspace access denied", 403);
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
@@ -1053,6 +1059,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       delete file.pending[project];
     }
     const seat: OrchestratorSeat = {
+      ...(input.workspace ? { workspace: { ...input.workspace } } : {}),
       project,
       seatEpoch: file.nextSeatEpoch,
       conversationId: input.conversationId ?? null,

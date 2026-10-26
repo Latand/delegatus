@@ -2018,8 +2018,9 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
     owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
 }
 
-export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean } = {}): Promise<Pipeline> {
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean; assertAuthority?: () => void } = {}): Promise<Pipeline> {
   return withDeliveryMutationAsync((tx) => {
+    options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (replay) {

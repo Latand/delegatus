@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaults";
 
 import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { BINDINGS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
@@ -436,7 +437,9 @@ export function allowedAccountIdsForProject(
   const allowed = bindings
     .filter((binding) => binding.engine === engine && binding.project === key)
     .map((binding) => binding.accountId);
-  return allowed.length ? [...new Set(allowed)].sort() : null;
+  const inherited = workspaceDefaultsForProject(key)?.accounts[engine];
+  if (allowed.length) return [...new Set(allowed)].filter(id => !inherited?.length || inherited.includes(id)).sort();
+  return inherited?.length ? [...inherited] : null;
 }
 
 /**

@@ -99,6 +99,36 @@ test("the fake transport routes the owner's report reply with Telegram attributi
   expect(store.pendingReportReplies()).toHaveLength(0);
 });
 
+test("workspace directive chats fence admission and a queued reply after readiness changes", async () => {
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+  const team = teamStore();
+  const actor = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, now.getTime()).member;
+  const id = `w_${"a".repeat(32)}`;
+  createWorkspace(team, actor, { id, name: "Alpha", projects: ["fixture-project"] });
+  setWorkspaceDefaults(team, actor, id, { directiveChats: ["another-chat"] });
+  await poll([reply()]);
+  expect(store.pendingReportReplies()).toHaveLength(0);
+  expect(delivered).toHaveLength(0);
+  setWorkspaceDefaults(team, actor, id, { directiveChats: ["fixture-reports"] });
+  ready = false;
+  await poll([reply({}, 3)]);
+  expect(store.pendingReportReplies()).toHaveLength(1);
+  ready = true;
+  ports.ready = async () => {
+    setWorkspaceDefaults(team, actor, id, { directiveChats: ["another-chat"] });
+    return true;
+  };
+  await poll([]);
+  expect(delivered).toHaveLength(0);
+  expect(store.pendingReportReplies()).toHaveLength(0);
+  ports.ready = async () => true;
+  setWorkspaceDefaults(team, actor, id, { directiveChats: ["fixture-reports"] });
+  await poll([reply({ message_id: 21 }, 4)]);
+  expect(delivered).toHaveLength(1);
+});
+
 test("captions route as text; unsupported media produces only a short notice", async () => {
   await poll([reply({ message_id: 21, text: undefined, caption: "Use this caption", photo: [{}] }),
     reply({ message_id: 22, text: undefined, voice: {} }, 3)]);

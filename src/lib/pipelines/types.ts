@@ -1106,6 +1106,8 @@ export type PipelineRemoteAction = {
 };
 
 export type Pipeline = {
+  /** Server-attributed member scope, retained across stage retries and restart. */
+  workspace?: import("@/lib/accounts/migration/contracts").LaunchProfile["workspace"];
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
   /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */

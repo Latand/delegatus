@@ -6,6 +6,9 @@ import { MEMBER_REQUIRED_CODE } from "./contract";
 import { MEMBER_COOKIE, verifySessionValue } from "./sessions";
 import { existingTeamStore } from "./store";
 import { workspaceScope } from "./workspaceAccess";
+import { conversationWorkspacePrincipal, workspacePrincipalAccess } from "./workspacePrincipal";
+import { agentRegistry } from "@/lib/agent/registry";
+import { callerConversationId } from "@/lib/agent/operatorAuthority";
 
 type Scope = ReturnType<typeof workspaceScope>;
 type Context = { params?: Promise<Record<string, string>> };
@@ -18,7 +21,16 @@ export function workspaceDenied(): NextResponse<never> {
 export function requestWorkspaceScope(request: Request): Scope | null {
   const store = existingTeamStore();
   if (!store?.hasActiveOwner()) return null;
-  if (agentCapabilityClaim(request) === "valid" || internalServiceClaim(request, { readOnly: true }).claim === "valid") return null;
+  if (agentCapabilityClaim(request) === "valid") {
+    const principal = conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), callerConversationId(request), store);
+    if (!principal) return null;
+    const scope = workspaceScope(store, principal.memberId);
+    const allows = workspacePrincipalAccess(principal, store);
+    const workspaces = scope.workspaces.filter(workspace => workspace.id === principal.workspaceId);
+    return { ...scope, owner: false, workspaces, projectFilter: { allowed: workspaces.flatMap(workspace => workspace.projects) },
+      canAct: allows, canReadFile: allows, access: project => allows(project) ? scope.access(project) : "none" };
+  }
+  if (internalServiceClaim(request, { readOnly: true }).claim === "valid") return null;
   const req = request instanceof NextRequest ? request : new NextRequest(request.url, { headers: request.headers });
   const live = verifySessionValue(store, req.cookies.get(MEMBER_COOKIE)?.value);
   if (live) return workspaceScope(store, live.member.id);

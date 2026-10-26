@@ -1,3 +1,6 @@
+import { existingTeamStore } from "@/lib/team/store";
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -338,11 +341,20 @@ async function postTaskSpawn(
   if (directOperatorActivityAuthority(req).ok) {
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `task-spawn:${clientAttemptId}`, project: task.project });
   }
+  const team = existingTeamStore();
+  const workspace = spawnActor.kind === "member" && team ? memberWorkspacePrincipal(team, spawnActor.memberId, project)
+    : spawnActor.kind === "agent" ? conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), spawnActor.conversationId) : null;
+  const authorizeWorkspace = () => {
+    if (!workspace) return;
+    const allowed = allowedAccountIdsForProject(project, engine);
+    if (!workspacePrincipalAllows(workspace, project) || allowed && !allowed.includes(account.accountId)) throw new Error("workspace launch access denied");
+  };
   const taskTitle = task.text.split("\n")[0]?.trim() ?? "";
   const spec = {
     ...specBase,
     launchProfile: emptyLaunchProfile({
       ...(specBase.launchProfile ?? {}),
+      ...(workspace ? { workspace } : {}),
       cwd: cwdResult.cwd,
       project,
       title: taskTitle && !isGenericSessionTitle(taskTitle) ? taskTitle : `Task ${task.id}`,
@@ -365,7 +377,7 @@ async function postTaskSpawn(
       clientAttemptId,
       requestDigest: taskRequestDigest(task, shape),
       taskIds: [task.id],
-    });
+    }, authorizeWorkspace);
   } catch (error) {
     if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     throw error;
@@ -463,7 +475,8 @@ async function postTaskSpawn(
   const prompt = [task.text, ...attachmentPaths].join("\n");
   const startedAtMs = Date.now();
   try {
-    const pane: SpawnedPane = await dependencies.spawnAgentWithPrompt(spec, prompt, launchReceipt);
+    authorizeWorkspace();
+    const pane: SpawnedPane = await dependencies.spawnAgentWithPrompt(spec, prompt, launchReceipt, { authorize: authorizeWorkspace });
     const transcript = await dependencies.resolveSpawnedTranscriptPath({
       engine,
       knownTranscript: spec.transcript ?? null,

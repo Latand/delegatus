@@ -222,3 +222,32 @@ test("the spawn HTTP route validates account without relying on the MCP schema",
   expect(await response.json()).toMatchObject({ error: "account must be a string or null" });
   expect(resolutions).toEqual([]);
 });
+
+test("a workspace launch uses its default account pool and refuses an explicit pin outside it", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+  const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"a".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-b"] } });
+  try {
+    await withClient(async (client, { routeDependencies }) => {
+      const resolve = routeDependencies.resolveSpawnAccount;
+      routeDependencies.resolveHealthySpawnAccount = async (engine, requested, project) => {
+        const selected = selectProjectAccount({ engine, project: project ?? null, accounts: [{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }],
+          observations: [], bindings: [], requestedId: requested, preferredId: "account-a", unbound: "engine-default" });
+        if (selected.kind !== "available") throw new Error("no account allowed");
+        return resolve(engine, selected.accountId);
+      };
+      expect((await client.callTool({ name: "spawn_agent", arguments: args() })).structuredContent).toMatchObject({ ok: true });
+      expect(registry.spawnReceiptForClientAttempt(requestId())?.accountId).toBe("account-b");
+      const rejected = await client.callTool({ name: "spawn_agent", arguments: { ...args("account-a"), clientRequestId: `${requestId()}-denied` } });
+      expect(rejected.structuredContent).toMatchObject({ ok: false, details: { code: "project_account_refused" } });
+      expect(registry.spawnReceiptForClientAttempt(`${requestId()}-denied`)).toBeNull();
+    });
+  } finally { resetTeamStoreForTests(); }
+});

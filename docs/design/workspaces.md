@@ -959,3 +959,44 @@ over the copied files before the push.
 | The UI changes a little | three new pieces (chip and menu, tab, page); everything else reuses existing controls (§13.5) |
 | Survives project-key succession | §13.1.2, §13.2, tests 2 (a)–(e) |
 | Level 2's fence, accounts, chats, usage (Q1, Q5, Q6) | slices (c) and (d), not started here |
+
+## 14. Slice (c): MCP authority and defaults
+
+A team launch records `LaunchProfile.workspace = { memberId, workspaceId }`
+from authenticated server attribution. Task-card launches, pipeline stages,
+seat creation and rotation carry it too; migration and resume retain the
+profile. Pipeline and pending-seat records retain the same scope across
+restart. Existing member-directed conversations resolve their latest recorded
+message author. Owner conversations and installation-owned seats without a
+member binding retain their existing reach.
+
+The production MCP dispatcher checks the binding before pagination and
+receipt replay. It uses slice (b)'s `workspaceScope` for current membership
+and the bound workspace for project placement. Explicit projects, tasks,
+pipelines, conversations, selected-card references, nested targets and launch
+directories all need authority. Collections default to the caller's project;
+a caller can explicitly select another project in the same workspace.
+Installation-wide tools refuse for a member-bound caller. Checks repeat at
+binding and HTTP dispatch, inside task writes and before a read result is
+returned. Unknown or inaccessible targets disclose no resource content.
+Transcript search discards the unscoped fallback and installation-wide corpus
+and duplicate metadata.
+
+`GET` and `PUT /api/team/workspaces/[id]/defaults` admit the owner and that
+workspace's managers. The durable value holds `accounts` (Claude and Codex
+lists), `reportChat` (chat, report name and optional topic), and
+`directiveChats`. Empty account lists preserve the unrestricted shared pool.
+Per-project account bindings narrow a workspace's allowed pool; an empty
+intersection permits no account. An explicit report choice takes precedence,
+including "Log only". Defaults are inherited at the existing project
+account and report resolvers, rather than copied into those stores: this keeps
+new placements, aliases and edits consistent while preserving explicit project
+choices. No workspace read writes a project setting.
+
+Launch admission uses the inherited pool. A member-bound named account cannot
+bypass it. Telegram report replies must originate in an allowed directive chat
+when a workspace names such a list. Queued replies retain their source chat and
+recheck it after readiness; a withdrawn permission terminally refuses the row
+with its reason. The bot's existing sender, report-reply and posting checks
+continue to apply. Usage grouping, worker shares and resource slices remain
+slice (d).

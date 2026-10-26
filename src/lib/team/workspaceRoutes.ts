@@ -205,6 +205,7 @@ export const WORKSPACE_ROUTES = {
   "/api/team/workspace-projects": "team",
   "/api/team/workspaces": "team",
   "/api/team/workspaces/[id]": "team",
+  "/api/team/workspaces/[id]/defaults": "team",
   "/api/team/workspaces/[id]/members": "team",
   "/api/telegram": "owner",
   "/api/telegram/bot": "owner",

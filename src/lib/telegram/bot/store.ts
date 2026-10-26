@@ -104,13 +104,16 @@ export type SendRow = {
 
 /** Private durable inbound obligation. Completed rows remain as dedup tombstones. */
 export interface ReportReplyRow {
+  /** Source retained so a queued directive rechecks workspace chat policy. */
+  chatId?: string;
   key: string;
   botId: string;
   senderId: string;
   project: string;
   seq: number;
   text: string;
-  state: "pending" | "delivered";
+  state: "pending" | "delivered" | "refused";
+  refusalReason?: string;
   attempt: number;
   recipient: string | null;
   operationId: string | null;
