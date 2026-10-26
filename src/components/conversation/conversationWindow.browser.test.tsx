@@ -6010,7 +6010,13 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
             return {
               texts, offscreen, clipped, cut, small, covered, orphans, contrast,
               gap: Math.round(card.top - caption.bottom),
-              popoverInCard: popoverBox ? popoverBox.top >= card.top + 4 && popoverBox.bottom <= card.bottom && popoverBox.left >= card.left && popoverBox.right <= card.right : null,
+              popoverInCard: popoverBox ? popoverBox.top >= card.top + 4 && popoverBox.bottom <= card.bottom - 4 && popoverBox.left >= card.left + 4 && popoverBox.right <= card.right - 4 : null,
+              /* The status dot and the Details chevron share one centre line on the right. */
+              dotOffChevron: (() => {
+                const dot = document.querySelector("[data-proto-status] > span")?.getBoundingClientRect();
+                const chevron = document.querySelector("[data-proto-details] button svg")?.getBoundingClientRect();
+                return dot && chevron ? Math.round(((dot.left + dot.right) / 2 - (chevron.left + chevron.right) / 2) * 10) / 10 : null;
+              })(),
               detailsRow: document.querySelector("[data-proto-details] button")?.textContent?.trim() ?? "",
               overflow: main.scrollWidth - main.clientWidth,
               cardWidth: Math.round(card.width),
@@ -6028,6 +6034,7 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
           if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
           if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
           if (reading.popoverInCard === false) failures.push(`${name}: the popover crosses or touches the card's edge (${JSON.stringify(reading.popover)})`);
+          if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
           if (reading.gap > 16) failures.push(`${name}: ${reading.gap} px of empty band between the caption and the card`);
           if (/\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row carries a number: ${reading.detailsRow}`);
           if (reading.orphans.length) failures.push(`${name}: a line ends on a lone word: ${reading.orphans.join(" | ")}`);

@@ -115,7 +115,9 @@ const PERMISSION = "inline-flex min-h-11 flex-1 items-center justify-center gap-
    rule): the word and the deadline live in the popover, the heading says the
    state in words, so colour is never alone. The popover opens to the left of
    the dot, centred on the card's first row, where nothing is written: two
-   lines in the phone's 44 px row, one line in the pointer's 24 px row. */
+   lines in the phone's 44 px row, one line in the pointer's 24 px row. The
+   target reaches into the card's padding so the dot's centre stands 8 px in
+   from the text column's edge, on the Details chevron's centre line. */
 function StatusDot({ state }: { state: "pending" | "sent" }) {
   const [open, setOpen] = useState(false);
   const host = useRef<HTMLDivElement>(null);
@@ -132,7 +134,7 @@ function StatusDot({ state }: { state: "pending" | "sent" }) {
     ? L(`${MINUTES_LEFT} min left, until ${clock(REQUEST.expiresAt)}`, `ще ${MINUTES_LEFT} хв, до ${clock(REQUEST.expiresAt)}`)
     : L(`at ${clock(REQUEST.decidedAt)}`, `о ${clock(REQUEST.decidedAt)}`);
   return (
-    <div ref={host} className="relative shrink-0" data-proto-new>
+    <div ref={host} className="relative -mr-1 shrink-0 pointer-coarse:-mr-3.5" data-proto-new>
       <button
         type="button"
         data-proto-status

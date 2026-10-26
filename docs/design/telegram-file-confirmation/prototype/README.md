@@ -23,7 +23,8 @@ What every variant keeps:
   is never alone). The popover opens to the left of the dot, centred on the
   card's first row («Telegram» and the dot): two lines in the phone's 44 px
   row, one line from 640 px up, so it stays inside the card and covers
-  nothing;
+  nothing. The dot's touch target reaches into the card's padding so the dot
+  itself stands on the Details chevron's centre line;
 - the three detector warnings as plain sentences, with no codes;
 - human time: «15:10» and «ще 8 хв», never an ISO timestamp;
 - one closed «Деталі» / "Details" row with no count, the phone sheet's own fold
@@ -85,7 +86,8 @@ unscrolled with the heading, the real file's name and, while pending, both
 decision buttons whole on the first screen; no sentence of the card is said
 twice; no paragraph ends on a lone short word; both decision labels read at
 4.5:1 or more against their fill; the Details row carries no number; the
-status popover stays inside the card, and no empty band separates the caption
+status popover stays at least 4 px inside the card; the status dot's centre
+is within 1 px of the Details chevron's; and no empty band separates the caption
 from the card; no text of the card or the caption lies outside the window
 or is cut by a clipping ancestor; no line ends in an ellipsis; no sideways
 overflow; the popover covers no word; every button is at least 44 px under a
