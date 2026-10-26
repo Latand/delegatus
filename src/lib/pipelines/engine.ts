@@ -2644,12 +2644,19 @@ function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, a
     const registry = agentRegistry();
     for (let call = 0; call < Math.max(1, attempt.spawnCalls); call++) {
       const key = call === 0 ? base : `handshake_retry_${call}_${base}`.slice(0, 128);
-      if (registry.spawnReceiptForClientAttempt(key)) {
+      const receipt = registry.spawnReceiptForClientAttempt(key);
+      if (!receipt) continue;
+      const safelyRetired = receipt.state === "failed"
+        && receipt.retryClaim?.claimId === `${pipeline.id}:${stage.id}:${receipt.launchId}`
+        && attempt.retiredLaunches?.some(retired => retired.launchId === receipt.launchId
+          && retired.conversationId === receipt.conversationId && retired.error === receipt.error);
+      if (!safelyRetired) {
         return "stage launch recovery cannot prove no dispatch began: a reserved receipt is not recorded on the attempt; its first-message delivery must be reconciled";
       }
     }
-  } catch {
-    return "stage launch recovery cannot prove no dispatch began: durable spawn receipts could not be read";
+  } catch (error) {
+    const cause = redactBounded(error instanceof Error ? error.message : String(error), 300);
+    return `stage launch recovery cannot prove no dispatch began: durable spawn receipts could not be read (${cause})`;
   }
   return null;
 }
