@@ -1549,6 +1549,31 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
         });
         if (geometry.clipped.length || geometry.covered.length || geometry.wide || geometry.documentOverflow) throw new Error(`${where}: ${JSON.stringify(geometry)}`);
         if (!opens) frames.push(await shot("-open"));
+        /* On the phone the dot is its own 44 px target, every tap inside it (short
+           of its control-radius corners) reaches the dot, and it takes no tap from
+           the summary's target, which still closes and reopens the details. */
+        let dotTarget: unknown = null;
+        if (phone) {
+          dotTarget = await result.evaluate(element => {
+            const dot = element.querySelector("[data-stage-setup-dot]")!, summary = element.querySelector("summary")!;
+            const box = dot.getBoundingClientRect(), words = summary.getBoundingClientRect();
+            const x = (box.left + box.right) / 2, y = (box.top + box.bottom) / 2;
+            const misses = [[-21, 0], [21, 0], [0, -21], [0, 21], [-18, -18], [18, -18], [-18, 18], [18, 18]].filter(([dx, dy]) => {
+              const hit = document.elementFromPoint(x + dx, y + dy);
+              return !hit || !dot.contains(hit);
+            });
+            const summaryHit = document.elementFromPoint(words.left + 1, (words.top + words.bottom) / 2);
+            return { width: box.width, height: box.height, misses, overlap: box.right > words.left + 0.5,
+              summaryEdgeHitsSummary: Boolean(summaryHit && summary.contains(summaryHit)) };
+          });
+          const reading = dotTarget as { width: number; height: number; misses: number[][]; overlap: boolean; summaryEdgeHitsSummary: boolean };
+          if (reading.width < 44 || reading.height < 44 || reading.misses.length || reading.overlap || !reading.summaryEdgeHitsSummary)
+            throw new Error(`${where}: dot target ${JSON.stringify(dotTarget)}`);
+          for (const expectOpen of [false, true]) {
+            await summary.tap();
+            await result.locator(expectOpen ? "details[open]" : "details:not([open])").waitFor();
+          }
+        }
         /* The dot's popover: when it started and how long it took, inside the window, over no other words. */
         let popover: unknown = null;
         if (view.kind === "running" || view.kind === "failed") {
@@ -1581,7 +1606,7 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
           await page.keyboard.press("Escape");
           if (phone) await page.mouse.click(2, 2);
         }
-        readings.push({ host, lang, theme, width, state, attempt: view.attempt, words, open: opens, summaryHeight, frames, geometry, popover, pageErrors });
+        readings.push({ host, lang, theme, width, state, attempt: view.attempt, words, open: opens, summaryHeight, dotTarget, frames, geometry, popover, pageErrors });
         if (pageErrors.length) throw new Error(`${where}: ${JSON.stringify(pageErrors)}`);
       }
     } finally { await context.close(); }

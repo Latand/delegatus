@@ -1,11 +1,11 @@
 {
-  "capturedAt": "2026-10-26T13:19:40.492Z",
+  "capturedAt": "2026-10-26T22:57:47.969Z",
   "sourceDigests": {
     "src/components/kanban/kanbanBoard.browser.test.tsx": "3732cd05c6c036667e7e69cafa10dbb5d111b7e7127e0a4056fdaca795d9dd80",
     "src/components/mobile/issue1671Evidence.browser.test.tsx": "68783c2b4c56a7f6b200f48c1e076af28c01f7dcad909b8fcaba370674ba0ed4",
     "src/components/conversation/conversationWindowEvidence.fixture.tsx": "72ec32f698ea17e0cb115b997a95467dc03a3e361b298e229bbb09208dcea767",
-    "src/components/kanban/issue1695BrowserHarness.ts": "6e0a3ce608553bcd002373060589a611f54a2c17300c35ecd9afcd37c7f15094",
-    "src/components/pipelines/StageSetupResult.tsx": "7db0b26907229ed8ef313059e0b06f92d2f542551ebd316d4c595bc434bdeecd",
+    "src/components/kanban/issue1695BrowserHarness.ts": "7dea379e37cd36903cd0f51e09702b178baf8b15859e5abeddce3a120f2e2549",
+    "src/components/pipelines/StageSetupResult.tsx": "a1bbf6c28315cf6cdd00af9f720f23986306b446c0df67f7b2af0e200ab0dc1f",
     "src/components/feed/cards/OutputPreview.tsx": "bb7d006527edbcbc141b4499161808d245927fb0696b66f646a0227c7fd9cea9",
     "src/components/kanban/StagesSheet.tsx": "446f3b007006158c3df7a74e31cc3d156df4d9500f5007f171a3b4407d5f1375",
     "src/components/mobile/MobilePipelineScreen.tsx": "f7839e6ae62f7093503d1b125afac90e628ccc4f6140072965d9d3e8279058fd",
@@ -23,6 +23,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-passed.png",
         "stages-en-light-640-passed-open.png"
@@ -46,6 +47,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-passed-empty.png",
         "stages-en-light-640-passed-empty-open.png"
@@ -69,6 +71,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-failed.png",
         "stages-en-light-640-failed-popover.png"
@@ -102,6 +105,7 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-stopped.png"
       ],
@@ -124,6 +128,7 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-running.png",
         "stages-en-light-640-running-open.png",
@@ -158,6 +163,7 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-long.png"
       ],
@@ -180,6 +186,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-switch-attempt-2.png",
         "stages-en-light-640-switch-attempt-2-open.png"
@@ -203,6 +210,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-640-switch-attempt-1.png",
         "stages-en-light-640-switch-attempt-1-popover.png"
@@ -236,6 +244,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-passed.png",
         "stages-en-light-1024-passed-open.png"
@@ -259,6 +268,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-passed-empty.png",
         "stages-en-light-1024-passed-empty-open.png"
@@ -282,6 +292,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-failed.png",
         "stages-en-light-1024-failed-popover.png"
@@ -315,6 +326,7 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-stopped.png"
       ],
@@ -337,6 +349,7 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-running.png",
         "stages-en-light-1024-running-open.png",
@@ -371,6 +384,7 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-long.png"
       ],
@@ -393,6 +407,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-switch-attempt-2.png",
         "stages-en-light-1024-switch-attempt-2-open.png"
@@ -416,6 +431,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1024-switch-attempt-1.png",
         "stages-en-light-1024-switch-attempt-1-popover.png"
@@ -449,6 +465,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-passed.png",
         "stages-en-light-1440-passed-open.png"
@@ -472,6 +489,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-passed-empty.png",
         "stages-en-light-1440-passed-empty-open.png"
@@ -495,6 +513,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-failed.png",
         "stages-en-light-1440-failed-popover.png"
@@ -528,6 +547,7 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-stopped.png"
       ],
@@ -550,6 +570,7 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-running.png",
         "stages-en-light-1440-running-open.png",
@@ -584,6 +605,7 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-long.png"
       ],
@@ -606,6 +628,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-switch-attempt-2.png",
         "stages-en-light-1440-switch-attempt-2-open.png"
@@ -629,6 +652,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-light-1440-switch-attempt-1.png",
         "stages-en-light-1440-switch-attempt-1-popover.png"
@@ -662,6 +686,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-passed.png",
         "stages-en-dark-640-passed-open.png"
@@ -685,6 +710,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-passed-empty.png",
         "stages-en-dark-640-passed-empty-open.png"
@@ -708,6 +734,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-failed.png",
         "stages-en-dark-640-failed-popover.png"
@@ -741,6 +768,7 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-stopped.png"
       ],
@@ -763,6 +791,7 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-running.png",
         "stages-en-dark-640-running-open.png",
@@ -797,6 +826,7 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-long.png"
       ],
@@ -819,6 +849,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-switch-attempt-2.png",
         "stages-en-dark-640-switch-attempt-2-open.png"
@@ -842,6 +873,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-640-switch-attempt-1.png",
         "stages-en-dark-640-switch-attempt-1-popover.png"
@@ -875,6 +907,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-passed.png",
         "stages-en-dark-1024-passed-open.png"
@@ -898,6 +931,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-passed-empty.png",
         "stages-en-dark-1024-passed-empty-open.png"
@@ -921,6 +955,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-failed.png",
         "stages-en-dark-1024-failed-popover.png"
@@ -954,6 +989,7 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-stopped.png"
       ],
@@ -976,6 +1012,7 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-running.png",
         "stages-en-dark-1024-running-open.png",
@@ -1010,6 +1047,7 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-long.png"
       ],
@@ -1032,6 +1070,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-switch-attempt-2.png",
         "stages-en-dark-1024-switch-attempt-2-open.png"
@@ -1055,6 +1094,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1024-switch-attempt-1.png",
         "stages-en-dark-1024-switch-attempt-1-popover.png"
@@ -1088,6 +1128,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-passed.png",
         "stages-en-dark-1440-passed-open.png"
@@ -1111,6 +1152,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-passed-empty.png",
         "stages-en-dark-1440-passed-empty-open.png"
@@ -1134,6 +1176,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-failed.png",
         "stages-en-dark-1440-failed-popover.png"
@@ -1167,6 +1210,7 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-stopped.png"
       ],
@@ -1189,6 +1233,7 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-running.png",
         "stages-en-dark-1440-running-open.png",
@@ -1223,6 +1268,7 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-long.png"
       ],
@@ -1245,6 +1291,7 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-switch-attempt-2.png",
         "stages-en-dark-1440-switch-attempt-2-open.png"
@@ -1268,6 +1315,7 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-en-dark-1440-switch-attempt-1.png",
         "stages-en-dark-1440-switch-attempt-1-popover.png"
@@ -1301,6 +1349,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-passed.png",
         "stages-uk-light-640-passed-open.png"
@@ -1324,6 +1373,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-passed-empty.png",
         "stages-uk-light-640-passed-empty-open.png"
@@ -1347,6 +1397,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-failed.png",
         "stages-uk-light-640-failed-popover.png"
@@ -1380,6 +1431,7 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-stopped.png"
       ],
@@ -1402,6 +1454,7 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-running.png",
         "stages-uk-light-640-running-open.png",
@@ -1436,6 +1489,7 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-long.png"
       ],
@@ -1458,6 +1512,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-switch-attempt-2.png",
         "stages-uk-light-640-switch-attempt-2-open.png"
@@ -1481,6 +1536,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-640-switch-attempt-1.png",
         "stages-uk-light-640-switch-attempt-1-popover.png"
@@ -1514,6 +1570,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-passed.png",
         "stages-uk-light-1024-passed-open.png"
@@ -1537,6 +1594,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-passed-empty.png",
         "stages-uk-light-1024-passed-empty-open.png"
@@ -1560,6 +1618,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-failed.png",
         "stages-uk-light-1024-failed-popover.png"
@@ -1593,6 +1652,7 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-stopped.png"
       ],
@@ -1615,6 +1675,7 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-running.png",
         "stages-uk-light-1024-running-open.png",
@@ -1649,6 +1710,7 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-long.png"
       ],
@@ -1671,6 +1733,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-switch-attempt-2.png",
         "stages-uk-light-1024-switch-attempt-2-open.png"
@@ -1694,6 +1757,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1024-switch-attempt-1.png",
         "stages-uk-light-1024-switch-attempt-1-popover.png"
@@ -1727,6 +1791,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-passed.png",
         "stages-uk-light-1440-passed-open.png"
@@ -1750,6 +1815,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-passed-empty.png",
         "stages-uk-light-1440-passed-empty-open.png"
@@ -1773,6 +1839,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-failed.png",
         "stages-uk-light-1440-failed-popover.png"
@@ -1806,6 +1873,7 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-stopped.png"
       ],
@@ -1828,6 +1896,7 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-running.png",
         "stages-uk-light-1440-running-open.png",
@@ -1862,6 +1931,7 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-long.png"
       ],
@@ -1884,6 +1954,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-switch-attempt-2.png",
         "stages-uk-light-1440-switch-attempt-2-open.png"
@@ -1907,6 +1978,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-light-1440-switch-attempt-1.png",
         "stages-uk-light-1440-switch-attempt-1-popover.png"
@@ -1940,6 +2012,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-passed.png",
         "stages-uk-dark-640-passed-open.png"
@@ -1963,6 +2036,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-passed-empty.png",
         "stages-uk-dark-640-passed-empty-open.png"
@@ -1986,6 +2060,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-failed.png",
         "stages-uk-dark-640-failed-popover.png"
@@ -2019,6 +2094,7 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-stopped.png"
       ],
@@ -2041,6 +2117,7 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-running.png",
         "stages-uk-dark-640-running-open.png",
@@ -2075,6 +2152,7 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-long.png"
       ],
@@ -2097,6 +2175,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-switch-attempt-2.png",
         "stages-uk-dark-640-switch-attempt-2-open.png"
@@ -2120,6 +2199,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-640-switch-attempt-1.png",
         "stages-uk-dark-640-switch-attempt-1-popover.png"
@@ -2153,6 +2233,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-passed.png",
         "stages-uk-dark-1024-passed-open.png"
@@ -2176,6 +2257,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-passed-empty.png",
         "stages-uk-dark-1024-passed-empty-open.png"
@@ -2199,6 +2281,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-failed.png",
         "stages-uk-dark-1024-failed-popover.png"
@@ -2232,6 +2315,7 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-stopped.png"
       ],
@@ -2254,6 +2338,7 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-running.png",
         "stages-uk-dark-1024-running-open.png",
@@ -2288,6 +2373,7 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-long.png"
       ],
@@ -2310,6 +2396,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-switch-attempt-2.png",
         "stages-uk-dark-1024-switch-attempt-2-open.png"
@@ -2333,6 +2420,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1024-switch-attempt-1.png",
         "stages-uk-dark-1024-switch-attempt-1-popover.png"
@@ -2366,6 +2454,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-passed.png",
         "stages-uk-dark-1440-passed-open.png"
@@ -2389,6 +2478,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-passed-empty.png",
         "stages-uk-dark-1440-passed-empty-open.png"
@@ -2412,6 +2502,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-failed.png",
         "stages-uk-dark-1440-failed-popover.png"
@@ -2445,6 +2536,7 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-stopped.png"
       ],
@@ -2467,6 +2559,7 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-running.png",
         "stages-uk-dark-1440-running-open.png",
@@ -2501,6 +2594,7 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-long.png"
       ],
@@ -2523,6 +2617,7 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-switch-attempt-2.png",
         "stages-uk-dark-1440-switch-attempt-2-open.png"
@@ -2546,6 +2641,7 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 24,
+      "dotTarget": null,
       "frames": [
         "stages-uk-dark-1440-switch-attempt-1.png",
         "stages-uk-dark-1440-switch-attempt-1-popover.png"

@@ -1,11 +1,11 @@
 {
-  "capturedAt": "2026-10-26T13:35:18.633Z",
+  "capturedAt": "2026-10-26T22:40:18.346Z",
   "sourceDigests": {
     "src/components/kanban/kanbanBoard.browser.test.tsx": "3732cd05c6c036667e7e69cafa10dbb5d111b7e7127e0a4056fdaca795d9dd80",
     "src/components/mobile/issue1671Evidence.browser.test.tsx": "68783c2b4c56a7f6b200f48c1e076af28c01f7dcad909b8fcaba370674ba0ed4",
     "src/components/conversation/conversationWindowEvidence.fixture.tsx": "72ec32f698ea17e0cb115b997a95467dc03a3e361b298e229bbb09208dcea767",
-    "src/components/kanban/issue1695BrowserHarness.ts": "6e0a3ce608553bcd002373060589a611f54a2c17300c35ecd9afcd37c7f15094",
-    "src/components/pipelines/StageSetupResult.tsx": "7db0b26907229ed8ef313059e0b06f92d2f542551ebd316d4c595bc434bdeecd",
+    "src/components/kanban/issue1695BrowserHarness.ts": "7dea379e37cd36903cd0f51e09702b178baf8b15859e5abeddce3a120f2e2549",
+    "src/components/pipelines/StageSetupResult.tsx": "a1bbf6c28315cf6cdd00af9f720f23986306b446c0df67f7b2af0e200ab0dc1f",
     "src/components/feed/cards/OutputPreview.tsx": "bb7d006527edbcbc141b4499161808d245927fb0696b66f646a0227c7fd9cea9",
     "src/components/kanban/StagesSheet.tsx": "446f3b007006158c3df7a74e31cc3d156df4d9500f5007f171a3b4407d5f1375",
     "src/components/mobile/MobilePipelineScreen.tsx": "f7839e6ae62f7093503d1b125afac90e628ccc4f6140072965d9d3e8279058fd",
@@ -23,6 +23,13 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-passed.png",
         "mobile-en-light-390-passed-open.png"
@@ -46,6 +53,13 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-passed-empty.png",
         "mobile-en-light-390-passed-empty-open.png"
@@ -69,6 +83,13 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-failed.png",
         "mobile-en-light-390-failed-popover.png"
@@ -82,9 +103,9 @@
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 151.421875,
+          "right": 157.421875,
           "bottom": 270
         },
         "inside": true,
@@ -102,6 +123,13 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-stopped.png"
       ],
@@ -124,6 +152,13 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-running.png",
         "mobile-en-light-390-running-open.png",
@@ -138,9 +173,9 @@
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 158.140625,
+          "right": 164.140625,
           "bottom": 270
         },
         "inside": true,
@@ -158,6 +193,13 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-long.png"
       ],
@@ -180,6 +222,13 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-light-390-switch.png",
         "mobile-en-light-390-switch-open.png"
@@ -203,6 +252,13 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-passed.png",
         "mobile-en-dark-390-passed-open.png"
@@ -226,6 +282,13 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-passed-empty.png",
         "mobile-en-dark-390-passed-empty-open.png"
@@ -249,6 +312,13 @@
       "words": "Project setup failed · exit 7",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-failed.png",
         "mobile-en-dark-390-failed-popover.png"
@@ -262,9 +332,9 @@
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 151.421875,
+          "right": 157.421875,
           "bottom": 270
         },
         "inside": true,
@@ -282,6 +352,13 @@
       "words": "Project setup failed",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-stopped.png"
       ],
@@ -304,6 +381,13 @@
       "words": "Project setup running",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-running.png",
         "mobile-en-dark-390-running-open.png",
@@ -318,9 +402,9 @@
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 158.140625,
+          "right": 164.140625,
           "bottom": 270
         },
         "inside": true,
@@ -338,6 +422,13 @@
       "words": "Project setup failed · exit 1",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-long.png"
       ],
@@ -360,6 +451,13 @@
       "words": "Project setup done",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-en-dark-390-switch.png",
         "mobile-en-dark-390-switch-open.png"
@@ -383,6 +481,13 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-passed.png",
         "mobile-uk-light-390-passed-open.png"
@@ -406,6 +511,13 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-passed-empty.png",
         "mobile-uk-light-390-passed-empty-open.png"
@@ -429,6 +541,13 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-failed.png",
         "mobile-uk-light-390-failed-popover.png"
@@ -442,9 +561,9 @@
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 185.609375,
+          "right": 191.609375,
           "bottom": 270
         },
         "inside": true,
@@ -462,6 +581,13 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-stopped.png"
       ],
@@ -484,6 +610,13 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-running.png",
         "mobile-uk-light-390-running-open.png",
@@ -498,9 +631,9 @@
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 181.515625,
+          "right": 187.515625,
           "bottom": 270
         },
         "inside": true,
@@ -518,6 +651,13 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-long.png"
       ],
@@ -540,6 +680,13 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-light-390-switch.png",
         "mobile-uk-light-390-switch-open.png"
@@ -563,6 +710,13 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-passed.png",
         "mobile-uk-dark-390-passed-open.png"
@@ -586,6 +740,13 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-passed-empty.png",
         "mobile-uk-dark-390-passed-empty-open.png"
@@ -609,6 +770,13 @@
       "words": "Підготовка проєкту не вдалася · код 7",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-failed.png",
         "mobile-uk-dark-390-failed-popover.png"
@@ -622,9 +790,9 @@
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 185.609375,
+          "right": 191.609375,
           "bottom": 270
         },
         "inside": true,
@@ -642,6 +810,13 @@
       "words": "Підготовка проєкту не вдалася",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-stopped.png"
       ],
@@ -664,6 +839,13 @@
       "words": "Підготовка проєкту триває",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-running.png",
         "mobile-uk-dark-390-running-open.png",
@@ -678,9 +860,9 @@
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 12,
+          "left": 18,
           "top": 240,
-          "right": 181.515625,
+          "right": 187.515625,
           "bottom": 270
         },
         "inside": true,
@@ -698,6 +880,13 @@
       "words": "Підготовка проєкту не вдалася · код 1",
       "open": true,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-long.png"
       ],
@@ -720,6 +909,13 @@
       "words": "Підготовку проєкту виконано",
       "open": false,
       "summaryHeight": 44,
+      "dotTarget": {
+        "width": 44,
+        "height": 44,
+        "misses": [],
+        "overlap": false,
+        "summaryEdgeHitsSummary": true
+      },
       "frames": [
         "mobile-uk-dark-390-switch.png",
         "mobile-uk-dark-390-switch-open.png"

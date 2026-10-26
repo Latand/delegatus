@@ -78,6 +78,7 @@ function LiveSetupDot({ setup }: { setup: Setup }) {
 function SetupDotWords({ setup, endMs }: { setup: Setup; endMs: number }) {
   const { t, locale } = useLocale();
   const ref = useRef<HTMLSpanElement>(null);
+  const anchor = useRef<HTMLSpanElement>(null);
   const pressed = useRef(false);
   const [open, setOpen] = useState(false);
   const started = Date.parse(setup.startedAt);
@@ -92,11 +93,15 @@ function SetupDotWords({ setup, endMs }: { setup: Setup; endMs: number }) {
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [open]);
+  /* On a coarse pointer the dot's own column is the 44 px target, centred on
+     the dot: it borrows the host's 12 px side padding and ends where the
+     summary's target begins, so it takes no tap meant for the summary. It is
+     square so a tap in its corners still lands. */
   return (
     <span className="flex min-h-6 shrink-0 items-center pointer-coarse:min-h-11">
       <span
         ref={ref}
-        className="relative flex rounded-full after:absolute after:-inset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="relative flex rounded-full after:absolute after:-inset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:-ml-3 pointer-coarse:-mr-2 pointer-coarse:size-11 pointer-coarse:rounded-control pointer-coarse:items-center pointer-coarse:justify-center pointer-coarse:after:hidden"
         data-stage-setup-dot=""
         role="button"
         tabIndex={0}
@@ -113,9 +118,9 @@ function SetupDotWords({ setup, endMs }: { setup: Setup; endMs: number }) {
           else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setOpen((value) => !value); }
         }}
       >
-        <StageGlyph state={setup.state} model={null} fallback="tone" />
+        <span ref={anchor} className="flex"><StageGlyph state={setup.state} model={null} fallback="tone" /></span>
         {open ? (
-          <TooltipBubble anchorRef={ref} side="top" align="left" className="card-state-pop">
+          <TooltipBubble anchorRef={anchor} side="top" align="left" className="card-state-pop">
             <span data-stage-setup-pop="">{words}</span>
           </TooltipBubble>
         ) : null}
