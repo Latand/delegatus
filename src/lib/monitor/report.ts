@@ -251,7 +251,7 @@ function seatOwnedLaneSection(lanes: readonly SeatTickSeatOwnedLane[], now: numb
   const flat = (value: string) => redactMonitorText(value).replace(/\s+/g, " ").trim();
   const clip = (value: string, limit: number) => value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
   const rows = [...lanes].sort((a, b) => (a.sinceMs ?? Infinity) - (b.sinceMs ?? Infinity) || a.id.localeCompare(b.id));
-  for (const limit of compact ? [90, 60, 40, 24, 16, 12, 11, 10, 8, 4] : [90, 60, 40, 24]) {
+  for (const limit of compact ? [90, 60, 40, 24, 16, 12, 11, 10, 8, 4, 0] : [90, 60, 40, 24]) {
     const lines = ["", `Waiting on seat (${rows.length}${compact ? "" : "; oldest first"}):`, ...rows.map(lane => {
       const minutes = lane.sinceMs === null ? null : Math.max(0, Math.floor((now - lane.sinceMs) / 60_000));
       const age = minutes === null ? "age unknown" : minutes < 60 ? `${minutes}m`
@@ -261,7 +261,10 @@ function seatOwnedLaneSection(lanes: readonly SeatTickSeatOwnedLane[], now: numb
       const colon = reason.indexOf(":");
       const why = colon < 0 ? clip(reason, Math.max(limit, 12))
         : `${reason.slice(0, colon)}: ${clip(reason.slice(colon + 1).trim(), Math.max(limit, 13))}`;
-      return [`- ${flat(lane.id)}`, clip(flat(lane.title), limit), why, age].join(compact ? "|" : " | ");
+      // At the tightest bound the title preview yields to source diagnostics.
+      // Every identity, stop class, cause preview and age still reaches the seat;
+      // the agenda below carries a complete detail or explicit summary.
+      return [`- ${flat(lane.id)}`, ...(limit ? [clip(flat(lane.title), limit)] : []), why, age].join(compact ? "|" : " | ");
     })];
     if (lines.join("\n").length <= budget) return lines;
   }

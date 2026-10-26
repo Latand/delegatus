@@ -125,7 +125,7 @@ export function seatTickWorkSignal(): AbortSignal | undefined { return currentWo
 export function seatTickWorkRemainingMs(): number | undefined { return currentWork.getStore()?.remainingMs; }
 export function seatTickSkippedSources(): string | null {
   const names = [...(currentWork.getStore()?.skippedSources ?? [])];
-  return names.length ? `Sources skipped after their check budget share: ${names.join(", ")}. Retried next check.` : null;
+  return names.length ? `Skipped sources (budget): ${names.join(", ")}; retry next check.` : null;
 }
 export function assertSeatTickWork(): void { currentWork.getStore()?.assert(); }
 export function guardedSeatTickPort<T extends object>(port: T, label: string): T {

@@ -49,7 +49,7 @@ test.each(["liveness", "workerAsks", "recordRuleReports"] as const)(
       const result = await checking;
       expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
       expect(rig.sent).toHaveLength(1);
-      expect(rig.sent[0]!.text).toContain(`Sources skipped after their check budget share: ${source}`);
+      expect(rig.sent[0]!.text).toContain(`Skipped sources (budget): ${source}`);
       expect(result?.detail).toContain(source);
       expect(time.now()).toBeLessThan(800);
       expect(reads).toBe(1);
@@ -152,7 +152,7 @@ test.each(["liveness", "workerAsks", "recordRuleReports"] as const)("a fast %s r
   const result = await runSeatTickCheck(PROJECT, rig.deps);
   expect(result?.verdict).toBe("wake");
   expect(reads).toBeGreaterThan(0);
-  expect(rig.sent[0]!.text).not.toContain("Sources skipped");
+  expect(rig.sent[0]!.text).not.toContain("Skipped sources");
 });
 
 test.each(["once", "always", "unrelated"] as const)("preparation read conflicts retry once: %s", async mode => {
