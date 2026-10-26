@@ -1344,7 +1344,9 @@ test("a read-only stage whose host was lost re-runs on the same head instead of 
   const rerun = loadPipelines()[0]!;
   expect(rerun.state).toBe("running");
   expect(rerun.cursor).toMatchObject({ stageId: "review", state: "pending" });
-  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: READ_ONLY_RERUN });
+  const rerunError = `${READ_ONLY_RERUN}; exit: status unavailable; no Delegatus stop recorded`;
+  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: rerunError });
+  expect(rerun.stateDetail).toBe(rerunError);
   expect(rerun.runs[1]!.attempts).toHaveLength(0);
 
   await tickPipelines([], h.ports);

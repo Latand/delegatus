@@ -1,3 +1,4 @@
+import { readHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { engineRecordSince, processLaunchedAt } from "@/lib/runtime/liveness";
@@ -109,6 +110,8 @@ export interface AgentLivenessPipelineRef {
 }
 
 export interface AgentLivenessRecord {
+  hostExit?: HostExitRecord | null;
+  previousHostExit?: HostExitRecord;
   activity?: AgentActivity;
   verified?: boolean;
   previousPaths?: string[];
@@ -1526,6 +1529,8 @@ async function livenessSnapshotWithin(
       lastRecordMs,
       silentForMs: verdict.verified ? silentForMs : null,
       host,
+      hostExit: host.state === "gone" ? readHostExit(registryEntry?.hostExitProcess ?? registryEntry?.structuredHost?.exitProcess ?? registryEntry?.structuredHost?.process) : null,
+      previousHostExit: registryEntry?.previousHostExit,
       pipeline,
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],
     };
@@ -1546,6 +1551,8 @@ async function livenessSnapshotWithin(
     turnState: row.turnState,
     // Setup evidence stays inside the registry verdict; the record names the host.
     host: { state: row.host.state, kind: row.host.kind, pid: row.host.pid },
+    hostExit: row.hostExit,
+    ...(row.previousHostExit ? { previousHostExit: row.previousHostExit } : {}),
     lifecycle: row.lifecycle,
     reason: row.reason,
     retryAt: row.retryAt ?? null,
