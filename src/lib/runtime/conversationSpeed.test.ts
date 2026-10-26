@@ -50,7 +50,7 @@ test("speed records the applied profile without cutting, and an offline choice s
   const f = fixture();
   expect(await f.run()).toMatchObject({ status: 200, body: { ok: true, requestedTier: "ultrafast", appliedTier: "ultrafast", echoed: true } });
   expect(f.calls.map(call => call.cut)).toEqual(["none"]);
-  expect(registry.conversation(f.conversation.id)?.generations.at(-1)?.launchProfile).toMatchObject({ serviceTier: "ultrafast", fast: false, effort: "high" });
+  expect(registry.conversation(f.conversation.id)?.generations.at(-1)?.launchProfile).toMatchObject({ serviceTier: "ultrafast", fast: true, effort: "high" });
   expect(await changeConversationSpeed(f.conversation.id, "priority", "speed-offline", { ...f.deps, host: async () => null }))
     .toMatchObject({ status: 200, body: { appliedTier: "priority", echoed: false, reason: "the tier applies at the next resume" } });
   const fresh = new AgentRegistry(path.join(root, "registry.json"));

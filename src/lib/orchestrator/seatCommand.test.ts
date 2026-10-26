@@ -14,6 +14,8 @@ import { saveRoleOverrides } from "@/lib/roles/store";
 import { procBackend } from "@/lib/proc";
 import { drainFile, writeDrain } from "@/lib/selfUpdate/drain";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { changeConversationSpeed } from "@/lib/runtime/conversationSpeed";
+import type { EngineHost, RuntimeTierRequest } from "@/lib/runtime/engineHost";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
@@ -2939,6 +2941,64 @@ test("tier roundtrip: create and rotate forward an explicit tier", async () => {
   expect(result.status).toBe(200);
   expect(recorded.spawns[1]).toMatchObject({ serviceTier: "priority" });
   expect(recorded.spawns[1]).not.toHaveProperty("inheritedServiceTier");
+});
+
+for (const offline of [false, true]) test.each([
+  { selected: "ultrafast", applied: "ultrafast", fast: true },
+  { selected: "priority", applied: "priority", fast: true },
+  { selected: "standard", applied: "default", fast: false },
+  { selected: "default", applied: "default", fast: false },
+])(`selected $selected survives resume and rotation (offline=${offline})`, async ({ selected, applied, fast }) => {
+  const filename = path.join(sandbox, "registry.json");
+  let registry = new AgentRegistry(filename);
+  const transcript = path.join(sandbox, "incumbent.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: true, serviceTier: "priority" });
+  fs.writeFileSync(path.join(sandbox, "models_cache.json"), JSON.stringify({ models: [
+    { slug: "gpt-6.1-sol", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] },
+  ] }));
+  const calls: RuntimeTierRequest[] = [];
+  const host = { setTier: async (request: RuntimeTierRequest) => {
+    request.authorizeDispatch?.();
+    calls.push(request);
+    return { appliedTier: request.serviceTier, echoed: true, cut: "none" as const };
+  } } as unknown as EngineHost;
+  const { deps, recorded } = dependencies({ spawn: async body => {
+    recorded.spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: recorded.spawns.length === 1 ? conversation.id : NEW_ID, path: null } };
+  } });
+  try {
+    expect((await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol" }, deps)).status).toBe(200);
+    const selection = await changeConversationSpeed(conversation.id, selected, "selected-speed", {
+      registry, host: async () => offline ? null : host,
+      accounts: () => [{ id: "account-a", label: "Account A", home: sandbox, kind: "managed", sessionsDir: sandbox,
+        authPresent: true, loginPane: null, createdAt: 0 }],
+    });
+    expect(selection).toMatchObject({ status: 200, body: { appliedTier: applied, echoed: !offline } });
+    expect(calls.map(call => [call.serviceTier, call.cut])).toEqual(offline ? [] : [[applied, "none"]]);
+    registry.close();
+    registry = new AgentRegistry(filename);
+    const generation = registry.conversation(conversation.id)!.generations.at(-1)!;
+    const resumed = await registry.beginSpawnRequestAsync({
+      engine: "codex", cwd: sandbox, accountId: "account-a", conversationId: conversation.id,
+      purpose: "resume-successor", transport: "structured", expectedArtifactPath: transcript,
+      launchProfile: { ...generation.launchProfile, title: "Resume selected speed" },
+    });
+    // The host replaces its input with this receipt before forwarding the tier.
+    expect(resumed.receipt.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    expect(registry.settleSpawn(resumed.receipt.launchId, {
+      key: { engine: "codex", sessionId: generation.id }, artifactPath: transcript, cwd: sandbox,
+      accountId: "account-a", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }).kind).toBe("settled");
+    registry.close();
+    registry = new AgentRegistry(filename);
+    expect(registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    setAgentRegistryForTests(registry);
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "selected-speed-rotation" }, deps)).status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: applied });
+    expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
+    expect(recorded.spawns[1]).not.toHaveProperty("fast");
+  } finally { registry.close(); }
 });
 
 test.each([false, true])("tier roundtrip: rotation inherits the explicit profile, excluding Turbo (turbo=%s)", async turbo => {

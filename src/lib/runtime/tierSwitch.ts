@@ -69,7 +69,7 @@ export async function switchConversationTier(conversationId: string, operationId
         registry.updateConversationLaunchProfile(id, {
           model: latest.model,
           effort: latest.effort,
-          fast: outcome.appliedTier === "priority",
+          fast: !!outcome.appliedTier && !["default", "standard"].includes(outcome.appliedTier),
           serviceTier: outcome.appliedTier,
         });
       });
