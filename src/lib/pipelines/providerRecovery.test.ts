@@ -5,6 +5,11 @@ import { FlowPipelineController, startFlowPipelineControllerRuntime } from "./co
 import { pipelineRecoveryWindow } from "./store";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { spyOn } from "bun:test";
+import { once } from "node:events";
+import { Database } from "bun:sqlite";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { RuntimeHost } from "@/runtime-host/host";
+import { serveRuntimeHost } from "@/runtime-host/socket";
 
 function latch() {
   let resolve!: () => void;
@@ -102,6 +107,32 @@ test("exhausted capacity recovery visibly parks with the original reason", async
   expect(loadPipelines()[0]!).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("model at capacity after 3 tries") });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("needs_decision");
   expect(f.sends).toHaveLength(0);
+});
+
+test("agent output closes the spent capacity chain before a later capacity cut is checkpointed", async () => {
+  const f = await capacity();
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  attempt.providerRecoveryBudget!.tries = 3;
+  attempt.providerWait!.tries = 3;
+  savePipelines([lane]);
+  f.advance(1_000);
+  fs.appendFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+    payload: { type: "agent_message", message: "Working on the stage" } }) + "\n");
+  f.advance(1_000);
+  fs.appendFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: {
+    type: "task_complete", last_agent_message: null,
+    error: { codex_error_info: "server_overloaded", message: "Selected model is at capacity. Please try again later." },
+  } }) + "\n");
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  const saved = loadPipelines()[0]!;
+  expect(saved.state).toBe("running");
+  expect(saved.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
+  expect(saved.runs[0]!.attempts[0]!.providerRecoveryBudget?.tries).toBe(0);
+  expect(saved.stateDetail).toContain("waiting for model at capacity");
+  f.advance(60_000);
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  expect(f.sends).toHaveLength(1);
 });
 
 test("a fresh process honours the saved retry time", async () => {
@@ -202,9 +233,9 @@ test.each(["busy", "unknown", "unreadable"] as const)("%s evidence never manufac
 test("watchdog recovery admits a later terminal lane while ordinary and first recovery reads remain held", async () => {
   const f = await capacity();
   const read = f.h.ports.durableTurnEvidence;
-  const ordinaryEntered = latch(), recoveryEntered = latch(), release = latch(), peerShown = latch(), peerContinued = latch();
+  const ordinaryEntered = latch(), recoveryEntered = latch(), release = latch(), peerShown = latch(), peerContinued = latch(), wakeScheduled = latch();
   const wakes: number[] = [];
-  f.h.ports.scheduleTick = delay => { wakes.push(delay); };
+  f.h.ports.scheduleTick = delay => { wakes.push(delay); if (delay === 60_000) wakeScheduled.resolve(); };
   let holds = 0;
   f.h.ports.durableTurnEvidence = async (...args) => {
     if (args[1] === "/codex/stage-1.jsonl" && holds++ < 2) {
@@ -254,6 +285,7 @@ test("watchdog recovery admits a later terminal lane while ordinary and first re
       if (loadPipelines().find(row => row.id === peer.id)?.stateDetail?.includes("waiting for model at capacity")) peerShown.resolve();
     }, 10);
     try { await until(peerShown.promise); } finally { clearInterval(check); }
+    await until(wakeScheduled.promise);
     expect(holds).toBe(2);
     expect(f.sends).toHaveLength(0);
     expect(wakes).toContain(60_000);
@@ -271,12 +303,53 @@ test("watchdog recovery admits a later terminal lane while ordinary and first re
   } finally { release.resolve(); await ordinary; await control; await settleProviderRecoveries(); }
 });
 
-test("a recovery deadline withdraws late-read authority and joins one resident observation per lane", async () => {
+test.each([0, 3])("a known capacity cut checkpoints before held activity with %i spent tries", async tries => {
   const f = await capacity();
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries, startedAt: f.h.ports.now() };
+  savePipelines([lane]);
   const entered = latch(), release = latch();
+  let activityReads = 0, expire: (() => void) | undefined;
+  f.h.ports.conversationAgentActive = async () => { activityReads++; entered.resolve(); await release.promise; return null; };
+  const nativeTimeout = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+    if (delay === PROVIDER_RECOVERY_DEADLINE_MS) expire = callback;
+    return nativeTimeout(callback, delay);
+  }) as typeof setTimeout);
+  let work: Promise<void> | undefined;
+  try {
+    work = recoverPipelineProviderTurn(f.id, f.h.ports);
+    if (tries === 3) {
+      await until(work);
+      expect(activityReads).toBe(0);
+      expect(loadPipelines()[0]!.stateDetail).toContain("model at capacity after 3 tries");
+    } else {
+      await until(entered.promise);
+      expect(loadPipelines()[0]!.stateDetail).toContain("waiting for model at capacity");
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
+      expire!();
+      await until(work);
+      expect(loadPipelines()[0]!.stateDetail).toContain("model at capacity");
+    }
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    const parked = structuredClone(loadPipelines()[0]);
+    for (let wake = 0; wake < 4; wake++) await recoverPipelineProviderTurn(f.id, f.h.ports);
+    release.resolve();
+    await work;
+    expect(loadPipelines()[0]).toEqual(parked);
+    expect(f.sends).toHaveLength(0);
+  } finally { timer.mockRestore(); release.resolve(); await work; }
+});
+
+test("an expired held read parks visibly, releases observation and lets a peer recover before the read returns", async () => {
+  const f = await capacity();
+  const entered = latch(), release = latch(), lateRead = latch();
   const read = f.h.ports.durableTurnEvidence;
   let reads = 0, expire: (() => void) | undefined;
-  f.h.ports.durableTurnEvidence = async (...args) => { reads++; entered.resolve(); await release.promise; return read(...args); };
+  f.h.ports.durableTurnEvidence = async (...args) => {
+    reads++; entered.resolve(); await release.promise;
+    try { return await read(...args); } finally { lateRead.resolve(); }
+  };
   const nativeTimeout = globalThis.setTimeout;
   const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
     if (delay === PROVIDER_RECOVERY_DEADLINE_MS) expire = callback;
@@ -287,11 +360,85 @@ test("a recovery deadline withdraws late-read authority and joins one resident o
     await until(entered.promise);
     await scheduleProviderRecovery(f.h.ports);
     expect(reads).toBe(1);
-    expect(expire).toBeDefined();
     expire!();
+    await until(settleProviderRecoveries());
+    const parked = structuredClone(loadPipelines()[0]!);
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs[0]!.attempts[0]!.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain("provider recovery observation exceeded 15 seconds");
+    f.h.ports.durableTurnEvidence = read;
+    for (let wake = 0; wake < 4; wake++) {
+      await scheduleProviderRecovery(f.h.ports);
+      await until(settleProviderRecoveries());
+    }
+    expect(reads).toBe(1);
+    const source = `import { scheduleProviderRecovery, settleProviderRecoveries } from "./src/lib/pipelines/providerRecovery.ts";
+      import { defaultPipelinePorts } from "./src/lib/pipelines/engine.ts";
+      import { loadPipelines } from "./src/lib/pipelines/store.ts";
+      let reads=0;
+      const ports={...defaultPipelinePorts(),durableTurnEvidence:async()=>{reads++;return null;}};
+      await scheduleProviderRecovery(ports); await settleProviderRecoveries();
+      console.log(JSON.stringify({reads,state:loadPipelines()[0].state,detail:loadPipelines()[0].stateDetail}));`;
+    const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text();
+    const errors = await new Response(child.stderr).text();
+    expect({ code: await child.exited, errors }).toMatchObject({ code: 0 });
+    expect(JSON.parse(output)).toEqual({ reads: 0, state: "needs_decision", detail: parked.stateDetail });
+    const peer = structuredClone(parked);
+    peer.id = "deadline-peer";
+    peer.delivery = undefined; peer.publication = "internal";
+    peer.state = "running"; peer.stateDetail = null;
+    peer.cursor!.state = "running"; peer.runs[0]!.attempts[0]!.state = "running";
+    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+    savePipelines([parked, peer]);
+    await scheduleProviderRecovery(f.h.ports);
+    await until(settleProviderRecoveries());
+    expect(loadPipelines().find(row => row.id === peer.id)!.stateDetail).toContain("waiting for model at capacity");
+    f.advance(60_000);
+    await scheduleProviderRecovery(f.h.ports);
+    await until(settleProviderRecoveries());
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0]).toContain(peer.id);
+    expect(loadPipelines().find(row => row.id === f.id)).toEqual(parked);
+    release.resolve(); await until(lateRead.promise);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(loadPipelines().find(row => row.id === f.id)).toEqual(parked);
+    expect(f.sends).toHaveLength(1);
   } finally { timer.mockRestore(); release.resolve(); await settleProviderRecoveries(); }
-  expect(f.sends).toHaveLength(0);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+});
+
+test.each(["paused", "closed", "edited", "hidden", "reported"] as const)("deadline parking preserves concurrent %s authority", async change => {
+  const f = await capacity();
+  const entered = latch(), release = latch();
+  const read = f.h.ports.durableTurnEvidence;
+  f.h.ports.durableTurnEvidence = async (...args) => { entered.resolve(); await release.promise; return read(...args); };
+  let expire!: () => void;
+  const nativeTimeout = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+    if (delay === PROVIDER_RECOVERY_DEADLINE_MS) expire = callback;
+    return nativeTimeout(callback, delay);
+  }) as typeof setTimeout);
+  let work: Promise<void> | undefined;
+  try {
+    work = recoverPipelineProviderTurn(f.id, f.h.ports);
+    await until(entered.promise);
+    const lane = loadPipelines()[0]!;
+    if (change === "paused") lane.state = "paused";
+    if (change === "closed") { lane.state = "closed"; lane.closedAt = f.h.ports.now(); lane.cursor = null; }
+    if (change === "hidden") lane.hiddenAt = f.h.ports.now();
+    if (change === "edited") lane.stateDetail = "new controller checkpoint";
+    if (change === "reported") lane.runs[0]!.attempts[0]!.report = {
+      seq: 1, at: f.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+      verdict: { status: "pass", findings: [] }, summary: "done", calls: 1,
+      provenance: { head: "fixture-head", branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+    };
+    savePipelines([lane]);
+    const changed = structuredClone(loadPipelines()[0]);
+    expire(); await until(work);
+    expect(loadPipelines()[0]).toEqual(changed);
+    release.resolve(); await work;
+    expect(f.sends).toHaveLength(0);
+  } finally { timer.mockRestore(); release.resolve(); await work; }
 });
 
 test("recovery pages use indexed headers and persist their fair position across a fresh process", async () => {
@@ -303,6 +450,7 @@ test("recovery pages use indexed headers and persist their fair position across 
     Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); return lane;
   });
   savePipelines(rows);
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "provider-recovery-cursor.json"), JSON.stringify({ row_order: -1, row_key: "" }));
   f.h.ports.durableTurnEvidence = async () => null;
   await scheduleProviderRecovery(f.h.ports);
   await settleProviderRecoveries();
@@ -317,4 +465,76 @@ test("recovery pages use indexed headers and persist their fair position across 
   const output = await new Response(child.stdout).text();
   expect(await child.exited).toBe(0);
   expect(JSON.parse(output)).toEqual(next);
+});
+
+test("a default eight-lane recovery page scopes fresh activity to its identities as host history grows", async () => {
+  const f = await capacity();
+  const seed = loadPipelines()[0]!;
+  const lanes = Array.from({ length: PROVIDER_RECOVERY_PAGE }, (_, n) => {
+    const lane = structuredClone(seed);
+    lane.id = `scoped-recovery-${n}`;
+    lane.delivery = undefined; lane.publication = "internal";
+    Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
+    const attempt = lane.runs[0]!.attempts[0]!;
+    attempt.agentPath = f.file; attempt.conversationId = `conversation_scope_${n}`;
+    return lane;
+  });
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "recovery-host-"));
+  const database = path.join(root, "runtime.sqlite");
+  const journal = new RuntimeJournal(database);
+  const host = new RuntimeHost(journal);
+  const requests: Array<{ ids: readonly string[] | undefined; rows: number }> = [];
+  const socket = path.join(root, "host.sock");
+  const server = serveRuntimeHost(socket, { handle: request => {
+    if (request.method === "snapshot") {
+      const read = request.params?.snapshotRead as { kind: string; conversationIds?: string[] } | undefined;
+      if (read?.kind === "activity") {
+        const result = journal.snapshotRead(read);
+        requests.push({ ids: read.conversationIds, rows: result.sessions!.length });
+      }
+    }
+    return host.handle(request);
+  } });
+  const previous = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = socket;
+  const db = new Database(database);
+  try {
+    await once(server, "listening");
+    const insert = db.prepare("INSERT INTO entities(kind,id,revision,state_json,checkpoint_seq) VALUES ('session',?,1,?,0)");
+    const populate = db.transaction((from: number, to: number) => {
+      for (let n = from; n < to; n++) {
+        const id = n < PROVIDER_RECOVERY_PAGE ? `conversation_scope_${n}` : `conversation_history_${n}`;
+        insert.run(id, JSON.stringify({ conversationId: id, host: "hosted", turn: "idle", attentionIds: [] }));
+      }
+    });
+    let population = 0;
+    const measurements: Array<{ population: number; requests: number; scoped: number; rows: number }> = [];
+    for (const retained of [PROVIDER_RECOVERY_PAGE, 5_000, 50_000]) {
+      populate(population, retained); population = retained;
+      journal.append({ scope: { type: "system", id: "population-fixture" }, kind: "files.revision", payload: {} });
+      for (let repetition = 0; repetition < 3; repetition++) {
+        savePipelines(lanes);
+        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "provider-recovery-cursor.json"), JSON.stringify({ row_order: -1, row_key: "" }));
+        requests.length = 0;
+        await scheduleProviderRecovery();
+        await until(settleProviderRecoveries());
+        measurements.push({ population: retained, requests: requests.length,
+          scoped: requests.filter(request => request.ids?.length === 1).length,
+          rows: requests.reduce((sum, request) => sum + request.rows, 0) });
+        if (requests.every(request => request.ids?.length === 1)) {
+          expect(requests.map(request => request.ids!.join())).toEqual(expect.arrayContaining(
+            lanes.map(lane => lane.runs[0]!.attempts[0]!.conversationId!)));
+        }
+        expect(loadPipelines().every(lane => lane.stateDetail?.includes("waiting for model at capacity"))).toBe(true);
+      }
+    }
+    console.log("provider activity page measurements", JSON.stringify(measurements));
+    expect(measurements).toEqual([PROVIDER_RECOVERY_PAGE, 5_000, 50_000].flatMap(population =>
+      Array.from({ length: 3 }, () => ({ population, requests: PROVIDER_RECOVERY_PAGE, scoped: PROVIDER_RECOVERY_PAGE, rows: PROVIDER_RECOVERY_PAGE }))));
+  } finally {
+    await settleProviderRecoveries();
+    if (previous === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previous;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    db.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
 });

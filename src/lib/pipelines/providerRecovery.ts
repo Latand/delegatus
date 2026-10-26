@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
-import { defaultPipelinePorts, recoverPipelineProviderTurn, PROVIDER_RECOVERY_DEADLINE_MS, type PipelinePorts } from "./engine";
+import { recoverPipelineProviderTurn, type PipelinePorts } from "./engine";
 import { pipelineRecoveryWindow } from "./store";
 import { withoutControllerPipelineScope } from "./controllerScope";
 
@@ -47,8 +47,8 @@ async function saveCursor(filename: string, value: Cursor): Promise<void> {
 
 /** Each watchdog/host wake admits at most eight indexed running lanes. The
  * durable fair cursor advances before dispatch, including past unreadable or
- * held evidence. One resident read per lane cannot hold a peer's admission.
- * Expiry withdraws actuation authority; late evidence cannot write or send. */
+ * held evidence. Expiry parks through fresh authority and releases admission;
+ * late evidence cannot write or send. */
 export function scheduleProviderRecovery(suppliedPorts?: PipelinePorts): Promise<void> {
   return withoutControllerPipelineScope(() => {
     const root = statePath("provider-recovery-cursor.json");
@@ -61,18 +61,11 @@ export function scheduleProviderRecovery(suppliedPorts?: PipelinePorts): Promise
       for (const row of rows) {
         const key = JSON.stringify([root, row.row_key]);
         if (jobs.has(key)) continue;
-        const abort = new AbortController();
-        const timer = setTimeout(() => {
-          abort.abort();
-          console.error("[pipelines] provider recovery evidence deadline", { lane: row.row_key });
-        }, PROVIDER_RECOVERY_DEADLINE_MS);
-        timer.unref();
-        // A fresh ports instance gives each observation fresh host activity.
         const job = withViewerOperation("pipelines.controller-lane", () =>
-          recoverPipelineProviderTurn(row.row_key, suppliedPorts ?? defaultPipelinePorts(), abort.signal))
+          recoverPipelineProviderTurn(row.row_key, suppliedPorts))
           .catch(error => {
             if (!(error instanceof StateSnapshotChangedError)) console.error("[pipelines] provider recovery deferred", error);
-          }).finally(() => { clearTimeout(timer); jobs.delete(key); });
+          }).finally(() => { jobs.delete(key); });
         jobs.set(key, job);
       }
     })().finally(() => { schedules.delete(root); });
