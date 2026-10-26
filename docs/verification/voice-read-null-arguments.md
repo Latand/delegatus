@@ -1,4 +1,80 @@
-Voice read argument recovery verification, 2026-10-23. Fixes #3226.
+# Voice read argument recovery verification
+
+## Revalidation, 2026-10-26
+
+The assigned baseline, `0728b67c411f29e65b446cf6f4fd591a0c0bb819`, already
+contains the fix merged in #3284 on 2026-10-25. The implementation and its
+regression tests are unchanged in this stage.
+
+`withoutUnlistedNulls` in `src/lib/voiceCompanion/readSchemas.ts` removes
+unlisted null-valued arguments for board reads. Both `runCompanionTool` in
+`src/lib/voiceCompanion/tools.ts` and `CompanionBoardReads.normalize` in
+`src/lib/voiceCompanion/boardReads.ts` use it before validation. Declared
+arguments still undergo validation, and non-null extras remain refused.
+
+The regressions in `src/lib/voiceCompanion/tools.test.ts` and
+`src/lib/voiceCompanion/liveSession.test.ts` include the issue's exact call:
+
+```json
+{"project":null,"before":null,"limit":12,"refresh":null,"since":null}
+```
+
+They also cover the read callback, default limits, project refusal, non-null
+extras and reuse of the live read ledger when the stray null is omitted.
+
+The fresh checks used a detached clone pinned to the assigned baseline, with
+`bun install --frozen-lockfile --ignore-scripts`. Every test file had a private
+HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and the Viewer control URL
+pointed at a closed port. The environment came from `checkEnvironment` followed
+by `isolatedEnvironment`. All heavy checks ran locally through
+`scripts/gate-slot.sh`, with one admitted batch and one file at a time.
+
+Each row used `bun run test <file>`. All 16 selected files completed. The initial
+whole-file observations were 604 passes, six failures and 267 gated skips:
+
+| Test file | Initial exit | Pass / fail / skip |
+| --- | ---: | ---: |
+| `src/lib/voiceCompanion/tools.test.ts` | 1 | 12 / 1 / 0 |
+| `src/lib/voiceCompanion/boardReads.test.ts` | 0 | 5 / 0 / 0 |
+| `src/lib/voiceCompanion/liveSession.test.ts` | 0 | 129 / 0 / 0 |
+| `src/lib/voiceCompanion/codexVoiceSchema.test.ts` | 1 | 3 / 1 / 0 |
+| `src/lib/voiceCompanion/companion.test.ts` | 0 | 229 / 0 / 0 |
+| `src/lib/voiceCompanion/ownerHistoryRecording.test.ts` | 0 | 52 / 0 / 0 |
+| `src/lib/voiceCompanion/delivery.team.test.ts` | 0 | 11 / 0 / 0 |
+| `src/lib/voiceCompanion/readPaths.test.ts` | 1 | 16 / 2 / 0 |
+| `src/lib/voiceCompanion/provider.test.ts` | 0 | 8 / 0 / 0 |
+| `src/lib/voiceCompanion/liveAdapter.test.ts` | 0 | 21 / 0 / 0 |
+| `src/lib/voiceCompanion/prototypeFlow.test.ts` | 0 | 2 / 0 / 0 |
+| `src/lib/voiceCompanion/prototypeRead.test.ts` | 0 | 9 / 0 / 0 |
+| `src/components/kanban/kanbanBoard.browser.test.tsx` | 0 | 1 / 0 / 267 |
+| `src/components/voiceCompanion/voiceCompanionProduct.dom.test.tsx` | 0 | 44 / 0 / 0 |
+| `src/lib/mcp/schemaParity.test.ts` | 0 | 52 / 0 / 0 |
+| `src/lib/mcp/agentFleet.binding.test.ts` | 1 | 10 / 2 / 0 |
+
+The single typecheck, `bun x --no-install tsc --noEmit`, exited 0. Each file
+with an initial failure then ran separately through the repository comparator:
+
+```sh
+bun scripts/local-gate-tests.ts --base 0728b67c411f29e65b446cf6f4fd591a0c0bb819 <file>
+```
+
+All four comparison commands exited 0, with zero new failures. Five assertions
+also failed on the captured baseline: the `voice_tools` action policy in
+`tools.test.ts`, two project-resolution cases in `readPaths.test.ts`, and the
+history-read bound and partial-inventory expectations in
+`src/lib/mcp/agentFleet.binding.test.ts`. The initial Codex schema run passed
+its assertions but failed child-process teardown; its fresh whole-file run
+passed, so the comparator needed no baseline sample for that file. No flaky
+classification is claimed for that observation.
+
+Both issue regressions passed. A final fetch still resolved `origin/main` to
+the assigned baseline, and the tested clone had no tracked or untracked
+changes. This stage changes only this verification note. No broad suite,
+rendered browser evidence or performance gain is claimed.
+
+## Original verification, 2026-10-23
+
+Fixes #3226.
 
 Product source: `8d5e73b1e`; main baseline: `faf571855a09e79f3ba33e6278e48a51404426fb`.
 The five changed source and test files in the remote checkout matched the
