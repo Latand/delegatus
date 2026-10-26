@@ -111,8 +111,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-// v61 implements the report preparation and decline decision of 2026-10-24 (#3293).
-export const ORCHESTRATOR_PROMPT_VERSION = 61;
+// v62 adds task progress reporting to the shared working rules.
+export const ORCHESTRATOR_PROMPT_VERSION = 62;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -754,6 +754,9 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
+  const oldRule10 = "10. Done means the acceptance criteria hold on the final state and your checks pass; review your change and report what you ran.";
+  const rule10 = WORKING_RULES_SHORT.split("\n").find(line => line.startsWith("10. "))!;
+  mandate = mandate.split("\n").map(line => line === oldRule10 ? rule10 : line).join("\n");
   const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
   const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
   mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);

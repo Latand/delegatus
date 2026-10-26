@@ -45,8 +45,8 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 61, and a v60 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(61);
+test("the default mandate is at version 62, and a v61 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(62);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -126,7 +126,8 @@ test("the default mandate is at version 61, and a v60 seat reads as stale", () =
   expect(orchestratorMandateStale(58)).toBe(true);
   expect(orchestratorMandateStale(59)).toBe(true);
   expect(orchestratorMandateStale(60)).toBe(true);
-  expect(orchestratorMandateStale(61)).toBe(false);
+  expect(orchestratorMandateStale(61)).toBe(true);
+  expect(orchestratorMandateStale(62)).toBe(false);
 });
 
 /**
@@ -199,6 +200,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   60: "d424c6e968bb1c646b975e88e3827eff2d13513abaedaafb81ee242f69d32175",
   // v61 prepares reports automatically and ends reporting on a decline.
   61: "600201a2ca27c689eb5aa190ad62fbdd94718c704d6058d633add78bf7e85c55",
+  62: "b2cbadbbf65003137d99da71fbdb0d2b4ae0a989b792e38141f18a9773ea49ea",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
