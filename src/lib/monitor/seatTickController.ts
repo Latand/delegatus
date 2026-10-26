@@ -1525,15 +1525,6 @@ async function check(
   const sources = new Proxy(sourcePorts, {
     get: (target, key, receiver) => key === "memoryProblems" ? memoryProblems : Reflect.get(target, key, receiver),
   });
-  // Quota continuations own their original request. Ordinary agenda wakes
-  // must not race them or turn a provider failure into a different request.
-  if (await sources.recoverQuota?.(canonical)) {
-    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
-      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
-      deferred: 0, eventsThrough: 0, delivery: null, detail: "seat quota recovery retains the unanswered request" };
-    appendRecord(record);
-    return record;
-  }
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
@@ -1748,6 +1739,17 @@ async function check(
      runs between them so one check is never one long block (#1987). The
      phases already read fresh state, as they do after any real I/O. */
   await yieldToRuntime();
+
+  // Provisional-seat reconciliation and source preparation have settled.
+  // Quota continuations own their original request. Ordinary agenda wakes
+  // must not race them or turn a provider failure into a different request.
+  if (sources.recoverQuota && await sources.recoverQuota(canonical)) {
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
+      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
+      deferred: 0, eventsThrough: 0, delivery: null, detail: "seat quota recovery retains the unanswered request" };
+    appendRecord(record);
+    return record;
+  }
 
   /* Then, before anything else is READ, let alone decided: settle the wake
      this project left outstanding. It comes before the rest because both of

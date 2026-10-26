@@ -9,6 +9,15 @@ test("an authoritative seat quota obligation withholds ordinary agenda delivery"
   expect(checked).toBe(1); expect(rig.sent).toEqual([]);
 });
 
+test("failed source preparation cannot dispatch a seat quota continuation", async () => {
+  const rig = harness({ pipelines: OPEN_LANE });
+  let checked = 0;
+  rig.deps.sources!.prepareRead = async () => { throw new Error("source preparation unavailable"); };
+  rig.deps.sources!.recoverQuota = async () => { checked++; return true; };
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("error");
+  expect(checked).toBe(0); expect(rig.sent).toEqual([]);
+});
+
 
 /* Running children are observed through a rotating window, so a stall on a
    child beyond the eighth is seen on two consecutive checks and reported —
