@@ -31,7 +31,7 @@ Every variant draws the same cards in «In progress» / «У роботі»:
 | Card payments: 3-D Secure | ≈35%, 18 min ago | working | a third filled |
 | Dark theme in settings | ≈100%, 9 min ago | needs your answer: the deploy stage asked a question | full, though the task is not done |
 | Search filters reset after going back from a product page | ≈65%, 12 min ago | waiting for PR #418 checks | two thirds; **its dot's words are shown** (desktop: the popover open; phone: a caption under the card) |
-| Orders page is slow on phones | ≈50%, 2 days ago | waiting: paused | half, in the softened tone |
+| Orders page is slow on phones | ≈50%, 2 days ago | waiting: paused | half, in diagonal stripes |
 
 The desktop also draws a finished task in «Done» / «Готові»: «Receipts by email»,
 ≈100%, merged. It shows the bar on the narrow 280 px shelf card. On the phone
@@ -39,7 +39,8 @@ that card is in the Done tab, off the frame.
 
 The dot's words keep the product's own first («Waiting for 40m» / «Чекає вже
 40 хв»). A second line adds the estimate and its age: «Agent estimate ≈65% ·
-reported 12m ago» / «Оцінка агента ≈65% · 12 хв тому». A report older than a
+12m ago» / «Оцінка агента ≈65% · 12 хв тому». The age never splits across
+lines, so a narrow bubble wraps after the «·». A report older than a
 day says «Last agent estimate» / «Остання оцінка агента». A card with no report
 says «No agent estimate yet» / «Агент ще не оцінив».
 
@@ -51,8 +52,9 @@ The bar uses the product's tokens and adds no colour:
   surface, rounded at both ends;
 - inside the outline lies `--border-default`;
 - the fill is `--color-secondary`;
-- an estimate older than 24 hours fills in plain `--color-muted`, a step
-  softer;
+- an estimate older than 24 hours fills with diagonal stripes of
+  `--color-muted`, 2 px wide with 2 px gaps that show the inside of the track,
+  so it differs from a fresh estimate by its form and not only its tone;
 - an absent estimate is the same outline, dashed, with nothing inside.
 
 Measured in the rendered pages (WCAG relative luminance, light / dark):
@@ -61,9 +63,9 @@ Measured in the rendered pages (WCAG relative luminance, light / dark):
 |---|---|---|
 | track outline against the card | 3.28:1 | 3.63:1 |
 | fill against the inside of the track | 5.56:1 | 5.51:1 |
-| stale fill against the inside of the track | 3.90:1 | 4.14:1 |
+| stale stripes against the inside of the track | 3.90:1 | 4.14:1 |
 | fill against the card | 7.25:1 | 6.80:1 |
-| stale fill against the card | 5.10:1 | 5.11:1 |
+| stale stripes against the card | 5.10:1 | 5.11:1 |
 
 The design asks for a solid 2 px track. A solid track under a solid fill
 cannot clear 3:1 at both steps while the stale fill stays softer. In light
@@ -71,7 +73,9 @@ theme, a track at 3:1 against the card leaves too little range for a fill
 that is softer than the secondary text tone and still 3:1 against the track.
 The outline marks the track's extent at 3:1 against the card. The fill then
 sits on the light inside of the track, and every fill clears 3:1 there. So 0%
-reads as an empty capsule and the stale estimate as a lighter fill. The
+reads as an empty capsule and the stale estimate as a striped fill. The
+stripes' ratios are sampled from the rendered frames (the darkest and lightest
+pixel along the stale fill), at 1× and 2×. The
 track is 5 px tall in variants 1 and 2, and 8 px in variant 3, where a 2 px
 track read as a dash.
 
@@ -104,10 +108,19 @@ card's own title, and in variant 2 the start of the bar it explains. The
 prototype opens the product's bubble beside the state line instead, so the
 operator can tell which card it explains. Its top is level with the state
 line, 4 px above it. It starts 12 px after the words of every row it spans,
-and covers no title, no bar and no words of any card. The checks record this
-in every desktop frame. At 820 px the bubble runs 8–24 px past the card's right
-edge; in variant 3 in English its last 12 px lie over the empty collapsed
-«Waiting» column beside it.
+and covers no title, no bar and no words of any card. It stays inside its own
+card: its right edge at least 4 px inside the card's, so at 820 px its words
+wrap there, and its bottom at least 4 px above the card's. Where the space
+under the state line is too short, it rises (in variant 2 never over the bar
+above the state line). In variant 1 it also rises until its shadow ends at
+least 6 px above the bar along the card's bottom edge. The checks record all
+of this in every desktop frame, as measured:
+
+| Frames | Bubble's right edge inside the card | Shadow above the bar |
+|---|---|---|
+| 1440, every variant | 440–470 px | 7.8 px in variant 1 |
+| 820, variants 1 and 2 | uk 4 px, en 23 px | 7.8 px in variant 1 |
+| 820, variant 3 | uk 4 px (three lines), en 7 px | — |
 
 The product would place it the same way in every variant:
 
@@ -127,7 +140,9 @@ The phone's card is one button, so its dot is passive and the product draws no
 popover there. The design puts the same words into the card's accessible
 description and the opened task. Each phone frame prints those words as a
 caption under the 65% card, outside it, so the card's title and bar stay in
-view. The product would not show the caption.
+view. The product would not show the caption. In variant 1, and in variant 2
+in Ukrainian, the caption pushes the last card's bar 9–43 px below the first
+844 px screen; without it, that bar would be on the first screen.
 
 ## Files
 
@@ -187,6 +202,8 @@ Before each capture, the checks measured:
 - the contrast of the track and the fills, from their computed colours;
 - that the popover lies inside the viewport, and which cards, bars and words
   it covers;
+- how far the popover's right and bottom edges lie inside its card, and in
+  variant 1 the gap between its shadow and the bar;
 - on the phone, in a 390 × 844 viewport before it grows, that every
   In-progress card's bar is on the first screen.
 

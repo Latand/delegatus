@@ -18,7 +18,7 @@
  * 0 %, 35 % working, 65 % waiting for the PR's checks (its dot's words
  * shown: the desktop's popover open beside the state line, a caption under
  * the card on the phone), 100 % that still waits for an answer, a report two
- * days old (softened), and on the desktop a Done card at 100 %. The words keep
+ * days old (striped), and on the desktop a Done card at 100 %. The words keep
  * the product's own first and add the estimate and its age on a line of
  * their own.
  *
@@ -220,10 +220,11 @@ function reportAge(minutesAgo: number): string {
 /** The popover's added line: the estimate, approximate, and how old the report is. */
 function estimateLine(estimate: Estimate): string {
   if (!estimate) return L("No agent estimate yet", "Агент ще не оцінив");
-  const age = reportAge(estimate.minutesAgo);
+  /* The age never splits («12 хв» / «тому»): a narrow bubble wraps after the «·». */
+  const age = L(`${reportAge(estimate.minutesAgo)} ago`, `${reportAge(estimate.minutesAgo)} тому`).replace(/ /g, "\u00a0");
   return shownOf(estimate) === "stale"
-    ? L(`Last agent estimate ≈${estimate.percent}% · reported ${age} ago`, `Остання оцінка агента ≈${estimate.percent}% · ${age} тому`)
-    : L(`Agent estimate ≈${estimate.percent}% · reported ${age} ago`, `Оцінка агента ≈${estimate.percent}% · ${age} тому`);
+    ? L(`Last agent estimate ≈${estimate.percent}% · ${age}`, `Остання оцінка агента ≈${estimate.percent}% · ${age}`)
+    : L(`Agent estimate ≈${estimate.percent}% · ${age}`, `Оцінка агента ≈${estimate.percent}% · ${age}`);
 }
 
 /* ---------- the bar ---------- */
@@ -232,16 +233,18 @@ function estimateLine(estimate: Estimate): string {
     outline (dashed, with nothing inside, when nothing was reported) in the
     muted text tone eased toward the card: 3.2:1 against the light card, 3.6:1
     against the dark one. Inside it lies the default border tone, and the fill
-    on that: the secondary text tone, and the muted text tone once the report
-    is older than a day, each at least 3.9:1 against the inside. A solid 2 px track under a solid fill cannot
-    hold 3:1 at both steps with a softened fill (README.md, «The bar's look»).
-    No status colour: the dot keeps those. */
+    on that: the secondary text tone. A report older than a day fills with
+    diagonal stripes of the muted text tone, so it differs from a fresh fill by
+    its form as well as its tone; each stroke is at least 3.9:1 against the
+    inside. A solid 2 px track under a solid fill cannot hold 3:1 at both steps
+    with a softened fill (README.md, «The bar's look»). No status colour: the
+    dot keeps those. */
 const BAR_CSS = `
 :root { --proto-track: color-mix(in srgb, var(--color-muted) 78%, var(--surface-card)); }
 [data-proto-progress] { display: block; box-sizing: border-box; height: 5px; border: 1px solid var(--proto-track); border-radius: 999px; background: var(--border-default); pointer-events: none; overflow: hidden; }
 [data-proto-progress="unknown"] { border-style: dashed; background: none; }
 [data-proto-progress] > [data-proto-fill] { display: block; height: 100%; border-radius: 999px; background: var(--color-secondary); }
-[data-proto-progress="stale"] > [data-proto-fill] { background: var(--color-muted); }
+[data-proto-progress="stale"] > [data-proto-fill] { background: repeating-linear-gradient(135deg, var(--color-muted) 0 2px, transparent 2px 4px); }
 /* Variant 1: in the card's bottom padding, inset by the card's own horizontal
    padding. The padding grows by 4 px so the bar keeps a clear gap below the
    last row, a framed phone card's «Answer» button included. */
@@ -261,6 +264,8 @@ const BAR_CSS = `
 [data-proto-variant="3"] [data-proto-host] { flex: none; width: 36px; margin-top: 4px; margin-left: -1px; }
 /* The desktop's open popover, beside the state line (DesktopPopover). */
 [data-proto-pop-placed] .card-state-pop { left: var(--proto-pop-left) !important; top: var(--proto-pop-top) !important; }
+/* Its width cap applies from the first measurement on; the product's is 260 px. */
+.card-state-pop { max-width: var(--proto-pop-max, 260px) !important; }
 `;
 
 function Bar({ card }: { card: CardSpec }) {
@@ -423,29 +428,54 @@ function DesktopPopover({ card }: { card: CardSpec }) {
   /* The product opens the bubble above the dot, over the card's own title (and
      in variant 2 over its bar). The prototype opens it beside the state line
      instead: level with the line's top, 12 px after the words of every row it
-     spans, so it covers neither the title, nor any bar, nor any words. The product's bubble keeps its words and its
-     layer; only its place moves. It measures again once the added line makes
-     it taller, and on every resize. */
+     spans, so it covers neither the title, nor any bar, nor any words. Its
+     right edge stays 4 px inside the card, so on a narrow board its words wrap
+     inside the card and never reach the next column. It rises when the space
+     under the state line is too short to keep it inside the card, and in
+     variant 1 to keep its shadow 6 px above the bar along the card's bottom
+     edge. The product's
+     bubble keeps its words and its layer; only its place moves. It measures
+     again once the added line makes it taller, and on every resize. */
   useEffect(() => {
     if (!host) return;
     const place = () => {
       const cardBox = cardElement(card.id);
       const line = cardBox?.querySelector<HTMLElement>(".card-state");
-      const bubble = document.querySelector(".card-state-pop");
+      const bubble = document.querySelector<HTMLElement>(".card-state-pop");
       if (!cardBox || !line || !bubble) return;
-      const top = line.getBoundingClientRect().top - 4;
-      const bottom = top + bubble.getBoundingClientRect().height;
-      /* The right end of the words on every row the bubble spans. */
-      let textRight = line.getBoundingClientRect().left;
-      const walker = document.createTreeWalker(cardBox, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        if (!node.textContent?.trim()) continue;
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        for (const rect of range.getClientRects()) if (rect.width && rect.top < bottom && rect.bottom > top) textRight = Math.max(textRight, rect.right);
-      }
       const root = document.documentElement;
-      root.style.setProperty("--proto-pop-left", `${Math.round(textRight + 12)}px`);
+      const cardRight = cardBox.getBoundingClientRect().right;
+      const bar = cardBox.querySelector("[data-proto-progress]")?.getBoundingClientRect();
+      const lineTop = line.getBoundingClientRect().top - 4;
+      /* Its bottom stays 4 px inside the card; in variant 1 its shadow (--shadow-1
+         reaches 3 px under its border) ends 7 px above the bar, which keeps 6 whole
+         pixels after rounding. In variant 2 it never rises over the bar between
+         the title and the state line. */
+      let bottomLimit = cardBox.getBoundingClientRect().bottom - 4;
+      if (VARIANT === 1 && bar) bottomLimit = Math.min(bottomLimit, bar.top - 7 - 3);
+      const topFloor = VARIANT === 2 && bar ? bar.bottom + 2 : -Infinity;
+      /* The right end of the words on every row between top and bottom. */
+      const textRightBetween = (top: number, bottom: number) => {
+        let right = line.getBoundingClientRect().left;
+        const walker = document.createTreeWalker(cardBox, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!node.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) if (rect.width && rect.top < bottom && rect.bottom > top) right = Math.max(right, rect.right);
+        }
+        return right;
+      };
+      /* Width, then height, then the rows spanned settle within a few rounds. */
+      let top = lineTop;
+      let left = 0;
+      for (let round = 0; round < 4; round += 1) {
+        const height = bubble.getBoundingClientRect().height;
+        top = Math.floor(Math.max(topFloor, Math.min(lineTop, bottomLimit - height)));
+        left = Math.round(textRightBetween(top, top + height) + 12);
+        root.style.setProperty("--proto-pop-max", `${Math.max(120, Math.min(260, Math.floor(cardRight - 4 - left)))}px`);
+      }
+      root.style.setProperty("--proto-pop-left", `${left}px`);
       root.style.setProperty("--proto-pop-top", `${Math.round(top)}px`);
       root.dataset.protoPopPlaced = "";
     };
