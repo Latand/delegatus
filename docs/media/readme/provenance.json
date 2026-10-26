@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "a713bd2b911eb816e32683300334218284506e026b5189f3a44b0c791c22eb6a",
+  "generatorSha256": "f2a648f1432981695147581c59219a9903c84b2b09f8e4d7b4771091fc87303a",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -28,7 +28,7 @@
         "meanDifference": 0.199,
         "ringsClipped": 0
       },
-      "sha256": "b3d41092f02abb0c3370b271199d8cbc67aeddd55b978f0385112916ef906628"
+      "sha256": "24b0c04d36e71c84a2012c57135c1f62ebe287a2e7f7571ffaa081fe0682273c"
     },
     {
       "path": "orchestrator.svg",
@@ -47,11 +47,11 @@
       "rasterTiles": 14,
       "renderBack": {
         "worstTileMean": 13.513,
-        "changedTileShare": 0.032,
-        "meanDifference": 0.625,
+        "changedTileShare": 0.033,
+        "meanDifference": 0.626,
         "ringsClipped": 1
       },
-      "sha256": "cb48808783bca404fd2bf5e33a7b54cc36792903f6df76c9479d5f0fd46a847e"
+      "sha256": "0baaecbbffbeb37bcd4bc0794275671d2d85877159b41666ee41b4141a8bc219"
     },
     {
       "path": "conversation.svg",
@@ -74,7 +74,7 @@
         "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "895d557a88c92656271fa48b937fdf3c4887dce4dac40cb7d70121e906916271"
+      "sha256": "fbddb4e06a34a3689fd2b451575b0326ba0cc6fca0bb5c96b4c707228eb5e334"
     },
     {
       "path": "pipeline.svg",
@@ -94,10 +94,10 @@
       "renderBack": {
         "worstTileMean": 9.363,
         "changedTileShare": 0.001,
-        "meanDifference": 0.271,
+        "meanDifference": 0.272,
         "ringsClipped": 0
       },
-      "sha256": "58c87364d85b86ca61fc4a9cfca0b03191229110106ba149eee6f15f7ebd4b49"
+      "sha256": "724b5396d60cf08eea6018bba219275acf5868bdaae138744ce1c5b9190f1f71"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.312,
         "ringsClipped": 0
       },
-      "sha256": "87940bdd8ca3f5d109ff282103403652ec446213da0b84b0908ac2a57ca0c523"
+      "sha256": "97dc4001144a719b3445649305343517a2729cc8dd755a87f24cb79ec89e0559"
     },
     {
       "path": "accounts.svg",
@@ -140,44 +140,44 @@
       "renderBack": {
         "worstTileMean": 3.062,
         "changedTileShare": 0,
-        "meanDifference": 0.259,
+        "meanDifference": 0.263,
         "ringsClipped": 0
       },
-      "sha256": "92fc0951ffaa2da710a0a2ad5d130a669fe1a7ff33f8a5479e6383062f870991"
+      "sha256": "b336aa530e6f725ed261f30bdbcf2cd6270422d6eb1d36dc16f91c3f21fb8799"
     },
     {
       "path": "phone-conversation.svg",
       "description": "The same conversation on a phone screen, its test run expanded.",
       "viewport": {
-        "width": 392,
+        "width": 416,
         "height": 848
       },
       "colorScheme": "dark",
       "rasterTiles": 1,
       "renderBack": {
         "worstTileMean": 11.912,
-        "changedTileShare": 0.016,
-        "meanDifference": 0.756,
+        "changedTileShare": 0.017,
+        "meanDifference": 0.733,
         "ringsClipped": 0
       },
-      "sha256": "c5d83f007ff1c7b9024f67b0ebb44a1e2c36a8b3bc6bb1f7fdc1dec8d4a31443"
+      "sha256": "c172a37f1fd03c61c50066f01ed71976a29267e0620d9643dfc4fd022bec7f7f"
     },
     {
       "path": "phone-board.svg",
       "description": "A project's board on a phone: the four status columns as tabs, In progress counting the card that needs you and showing it first.",
       "viewport": {
-        "width": 392,
+        "width": 416,
         "height": 848
       },
       "colorScheme": "dark",
       "rasterTiles": 10,
       "renderBack": {
         "worstTileMean": 12.37,
-        "changedTileShare": 0.022,
-        "meanDifference": 0.422,
+        "changedTileShare": 0.02,
+        "meanDifference": 0.397,
         "ringsClipped": 0
       },
-      "sha256": "592feef247fd068a8c5e3b02f3cf0d0d040a1fcca096364c0c4a53d1a2656d06"
+      "sha256": "2d4baa9c2f8888ee55cf0859e3df3d1a27aeb8a69a80007a89d340d974e2431b"
     }
   ]
 }

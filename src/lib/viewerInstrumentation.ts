@@ -1034,8 +1034,11 @@ export async function registerViewerRuntime(): Promise<void> {
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     await startupBarrier.run(() => settleInterruptedTransfers());
-    const { agentRegistry } = await import("@/lib/agent/registry");
-    await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
+    const { prepareAgentRegistry } = await import("@/lib/agent/registry");
+    await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
+      const registry = await prepareAgentRegistry(startupAbort.signal);
+      await registry.prepareReadOnlySnapshot(startupAbort.signal);
+    }));
     assertStartupActive();
     const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");
     await startupBarrier.run(() => cleanupFinishedWorkAtStartup(undefined, assertStartupActive));

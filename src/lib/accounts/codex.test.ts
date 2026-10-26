@@ -257,6 +257,16 @@ function usedCodexHome(label: string) {
   return { account, rollout, conversation, archive: retiredAccountArchive("codex", account.id) };
 }
 
+test("a used Codex home persists its seeded rollout across a registry restart", () => {
+  const fixture = usedCodexHome("Persisted removal fixture");
+
+  closeAgentRegistryForTests();
+
+  const persisted = agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id];
+  expect(persisted?.generations[0]?.path).toBe(fixture.rollout);
+  expect(persisted?.generations[0]?.accountId).toBe(fixture.account.id);
+});
+
 function codexRegistryJson(): { removals?: unknown[]; retired: Array<{ id: string; archived?: boolean }> } {
   return persistedAccountRegistry("codex");
 }

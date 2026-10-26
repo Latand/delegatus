@@ -2,6 +2,7 @@ import { worktreeMapStore, readProjectDocument, projectStoreSignature } from "@/
 import fs from "node:fs";
 import path from "node:path";
 
+import { repositoryRootForPath } from "@/lib/projects/identity";
 import { stateDir } from "@/lib/configDir";
 import { readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 
@@ -13,7 +14,7 @@ const PROJECT_STATE_FILES = [
 ] as const;
 const PROJECT_DIRECTORY_CACHE_MS = 10_000;
 
-type ProjectDirectory = { cwd: string; project: string; projectRoot: string };
+type ProjectDirectory = { cwd: string; project: string; projectRoot: string; checkoutRoot: string | null };
 type ProjectDirectoryCacheEntry = {
   directories: ProjectDirectory[];
   expiresAt: number;
@@ -124,7 +125,7 @@ function localProjectDirectories(): ProjectDirectory[] {
     const key = project ? `${project}\0${cwd}` : "";
     if (!project || !projectRoot || seen.has(key)) continue;
     seen.add(key);
-    directories.push({ cwd, project, projectRoot });
+    directories.push({ cwd, project, projectRoot, checkoutRoot: repositoryRootForPath(cwd) });
   }
   projectDirectoryCache.set(directory, {
     directories,
@@ -166,4 +167,9 @@ export function projectDirectoryFallbacks(projects: Iterable<string>): Record<st
     if (wanted.has(entry.project) && !fallbacks[entry.project]) fallbacks[entry.project] = entry.projectRoot;
   }
   return fallbacks;
+}
+
+/** Exact project and linked-checkout directories recorded by the scanner and launchers. */
+export function knownProjectFileRoots(): string[] {
+  return [...new Set(localProjectDirectories().flatMap(entry => [entry.projectRoot, entry.cwd, ...(entry.checkoutRoot ? [entry.checkoutRoot] : [])]))];
 }

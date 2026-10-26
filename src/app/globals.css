@@ -507,6 +507,35 @@ body {
   }
 }
 
+/* The phone's chat screen opens at once, while a first read may still be
+   loading (board task d5e2680a). Its feed skeleton stays out of sight for
+   the first moment, so a quick read never flashes it, and what the read
+   settles on fades in where it rests (`data-feed-enter`, LogFeed.tsx)
+   instead of swapping in for the skeleton, the reply card with it (the feed
+   holds the card until then, so it is first drawn where it rests); what the
+   feed already drew beside the skeleton stays. Opacity only: the feed's scroll
+   position and its rows are already final. Under reduced motion the
+   skeleton still waits, without a fade, and the transcript appears at once. */
+@keyframes feed-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+[data-mobile2-screen="chat"] [data-skeleton="feed"] {
+  animation: feed-enter var(--motion-base) step-end both;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-mobile2-screen="chat"] [data-skeleton="feed"] {
+    animation: feed-enter var(--motion-base) var(--ease-standard) var(--motion-base) both;
+  }
+
+  [data-mobile2-screen="chat"] [data-feed-arrived] > [data-feed-enter] {
+    animation: feed-enter var(--motion-base) var(--ease-standard);
+  }
+}
+
 /* A node entering the scheme canvas fades in instead of popping. */
 @keyframes scheme-in {
   from {

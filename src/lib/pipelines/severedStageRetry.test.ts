@@ -586,6 +586,7 @@ test("a descendant's transient scope ending leaves the stage alone, and a lost s
       /* The production stop, with no structured control channel in this process. */
       stopStageAgent: (target, options) => stopPipelineStageAgent(target, { automatic: options?.automatic }),
       stageHostResident: defaultPipelinePorts().stageHostResident,
+      conversationHostEnded: defaultPipelinePorts().conversationHostEnded,
       /* The machine's own CPU pressure decides nothing in this case. */
       cpuPressureHold: () => null,
       /* No runtime host answers in this process; the operator asked for no stop. */
@@ -634,8 +635,8 @@ test("a descendant's transient scope ending leaves the stage alone, and a lost s
     expect(agentAliveAtReplacement).toEqual([false]);
     const replaced = loadPipelines()[0]!;
     expect(replaced.runs[0]!.attempts).toHaveLength(2);
-    expect(replaced.runs[0]!.attempts[0]!.error).toBe(
-      "stage host was lost while its turn was open; its agent process was still running and Delegatus stopped it by its recorded identity; replaced by a fresh stage attempt");
+    expect(replaced.runs[0]!.attempts[0]!.error).toContain("exit: status unavailable; stopped by pipeline-stage-stop");
+    expect(replaced.runs[0]!.attempts[0]!.error).toContain("its agent process was still running and Delegatus stopped it by its recorded identity; replaced by a fresh stage attempt");
   } finally {
     try { agent.kill("SIGKILL"); } catch { /* gone */ }
     await Promise.race([agent.exited, Bun.sleep(2_000)]);

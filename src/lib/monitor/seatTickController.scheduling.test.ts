@@ -240,37 +240,31 @@ test("callbacks during one project check coalesce one owed check with fresh stat
 });
 
 test("an alarm-sources cancellation is retried immediately and a newly settled deploy lands", async () => {
-  const { deepFreeze } = await import("@/lib/deepFreeze");
-  const { performanceSpans } = await import("@/lib/performanceSpans");
   const rig = deployRig();
   const settlement = rig.deps.sources!.deployment!;
   let settled = false;
   rig.deps.sources!.deployment = id => settled ? settlement(id) : { state: "unreadable", error: "still promoting" } as never;
-  let rows = deepFreeze(Array.from({ length: 8 }, (_, index) => pipelineRecord({ ...OPEN_LANE[0]!, id: `evidence-${index}` })));
+  const rows = OPEN_LANE.map(pipelineRecord);
   rig.deps.sources!.pipelines = () => rows as never;
-  const sync = performanceSpans.sync;
-  let scheduled = false;
-  const observe: typeof sync = (site, read, ...rest) => {
-    const result = sync(site, read, ...rest);
-    if (site === "seat-tick.hash" && !scheduled) {
-      scheduled = true;
-      // Publish during the real provenance hash's cooperative yield.
-      setImmediate(() => {
-        rows = deepFreeze(rows.map(row => ({ ...row, task: "replacement evidence" })));
-        settled = true;
-      });
+  const liveness = rig.deps.sources!.liveness;
+  const settings = rig.deps.sources!.settings;
+  let changed = false;
+  rig.deps.sources!.liveness = async request => {
+    const result = await liveness(request);
+    if (request.project && !changed) {
+      changed = true;
+      // Eligibility changes still invalidate a check across its source await.
+      rig.deps.sources!.settings = project => ({ ...settings(project), wakeIntervalMinutes: 30 });
+      settled = true;
     }
     return result;
   };
-  const hashing = spyOn(performanceSpans, "sync").mockImplementation(observe);
-  try {
-    const result = await runSeatTickCheck(PROJECT, rig.deps);
-    expect(scheduled).toBe(true);
-    expect(rig.journal.some(record => record.detail?.includes("Seat alarm sources changed"))).toBe(true);
-    expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
-    expect(rig.sent).toHaveLength(1);
-    expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
-  } finally { hashing.mockRestore(); }
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(changed).toBe(true);
+  expect(rig.journal.some(record => record.detail?.includes("Seat alarm sources changed"))).toBe(true);
+  expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
 });
 
 test("a priority deploy preserves opening problem credit before epoch reset", async () => {
