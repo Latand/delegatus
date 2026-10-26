@@ -85,6 +85,54 @@ test("a stage using the implicit Builder defaults also prepares its worktree", a
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.setup?.state).toBe("passed");
 });
 
+test("setup dispatch rechecks adopted task authority after async preparation", async () => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { loadTasksByIds } = await import("@/lib/tasks/store");
+  const adoptFor = async (project: string, key: string) => {
+    const startedAt = new Date(NOW - 1_000).toISOString();
+    const { task } = await admitProactiveTask({ ...candidate(key), project },
+      { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined,
+      () => new Date(NOW).toISOString());
+    return task;
+  };
+
+  const allowed = await ready();
+  const acceptedTask = await adoptFor(allowed.lane.project, `setup-accepted-${allowed.lane.id}`);
+  allowed.lane.taskIds = [acceptedTask.id];
+  savePipelines([allowed.lane]);
+  let acceptedEffects = 0;
+  allowed.h.ports.executeProjectSetup = async (_cwd, _reviewed, _sandbox, _signal, authorize) => {
+    authorize!();
+    acceptedEffects++;
+    return { code: 0, stdout: "ready", stderr: "" };
+  };
+  await tickPipelines([], allowed.h.ports);
+  await settlePipelineControllerJobs();
+  expect(acceptedEffects).toBe(1);
+  expect(allowed.h.spawnInputs).toHaveLength(1);
+
+  const revoked = await ready();
+  const rejectedTask = await adoptFor(revoked.lane.project, `setup-rejected-${revoked.lane.id}`);
+  revoked.lane.taskIds = [rejectedTask.id];
+  savePipelines([revoked.lane]);
+  let rejectedEffects = 0;
+  revoked.h.ports.executeProjectSetup = async (_cwd, _reviewed, _sandbox, _signal, authorize) => {
+    const currentTask = loadTasksByIds(new Set([rejectedTask.id]))[0]!;
+    await decideProactiveTask(rejectedTask.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined,
+      () => new Date(NOW).toISOString());
+    authorize!();
+    rejectedEffects++;
+    return { code: 0, stdout: "ready", stderr: "" };
+  };
+  await tickPipelines([], revoked.h.ports);
+  await settlePipelineControllerJobs();
+  expect(rejectedEffects).toBe(0);
+  expect(revoked.h.spawnInputs).toHaveLength(0);
+  expect(loadPipelines().find(item => item.id === revoked.lane.id)!.runs[0]!.attempts[0]!.setup?.state).toBe("failed");
+});
+
 test("blocked setup leaves ticks returning and another lane spawning", async () => {
   const { h, lane } = await ready();
   const other = structuredClone(lane);

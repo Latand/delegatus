@@ -6961,11 +6961,13 @@ async function spawnRunStage(
   try {
     const setupAbort = new AbortController();
     const assertSetupCurrent = () => {
-      if (!attempt.activation) return;
       const current = findPipelineRecord(pipeline.id);
-      const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
-      if (!current || activationFence(current) !== attempt.activation.fence
-        || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+      if (attempt.activation) {
+        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+        if (!current || activationFence(current) !== attempt.activation.fence
+          || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+      }
+      assertProactiveTaskExecution(current?.taskIds ?? pipeline.taskIds);
     };
     const setupWatch = attempt.activation ? setInterval(() => {
       try { assertSetupCurrent(); } catch { setupAbort.abort(); }
