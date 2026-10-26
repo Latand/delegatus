@@ -299,8 +299,13 @@ function restRoute(target) {
   return route.join("/");
 }
 
+/** Parse API flags once for write classification and engine read routing. */
+export function readGhApiArgs(args) {
+  return readArgs(args, VALUE_FLAGS.api);
+}
+
 function classifyApi(args, env) {
-  const { positional, last, help } = readArgs(args, VALUE_FLAGS.api);
+  const { positional, last, help } = readGhApiArgs(args);
   if (help) return PASS;
   const hostname = last("--hostname");
   if (hostname != null && !isGitHubHost(hostname)) return PASS;
