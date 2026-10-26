@@ -288,7 +288,6 @@ export function PipelineTemplatePicker({
             disabled={formLocked}
             onTask={(taskId) => { if (link.phase === "resolved") setTaskChoice({ source: link.source, taskId }); }}
             attachFailure={state.phase === "attach-failed" ? { link: state.source.attachLink ?? "", error: state.error, retrying: state.retrying, onRetry: () => void retryAttach(), onOpen: () => onCreated(state.pipeline) } : null}
-            scroller={scroller}
           />
           <div className="flex flex-col gap-1">
             {templates.map((template) => (
