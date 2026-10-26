@@ -51,7 +51,7 @@ test("finished gates return the persisted exit and tail in fresh waiter processe
 test("queued deadline includes the latest position and reason; a later wait observes completion", async () => {
   const f = fixture();
   ticket(f, "gate-slot: Waiting for the CPU queue · 3rd · normal priority\ngate-slot: Waiting for measured CPU pressure · 2nd in CPU queue\n");
-  const result = await waitForGate(f.log, 0);
+  const result = await waitForGate(f.log, 1);
   expect(result.state).toBe("queued position=2 reason=Waiting for measured CPU pressure · 2nd in CPU queue");
   expect(result.code).toBe(124);
   expect(fs.existsSync(path.join(f.dir, "exit"))).toBe(false);
@@ -63,7 +63,7 @@ test("queued deadline includes the latest position and reason; a later wait obse
 
 test("a running deadline leaves the run intact and another process resumes the same wait", async () => {
   const f = fixture(); ticket(f, "working\n"); fs.writeFileSync(path.join(f.dir, "running"), "running\n");
-  const result = cli(f.log);
+  const result = cli(f.log, "0.001");
   expect(result.status).toBe(124);
   expect(result.stdout).toBe('gate-slot: running | tail="working"\n');
   expect(fs.existsSync(path.join(f.dir, "exit"))).toBe(false);
@@ -115,8 +115,34 @@ test("tail reads are bounded by bytes and lines, and stay on one output line", (
 });
 
 test.each(["-1", "NaN", "Infinity", "2147484"])("invalid wait deadline %s refuses", seconds => {
-  const f = fixture(); const result = cli(f.log, seconds);
+  const f = fixture(); ticket(f); const result = cli(f.log, seconds);
   expect(result.status).toBe(2); expect(result.stderr).toContain("invalid wait deadline");
+});
+
+test.each(["540.001", "541", "600", "601"])("custom wait deadline %s above the engine-safe ceiling refuses on a live ticket", seconds => {
+  const f = fixture(); ticket(f, "queued\n");
+  const before = gateSnapshot(f.log);
+  const result = cli(f.log, seconds);
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("invalid wait deadline");
+  expect(result.stdout).toBe("");
+  expect(gateSnapshot(f.log)).toEqual(before);
+});
+
+test.each([-1, NaN, Infinity, 540_001, 541_000, 600_000, 601_000, 2_147_483_648])("the wait API rejects invalid deadline %i even for a finished ticket", async ms => {
+  const f = fixture(); ticket(f); complete(f.dir, 0);
+  await expect(waitForGate(f.log, ms)).rejects.toThrow("invalid wait deadline");
+});
+
+test("the nine-minute ceiling is inclusive through the CLI and wait API", async () => {
+  const f = fixture(); ticket(f, "done\n"); complete(f.dir, 17);
+  expect((await waitForGate(f.log, 540_000)).code).toBe(17);
+  const result = cli(f.log, "540");
+  expect(result.status).toBe(17);
+  expect(result.stdout).toBe('gate-slot: finished exit=17 | tail="done"\n');
+  expect(result.stderr).toBe("");
 });
 
 /** Register before observing, with an independent setup deadline. */
@@ -162,7 +188,7 @@ test.skipIf(process.platform !== "linux")("demonstration: a real queued gate fin
   // the tail. Observe that checkpoint before adding the noise.
   await observe(f.dir, () => fs.existsSync(path.join(f.dir, "queued")));
   fs.appendFileSync(f.log, "diagnostic\n".repeat(50));
-  const first = cli(f.log, "0", env);
+  const first = cli(f.log, "0.001", env);
   expect(first.status).toBe(124); expect(first.stdout).toContain("gate-slot: queued position=1 reason=Waiting");
   expect(first.stdout).toMatch(/(?:\d+(?:st|nd|rd|th)|all 1 busy)/);
   const second = background(["--wait", f.log, "10"], env);
@@ -183,7 +209,7 @@ test.skipIf(process.platform !== "linux")("a running record forwards cancellatio
   const command = 'const fs = require("node:fs"); process.on("SIGTERM", () => { fs.writeFileSync(process.argv[2], "clean"); process.exit(0); }); fs.writeFileSync(process.argv[1], "ready"); setInterval(() => {}, 1000);';
   const recording = background(["--record", f.log, process.execPath, "-e", command, ready, cleaned], env);
   await observe(f.root, () => fs.existsSync(ready));
-  const first = cli(f.log, "0", env);
+  const first = cli(f.log, "0.001", env);
   expect(first.status).toBe(124); expect(first.stdout).toContain("gate-slot: running");
   const waiting = background(["--wait", f.log, "10"], env);
   recording.child.kill("SIGTERM");

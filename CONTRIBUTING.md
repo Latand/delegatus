@@ -512,8 +512,10 @@ It waits up to nine minutes, then prints one line with the state and the last
 position and reason; running output means admission completed. An exit of 124
 with a queued/running state means the run remains active: repeat the same wait.
 A finished state includes the command's exit code, which the wait also returns.
-`--wait LOG <seconds>` changes only that wait's deadline. Unknown logs refuse
-with exit 2. Use a fresh log path for every recording; logs and their `.gate`
+`--wait LOG <seconds>` changes only that wait's deadline, from zero through
+540 seconds. Longer deadlines refuse with exit 2, leaving time for startup and
+output within a ten-minute foreground window. Unknown logs refuse with exit 2.
+Use a fresh log path for every recording; logs and their `.gate`
 sidecars remain available for later waits. Waiters take no slot and send no
 completion notifications. Use these waits in place of sleep/poll loops.
 

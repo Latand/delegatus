@@ -7,7 +7,9 @@ import { constants } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "../src/lib/runtime/signalSandboxContext";
 
-const DEFAULT_WAIT_MS = 9 * 60_000;
+// Leave one minute of the engines' ten-minute foreground window for startup
+// and printing the final state and tail. Custom waits share this ceiling.
+const MAX_WAIT_MS = 9 * 60_000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
@@ -47,8 +49,8 @@ export function gateSnapshot(log: string): { state: string; code: number; tail: 
 
 /** Subscribe before checking so a completion racing the first read wakes us.
  * Only the final snapshot reads the tail; log activity does not extend the bound. */
-export async function waitForGate(log: string, timeoutMs = DEFAULT_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) throw new Error("invalid wait deadline");
+export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error("invalid wait deadline");
   const dir = directory(log);
   if (!fs.existsSync(path.join(dir, "owner.json"))) throw new Error("unknown gate log (no recording ticket)");
   return await new Promise((resolve, reject) => {
@@ -124,8 +126,7 @@ if (import.meta.main) {
     const log = path.resolve(filename);
     if (mode === "--record" && args.length) process.exitCode = await record(log, args);
     else if (mode === "--wait" && args.length <= 1) {
-      const ms = args[0] === undefined ? DEFAULT_WAIT_MS : Number(args[0]) * 1000;
-      if (!Number.isFinite(ms) || ms < 0 || ms > 2_147_483_647) throw new Error("invalid wait deadline");
+      const ms = args[0] === undefined ? undefined : Number(args[0]) * 1000;
       const result = await waitForGate(log, ms);
       console.log(`gate-slot: ${result.state} | tail=${JSON.stringify(result.tail)}`);
       process.exitCode = result.code;
