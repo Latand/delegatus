@@ -27,6 +27,7 @@ export interface TierSwitchDependencies {
   host?: (conversationId: string) => EngineHost | null | Promise<EngineHost | null>;
   authorizeDispatch?: () => void;
   beforeCut?: (turnId: string) => Promise<void>;
+  writeLabel?: string;
   expected?: { accountId: string | null; model: string | null };
 }
 
@@ -36,7 +37,7 @@ async function liveHost(conversationId: string): Promise<EngineHost | null> {
 }
 
 export async function switchConversationTier(conversationId: string, operationId: string, serviceTier: string | null,
-  cut: "boundary" | "none" | "now", dependencies: TierSwitchDependencies = {}): Promise<{ cut: "cut" | "armed" | "none"; appliedTier: string | null; reason?: string }> {
+  cut: "boundary" | "none" | "now", dependencies: TierSwitchDependencies = {}): Promise<{ cut: "cut" | "armed" | "none"; appliedTier: string | null; echoed: boolean; reason?: string }> {
   const registry = dependencies.registry ?? agentRegistry();
   const id = conversationId as ViewerConversationId;
   const before = registry.conversation(id)?.generations.at(-1);
@@ -57,10 +58,10 @@ export async function switchConversationTier(conversationId: string, operationId
   authorizeDispatch();
   const outcome = hostSupportsTier(host)
     ? await host.setTier({ operationId, serviceTier, cut, authorizeDispatch, beforeCut: dependencies.beforeCut })
-    : { appliedTier: serviceTier, cut: "none" as const, settled: undefined, reason: undefined };
+    : { appliedTier: serviceTier, cut: "none" as const, echoed: false, settled: undefined, reason: undefined };
   const profile = registry.conversation(id)?.generations.at(-1)?.launchProfile;
   if (profile && registry.conversation(id)?.generations.at(-1)?.id === before.id) {
-    await registry.deliveryWriteOrBusy({ label: "turbo.tier", operationId },
+    await registry.deliveryWriteOrBusy({ label: dependencies.writeLabel ?? "turbo.tier", operationId },
       () => {
         const generation = registry.conversation(id)?.generations.at(-1);
         if (generation?.id !== before.id || generation.accountId !== before.accountId || generation.launchProfile.model !== before.launchProfile.model) throw new Error("the conversation generation changed while recording the tier");
@@ -77,7 +78,7 @@ export async function switchConversationTier(conversationId: string, operationId
     remember(operationId, conversationId, "armed");
     void outcome.settled?.then(state => { if (cuts.get(operationId)?.state === "armed") remember(operationId, conversationId, state); });
   } else remember(operationId, conversationId, outcome.cut);
-  return { cut: outcome.cut, appliedTier: outcome.appliedTier, ...(outcome.reason ? { reason: outcome.reason } : {}) };
+  return { cut: outcome.cut, appliedTier: outcome.appliedTier, echoed: outcome.echoed === true, ...(outcome.reason ? { reason: outcome.reason } : {}) };
 }
 
 export function tierCutState(operationId: string, host?: EngineHost | null, turnId?: string): TierCutState | "unknown" {

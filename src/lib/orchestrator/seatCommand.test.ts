@@ -2929,3 +2929,40 @@ test("an exhausted admission revision replay keeps its own safe cause", async ()
   expect(result.body).toMatchObject({ code: "account_admission_changed", retryable: true, error: new AccountAdmissionChangedError().message });
   expect(recorded.spawns).toHaveLength(1);
 });
+
+
+test("tier roundtrip: create and rotate forward an explicit tier", async () => {
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast" }, deps);
+  expect(recorded.spawns[0]).toMatchObject({ serviceTier: "ultrafast" });
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-rotation", serviceTier: "priority" }, deps);
+  expect(result.status).toBe(200);
+  expect(recorded.spawns[1]).toMatchObject({ serviceTier: "priority" });
+  expect(recorded.spawns[1]).not.toHaveProperty("inheritedServiceTier");
+});
+
+test.each([false, true])("tier roundtrip: rotation inherits the explicit profile, excluding Turbo (turbo=%s)", async turbo => {
+  const { writeSeatTickSettings, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", path.join(sandbox, "incumbent.jsonl"), "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: false, serviceTier: "ultrafast" });
+  const { deps, recorded } = dependencies({ spawn: async body => {
+    recorded.spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: recorded.spawns.length === 1 ? conversation.id : NEW_ID, path: null } };
+  } });
+  try {
+    await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol" }, deps);
+    if (turbo) writeSeatTickSettings("proj-a", { ...defaultSeatTickSettings("proj-a"), turbo: {
+      enabled: true, startedAt: AT, until: null, endedAt: null, endReason: null, updatedAt: AT,
+      setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, why: null, plan: [],
+      credits: { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+      switches: [{ conversationId: conversation.id, accountId: "account-a", model: "gpt-6.1-sol", from: "priority", to: "ultrafast", state: "switched", at: AT }],
+    } });
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-inherited" }, deps);
+    expect(result.status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: turbo ? "priority" : "ultrafast" });
+    expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
+    expect(recorded.spawns[1]).not.toHaveProperty("fast");
+  } finally { registry.close(); }
+});

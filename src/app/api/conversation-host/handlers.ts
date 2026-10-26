@@ -420,6 +420,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       ...(typeof body.operationId === "string" && body.operationId.trim()
         ? { operationId: body.operationId.trim() }
         : {}),
+      ...(explicitAction === "speed" ? { serviceTier: body.serviceTier } : {}),
       key: typeof body.key === "string" ? body.key : "",
       label: body.label,
       question: body.question,
