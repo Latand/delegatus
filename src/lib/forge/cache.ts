@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { cachedJsonFile, type CachedJsonFile } from "@/lib/state/cachedJsonFile";
 
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -9,7 +9,7 @@ import type { CachedPullRequest, ForgeCacheView, ForgeRepositoryView, PullReques
  * The forge cache (#2059, docs/design/pr-issue-chips.md §3.3): what the Viewer
  * last read from GitHub about each repository's pull requests. One writer, the
  * sweep in `sweep.ts`, plus the stage report's observation of the PR it
- * already looked up. It is read through an mtime-keyed memory copy, so a board
+ * already looked up. It is read through a file snapshot, so a board
  * read costs one `stat` and a few map lookups, and it is never sent to the
  * browser: only resolved links are.
  */
@@ -105,8 +105,12 @@ function parseFile(raw: string): ForgeCacheFile {
   }
 }
 
-type Memo = { file: string; mtimeMs: number; size: number; data: ForgeCacheFile; view: ForgeCacheView };
-const memoHost = globalThis as typeof globalThis & { __llvForgeCacheMemo?: Memo | null };
+type Snapshot = { data: ForgeCacheFile; view: ForgeCacheView };
+const memoHost = globalThis as typeof globalThis & { __llvForgeFileCache?: CachedJsonFile<Snapshot> };
+const cache = memoHost.__llvForgeFileCache ??= cachedJsonFile((raw): Snapshot => {
+  const data = parseFile(raw ?? "");
+  return { data, view: forgeViewOf(data) };
+});
 
 /** The indexed view of a cache as stored; exported for tests and fixtures. */
 export function forgeViewOf(data: ForgeCacheFile): ForgeCacheView {
@@ -141,27 +145,7 @@ export function forgeViewOf(data: ForgeCacheFile): ForgeCacheView {
 
 /** The cache as stored, re-read only when the file changed. */
 export function readForgeCache(file = forgeCacheFile()): { data: ForgeCacheFile; view: ForgeCacheView } {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    const data = EMPTY_FILE();
-    const memo = { file, mtimeMs: -1, size: -1, data, view: forgeViewOf(data) };
-    memoHost.__llvForgeCacheMemo = memo;
-    return memo;
-  }
-  const memo = memoHost.__llvForgeCacheMemo;
-  if (memo && memo.file === file && memo.mtimeMs === stat.mtimeMs && memo.size === stat.size) return memo;
-  let raw = "";
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch {
-    raw = "";
-  }
-  const data = parseFile(raw);
-  const next = { file, mtimeMs: stat.mtimeMs, size: stat.size, data, view: forgeViewOf(data) };
-  memoHost.__llvForgeCacheMemo = next;
-  return next;
+  return cache.read(file);
 }
 
 export function forgeCacheView(file = forgeCacheFile()): ForgeCacheView {
@@ -175,7 +159,7 @@ export function updateForgeCache(change: (data: ForgeCacheFile) => void, file = 
   const next: ForgeCacheFile = structuredClone(current);
   change(next);
   writeJsonDurably(file, next, { space: 0 });
-  memoHost.__llvForgeCacheMemo = null;
+  cache.invalidate();
   return next;
 }
 
@@ -235,6 +219,6 @@ export function observeForgePullRequest(
 }
 
 export function resetForgeCacheForTests(): void {
-  memoHost.__llvForgeCacheMemo = null;
+  cache.invalidate();
   nudges.clear();
 }
