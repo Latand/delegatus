@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { composeBatch, type InboxMember } from "./inboxBatch";
 import type { SeatRecipientVerdict } from "@/lib/orchestrator/seatChannel";
@@ -3412,7 +3413,7 @@ export class StructuredDeliveryQueue {
       }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
+          if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
             if (effect.onlyIfIdle) {
               await transition("failed", { reason: "idle-retirement-deferred" });
               return { blocked: false, terminated: false };
@@ -3433,7 +3434,7 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
+        if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
