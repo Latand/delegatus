@@ -25,6 +25,9 @@ export function OutputPreview({
   heading,
   tone = "out",
   showAllLabel,
+  previewLines = PREVIEW_LINES,
+  previewChars = PREVIEW_CHARS,
+  from = "start",
 }: {
   output: string;
   truncated: boolean;
@@ -35,6 +38,12 @@ export function OutputPreview({
   /** `err` tints the block and heading for the stderr stream. */
   tone?: "out" | "err";
   showAllLabel?: string;
+  /** How many lines the collapsed preview keeps. */
+  previewLines?: number;
+  /** How many characters the collapsed preview keeps; wrapped lines count by length. */
+  previewChars?: number;
+  /** `end` keeps the last lines, where a failing command says why it failed. */
+  from?: "start" | "end";
 }) {
   const [all, setAll] = useState(false);
   const label = heading ? (
@@ -43,9 +52,11 @@ export function OutputPreview({
   /* Absent output renders nothing at all: an "no output captured" apology row
      is pure noise the operator scrolls past (compact-feed pass). */
   if (!output.trim()) return null;
-  const lines = output.split("\n");
-  const overflow = lines.length > PREVIEW_LINES || output.length > PREVIEW_CHARS;
-  const shown = all ? output : lines.slice(0, PREVIEW_LINES).join("\n").slice(0, PREVIEW_CHARS);
+  const lines = (from === "end" ? output.trimEnd() : output).split("\n");
+  const overflow = lines.length > previewLines || output.length > previewChars;
+  const shown = all ? output
+    : from === "end" ? lastChars(lines.slice(-previewLines).join("\n"), previewChars)
+    : lines.slice(0, previewLines).join("\n").slice(0, previewChars);
   /* stderr keeps a thin danger left-edge so the failing stream stays scannable
      without wrapping the whole block in its own bordered card. */
   const edge = tone === "err" ? "border-l-2 border-danger/50 pl-2" : "";
@@ -97,4 +108,12 @@ export function OutputPreview({
       ) : null}
     </div>
   );
+}
+
+/** The end of `text` within `chars`, from a whole line when one fits, else marked as cut. */
+function lastChars(text: string, chars: number): string {
+  if (text.length <= chars) return text;
+  const cut = text.slice(-chars);
+  const start = cut.indexOf("\n");
+  return start >= 0 && start < cut.length - 1 ? cut.slice(start + 1) : `…${cut}`;
 }

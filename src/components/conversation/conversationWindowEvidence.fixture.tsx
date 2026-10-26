@@ -1901,16 +1901,16 @@ if (root && requested === "memory-cap") {
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "project-setup") {
+  /* The running setup started 42 s before this clock. */
+  Date.now = () => Date.parse("2026-10-23T10:00:42Z");
   const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
-  const attempts = (["failed", "passed"] as const).map((state, index) => ({
-    n: index + 1, state: state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
+  const state = params.get("state") ?? "switch";
+  const setups = (state === "switch" ? ["failed", "passed"] : [state]).map((kind, index) => setupRecord(kind, index));
+  const attempts = setups.map((setup, index) => ({
+    n: index + 1, state: setup.state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
     launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
-    startedAt: "2026-10-23T10:00:00.000Z", completedAt: null, input: null, activatedBy: null, output: null,
-    verdict: null, error: null,
-    setup: { command: ["sh", "scripts/setup.sh"], cwd: "pipeline-checkout/web", hash: "a".repeat(64), state,
-      startedAt: "2026-10-23T10:00:00.000Z", completedAt: "2026-10-23T10:00:01.000Z",
-      code: state === "passed" ? 0 : 7, stdout: "Preparing dependencies\nWorkspace ready",
-      stderr: state === "failed" ? "Dependency unavailable" : "" },
+    startedAt: setup.startedAt, completedAt: null, input: null, activatedBy: null, output: null,
+    verdict: null, error: null, setup,
   })) as PipelineStageAttempt[];
   const pipeline = { id: "setup-lane", task: "Prepare the project checkout", project: "atlas", repoDir: "/repo",
     worktreeDir: "/repo-lane", branch: "pipeline/setup", baseBranch: "main", baseRef: "a".repeat(40), lastPassedCommit: "a".repeat(40),
@@ -1918,14 +1918,10 @@ else if (root && requested === "project-setup") {
     runs: [{ stageId: "build", attempts }], cursor: { stageId: "build", state: "spawning", input: null, activatedBy: null },
     state: "running", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
     createdAt: "2026-10-23T10:00:00.000Z", closedAt: null } as Pipeline;
-  const stage = pipeline.stages[0]!;
   const host = params.get("host");
-  const slot = { key: "setup-slot", pipeline, stage, index: 0, total: 1, presentation: "placeholder",
-    x: 0, y: 0, w: 720, h: 760 } as StageSlot;
-  createRoot(root).render(<main data-setup-fixture data-setup-host={host} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
-    {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.parse("2026-10-23T10:01:00Z") / 1000} onOpenConversation={() => {}} />
-      : host === "stages" ? <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>
-      : <div className="h-[800px] max-w-3xl p-4"><StagePlaceholderPane slot={slot} interactive={false} /></div>}
+  createRoot(root).render(<main data-setup-fixture data-setup-host={host} data-setup-state={state} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
+    {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
+      : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
   </main>);
 }
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
@@ -1944,6 +1940,36 @@ else if (root && requested === "delivery-stalled") {
   createRoot(root).render(<Fixture id={requested} />);
 }
 
+
+/** One setup record per evidence state, as the engine writes it. */
+function setupRecord(kind: string, index: number): NonNullable<PipelineStageAttempt["setup"]> {
+  const startedAt = new Date(Date.parse("2026-10-23T10:00:00Z") + index * 60_000).toISOString();
+  const after = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000).toISOString();
+  const base = { command: ["sh", "scripts/setup.sh"], cwd: "/repo-lane/web", hash: "a".repeat(64), startedAt };
+  const install = [
+    "> atlas-web@3.8.0 setup", "> node scripts/fetch-fixtures.mjs && pnpm install --frozen-lockfile",
+    ...Array.from({ length: 34 }, (_, i) => `Progress: resolved ${(i + 1) * 37}, reused ${(i + 1) * 35}, downloaded ${i + 2}, added ${(i + 1) * 29}`),
+    "Packages: +1258", "node_modules/esbuild: Running postinstall script, done in 412ms",
+    "ERR_PNPM_FETCH_503  GET https://registry.example.test/@atlas%2Fui/-/ui-4.2.1.tgz: Service Unavailable - 503",
+    "pnpm: exited with code 7",
+  ].join("\n") + "\n";
+  if (kind === "passed") return { ...base, state: "passed", completedAt: after(12), code: 0,
+    stdout: "Fetching fixtures: 14 files, 2.3 MB\nInstalled 1258 packages in 9.4s\nWorkspace ready\n", stderr: "" };
+  if (kind === "passed-empty") return { ...base, state: "passed", completedAt: after(1), code: 0, stdout: "", stderr: "" };
+  if (kind === "failed") return { ...base, state: "failed", completedAt: after(38), code: 7, stdout: install,
+    stderr: "Dependency unavailable: @atlas/ui@4.2.1 (registry answered 503)\n" };
+  if (kind === "stopped") return { ...base, state: "failed", completedAt: after(180), code: null, stdout: "",
+    stderr: "setup timed out after 180 seconds" };
+  if (kind === "running") return { ...base, state: "running", completedAt: null, code: null, stdout: "", stderr: "" };
+  /* long: cut at the 16,000-character cap as the engine stores it, with one
+     unbroken 300-character line among the last lines kept. */
+  const line = (i: number) => `[build ${String(i + 1).padStart(3, "0")}] compiled src/modules/feature-${i % 37}/index.ts in ${(i * 7) % 90 + 10}ms`;
+  const lines: string[] = [];
+  for (let i = 0; lines.join("\n").length < 15_600; i++) lines.push(line(i));
+  lines.push("dist/assets/" + "chunk-a1b2c3d4e5f6".repeat(17).slice(0, 288));
+  for (let i = lines.length, end = i + 8; i < end; i++) lines.push(line(i));
+  return { ...base, state: "failed", completedAt: after(95), code: 1, stdout: lines.join("\n").slice(0, 16_000) + "…", stderr: "" };
+}
 
 /** The board's stage sheet over the setup lane; its attempt chooser switches
     the shown attempt as the board does. */

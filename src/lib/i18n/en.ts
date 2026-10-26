@@ -4,14 +4,15 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
-  "projectSetup.attempt": "Stage {stage} · attempt {n}",
   "projectSetup.title": "Project setup",
-  "projectSetup.running": "Running",
-  "projectSetup.passed": "Ready",
-  "projectSetup.failed": "Failed · review output and retry stage",
-  "projectSetup.cwd": "Working directory",
-  "projectSetup.exit": "Exit code",
-  "projectSetup.noOutput": "No output recorded",
+  "projectSetup.running": "Project setup running",
+  "projectSetup.passed": "Project setup done",
+  "projectSetup.failed": "Project setup failed",
+  "projectSetup.failedExit": "Project setup failed · exit {code}",
+  "projectSetup.took": "Started {time} · took {duration}",
+  "projectSetup.soFar": "Started {time} · {duration} so far",
+  "projectSetup.inDir": "in {dir}",
+  "projectSetup.noOutput": "No output",
   "agentMemory.cap": "Memory cap: {size} GiB.",
   "agentMemory.clamped": "Requested {size} GiB; clamped to the shared machine budget.",
   "agentMemory.unenforced": "Memory cap: containment is off or unavailable.",

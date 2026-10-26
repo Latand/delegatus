@@ -558,12 +558,14 @@ test("attempt tabs number the stage's own attempts, not the record's n", async (
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
 });
 
-/* The pane shows the project setup of the attempt it shows, numbered as its
-   attempt tabs number it, and the tabs switch the failed setup for its retry. */
+/* The pane shows the project setup of the attempt it shows, and its attempt
+   tabs switch the failed setup for its retry: a pass is one closed line, a
+   failure opens on its command and the end of its output. */
 test("a stage pane shows the setup of the attempt it shows; attempt tabs switch it", async () => {
-  const setup = (state: "failed" | "passed") => ({ command: ["sh", "scripts/setup.sh"], cwd: "web", hash: "a".repeat(64), state,
+  const install = Array.from({ length: 12 }, (_, index) => `install step ${index + 1}`).join("\n");
+  const setup = (state: "failed" | "passed") => ({ command: ["sh", "scripts/setup.sh", "--profile", "two words"], cwd: "/fixture/worktree/web", hash: "a".repeat(64), state,
     startedAt: iso(7300), completedAt: iso(7290), code: state === "passed" ? 0 : 7,
-    stdout: "Preparing dependencies", stderr: state === "failed" ? "Dependency unavailable" : "" });
+    stdout: state === "failed" ? install : "Preparing dependencies", stderr: state === "failed" ? "Dependency unavailable" : "" });
   const record = searchPipeline({
     runs: searchPipeline().runs.map((run) => (run.stageId === "implement"
       ? { ...run, attempts: [{ ...run.attempts[0]!, setup: setup("failed") }, { ...run.attempts[1]!, n: 4, setup: setup("passed") }] }
@@ -574,13 +576,19 @@ test("a stage pane shows the setup of the attempt it shows; attempt tabs switch 
   click(card(host).querySelector("[data-open-stages]"));
   await tick();
   const results = () => [...pane(host, "implement")!.querySelectorAll<HTMLElement>("[data-stage-setup]")];
-  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Stage implement · attempt 2 · Project setup · Ready"]);
-  expect(results()[0]!.hasAttribute("open")).toBe(false);
+  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Project setup done"]);
+  expect(results()[0]!.querySelector("details")!.hasAttribute("open")).toBe(false);
   click(pane(host, "implement")!.querySelector('[data-attempt="1"]'));
   await tick();
-  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Stage implement · attempt 1 · Project setup · Failed · review output and retry stage"]);
-  for (const text of ["Working directory: web", "\"sh\" \"scripts/setup.sh\"", "Exit code: 7", "Preparing dependencies\nDependency unavailable"])
-    expect(results()[0]!.textContent).toContain(text);
+  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Project setup failed · exit 7"]);
+  const failed = results()[0]!;
+  expect(failed.querySelector("details")!.hasAttribute("open")).toBe(true);
+  expect(failed.querySelector("[data-stage-setup-command]")!.textContent).toBe("$ sh scripts/setup.sh --profile 'two words'");
+  expect(failed.textContent).toContain("in web");
+  expect(failed.textContent).toContain("Dependency unavailable");
+  /* The tail: the last eight install lines, the earlier ones behind "show all output". */
+  const streams = [...failed.querySelectorAll("pre")].map((pre) => pre.textContent);
+  expect(streams).toEqual(["Dependency unavailable", Array.from({ length: 8 }, (_, index) => `install step ${index + 5}`).join("\n")]);
   /* A stage whose attempts ran no setup draws none. */
   expect(pane(host, "verify")!.querySelector("[data-stage-setup]")).toBeNull();
 });

@@ -4,14 +4,15 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
-  "projectSetup.attempt": "Етап {stage} · спроба {n}",
   "projectSetup.title": "Підготовка проєкту",
-  "projectSetup.running": "Виконується",
-  "projectSetup.passed": "Готово",
-  "projectSetup.failed": "Помилка · перегляньте вивід і повторіть етап",
-  "projectSetup.cwd": "Робочий каталог",
-  "projectSetup.exit": "Код завершення",
-  "projectSetup.noOutput": "Вивід не записано",
+  "projectSetup.running": "Підготовка проєкту триває",
+  "projectSetup.passed": "Підготовку проєкту виконано",
+  "projectSetup.failed": "Підготовка проєкту не вдалася",
+  "projectSetup.failedExit": "Підготовка проєкту не вдалася · код {code}",
+  "projectSetup.took": "Почато о {time} · тривало {duration}",
+  "projectSetup.soFar": "Почато о {time} · минуло {duration}",
+  "projectSetup.inDir": "у теці {dir}",
+  "projectSetup.noOutput": "Виводу немає",
   "agentMemory.cap": "Ліміт пам’яті: {size} GiB.",
   "agentMemory.clamped": "Запитано {size} GiB; обмежено спільним бюджетом пам’яті.",
   "agentMemory.unenforced": "Ліміт пам’яті: ізоляцію вимкнено або вона недоступна.",

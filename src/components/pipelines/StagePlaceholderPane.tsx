@@ -3,7 +3,6 @@ import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 
 import { Check, ChevronLeft, ChevronRight, Loader2, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
-import { StageSetupResult } from "./StageSetupResult";
 
 import { RuntimeControlsView, type RuntimeApplyState, type RuntimeDraft } from "@/components/AgentRuntimeControls";
 import { effortTierLabel } from "@/components/builderCopy";
@@ -343,11 +342,6 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
         ) : null}
       </header>
       <AgentMemoryCapNote cap={slot.attempt?.memoryCap} />
-
-      <div className="max-h-[50vh] shrink-0 space-y-2 overflow-y-auto">
-        {pipeline.runs.find(run => run.stageId === stage.id)?.attempts.filter(attempt => attempt.setup).map(attempt =>
-          <StageSetupResult key={attempt.n} setup={attempt.setup} stageId={stage.id} attempt={attempt.n} />)}
-      </div>
 
       {interactive && configOpen ? (
         <RoleSection

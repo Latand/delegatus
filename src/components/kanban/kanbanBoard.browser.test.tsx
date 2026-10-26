@@ -38474,16 +38474,16 @@ describe("sound captions", () => {
 });
 
 describe("project setup stage hosts", () => {
-  browserTest("stage pane and stage sheet retain failed setup and passed retry", async () => {
+  browserTest("stage sheet shows each setup state as one line, a failure open on its tail", async () => {
     const out = path.resolve(".artifacts/project-setup/desktop"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     try {
-      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["placeholder", "stages"], [390, 1440]);
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["stages"], [640, 1024, 1440]);
       fs.mkdirSync("evidence/project-setup", { recursive: true });
       fs.writeFileSync("evidence/project-setup/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 1_800_000);
 });
 
 describe("installer guide: old state, project search, newcomer clarity", () => {

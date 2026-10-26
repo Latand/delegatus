@@ -1461,38 +1461,69 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
   return readings;
 }
 
-/** Production setup hosts, including the failed attempt and its successful retry. */
+/** The setup states the evidence fixture draws, and what each must read. */
+const SETUP_STATES = ["passed", "passed-empty", "failed", "stopped", "running", "long", "switch"] as const;
+
+/** Production setup hosts: one line per shown setup, each state in its own words. */
 export async function captureProjectSetupHosts(browser: Browser, base: string, out: string,
-  hosts: readonly ("placeholder" | "stages" | "mobile")[], widths: readonly number[]) {
+  hosts: readonly ("stages" | "mobile")[], widths: readonly number[]) {
   const readings: unknown[] = [];
-  for (const host of hosts) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) {
+  for (const host of hosts) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) for (const state of SETUP_STATES) {
+    const phone = host === "mobile";
     const { context, page, pageErrors } = await openFixture(browser,
-      `${base}?case=project-setup&host=${host}&lang=${lang}`, { width, height: 900 }, theme, lang, "reduce", host === "mobile");
+      `${base}?case=project-setup&host=${host}&state=${state}&lang=${lang}`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+    const where = `${host}/${lang}/${theme}/${width}/${state}`;
     try {
       const results = page.locator("[data-stage-setup]");
       await results.first().waitFor();
-      // The stage sheet shows the setup of the attempt its chooser picks; the
-      // other hosts list the failed attempt and its passed retry together.
-      const listed = host === "stages" ? 1 : 2;
-      // Each host opens at its ordinary initial scroll, with results collapsed.
-      for (let index = 0; index < 2; index++) {
-        const n = index + 1;
-        if (host === "stages") {
-          await page.locator(`.attempts [data-attempt="${n}"]`).click();
-          await page.locator(`.attempts [data-attempt="${n}"][aria-pressed="true"]`).waitFor();
+      /* The stage sheet opens on the last attempt (the passed retry) and its
+         chooser switches to the failed one; the phone shows the lane's latest setup only. */
+      const views: { attempt: number; kind: string }[] = state === "switch"
+        ? phone ? [{ attempt: 2, kind: "passed" }] : [{ attempt: 2, kind: "passed" }, { attempt: 1, kind: "failed" }]
+        : [{ attempt: 1, kind: state }];
+      for (const view of views) {
+        if (state === "switch" && !phone) {
+          await page.locator(`.attempts [data-attempt="${view.attempt}"]`).click();
+          await page.locator(`.attempts [data-attempt="${view.attempt}"][aria-pressed="true"]`).waitFor();
         }
-        if (await results.count() !== listed) throw new Error(`${host}: expected ${listed} setup results`);
-        const result = results.nth(host === "stages" ? 0 : index);
-        if (await result.getAttribute("open") !== null) throw new Error("setup unexpectedly opens expanded");
-        const text = await result.locator("summary").innerText();
-        if (!text.includes(translate(lang, "projectSetup.attempt", { stage: "build", n }))) throw new Error("missing stage/attempt label");
-        const state = n === 1 ? "failed" : "passed";
-        if (!text.includes(translate(lang, `projectSetup.${state}`))) throw new Error("wrong setup state");
-        await result.locator("summary").click();
-        await result.scrollIntoViewIfNeeded();
-        const shown = await result.innerText();
-        for (const value of ["scripts/setup.sh", "pipeline-checkout/web", "Workspace ready", n === 1 ? "Dependency unavailable" : "Preparing dependencies"])
-          if (!shown.includes(value)) throw new Error(`${host}: missing output ${value}`);
+        if (await results.count() !== 1) throw new Error(`${where}: expected one setup result, saw ${await results.count()}`);
+        const result = results.first();
+        const summary = result.locator("summary");
+        const words = (await summary.innerText()).trim();
+        const expected = view.kind === "failed" ? translate(lang, "projectSetup.failedExit", { code: 7 })
+          : view.kind === "long" ? translate(lang, "projectSetup.failedExit", { code: 1 })
+          : view.kind === "stopped" ? translate(lang, "projectSetup.failed")
+          : view.kind === "running" ? translate(lang, "projectSetup.running") : translate(lang, "projectSetup.passed");
+        if (words !== expected) throw new Error(`${where}: summary "${words}", expected "${expected}"`);
+        const opens = ["failed", "stopped", "long"].includes(view.kind);
+        if ((await result.locator("details").getAttribute("open") !== null) !== opens) throw new Error(`${where}: ${opens ? "failure opens" : "line stays closed"}`);
+        /* The defining line is on the first screen, before any scroll. */
+        const firstScreen = await summary.evaluate(element => { const box = element.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && window.scrollY === 0; });
+        if (!firstScreen) throw new Error(`${where}: setup line is not on the first screen`);
+        const summaryHeight = await summary.evaluate(element => element.getBoundingClientRect().height);
+        if (phone && summaryHeight < 44) throw new Error(`${where}: summary target ${summaryHeight}px`);
+        const shot = async (suffix: string) => {
+          const frame = `${host}-${lang}-${theme}-${width}-${state}${views.length > 1 ? `-attempt-${view.attempt}` : ""}${suffix}.png`;
+          await page.screenshot({ path: path.join(out, frame) });
+          return frame;
+        };
+        const frames = [await shot("")];
+        if (!opens) {
+          await summary.click();
+          await result.locator("details[open]").waitFor();
+        }
+        const body = await result.locator("details").innerText();
+        const must = ["$ sh scripts/setup.sh", translate(lang, "projectSetup.inDir", { dir: "web" }),
+          ...view.kind === "failed" ? ["Dependency unavailable", "pnpm: exited with code 7"]
+            : view.kind === "stopped" ? ["setup timed out after 180 seconds"]
+            : view.kind === "long" ? ["chunk-a1b2c3d4e5f6chunk"]
+            : view.kind === "passed" ? ["Workspace ready"]
+            : view.kind === "passed-empty" ? [translate(lang, "projectSetup.noOutput")] : []];
+        for (const text of must) if (!body.includes(text)) throw new Error(`${where}: missing "${text}"`);
+        /* The tail ends where the stored output ends. */
+        const tail = await result.locator("pre").last().evaluate(element => element.textContent ?? "").catch(() => "");
+        const last = view.kind === "failed" ? "pnpm: exited with code 7" : view.kind === "stopped" ? "setup timed out after 180 seconds" : view.kind === "long" ? "…" : view.kind === "passed" ? "Workspace ready" : "";
+        if (!tail.trimEnd().endsWith(last)) throw new Error(`${where}: tail ends "${tail.slice(-40)}"`);
         const geometry = await result.evaluate(element => {
           const clipped: string[] = [], covered: string[] = [];
           const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -1507,24 +1538,56 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
                 if (/hidden|auto|scroll|clip/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
                 if (/hidden|auto|scroll|clip/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
               }
+              if (rect.bottom < 0 || rect.top > innerHeight) continue;
               if (rect.left < left - 1 || rect.right > right + 1 || rect.top < top - 1 || rect.bottom > bottom + 1) clipped.push(node.textContent!);
               const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
               if (!hit || !element.contains(hit)) covered.push(node.textContent!);
             }
           }
-          return { clipped, covered, documentOverflow: document.documentElement.scrollWidth > innerWidth, scroll: window.scrollY, focus: document.activeElement?.tagName };
+          const wide = [...element.querySelectorAll("pre, code")].filter(child => child.scrollWidth > child.clientWidth + 1).length;
+          return { clipped, covered, wide, documentOverflow: document.documentElement.scrollWidth > innerWidth };
         });
-        if (geometry.clipped.length || geometry.covered.length || geometry.documentOverflow) throw new Error(`${host}/${lang}/${theme}/${width}/${n}: ${JSON.stringify(geometry)}`);
-        const frame = `${host}-${lang}-${theme}-${width}-attempt-${n}.png`;
-        await page.screenshot({ path: path.join(out, frame) });
-        readings.push({ host, lang, theme, width, attempt: n, state, frame, geometry, pageErrors });
-        await result.locator("summary").click();
-        if (pageErrors.length) throw new Error(JSON.stringify(pageErrors));
+        if (geometry.clipped.length || geometry.covered.length || geometry.wide || geometry.documentOverflow) throw new Error(`${where}: ${JSON.stringify(geometry)}`);
+        if (!opens) frames.push(await shot("-open"));
+        /* The dot's popover: when it started and how long it took, inside the window, over no other words. */
+        let popover: unknown = null;
+        if (view.kind === "running" || view.kind === "failed") {
+          const dot = result.locator("[data-stage-setup-dot]");
+          await dot.scrollIntoViewIfNeeded();
+          if (phone) await dot.tap(); else await dot.hover();
+          const pop = page.locator("[data-stage-setup-pop]");
+          await pop.waitFor();
+          const text = (await pop.innerText()).trim();
+          const duration = view.kind === "running" ? (lang === "uk" ? "42 с" : "42s") : (lang === "uk" ? "38 с" : "38s");
+          if (!text.includes(duration)) throw new Error(`${where}: popover "${text}"`);
+          popover = await pop.evaluate(element => {
+            const bubble = element.closest(".card-state-pop") ?? element;
+            const box = bubble.getBoundingClientRect();
+            const covers: string[] = [];
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim() || bubble.contains(node)) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects())
+                if (rect.right > box.left + 1 && rect.left < box.right - 1 && rect.bottom > box.top + 1 && rect.top < box.bottom - 1) { covers.push(node.textContent!.trim().slice(0, 60)); break; }
+            }
+            return { text: element.textContent, box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+              inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, covers };
+          });
+          const reading = popover as { inside: boolean; covers: string[] };
+          if (!reading.inside || reading.covers.length) throw new Error(`${where}: popover ${JSON.stringify(popover)}`);
+          frames.push(await shot("-popover"));
+          await page.keyboard.press("Escape");
+          if (phone) await page.mouse.click(2, 2);
+        }
+        readings.push({ host, lang, theme, width, state, attempt: view.attempt, words, open: opens, summaryHeight, frames, geometry, popover, pageErrors });
+        if (pageErrors.length) throw new Error(`${where}: ${JSON.stringify(pageErrors)}`);
       }
     } finally { await context.close(); }
   }
   const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/mobile/issue1671Evidence.browser.test.tsx", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/kanban/issue1695BrowserHarness.ts",
-    "src/components/pipelines/StageSetupResult.tsx", "src/components/pipelines/StagePlaceholderPane.tsx", "src/components/kanban/StagesSheet.tsx",
+    "src/components/pipelines/StageSetupResult.tsx", "src/components/feed/cards/OutputPreview.tsx", "src/components/kanban/StagesSheet.tsx",
     "src/components/mobile/MobilePipelineScreen.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
   return { capturedAt: new Date().toISOString(), sourceDigests: Object.fromEntries(sources.map(file =>
     [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), readings };

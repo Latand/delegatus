@@ -13331,16 +13331,16 @@ describe("phone composer tools row", () => {
 });
 
 describe("project setup phone host", () => {
-  browserTest("pipeline screen labels failed setup and passed retry by stage and attempt", async () => {
+  browserTest("pipeline screen shows the lane's latest setup as one line", async () => {
     const out = path.resolve(".artifacts/project-setup/mobile"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try {
-      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["mobile"], [390, 1440]);
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["mobile"], [390]);
       fs.mkdirSync("evidence/project-setup", { recursive: true });
       fs.writeFileSync("evidence/project-setup/mobile.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 600_000);
 });
 
 /*

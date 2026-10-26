@@ -1,16 +1,16 @@
 {
-  "capturedAt": "2026-10-25T16:37:49.369Z",
+  "capturedAt": "2026-10-26T13:35:18.633Z",
   "sourceDigests": {
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "8d15350d5de5a762d9727fca4e008a6190c42ce7ee893c6e1a49647a9f98d627",
-    "src/components/mobile/issue1671Evidence.browser.test.tsx": "960ac0034144b7d6376eb0f84d1f18187fffe18c3558aaae6cfe6beb416f3743",
-    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "afe6b98b430f8918f23e734569ef82a1872e38146dd3149e1c3e4c5fdaa0587c",
-    "src/components/kanban/issue1695BrowserHarness.ts": "af79cc91f6bad5696fd74299b6b42dd5c2edafeef297d6444c2c466352f9486e",
-    "src/components/pipelines/StageSetupResult.tsx": "fdcca3b5dcaf6bd21295ae2b85646b37c36b10dbec39a45dfaf3b6b7d30054e2",
-    "src/components/pipelines/StagePlaceholderPane.tsx": "104570955e150a74a3827f6b3e5c1d96f1494607ceb7ad76fa0e5834a50a8175",
-    "src/components/kanban/StagesSheet.tsx": "aff7bd26bc1f11b7875277c9918fc0a78c9c62703c18d69bdc86a0f1eed63eaf",
-    "src/components/mobile/MobilePipelineScreen.tsx": "c2ec2694a2831b7d023c3670bb3784a03a3a1aee5c729b4647e3a002a4a73b03",
-    "src/lib/i18n/en.ts": "a79a245b685df5be3bad89c912c1bff77844381dc991024a5470c22f26793d2b",
-    "src/lib/i18n/uk.ts": "3c53361d7bd370e82d7963635f988691d1b87c96ee19686ec582475906c0033b"
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "3732cd05c6c036667e7e69cafa10dbb5d111b7e7127e0a4056fdaca795d9dd80",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "68783c2b4c56a7f6b200f48c1e076af28c01f7dcad909b8fcaba370674ba0ed4",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "72ec32f698ea17e0cb115b997a95467dc03a3e361b298e229bbb09208dcea767",
+    "src/components/kanban/issue1695BrowserHarness.ts": "6e0a3ce608553bcd002373060589a611f54a2c17300c35ecd9afcd37c7f15094",
+    "src/components/pipelines/StageSetupResult.tsx": "7db0b26907229ed8ef313059e0b06f92d2f542551ebd316d4c595bc434bdeecd",
+    "src/components/feed/cards/OutputPreview.tsx": "bb7d006527edbcbc141b4499161808d245927fb0696b66f646a0227c7fd9cea9",
+    "src/components/kanban/StagesSheet.tsx": "446f3b007006158c3df7a74e31cc3d156df4d9500f5007f171a3b4407d5f1375",
+    "src/components/mobile/MobilePipelineScreen.tsx": "f7839e6ae62f7093503d1b125afac90e628ccc4f6140072965d9d3e8279058fd",
+    "src/lib/i18n/en.ts": "e874b483c74478e3ba83bdb556ab84a7691771f57fb24886742a1d3f57172a89",
+    "src/lib/i18n/uk.ts": "3369d6fda7f636c0e67a85636a63f85256c2334468712a4959cdc68e0ebf4b40"
   },
   "readings": [
     {
@@ -18,15 +18,77 @@
       "lang": "en",
       "theme": "light",
       "width": 390,
+      "state": "passed",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-en-light-390-attempt-1.png",
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-passed.png",
+        "mobile-en-light-390-passed-open.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-passed-empty.png",
+        "mobile-en-light-390-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-failed.png",
+        "mobile-en-light-390-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 151.421875,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -35,32 +97,54 @@
       "lang": "en",
       "theme": "light",
       "width": 390,
-      "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-en-light-390-attempt-2.png",
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
-      },
-      "pageErrors": []
-    },
-    {
-      "host": "mobile",
-      "lang": "en",
-      "theme": "light",
-      "width": 1440,
+      "state": "stopped",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-en-light-1440-attempt-1.png",
+      "words": "Project setup failed",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-stopped.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "state": "running",
+      "attempt": 1,
+      "words": "Project setup running",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-running.png",
+        "mobile-en-light-390-running-open.png",
+        "mobile-en-light-390-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Started 13:00 · 42s so far",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 158.140625,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -68,16 +152,123 @@
       "host": "mobile",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
-      "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-en-light-1440-attempt-2.png",
+      "width": 390,
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-long.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-light-390-switch.png",
+        "mobile-en-light-390-switch-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-passed.png",
+        "mobile-en-dark-390-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-passed-empty.png",
+        "mobile-en-dark-390-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-failed.png",
+        "mobile-en-dark-390-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 151.421875,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -86,15 +277,54 @@
       "lang": "en",
       "theme": "dark",
       "width": 390,
+      "state": "stopped",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-en-dark-390-attempt-1.png",
+      "words": "Project setup failed",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-stopped.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "state": "running",
+      "attempt": 1,
+      "words": "Project setup running",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-running.png",
+        "mobile-en-dark-390-running-open.png",
+        "mobile-en-dark-390-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Started 13:00 · 42s so far",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 158.140625,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -103,49 +333,122 @@
       "lang": "en",
       "theme": "dark",
       "width": 390,
-      "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-en-dark-390-attempt-2.png",
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-long.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
       },
+      "popover": null,
       "pageErrors": []
     },
     {
       "host": "mobile",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
-      "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-en-dark-1440-attempt-1.png",
+      "width": 390,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-en-dark-390-switch.png",
+        "mobile-en-dark-390-switch-open.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
       },
+      "popover": null,
       "pageErrors": []
     },
     {
       "host": "mobile",
-      "lang": "en",
-      "theme": "dark",
-      "width": 1440,
-      "attempt": 2,
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
       "state": "passed",
-      "frame": "mobile-en-dark-1440-attempt-2.png",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-passed.png",
+        "mobile-uk-light-390-passed-open.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-passed-empty.png",
+        "mobile-uk-light-390-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-failed.png",
+        "mobile-uk-light-390-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 185.609375,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -154,15 +457,54 @@
       "lang": "uk",
       "theme": "light",
       "width": 390,
+      "state": "stopped",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-uk-light-390-attempt-1.png",
+      "words": "Підготовка проєкту не вдалася",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-stopped.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "state": "running",
+      "attempt": 1,
+      "words": "Підготовка проєкту триває",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-running.png",
+        "mobile-uk-light-390-running-open.png",
+        "mobile-uk-light-390-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Почато о 13:00 · минуло 42 с",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 181.515625,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -171,49 +513,122 @@
       "lang": "uk",
       "theme": "light",
       "width": 390,
-      "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-uk-light-390-attempt-2.png",
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
-      },
-      "pageErrors": []
-    },
-    {
-      "host": "mobile",
-      "lang": "uk",
-      "theme": "light",
-      "width": 1440,
+      "state": "long",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-uk-light-1440-attempt-1.png",
+      "words": "Підготовка проєкту не вдалася · код 1",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-long.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
       },
+      "popover": null,
       "pageErrors": []
     },
     {
       "host": "mobile",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 390,
+      "state": "switch",
       "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-uk-light-1440-attempt-2.png",
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-light-390-switch.png",
+        "mobile-uk-light-390-switch-open.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-passed.png",
+        "mobile-uk-dark-390-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-passed-empty.png",
+        "mobile-uk-dark-390-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-failed.png",
+        "mobile-uk-dark-390-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 185.609375,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -222,15 +637,54 @@
       "lang": "uk",
       "theme": "dark",
       "width": 390,
+      "state": "stopped",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-uk-dark-390-attempt-1.png",
+      "words": "Підготовка проєкту не вдалася",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-stopped.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "state": "running",
+      "attempt": 1,
+      "words": "Підготовка проєкту триває",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-running.png",
+        "mobile-uk-dark-390-running-open.png",
+        "mobile-uk-dark-390-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "wide": 0,
+        "documentOverflow": false
+      },
+      "popover": {
+        "text": "Почато о 13:00 · минуло 42 с",
+        "box": {
+          "left": 12,
+          "top": 240,
+          "right": 181.515625,
+          "bottom": 270
+        },
+        "inside": true,
+        "covers": []
       },
       "pageErrors": []
     },
@@ -239,50 +693,44 @@
       "lang": "uk",
       "theme": "dark",
       "width": 390,
-      "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-uk-dark-390-attempt-2.png",
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
-      },
-      "pageErrors": []
-    },
-    {
-      "host": "mobile",
-      "lang": "uk",
-      "theme": "dark",
-      "width": 1440,
+      "state": "long",
       "attempt": 1,
-      "state": "failed",
-      "frame": "mobile-uk-dark-1440-attempt-1.png",
+      "words": "Підготовка проєкту не вдалася · код 1",
+      "open": true,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-long.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
       },
+      "popover": null,
       "pageErrors": []
     },
     {
       "host": "mobile",
       "lang": "uk",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "state": "switch",
       "attempt": 2,
-      "state": "passed",
-      "frame": "mobile-uk-dark-1440-attempt-2.png",
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 44,
+      "frames": [
+        "mobile-uk-dark-390-switch.png",
+        "mobile-uk-dark-390-switch-open.png"
+      ],
       "geometry": {
         "clipped": [],
         "covered": [],
-        "documentOverflow": false,
-        "scroll": 0,
-        "focus": "SUMMARY"
+        "wide": 0,
+        "documentOverflow": false
       },
+      "popover": null,
       "pageErrors": []
     }
   ]
