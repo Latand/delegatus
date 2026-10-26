@@ -35,6 +35,66 @@ const LAUNCH: LaunchOptions = {
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
 
+describe("retired orchestrator", () => {
+  browserTest("a failed detailed seat read preserves the phone's retired-recipient block", async () => {
+    const out = path.resolve(".artifacts/retired-orchestrator");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=retired-orchestrator&lang=uk&detailFailure=1`, { width: 390, height: 844 }, "dark", "uk");
+      try {
+        await page.locator("textarea").waitFor();
+        await page.evaluate(() => (window as unknown as { retiredOrchestrator: { rotate(): void } }).retiredOrchestrator.rotate());
+        const banner = page.locator("[data-retired-orchestrator]");
+        await banner.waitFor();
+        expect(await banner.getByRole("link").count()).toBe(0);
+        expect(await banner.innerText()).toContain(translate("uk", "retiredOrchestrator.unavailable"));
+        expect(await page.locator("[data-outbox-retry=retired-message]").isDisabled()).toBe(true);
+        // No successor: nothing on the screen tells the operator to open one.
+        expect(await page.locator("body").innerText()).not.toContain(translate("uk", "retiredOrchestrator.open"));
+        expect(await page.locator('[data-testid="composer-send-blocked"]').innerText()).toContain(translate("uk", "retiredOrchestrator.sendBlocked"));
+        expect(await page.locator("textarea").inputValue()).toBe("Unsent draft stays here");
+        expect(await page.evaluate(() => (window as unknown as { retiredOrchestrator: { sends(): number } }).retiredOrchestrator.sends())).toBe(0);
+        await page.screenshot({ path: path.join(out, "uk-dark-390-unavailable.png"), fullPage: true });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); served.stop(); }
+  });
+  browserTest("a rotated recipient keeps drafts and offers a current conversation link in every viewport", async () => {
+    const out = path.resolve(".artifacts/retired-orchestrator");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=retired-orchestrator&lang=${lang}`, { width, height: 844 }, theme, lang);
+        try {
+          const draft = page.locator("textarea").first();
+          await draft.waitFor();
+          await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>("textarea")?.value === "Unsent draft stays here");
+          await page.evaluate(() => (window as unknown as { retiredOrchestrator: { rotate(): void } }).retiredOrchestrator.rotate());
+          const banner = page.locator("[data-retired-orchestrator]");
+          await banner.waitFor();
+          expect(await banner.innerText()).toContain(translate(lang, "retiredOrchestrator.title"));
+          expect(await draft.inputValue()).toBe("Unsent draft stays here");
+          expect(await page.locator('[data-testid="composer-send-blocked"] button').count()).toBe(0);
+          expect(await page.locator("[data-outbox-retry=retired-message]").isDisabled()).toBe(true);
+          // The call to action is the banner's link alone; the composer states the closed send without repeating it.
+          expect(await page.getByText(translate(lang, "retiredOrchestrator.open")).count()).toBe(1);
+          expect(await page.locator('[data-testid="composer-send-blocked"]').innerText()).toContain(translate(lang, "retiredOrchestrator.sendBlocked"));
+          expect(await page.evaluate(() => (window as unknown as { retiredOrchestrator: { sends(): number } }).retiredOrchestrator.sends())).toBe(0);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`), fullPage: true });
+          await banner.getByRole("link").click();
+          expect(new URL(page.url()).hash).toBe("#c=conversation_current");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+  });
+});
+
 describe("scoped memory cap", () => {
   browserTest("the effective cap and clamp note fit every locale, theme and viewport", async () => {
     const out = path.resolve(".artifacts/memory-caps");
@@ -44,31 +104,43 @@ describe("scoped memory cap", () => {
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-        for (const width of [390, 1280]) for (const mode of ["clamped", "unenforced"]) {
-          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=memory-cap&lang=${lang}&mode=${mode}`, { width, height: 844 }, theme, lang);
+        for (const width of [390, 1280]) for (const mode of ["clamped", "unenforced"]) for (const surface of ["stages", "placeholder", "screen"]) {
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=memory-cap&lang=${lang}&mode=${mode}&surface=${surface}`, { width, height: 844 }, theme, lang);
           try {
-            for (const surface of ["completed", "placeholder", "row"]) {
-              const frame = page.locator(`[data-memory-surface="${surface}"]`);
-              const note = frame.locator("[data-agent-memory-cap]");
-              await note.waitFor();
-              await note.scrollIntoViewIfNeeded();
-              expect(await note.innerText()).toBe(mode === "unenforced" ? translate(lang, "agentMemory.unenforced")
-                : `${translate(lang, "agentMemory.cap", { size: 8 })} ${translate(lang, "agentMemory.clamped", { size: 12 })}`);
-              const bounds = await note.evaluate(element => {
-                const frame = element.closest("[data-memory-surface]")!.getBoundingClientRect();
-                const box = element.getBoundingClientRect();
-                return { overflow: element.scrollWidth > element.clientWidth, inside: box.top >= frame.top && box.bottom <= frame.bottom };
-              });
-              expect(bounds.overflow).toBe(false);
-              expect(bounds.inside).toBe(true);
-            }
+            const frame = page.locator(`[data-memory-surface="${surface}"]`);
+            const note = frame.locator("[data-agent-memory-cap]");
+            await note.waitFor();
+            await note.scrollIntoViewIfNeeded();
+            expect(await note.innerText()).toBe(mode === "unenforced" ? translate(lang, "agentMemory.unenforced")
+              : `${translate(lang, "agentMemory.cap", { size: 8 })} ${translate(lang, "agentMemory.clamped", { size: 12 })}`);
+            const bounds = await note.evaluate(element => {
+              const frame = element.closest("[data-memory-surface]")!.getBoundingClientRect();
+              const box = element.getBoundingClientRect();
+              const clipped: string[] = [];
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(walker.currentNode);
+                for (const rect of range.getClientRects()) {
+                  if (rect.left < box.left || rect.right > box.right || rect.top < box.top || rect.bottom > box.bottom
+                    || rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) {
+                    clipped.push(walker.currentNode.textContent);
+                  }
+                }
+              }
+              return { overflow: element.scrollWidth > element.clientWidth, inside: box.top >= frame.top && box.bottom <= frame.bottom, clipped };
+            });
+            expect(bounds.overflow).toBe(false);
+            expect(bounds.inside).toBe(true);
+            expect(bounds.clipped).toEqual([]);
             expect(pageErrors).toEqual([]);
-            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${mode}.png`), fullPage: true });
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${mode}-${surface}.png`), fullPage: true });
           } finally { await context.close(); }
         }
       }
     } finally { await browser?.close(); served.stop(); }
-  });
+  }, 180_000);
 });
 
 describe("#1793 launch-prompt bubble", () => {

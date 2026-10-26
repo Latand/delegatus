@@ -2094,8 +2094,9 @@ test.each([
   h.advanceWallClock(IDLE_TURN_QUIET_MS);
   await tickPipelines([entry(attempt.agentPath!)], sameBoot);
   const replaced = loadPipelines()[0]!;
-  expect(replaced.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: `${error}; replaced by a fresh stage attempt` });
-  expect(replaced.stateDetail).toBe(`stage attempt 1 ${detail}; fresh attempt 2 is starting`);
+  const exit = interruption === "dead" ? " (exit: status unavailable; no Delegatus stop recorded)" : "";
+  expect(replaced.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: `${error}${exit}; replaced by a fresh stage attempt` });
+  expect(replaced.stateDetail).toBe(`stage attempt 1 ${detail}${exit}; fresh attempt 2 is starting`);
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: interruption === "dead" ? "host-lost" : "engine-stop" });
   await tickPipelines([], sameBoot);
   expect(h.spawnInputs[1]!.prompt).toContain(`stage attempt 1 ${detail}.`);
@@ -2111,7 +2112,7 @@ test.each([
   await tickPipelines([entry(replacement.agentPath!)], sameBoot);
   const parkedLane = loadPipelines()[0]!;
   expect(parkedLane.state).toBe("needs_decision");
-  expect(parkedLane.stateDetail).toBe(`the automatic replacement attempt ${parked}; retry-stage to start another attempt`);
+  expect(parkedLane.stateDetail).toBe(`the automatic replacement attempt ${parked}; retry-stage to start another attempt${interruption === "dead" ? "; exit: status unavailable; no Delegatus stop recorded" : ""}`);
   expect(parkedLane.stateDetail).not.toContain("boot");
 });
 
@@ -2384,8 +2385,8 @@ test("an attempt that worked on after a restart and whose host is found gone lat
   const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
   await tickPipelines([entry(attempt.agentPath!)], ports("dead"));
   const replaced = loadPipelines()[0]!;
-  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
-  expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open (exit: status unavailable; no Delegatus stop recorded); replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open (exit: status unavailable; no Delegatus stop recorded); fresh attempt 2 is starting");
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
   await tickPipelines([], h.ports);
   expect(h.spawnInputs[1]!.prompt).toContain("lost its host while its turn was open");

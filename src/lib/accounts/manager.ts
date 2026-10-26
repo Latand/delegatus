@@ -1,4 +1,4 @@
-import { codexModelServiceTiers, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
 import { accountsCollectionRevision } from "./accountsStore";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountForSpawn, activeCodexAccountId, codexAccountListed, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
@@ -11,12 +11,12 @@ import type { AccountContext, AccountEngineName, AccountManager, AccountSummary,
 import { unavailableLimits } from "./contracts";
 import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
-import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
+import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
 import { creditGuardBlock } from "./creditGuard";
 import { turboCreditExemptFor } from "./turboCreditExemption";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
-import { selectHealthyClaudeAccount } from "./spawnHealth";
+import { ClaudeCredentialUnavailableError, selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
 
@@ -159,9 +159,7 @@ export async function resolveHealthySpawnAccount(
   const labels = offers?.offering.map(id => tierAccounts.find(account => account.id === id)?.label ?? "account").join(", ") || "none";
   if (offers && !offers.offering.length) {
     if (serviceTier!.required) {
-      const allOffers = tierOffers(tierAccounts, serviceTier!.model, serviceTier!.id);
-      const availableLabels = allOffers.offering.map(id => tierAccounts.find(account => account.id === id)?.label ?? "account").join(", ") || "none";
-      throw new CodexServiceTierUnavailableError(`${named ? "named account does not offer" : allowed ? "no account in this project's pool offers" : "no Codex account offers"} serviceTier ${serviceTier!.id} for ${serviceTier!.model}; offered: ${offers.offered.join(", ") || "none"}; accounts that offer it: ${availableLabels}`);
+      throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, serviceTier!.model, serviceTier!.id, named));
     }
     appliedTier = null;
   }
@@ -178,6 +176,13 @@ export async function resolveHealthySpawnAccount(
     automatic = selectProjectAccount({ ...selectionInput, observations: registry.quotaObservations(engine) });
   }
   if (named === null && automatic.kind !== "available") {
+    // Discovery cannot prove authentication when Keychain is unreadable.
+    // Preserve that diagnosis when capacity selection has no candidate, before
+    // its authPresent filter can hide the health pass's uncertainty refusal.
+    if (engine === "claude" && automatic.kind === "unavailable" && selectionInput.accounts.some(account =>
+      (allowed === null || allowed.has(account.id)) && "credentialState" in account && account.credentialState === "unknown")) {
+      throw new ClaudeCredentialUnavailableError();
+    }
     throw new ProjectAccountRefusedError(automatic, engine, project, appliedTier ? `serviceTier ${appliedTier} is offered by: ${labels}` : undefined);
   }
   if (named !== null) {
@@ -210,7 +215,7 @@ export async function resolveHealthySpawnAccount(
     try {
       const context = contextForSpawn(engine, routed, project);
       if (appliedTier && serviceTier && !tierOffers([{ id: context.accountId, home: context.home }], serviceTier.model, appliedTier).offering.length) {
-        if (serviceTier.required) throw new CodexServiceTierUnavailableError(`selected account does not offer serviceTier ${appliedTier}; offered: ${(codexModelServiceTiers(context.home, serviceTier.model) ?? []).map(tier => tier.id).join(", ") || "none"}`);
+        if (serviceTier.required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal([{ id: context.accountId, home: context.home }], serviceTier.model, appliedTier, context.accountId, "selected"));
         appliedTier = null;
       }
       return { ...context, ...(serviceTier ? { serviceTier: appliedTier } : {}) };
@@ -260,6 +265,7 @@ export async function resolveHealthySpawnAccount(
       named !== null && requestedExists,
       active,
       model,
+      fallbackAccountIdsForProject(project, engine, bindings),
     );
     return {
       ...contextForSpawn(engine, selected.account.id, project),

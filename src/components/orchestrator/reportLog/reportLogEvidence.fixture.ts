@@ -46,7 +46,9 @@ function seededReports(now: number): ReportLogEntry[] {
     const [reportClass, body] = BODIES[(45 - index) % BODIES.length]!;
     seq += 1 + (index % 3 === 0 ? 1 : 0);
     const minutesAgo = Math.round((45 - index) * (index < 30 ? 95 : 21)) + 4;
-    entries.push({ seq, at: new Date(now - minutesAgo * MIN).toISOString(), class: reportClass, body, cards: [] });
+    entries.push({ seq, at: new Date(now - minutesAgo * MIN).toISOString(), class: reportClass, body, cards: [],
+      author: { kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" },
+    });
   }
   return entries.reverse();
 }

@@ -1,5 +1,6 @@
 import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { MergeRecovery } from "@/lib/forge/postMerge";
 import type { BackgroundWait } from "./backgroundTasks";
 
 export type PipelineAccess = "read-only" | "read-write";
@@ -103,11 +104,16 @@ export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: Pi
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
+  /** Omitted stages keep their local runtime. Slice 1 supports read-only Codex reviews. */
+  runtime?: "codex-cloud";
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
   effort?: string | null;
   serviceTier?: string | null;
+  /** Preferred tier for automatic selection. Unlike serviceTier, this can
+      fall back through the allowed pool's currently available catalog tiers. */
+  preferredServiceTier?: string;
   agentMemoryMaxBytes?: number | null;
   /** Repository mutation policy, enforced when the stage settles. It does not
       select the engine's tool/network sandbox. */
@@ -252,6 +258,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
+  runtime?: "codex-cloud";
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -402,6 +409,7 @@ export type PipelineAccountHold = { accountId: string; resetsAt: number | null; 
 export type PipelineStageAttempt = {
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
+  cloud?: import("./cloudStage").CloudStageAttempt;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
     hold?: PipelineAccountHold };
@@ -697,6 +705,10 @@ export type PipelineStageAttempt = {
   /** Proven fenced first messages replaced in this attempt. Retained across
       successful spawn handshakes and controller restarts; at most three. */
   fencedMessageRetries?: number;
+  /** Socketless recovery hands a failed launch back to its runnable Viewer
+      for at most ten minutes. Ownership changes and controller restarts keep
+      this deadline; successful retirement clears it before replacement. */
+  startupOwnerWait?: { launchId: string; deadline: string };
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
@@ -1279,6 +1291,11 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** Enrolled when this release automatically lands the PR. */
+  postMergeWatch?: boolean;
+  /** Required main checks passed on this exact merge commit. */
+  postMergeVerifiedAt?: string;
+  recovery?: MergeRecovery;
   /** Durable create reservation; a missing id is replayed on the next sweep. */
   refresh?: PipelineRefresh;
   state: PipelineMergeState;

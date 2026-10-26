@@ -1,6 +1,6 @@
 "use client";
 
-import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
+import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 
@@ -36,7 +36,9 @@ import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
-import { BAR_MENU_ROW, BarCreateGroup, BarFilterMenu, BarIslandSlot, BarRecentAgents, useBarFit, useBoardPaneRef } from "@/components/ProjectBar";
+import { PipelineChecksPopover } from "./PipelineChecksPopover";
+import { publishingStage } from "@/components/pipelines/PipelineCheckSettings";
+import { BAR_MENU_ROW, BarCreateGroup, BarFilterMenu, BarIslandSlot, BarRecentAgents, useBarFit, useBoardPaneRef, type BarFitStep } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
@@ -74,6 +76,7 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
+import { LaneReviewSheet } from "@/components/laneReview/LaneReviewSheet";
 import { clipTitle, textField, withField } from "./taskText";
 import { BoardHistory, type HistoryEntry } from "./boardHistory";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
@@ -152,9 +155,9 @@ export interface KanbanBoardProps {
   selection: ReadonlySet<string>;
   /** The bar's first group (the project's name and accounts) (#1801). */
   barLead?: () => ReactNode;
-  /** The bar's last groups (the panel toggles and the ⋯ menu), given whether the row gave the
-      account switches up to ⋯, and what the board adds to them (#1801). */
-  barTrail?: (accountsInMenu: boolean, extra: BarTrailExtra) => ReactNode;
+  /** The bar's last groups (the panel toggles and the ⋯ menu), given the steps the row has taken
+      (`BAR_FIT_STEPS`), so ⋯ carries what left the row, and what the board adds to them (#1801). */
+  barTrail?: (fit: readonly BarFitStep[], extra: BarTrailExtra) => ReactNode;
   /** The recent agents' list, which the bar opens under its icon: every agent of the project,
       reached without leaving the board. */
   recentAgents?: (close: () => void, countSlot: HTMLElement | null) => ReactNode;
@@ -259,6 +262,10 @@ export interface BarTrailExtra {
   menuRows: (close: () => void) => ReactNode;
   /** The recent agents' control, the panel group's last segment. */
   panelsTail: ReactNode;
+  /** The ⋯ rows of the controls a short row gave up (`panels`, `create`): the recent agents' list
+      and the two creators of `+`. The trail draws them only once the row has taken that step. */
+  recentRow: ((close: () => void) => ReactNode) | null;
+  createRows: (close: () => void) => ReactNode;
 }
 
 const VIEWER_OWNED = "[data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
@@ -328,8 +335,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      quiet note, a long outage the red alert it always was. */
   const reach = useServerReach();
   const reachStatus = reach.kind === "reconnecting"
-    ? <span className="bar-note" data-bar-reach="reconnecting">{reachLineText(t, locale, reach)}</span>
-    : catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null;
+    ? <span className="bar-note" data-bar-reach="reconnecting" data-bar-whole="" title={reachLineText(t, locale, reach)}>{reachLineText(t, locale, reach)}</span>
+    : catalogFailures > 0 ? <span className="bar-alert" role="alert" data-bar-whole="" title={t("kanban.filesFailed")}>{t("kanban.filesFailed")}</span> : null;
   /* `+ Task` (K9a): a task this board created is drawn at once, on the tasks it was created against. The next
      tasks payload is the authority: it carries the task, or the task is gone (deleted, moved to another project)
      and so is its card. */
@@ -415,6 +422,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
     | { kind: "account"; target: AccountTarget }
     | { kind: "links"; target: WorkLinkTarget }
+    | { kind: "checks"; pipelineId: string }
   >();
   const { receipts, show, dismiss } = useReceipts();
 
@@ -432,6 +440,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const draftsVersion = useSyncExternalStore(stageDrafts.subscribe, stageDrafts.version, stageDrafts.version);
   const [stagePanels, setStagePanels] = useState<ReadonlyMap<string, StagePanel>>(() => new Map());
   const [sheet, setSheet] = useState<SheetTarget | null>(null);
+  /* The lane review sheet (docs/design/lane-diff-comments.md); one of the two sheets is open at a time. */
+  const [review, setReview] = useState<{ pipelineId: string; title: string; opener: HTMLElement | null } | null>(null);
   /* Pane folds and attempt choices outlive one opening of the sheet, as the prototype's do. */
   const [paneFolds, setPaneFolds] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [paneAttempts, setPaneAttempts] = useState<ReadonlyMap<string, number>>(() => new Map());
@@ -1474,7 +1484,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon" || open.value.kind === "checks") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1577,6 +1587,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
       keepFocus: true,
       disabled: !anchor,
       onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "links", target } })); },
+    };
+  };
+  /* Where the lane's heavy checks run (docs/design/cloud-checks.md): its
+     choices open over the same anchor, the way a stage's account picker does. */
+  const checksItem = (pipelineId: string): KanbanMenuItem => {
+    const anchor = menu.open?.anchor;
+    return {
+      type: "item",
+      id: "checks",
+      label: t("pipelineStrip.checks"),
+      keepFocus: true,
+      disabled: !anchor,
+      onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "checks", pipelineId } })); },
     };
   };
   /* ── A pipeline's actions, and a stage's (prototype `openPipelineMenu`, pane ⋯) ─ */
@@ -1685,8 +1708,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.pipelineAct.menu") },
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
+        { type: "item", id: "review-changes", label: t("laneReview.menu"), keepFocus: true, onSelect: () => openReview(pipeline, title) },
         /* In the card's ⋯ the task's own Attach sits a few rows up, so the lane's names what it attaches to. */
         linksItem({ kind: "pipeline", id: pipeline.id }, inCardMenu ? t("workLinks.attachPipeline") : undefined),
+        checksItem(pipeline.id),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         ...answerItems,
         ...finishItems,
@@ -2138,8 +2163,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const summary = cardsByIdRef.current.get(cardId)?.pipelines.find((entry) => entry.pipeline.id === pipeline.id);
     const focus = stageId ?? (summary ? currentStageId(summary.pipeline, summary.views) : null);
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setReview(null);
     setSheet({ cardId, pipelineId: pipeline.id, focus, opener });
   }, []);
+  const openReview = useCallback((pipeline: Pipeline, title: string) => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSheet(null);
+    setReview({ pipelineId: pipeline.id, title, opener });
+  }, []);
+  const closeReview = useCallback(() => {
+    setReview((current) => {
+      const back = current?.opener;
+      queueMicrotask(() => (back?.isConnected && back !== document.body ? back : rootRef.current?.querySelector<HTMLElement>(".board-frame"))?.focus({ preventScroll: true }));
+      return null;
+    });
+  }, []);
+  /* The board behind the review sheet takes no input while it is open. */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!review || !root) return;
+    const held = [...root.children].filter((element) => !element.hasAttribute("data-lane-review-scrim") && !element.hasAttribute("inert"));
+    for (const element of held) element.setAttribute("inert", "");
+    return () => {
+      for (const element of held) element.removeAttribute("inert");
+    };
+  }, [review]);
   const closeSheet = useCallback(() => {
     setSheet((current) => {
       if (current) {
@@ -2585,6 +2633,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
   const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
   const linksOpen = menu.open?.value.kind === "links" ? menu.open.value.target : null;
+  const checksOpen = menu.open?.value.kind === "checks" ? menu.open.value.pipelineId : null;
+  const checksPipeline = checksOpen ? cards.flatMap((card) => card.pipelines).find((entry) => entry.pipeline.id === checksOpen)?.pipeline ?? null : null;
+  const checksStage = checksPipeline ? publishingStage(checksPipeline) : null;
   const iconOpen = menu.open?.value.kind === "icon" ? menu.open : null;
   const iconCard = iconOpen && iconOpen.value.kind === "icon" ? cardsById.get(iconOpen.value.cardId) ?? null : null;
   /* The picker reads the pipeline and the conversation as the board holds them now. */
@@ -2651,7 +2702,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   };
   const closeNewTask = useCallback(() => {
     setComposingTask(false);
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-bar-create]")?.focus({ preventScroll: true }));
+    /* Back to `+`, or to ⋯ while a short row keeps `+` there. */
+    queueMicrotask(() => {
+      const folded = rootRef.current?.querySelector('.bar[data-fit~="create"]');
+      rootRef.current?.querySelector<HTMLElement>(folded ? "[data-bar-more]" : "[data-bar-create]")?.focus({ preventScroll: true });
+    });
   }, []);
   const taskCreated = useCallback((task: BoardTask) => {
     setComposingTask(false);
@@ -2685,6 +2740,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const spawnRetryRef = useRef(props.onSpawnRetry);
   spawnRetryRef.current = props.onSpawnRetry;
   const spawnRetry = useCallback((file: FileEntry) => spawnRetryRef.current?.(file), []);
+  const closeConversation = useStableCallback((file: FileEntry) => props.onCloseConversation?.(file));
   const draftCloseRef = useRef(props.onDraftClose);
   draftCloseRef.current = props.onDraftClose;
   const draftSpawnedRef = useRef(props.onDraftSpawned);
@@ -2865,6 +2921,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         type="search"
         placeholder={t("kanban.find")}
         aria-label={t("kanban.find")}
+        title={t("kanban.find")}
         data-kanban-search=""
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -2922,7 +2979,29 @@ export function KanbanBoard(props: KanbanBoardProps) {
         <span className="font-normal tabular-nums text-muted">{hiddenCount}</span>
       </button>
     ) : null,
-    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} /> : null,
+    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null,
+    /* The list still hangs under its own segment, which the row keeps as an empty anchor beside ⋯. */
+    recentRow: props.recentAgents ? (close) => (
+      <button type="button" className={BAR_MENU_ROW} data-bar-more-recent="" aria-haspopup="dialog" onClick={() => { close(); queueMicrotask(() => setRecentOpen(true)); }}>
+        <History className="h-[15px] w-[15px] shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1">{t("dash.recentAgents")}</span>
+      </button>
+    ) : null,
+    /* The same two creators as the `+` menu, with its words and icons. */
+    createRows: (close) => (
+      <>
+        <button type="button" className={BAR_MENU_ROW} data-bar-more-create="task" onClick={() => { close(); openNewTask(); }}>
+          <ListPlus className="h-[15px] w-[15px] shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">{t("dash.newTask")}</span>
+        </button>
+        {props.onNewAgent ? (
+          <button type="button" className={BAR_MENU_ROW} data-bar-more-create="agent" disabled={!loaded} onClick={() => { close(); props.onNewAgent?.(); }}>
+            <MessageSquarePlus className="h-[15px] w-[15px] shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">{t("dash.newConvo")}</span>
+          </button>
+        ) : null}
+      </>
+    ),
   };
 
   return (
@@ -2970,12 +3049,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
               <>
                 <span className="dot" aria-hidden="true" />
                 <span className="num" data-bar-working="" aria-label={t("kanban.summaryWorking", { count: model.totals.working })}>{model.totals.working}</span>
-                {props.updating ? <span className="bar-note" data-bar-updating="">{t("dash.updating")}</span> : null}
+                {props.updating ? <span className="bar-note" data-bar-updating="" data-bar-whole="">{t("dash.updating")}</span> : null}
               </>
             )}
           </span>
           <OpenAgentsPill count={windowAgents.length} open={windowOpen} onOpen={windowOpen ? leaveWindow : reopenWindow} />
-          <span className="grow" />
+          <span className="grow" data-bar-spacer="" />
           {/* The search and its one filter: the reasons and «Needs you», which was the island's funnel. */}
           <div className="bar-find" data-bar-group="find">
             {searchField()}
@@ -2993,7 +3072,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit.includes("accounts"), barExtra)}</div> : null}
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : null}
           <BarIslandSlot />
         </header>
       )}
@@ -3061,6 +3140,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       </div>
       <div ref={parkRef} className="reader-park" aria-hidden="true" />
       {sheetView}
+      {review ? (
+        <LaneReviewSheet
+          key={review.pipelineId}
+          pipelineId={review.pipelineId}
+          title={review.title}
+          onClose={closeReview}
+          onOpenConversation={(conversationId) => {
+            closeReview();
+            openRecorded({ path: null, conversationId });
+          }}
+        />
+      ) : null}
       {/* The window's reader, and the agent it is bringing in, in a slot of
           its own under it: laid out on screen and not drawn, so its feed
           reads while the one shown stays. Keyed by agent, so the incoming
@@ -3088,7 +3179,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onLeave={leaveWindow}
         onMenu={openReaderMenu}
         onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
-        onCloseConversation={props.onCloseConversation}
+        onCloseConversation={props.onCloseConversation ? closeConversation : undefined}
       />
 
       {openMenu && menu.open ? (
@@ -3177,6 +3268,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </KanbanPopover>
       ) : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
+      {checksPipeline && menu.open ? (
+        <PipelineChecksPopover
+          key={checksPipeline.id}
+          anchor={menu.open.anchor}
+          onClose={menu.close}
+          pipeline={checksPipeline}
+          stageName={checksStage ? stageNames(t, checksPipeline).get(checksStage) ?? checksStage : null}
+        />
+      ) : null}
     </div>
     </KanbanDraftContext.Provider>
     </AccountChoiceContext.Provider>

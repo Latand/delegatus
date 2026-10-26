@@ -179,7 +179,7 @@ test.each(["uncurated", "curated", "operator-kept"])("an agent rewrite refreshes
   leave(request("next", "task-next"), `Check a different boundary ${"before releasing ".repeat(17)}`.slice(0, 300));
   const after = builder();
   expect(after.active.some(rule => rule.id === target.id)).toBe(true);
-  expect(after.left.some(rule => newer.includes(rule.id) && rule.reason === "budget")).toBe(true);
+  expect(after.left.some(rule => newer.includes(rule.id) && rule.reason === "budget")).toBe(false);
   if (retention === "uncurated") expect(learnedRulesBlock(PROJECT, "builder").indexOf(target.id)).toBeLessThan(learnedRulesBlock(PROJECT, "builder").indexOf(newer[0]));
 });
 

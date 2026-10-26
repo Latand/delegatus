@@ -12,6 +12,7 @@ import { readCuration } from "./curation/read";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import type { RoleMemoryRow, RoleMemoryRule, RoleMemoryScopeRow } from "./roleTypes";
+import { chooseSource } from "./fixtures/source";
 
 const NOW = Date.parse("2026-10-12T12:00:00.000Z");
 const AT = new Date(NOW).toISOString();
@@ -182,8 +183,21 @@ test("settings, kill switch and project succession invalidate warmed answers", (
   expect(effectiveCurationSetting(readSeatTickSettings(PROJECT)).enabled).toBe(false);
   expect(projectView(PROJECT, NOW).curation?.nextAt).toBeNull();
   const previous = process.env.LLV_ROLE_MEMORY;
-  try { process.env.LLV_ROLE_MEMORY = "off"; expect(projectView(PROJECT, NOW).enabled).toBe(false); }
-  finally { if (previous === undefined) delete process.env.LLV_ROLE_MEMORY; else process.env.LLV_ROLE_MEMORY = previous; }
+  try {
+    process.env.LLV_ROLE_MEMORY = "off";
+    expect(projectView(PROJECT, NOW)).toMatchObject({ enabled: false });
+    expect(projectView(PROJECT, NOW).pausedBy).toBeUndefined();
+    /* The kill switch outranks the Settings row: the window keeps naming the override. */
+    chooseSource("engines");
+    expect(projectView(PROJECT, NOW).pausedBy).toBeUndefined();
+  } finally { if (previous === undefined) delete process.env.LLV_ROLE_MEMORY; else process.env.LLV_ROLE_MEMORY = previous; }
+  /* The engines position pauses the rules through the Settings row, and a warmed view follows each move. */
+  expect(projectView(PROJECT, NOW)).toMatchObject({ enabled: false, pausedBy: "memorySource" });
+  chooseSource("active");
+  expect(projectView(PROJECT, NOW).enabled).toBe(true);
+  expect(projectView(PROJECT, NOW).pausedBy).toBeUndefined();
+  chooseSource("unchosen");
+  expect(projectView(PROJECT, NOW).pausedBy).toBeUndefined();
   persistProjectAliases([{ source: PROJECT, target: "view-renamed", displayName: "Renamed fixture" }]);
   const moved = projectView(PROJECT, NOW);
   expect(moved.project).toBe("view-renamed");

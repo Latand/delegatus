@@ -1,0 +1,1050 @@
+{
+  "date": "2026-10-24",
+  "assembled_at_utc": "2026-10-24T15:25:25.287952+00:00",
+  "base_commit": "3736d5e434149f257061a94cb74b4c0806f152c8",
+  "upstream_checked": "20933a6d8cbe014f2bc59ee813a42ca5af189425",
+  "upstream_scope_changes": [],
+  "outcome": "pass",
+  "contract": {
+    "send_document": "CelestiaCompose docs/design/relay-send-as-clone.md sections 1.1–1.7 and 9 (read-only)",
+    "claim_context": "Optional owner_delivery with chat_id, trigger reply_to_message_id, and nullable message_thread_id; confirmed additive service contract for the next backend release.",
+    "route": "POST /api/relay/v1/targets/{target_id}/send",
+    "client": "src/lib/externalRelay/cloneSend.ts",
+    "authentication": "Existing pairing credential and relay v1 version headers.",
+    "payload": "Persisted SendMessage payload and client_key reused across retries and restarts; trigger reply and topic mapped directly.",
+    "media": "Text only; a note states when files were omitted.",
+    "missing_context": "Durable pending-delivery-context; log the status and send nothing.",
+    "rollout": "404 and unavailable responses retain the answer for retry. Explicit uncertainty and expired unresolved keys stay fenced to prevent duplicates."
+  },
+  "environment": {
+    "bun": "1.4.0",
+    "gate": "Stage-provided scripts/gate-slot.sh; local CPU admission; one heavy command at a time.",
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "viewer_control": "Closed loopback port.",
+    "transports": "Port-0 fake services and stub agent ports; no live relay or agent service.",
+    "dependencies": "Manifest and lockfile matched the dependency source; installed pinned versions checked.",
+    "stateful_comparisons": "Project local-gate-tests.ts, one explicit file per invocation, against the starting commit."
+  },
+  "acceptance": {
+    "owner_deadline_and_files": "Owner work crosses the service deadline and sends text via the real clone HTTP client, including omission notes.",
+    "member_deadline": "A member carrying owner_delivery is still stopped at the service deadline.",
+    "restart": "Real processes are killed and restarted; one execution retry, preserved routing context, a durable 404 retry and one final answer.",
+    "second_restart": "An interrupted execution retry reports failure without another launch.",
+    "stable_key": "Lost acknowledgements and repeated delivery reuse the persisted payload and key.",
+    "agent_error": "Observation exit code and pre-transcript launch causes are retained in the local record and journal.",
+    "write_refusal": "Refusing the restart-budget write leaves the next sweep able to recover."
+  },
+  "tested_files": [
+    "src/lib/externalRelay/answers.test.ts",
+    "src/lib/externalRelay/cloneSend.test.ts",
+    "src/lib/externalRelay/hold.runner.test.ts",
+    "src/lib/externalRelay/ownerAnswer.test.ts",
+    "src/lib/externalRelay/ownerLateDelivery.test.ts",
+    "src/lib/externalRelay/ownerLifecycle.test.ts",
+    "src/lib/externalRelay/ownerTier.test.ts",
+    "src/lib/externalRelay/poller.test.ts",
+    "src/lib/externalRelay/protocol.test.ts",
+    "src/lib/externalRelay/requestWindow.test.ts",
+    "src/lib/externalRelay/runner.test.ts",
+    "src/lib/externalRelay/store.test.ts"
+  ],
+  "checks": [
+    {
+      "name": "baseline-ledger",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/runner.test.ts",
+        "-t",
+        "^a persistent ledger read error still releases the local slot$"
+      ],
+      "exit": 0,
+      "tree": "base"
+    },
+    {
+      "name": "src/lib/externalRelay/ownerLifecycle.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/ownerLifecycle.test.ts"
+      ],
+      "exit": 0,
+      "pass": 13,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/ownerLateDelivery.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/ownerLateDelivery.test.ts"
+      ],
+      "exit": 0,
+      "pass": 15,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/cloneSend.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/cloneSend.test.ts"
+      ],
+      "exit": 0,
+      "pass": 23,
+      "fail": 0
+    },
+    {
+      "name": "types",
+      "command": [
+        "bun",
+        "x",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "eslint",
+      "command": [
+        "bun",
+        "node_modules/eslint/bin/eslint.js",
+        "src/lib/externalRelay/answers.ts",
+        "src/lib/externalRelay/cloneSend.test.ts",
+        "src/lib/externalRelay/cloneSend.ts",
+        "src/lib/externalRelay/diagnostic.ts",
+        "src/lib/externalRelay/hold.runner.test.ts",
+        "src/lib/externalRelay/ownerAnswer.ts",
+        "src/lib/externalRelay/ownerLateDelivery.test.ts",
+        "src/lib/externalRelay/ownerLateDelivery.ts",
+        "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+        "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "src/lib/externalRelay/ownerRun.ts",
+        "src/lib/externalRelay/ownerTier.test.ts",
+        "src/lib/externalRelay/poller.ts",
+        "src/lib/externalRelay/protocol.ts",
+        "src/lib/externalRelay/requestWindow.test.ts",
+        "src/lib/externalRelay/runner.test.ts",
+        "src/lib/externalRelay/runner.ts",
+        "src/lib/externalRelay/store.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "comparison-hold.runner",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/hold.runner.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 11,
+      "head_green": false
+    },
+    {
+      "name": "comparison-ownerTier",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/ownerTier.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 1,
+      "head_green": false
+    },
+    {
+      "name": "comparison-runner",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/runner.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 0,
+      "head_green": true
+    },
+    {
+      "name": "comparison-protocol",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/protocol.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 1,
+      "head_green": false
+    },
+    {
+      "name": "comparison-ownerAnswer",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/ownerAnswer.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 0,
+      "head_green": true
+    },
+    {
+      "name": "privacy",
+      "command": [
+        "bun",
+        "scripts/privacy-publication-gate.ts",
+        "--repository",
+        ".",
+        "--require-known-values",
+        "--paths",
+        "docs/design/relay.md",
+        "docs/guide/telegram.md",
+        "evidence/external-relay/owner-execution-validation.json",
+        "src/lib/externalRelay/answers.ts",
+        "src/lib/externalRelay/cloneSend.test.ts",
+        "src/lib/externalRelay/cloneSend.ts",
+        "src/lib/externalRelay/diagnostic.ts",
+        "src/lib/externalRelay/hold.runner.test.ts",
+        "src/lib/externalRelay/ownerAnswer.ts",
+        "src/lib/externalRelay/ownerLateDelivery.test.ts",
+        "src/lib/externalRelay/ownerLateDelivery.ts",
+        "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+        "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "src/lib/externalRelay/ownerRun.ts",
+        "src/lib/externalRelay/ownerTier.test.ts",
+        "src/lib/externalRelay/poller.ts",
+        "src/lib/externalRelay/protocol.ts",
+        "src/lib/externalRelay/requestWindow.test.ts",
+        "src/lib/externalRelay/runner.test.ts",
+        "src/lib/externalRelay/runner.ts",
+        "src/lib/externalRelay/store.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "src/lib/externalRelay/requestWindow.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/requestWindow.test.ts"
+      ],
+      "exit": 0,
+      "pass": 15,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/answers.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/answers.test.ts"
+      ],
+      "exit": 0,
+      "pass": 7,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/poller.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/poller.test.ts"
+      ],
+      "exit": 0,
+      "pass": 30,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/store.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/store.test.ts"
+      ],
+      "exit": 0,
+      "pass": 11,
+      "fail": 0
+    }
+  ],
+  "preexisting_failures": [
+    "src/lib/externalRelay/hold.runner.test.ts: two owner chains in one chat run together; a reply waits for only its chain",
+    "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then serves without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then serves without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then serves without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: shrinking stall window 10s bounds unacknowledged admission",
+    "src/lib/externalRelay/hold.runner.test.ts: acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+    "src/lib/externalRelay/hold.runner.test.ts: owner first-message hold recovers with queued progress",
+    "src/lib/externalRelay/hold.runner.test.ts: capacity returning at the admission cutoff cannot start expired waiting work",
+    "src/lib/externalRelay/ownerTier.test.ts: owner final answers refuse truncated JSON credentials",
+    "src/lib/externalRelay/protocol.test.ts: N1 preserves every pre-amendment v3 answer, compact, completion and X2 capture byte"
+  ],
+  "notes": [
+    "The full runner and owner-answer suites pass under the project comparison gate.",
+    "ESLint reports three existing unused-variable warnings.",
+    "No performance claim."
+  ],
+  "inputs_sha256": {
+    "docs/design/relay.md": "533d5a3bfec3e6e259b9bf56be3c9826296f3655a2457e03bd49ce8e292002a7",
+    "docs/guide/telegram.md": "3fdfe85700899cabe1dd9625eef6b0568d9756b1ce5c7833e42d9d8520403894",
+    "src/lib/externalRelay/answers.ts": "bb1cbd62d18e882b97081e63bce6b102e7e6ee644a33667c306fe7afef0f8e7c",
+    "src/lib/externalRelay/cloneSend.test.ts": "f90c401bfcaf42a9b41380f1a55c041f451841020e2e8f6e99de23bb2f2214b1",
+    "src/lib/externalRelay/cloneSend.ts": "da4f64d1da4cfe84d1b15e70846f2ebbac71f9b7db37404e4d23c2483235376e",
+    "src/lib/externalRelay/diagnostic.ts": "c392074f81c2077760a8276c671a6291bd4e54dd1eee186e67c6bd429ade265b",
+    "src/lib/externalRelay/hold.runner.test.ts": "8fc729365664522dd64671ac04456eb29a1690bf50fb06ad3af04147fe0e3a96",
+    "src/lib/externalRelay/ownerAnswer.ts": "c022f3af95274d01be66d846e9bb483493aab4232e35aee282a60f539f54edc1",
+    "src/lib/externalRelay/ownerLateDelivery.test.ts": "40af020c9c637d99738367476178d830f0441e23d971452b26c1bdc59467aaac",
+    "src/lib/externalRelay/ownerLateDelivery.ts": "879b9616ab5e14f272c2632ad36ca474d3fb87f666b72c225af3bb3abe6b10a9",
+    "src/lib/externalRelay/ownerLifecycle.fixture.ts": "d241033944b1b7e9e3027e075e9aff6964748983f6f1c6af072c94f04d83b9d2",
+    "src/lib/externalRelay/ownerLifecycle.test.ts": "da94497628675816ed2afbbf0ddd1508782d0a21c9de7317c3fe2d7fbf3669f0",
+    "src/lib/externalRelay/ownerRun.ts": "2ddd0523af6adcfbc7179562aade2efbf14ab3020b37cc8eb2439d05596b05f4",
+    "src/lib/externalRelay/ownerTier.test.ts": "e78e82a9fe2697258b17b960406097e1ade4d14e97b68eb829d2e58161ad6dfb",
+    "src/lib/externalRelay/poller.ts": "62d02b8dde45d227d1d41b421f9df16c0fd7894dd34da7d3edbe6d3e7ba85e5d",
+    "src/lib/externalRelay/protocol.ts": "a25babfa2a2040f17f37a17d686a7f0808f4c31b377df41bcc1f276545311b38",
+    "src/lib/externalRelay/requestWindow.test.ts": "d9e7743787ccf2de86540330cdb0deab1c6a7e4a206de3173dc818799b4eb176",
+    "src/lib/externalRelay/runner.test.ts": "5365a82aa28bd4a6beae745c5fac57a51c1f3d042139ff4903e2f5968d14eeed",
+    "src/lib/externalRelay/runner.ts": "05fc50881cff1be4eb54b31a4107fe8c01b8dd61bea1ebd073f0a82a40734184",
+    "src/lib/externalRelay/store.ts": "bf370f30dee12224e1eac302f4897b596abde603523a2b579487bf51597794ea"
+  },
+  "publication": "Commit in the assigned stage worktree with normal hooks; no push and no workflow changes.",
+  "delivery_fix_validation": {
+    "recorded_at_utc": "2026-10-24T17:05:39.595772+00:00",
+    "starting_implementation": "cd8fb93986913b9f58e56a127cde07e230fa2387",
+    "comparison_base": "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+    "source_files_sha256": {
+      "docs/design/relay.md": "85fad4d884b6e2082f0866f3b8f4f5d3cd6e4219c15c064354b1b8b843e4f1a3",
+      "docs/guide/telegram.md": "3fdfe85700899cabe1dd9625eef6b0568d9756b1ce5c7833e42d9d8520403894",
+      "src/lib/externalRelay/answers.ts": "bb1cbd62d18e882b97081e63bce6b102e7e6ee644a33667c306fe7afef0f8e7c",
+      "src/lib/externalRelay/cloneSend.test.ts": "f90c401bfcaf42a9b41380f1a55c041f451841020e2e8f6e99de23bb2f2214b1",
+      "src/lib/externalRelay/cloneSend.ts": "da4f64d1da4cfe84d1b15e70846f2ebbac71f9b7db37404e4d23c2483235376e",
+      "src/lib/externalRelay/diagnostic.ts": "c392074f81c2077760a8276c671a6291bd4e54dd1eee186e67c6bd429ade265b",
+      "src/lib/externalRelay/hold.runner.test.ts": "8fc729365664522dd64671ac04456eb29a1690bf50fb06ad3af04147fe0e3a96",
+      "src/lib/externalRelay/ownerAnswer.ts": "c022f3af95274d01be66d846e9bb483493aab4232e35aee282a60f539f54edc1",
+      "src/lib/externalRelay/ownerLateDelivery.test.ts": "4fddbe427560c5fedbf44caab3cc58927883f3dd459a7d0d6b4721d22b947c8a",
+      "src/lib/externalRelay/ownerLateDelivery.ts": "d50b23344930eed4b6448a12421f3ca0b9e4a2e480e1ff9e53e0f302fd958e24",
+      "src/lib/externalRelay/ownerLifecycle.fixture.ts": "af7947e37a02e262f317aa9cb14559de7cc43e6de816d1dd8253037632394b43",
+      "src/lib/externalRelay/ownerLifecycle.test.ts": "368d39e08f1d4bfe3758b30ce6cd84bb90581d22684975d5a16acae22bea82df",
+      "src/lib/externalRelay/ownerRun.ts": "2ddd0523af6adcfbc7179562aade2efbf14ab3020b37cc8eb2439d05596b05f4",
+      "src/lib/externalRelay/ownerTier.test.ts": "e78e82a9fe2697258b17b960406097e1ade4d14e97b68eb829d2e58161ad6dfb",
+      "src/lib/externalRelay/poller.ts": "598b5eca514422883712bf8f0d6d6a0b895c5fc9756e506d8fc4ad56f5474d10",
+      "src/lib/externalRelay/protocol.ts": "a25babfa2a2040f17f37a17d686a7f0808f4c31b377df41bcc1f276545311b38",
+      "src/lib/externalRelay/relayCompletion.ts": "4d6a4fbc5995f359046b3b9042452ad0785d2bf1c0b46fcd3d6f474f5214b912",
+      "src/lib/externalRelay/requestWindow.test.ts": "d9e7743787ccf2de86540330cdb0deab1c6a7e4a206de3173dc818799b4eb176",
+      "src/lib/externalRelay/runner.test.ts": "5365a82aa28bd4a6beae745c5fac57a51c1f3d042139ff4903e2f5968d14eeed",
+      "src/lib/externalRelay/runner.ts": "068c97fb030cb09d74a83dcbdc909b5005e554b422f5474e24997dbb8f6b1be3",
+      "src/lib/externalRelay/store.ts": "073c9e97c96aecac33eda0043e771efb47982683ff2ff78992817f7abb951841"
+    },
+    "isolation": "Dedicated scratch export; checkEnvironment then isolatedEnvironment; private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; closed Viewer control URL.",
+    "admission": "Pinned stage gate-slot wrapper, local mode because the remote runner is retired; one check at a time with inherited verified admission.",
+    "checks": [
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/answers.test.ts"
+        ],
+        "started": "2026-10-24T16:48:33.139Z",
+        "finished": "2026-10-24T16:48:33.985Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/cloneSend.test.ts"
+        ],
+        "started": "2026-10-24T16:48:33.985Z",
+        "finished": "2026-10-24T16:48:35.450Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/hold.runner.test.ts"
+        ],
+        "started": "2026-10-24T16:48:35.451Z",
+        "finished": "2026-10-24T16:50:36.186Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerAnswer.test.ts"
+        ],
+        "started": "2026-10-24T16:50:36.187Z",
+        "finished": "2026-10-24T16:50:40.188Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerLateDelivery.test.ts"
+        ],
+        "started": "2026-10-24T16:50:40.188Z",
+        "finished": "2026-10-24T16:50:43.972Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T16:50:43.972Z",
+        "finished": "2026-10-24T16:50:59.135Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerTier.test.ts"
+        ],
+        "started": "2026-10-24T16:50:59.137Z",
+        "finished": "2026-10-24T16:51:08.771Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/poller.test.ts"
+        ],
+        "started": "2026-10-24T16:51:08.771Z",
+        "finished": "2026-10-24T16:51:16.596Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/protocol.test.ts"
+        ],
+        "started": "2026-10-24T16:51:16.596Z",
+        "finished": "2026-10-24T16:51:20.529Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/requestWindow.test.ts"
+        ],
+        "started": "2026-10-24T16:51:20.529Z",
+        "finished": "2026-10-24T16:51:27.809Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T16:51:27.809Z",
+        "finished": "2026-10-24T16:54:19.783Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/store.test.ts"
+        ],
+        "started": "2026-10-24T16:54:19.783Z",
+        "finished": "2026-10-24T16:54:22.897Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/leaseRecovery.test.ts"
+        ],
+        "started": "2026-10-24T16:54:22.897Z",
+        "finished": "2026-10-24T16:54:30.245Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerStop.test.ts"
+        ],
+        "started": "2026-10-24T16:54:30.246Z",
+        "finished": "2026-10-24T16:54:47.131Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "started": "2026-10-24T16:54:47.131Z",
+        "finished": "2026-10-24T16:58:44.625Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bunx",
+          "eslint",
+          "--no-cache",
+          "src/lib/externalRelay/answers.ts",
+          "src/lib/externalRelay/cloneSend.test.ts",
+          "src/lib/externalRelay/cloneSend.ts",
+          "src/lib/externalRelay/diagnostic.ts",
+          "src/lib/externalRelay/hold.runner.test.ts",
+          "src/lib/externalRelay/ownerAnswer.ts",
+          "src/lib/externalRelay/ownerLateDelivery.test.ts",
+          "src/lib/externalRelay/ownerLateDelivery.ts",
+          "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+          "src/lib/externalRelay/ownerLifecycle.test.ts",
+          "src/lib/externalRelay/ownerRun.ts",
+          "src/lib/externalRelay/ownerTier.test.ts",
+          "src/lib/externalRelay/poller.ts",
+          "src/lib/externalRelay/protocol.ts",
+          "src/lib/externalRelay/relayCompletion.ts",
+          "src/lib/externalRelay/requestWindow.test.ts",
+          "src/lib/externalRelay/runner.test.ts",
+          "src/lib/externalRelay/runner.ts",
+          "src/lib/externalRelay/store.ts"
+        ],
+        "started": "2026-10-24T16:58:44.625Z",
+        "finished": "2026-10-24T16:58:50.213Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T16:59:13.630Z",
+        "finished": "2026-10-24T16:59:30.503Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/poller.test.ts"
+        ],
+        "started": "2026-10-24T16:59:30.504Z",
+        "finished": "2026-10-24T16:59:38.610Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d",
+          "src/lib/externalRelay/ownerStop.test.ts"
+        ],
+        "started": "2026-10-24T16:59:38.610Z",
+        "finished": "2026-10-24T16:59:58.621Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "started": "2026-10-24T16:59:58.622Z",
+        "finished": "2026-10-24T17:05:02.281Z",
+        "exit": 0
+      },
+      {
+        "command": [
+          "bunx",
+          "eslint",
+          "--no-cache",
+          "src/lib/externalRelay/answers.ts",
+          "src/lib/externalRelay/cloneSend.test.ts",
+          "src/lib/externalRelay/cloneSend.ts",
+          "src/lib/externalRelay/diagnostic.ts",
+          "src/lib/externalRelay/hold.runner.test.ts",
+          "src/lib/externalRelay/ownerAnswer.ts",
+          "src/lib/externalRelay/ownerLateDelivery.test.ts",
+          "src/lib/externalRelay/ownerLateDelivery.ts",
+          "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+          "src/lib/externalRelay/ownerLifecycle.test.ts",
+          "src/lib/externalRelay/ownerRun.ts",
+          "src/lib/externalRelay/ownerTier.test.ts",
+          "src/lib/externalRelay/poller.ts",
+          "src/lib/externalRelay/protocol.ts",
+          "src/lib/externalRelay/relayCompletion.ts",
+          "src/lib/externalRelay/requestWindow.test.ts",
+          "src/lib/externalRelay/runner.test.ts",
+          "src/lib/externalRelay/runner.ts",
+          "src/lib/externalRelay/store.ts"
+        ],
+        "started": "2026-10-24T17:05:02.281Z",
+        "finished": "2026-10-24T17:05:07.815Z",
+        "exit": 0
+      }
+    ],
+    "final_adjustment": "After the complete fourteen-file comparison, rechecked ownerLifecycle.test.ts, poller.test.ts and ownerStop.test.ts plus types and lint for the interrupted-host cleanup guard.",
+    "negative_controls": [
+      {
+        "base": "cd8fb9398",
+        "file": "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "selection": "normal completion lost",
+        "exit": 1,
+        "failures": 1
+      },
+      {
+        "base": "cd8fb9398",
+        "file": "src/lib/externalRelay/ownerLateDelivery.test.ts",
+        "selection": "long rich answer",
+        "exit": 1,
+        "failures": 3
+      }
+    ],
+    "new_failures": 0,
+    "preexisting_failures": [
+      "src/lib/externalRelay/hold.runner.test.ts: acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+      "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+      "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then serves without taking execution capacity",
+      "src/lib/externalRelay/hold.runner.test.ts: capacity returning at the admission cutoff cannot start expired waiting work",
+      "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+      "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then serves without taking execution capacity",
+      "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+      "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then serves without taking execution capacity",
+      "src/lib/externalRelay/hold.runner.test.ts: owner first-message hold recovers with queued progress",
+      "src/lib/externalRelay/hold.runner.test.ts: shrinking stall window 10s bounds unacknowledged admission",
+      "src/lib/externalRelay/hold.runner.test.ts: two owner chains in one chat run together; a reply waits for only its chain",
+      "src/lib/externalRelay/ownerStop.test.ts: completed cleanup stays with a live foreign owner until that process exits",
+      "src/lib/externalRelay/ownerTier.test.ts: owner final answers refuse truncated JSON credentials",
+      "src/lib/externalRelay/protocol.test.ts: N1 preserves every pre-amendment v3 answer, compact, completion and X2 capture byte"
+    ],
+    "delivery_guarantees": [
+      "Normal completion attempts persist before dispatch; uncertainty survives deadlines, orphan sweeps and process restarts without a new send.",
+      "Confirmed non-delivery can use the send route after the deadline; accepted normal completions retire attempt custody atomically.",
+      "Late text parts fit 4096 UTF-16 units without splitting surrogates; literal markup and whole file-omission notes survive.",
+      "Each part has a persisted client key, payload and receipt; restart skips acknowledged parts and reuses unresolved keys.",
+      "Permanent text refusals stop automatic retries; legacy unused-key payloads can be recomposed while unresolved payloads retain their exact identity.",
+      "Uncertain delivery custody preserves interrupted-host stop recovery and releases confirmed execution capacity."
+    ],
+    "publication_privacy": {
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "exit": 0
+    },
+    "eslint_warnings": 3
+  },
+  "orphan_recovery_fix_validation": {
+    "assembled_at_utc": "2026-10-24T18:18:25.082100+00:00",
+    "pre_fix_revision": "22461d49a6750cf377079e5799a828b2ed7f3bce",
+    "upstream_merged": "ee2b96e1489c5ecc4c33b2bd6aa85c199b5f8e50",
+    "inputs_sha256": {
+      "src/lib/externalRelay/poller.ts": "7c058afe555a1f2c83d6f2df532883d7b43333bfa781bb4d89a7ec4946327a7b",
+      "src/lib/externalRelay/ownerLifecycle.test.ts": "368f7a76ec8e4c93ec0b6532a30ca44241ac4786145a456e2f72d38339e07a99",
+      "src/lib/externalRelay/ownerLifecycle.fixture.ts": "af7947e37a02e262f317aa9cb14559de7cc43e6de816d1dd8253037632394b43"
+    },
+    "environment": {
+      "runtime": "Bun 1.4.0",
+      "execution": "pinned stage gate-slot.sh in local mode, one heavy command at a time",
+      "exports": "private stage scratch exports with matching frozen dependency inputs",
+      "isolated": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "TMPDIR",
+        "LLV_STATE_DIR"
+      ],
+      "viewer_control_url": "http://127.0.0.1:1"
+    },
+    "acceptance": [
+      "Orphan recovery persists completionAttempt under the ledger lock before posting the saved failure reply.",
+      "A process killed after remote posting leaves exactly one visible answer through two restarts past the request deadline; unresolved completion custody and its run directory remain.",
+      "A lost acknowledgement and already_completed refusal retain uncertain custody; accepted completions clean up without another delivery.",
+      "A definite lease refusal retains the saved reply for one later send after the deadline.",
+      "A failed custody write dispatches nothing; a failed settlement write keeps the attempt fenced.",
+      "Revocation after preparation prevents HTTP answer dispatch; competing completion and late-answer custody cannot be overwritten."
+    ],
+    "negative_control": {
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "-t",
+        "recovered failure completion crashed"
+      ],
+      "started": "2026-10-24T18:01:58.204Z",
+      "finished": "2026-10-24T18:02:49.524Z",
+      "exit": 1,
+      "tests": {
+        "pass": 0,
+        "fail": 1
+      },
+      "source": "pre-fix revision with the new crash regression",
+      "visible_messages": 2,
+      "failure": "recovered failure completion crashed survives restart and deadline without a duplicate"
+    },
+    "checks": {
+      "final-lifecycle": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T18:14:38.038Z",
+        "finished": "2026-10-24T18:17:29.127Z",
+        "exit": 0,
+        "tests": {
+          "pass": 29,
+          "fail": 0
+        }
+      },
+      "final-poller": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/poller.test.ts"
+        ],
+        "started": "2026-10-24T18:17:29.154Z",
+        "finished": "2026-10-24T18:17:40.603Z",
+        "exit": 0,
+        "tests": {
+          "pass": 30,
+          "fail": 0
+        }
+      },
+      "ownerLateDelivery": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLateDelivery.test.ts"
+        ],
+        "started": "2026-10-24T18:03:53.644Z",
+        "finished": "2026-10-24T18:04:00.993Z",
+        "exit": 0,
+        "tests": {
+          "pass": 26,
+          "fail": 0
+        }
+      },
+      "runner": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T18:04:01.018Z",
+        "finished": "2026-10-24T18:06:56.126Z",
+        "exit": 1,
+        "tests": {
+          "pass": 318,
+          "skip": 4,
+          "fail": 2
+        }
+      },
+      "baseline-runner": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T18:07:27.283Z",
+        "finished": "2026-10-24T18:11:03.222Z",
+        "exit": 1,
+        "tests": {
+          "pass": 318,
+          "skip": 4,
+          "fail": 2
+        }
+      },
+      "final-recovery": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/runner.test.ts",
+          "-t",
+          "fresh process recovers an abandoned diagnosed owner failure"
+        ],
+        "started": "2026-10-24T18:17:40.631Z",
+        "finished": "2026-10-24T18:17:44.219Z",
+        "exit": 0,
+        "tests": {
+          "pass": 4,
+          "fail": 0
+        }
+      },
+      "final-types": {
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "started": "2026-10-24T18:17:44.242Z",
+        "finished": "2026-10-24T18:18:01.555Z",
+        "exit": 0
+      },
+      "final-lint": {
+        "command": [
+          "bunx",
+          "eslint",
+          "--no-cache",
+          "src/lib/externalRelay/poller.ts",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T18:18:01.582Z",
+        "finished": "2026-10-24T18:18:03.756Z",
+        "exit": 0
+      }
+    },
+    "runner_comparison": {
+      "matched_case_outcomes": 324,
+      "introduced_failures": 0,
+      "matching_failures": [
+        "owner en failure reply excludes interrupted answer parts",
+        "owner uk failure reply excludes interrupted answer parts"
+      ],
+      "cause": "document_forbidden_path in both full-file samples",
+      "note": "The full-file comparison preceded the final competing-late-answer guard. The final lifecycle and poller files and all four diagnosed-orphan runner cases were rerun after that guard."
+    },
+    "performance_gain_claimed": false,
+    "privacy_procedure": [
+      "Repository pre-commit staged privacy check with committed known-value fingerprints.",
+      "Normal commit-publication privacy check against origin/main."
+    ]
+  },
+  "expired_handoff_and_parent_budget_validation": {
+    "assembled_at_utc": "2026-10-24T19:31:54.542373+00:00",
+    "pre_fix_revision": "30fb9b83f680085bf46e829596c151a4435c9ff7",
+    "upstream_merged": "ede220392c4eabc17318083700412348b30a637e",
+    "inputs_sha256": {
+      "src/lib/externalRelay/runner.ts": "7a70d5213ae5a68bf5a275e3ea688a850de94f9ff22f2f17b65bdc49c2d54126",
+      "src/lib/externalRelay/ownerLifecycle.fixture.ts": "3bf53921a0360a5d80ad386c10f2575977aa03c17de849bb06336962ee25d747",
+      "src/lib/externalRelay/ownerLifecycle.test.ts": "87b629ec910ea83d84f365b8bb71e5b07b7130349648bba68a66e95038fee19f",
+      "src/lib/externalRelay/hold.runner.test.ts": "208fa398c97b235c290ce7c92ebe74e2e4256ac8d078a4e28adc99d5dd3abcc7"
+    },
+    "environment": {
+      "runtime": "Bun 1.4.0",
+      "execution": "pinned stage gate-slot.sh, local mode, one heavy check at a time",
+      "exports": "private scratch exports with matching manifest and lockfile and checked installed dependency versions",
+      "isolated": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "TMPDIR",
+        "LLV_STATE_DIR"
+      ],
+      "viewer_control_url": "http://127.0.0.1:1"
+    },
+    "acceptance": [
+      "An owner handoff observed after the service deadline becomes a scrubbed explanatory reply, persisted before late-send dispatch.",
+      "A definite completion refusal that crosses the service deadline uses the same late delivery path and updates the saved answer record.",
+      "A 404 send refusal retains the explanation; two fresh recovery processes reuse the saved payload and key, yielding one visible outcome without another execution.",
+      "A timely handoff still declines to the service and makes no send call.",
+      "The child-process fixture covers recovery from queued first-message progress and target-cap expiry while observation never resolves.",
+      "The parent bounds startup separately from completion; a synchronously blocked child outlives its execution cap, is refused by the parent deadline, and is killed and reaped by its recorded handle."
+    ],
+    "checks": {
+      "types-final-v2": {
+        "tree": "final",
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "started": "2026-10-24T19:20:47.044Z",
+        "finished": "2026-10-24T19:23:40.775Z",
+        "exit": 0
+      },
+      "lint-final": {
+        "tree": "final",
+        "command": [
+          "bunx",
+          "eslint",
+          "--no-cache",
+          "src/lib/externalRelay/runner.ts",
+          "src/lib/externalRelay/hold.runner.test.ts",
+          "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T19:23:42.873Z",
+        "finished": "2026-10-24T19:24:40.950Z",
+        "exit": 0
+      },
+      "lifecycle-final-v2": {
+        "tree": "final",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T19:24:40.976Z",
+        "finished": "2026-10-24T19:25:32.866Z",
+        "exit": 0
+      },
+      "hold-comparison": {
+        "tree": "final",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "30fb9b83f680085bf46e829596c151a4435c9ff7",
+          "src/lib/externalRelay/hold.runner.test.ts"
+        ],
+        "started": "2026-10-24T19:25:32.896Z",
+        "finished": "2026-10-24T19:27:21.065Z",
+        "exit": 0
+      },
+      "runner-comparison": {
+        "tree": "final",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "30fb9b83f680085bf46e829596c151a4435c9ff7",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T19:27:21.092Z",
+        "finished": "2026-10-24T19:30:34.887Z",
+        "exit": 0
+      },
+      "negative-final": {
+        "tree": "base",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLifecycle.test.ts",
+          "-t",
+          "owner handoff (after|refusal)"
+        ],
+        "started": "2026-10-24T19:30:43.885Z",
+        "finished": "2026-10-24T19:31:44.579Z",
+        "exit": 1
+      },
+      "publication-privacy": {
+        "command": [
+          "bun",
+          "scripts/privacy-publication-gate.ts",
+          "--require-known-values",
+          "--check-commits",
+          "--base",
+          "ede220392c4eabc17318083700412348b30a637e"
+        ],
+        "started": "2026-10-24T19:31:54.715Z",
+        "finished": "2026-10-24T19:32:07.572Z",
+        "exit": 0
+      }
+    },
+    "results": {
+      "lifecycle": {
+        "pass": 35,
+        "fail": 0
+      },
+      "runner": "complete full-file green head",
+      "hold_comparison": {
+        "introduced": 0,
+        "preexisting": 10,
+        "flaky": 0
+      },
+      "preexisting_assertions": [
+        "src/lib/externalRelay/hold.runner.test.ts: two owner chains in one chat run together; a reply waits for only its chain",
+        "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then serves without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then serves without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then serves without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: shrinking stall window 10s bounds unacknowledged admission",
+        "src/lib/externalRelay/hold.runner.test.ts: acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+        "src/lib/externalRelay/hold.runner.test.ts: capacity returning at the admission cutoff cannot start expired waiting work"
+      ],
+      "negative_control": {
+        "source": "pre-fix runner with final process regressions",
+        "expected_failures": 2,
+        "cause": "late answer custody is absent"
+      },
+      "lint_warnings": 0
+    },
+    "publication_privacy_procedure": [
+      "Run the repository publication privacy gate with committed known-value fingerprints against the merged upstream revision.",
+      "Commit with the repository pre-commit privacy and lint hooks enabled, then repeat commit-publication privacy."
+    ],
+    "performance_gain_claimed": false
+  }
+}

@@ -1,24 +1,11 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { afterAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-// Clear inherited credentials, runtime endpoints and provider roots BEFORE imports.
-// TMPDIR is supplied on private disk by the invoking test environment.
-const ambient = { ...process.env };
-const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-finalization-"));
-for (const name of Object.keys(process.env)) delete process.env[name];
-Object.assign(process.env, { PATH: ambient.PATH, NODE_ENV: "test" });
-for (const [name, suffix] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", LLV_STATE_DIR: "state", TMPDIR: "tmp", CODEX_HOME: "codex", LLV_CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", LLV_CLAUDE_HOME: "claude" })) {
-  const directory = path.join(isolated, suffix);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  process.env[name] = directory;
-}
-fs.mkdirSync(path.join(isolated, "sockets"), { mode: 0o700 });
-
+const { fixture, isolated } = await (await import("./startupFinalization.fixture")).startupFinalizationFixture();
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { sessionKeyId } = await import("@/lib/agent/sessionKey");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
@@ -34,107 +21,6 @@ const { recoverPendingStructuredSpawns, reconcileStructuredSpawnReplay } = await
 const { captureProcessIdentity } = await import("@/lib/processIdentity");
 const { structuredStartupStatus } = await import("./startupStatus");
 type RuntimeHostClient = import("./client").RuntimeHostClient;
-type RegistryFile = import("@/lib/agent/registry").RegistryFile;
-
-afterAll(() => {
-  for (const name of Object.keys(process.env)) delete process.env[name];
-  Object.assign(process.env, ambient);
-  fs.rmSync(isolated, { recursive: true, force: true });
-});
-
-function fixture(failedCount: number, fullHistory = false, historyCount = 8078, grantedRoots = 0) {
-  const directory = fs.mkdtempSync(path.join(isolated, "fixture-"));
-  const filename = path.join(directory, "registry.json");
-  const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
-  const begun = seed.beginSpawnRequest({
-    engine: "codex", cwd: directory, transport: "structured", accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: directory, title: "Historical failed launch" }),
-  });
-  seed.failSpawn(begun.receipt.launchId, "historical failure");
-  if (fullHistory) {
-    const artifactPath = path.join(directory, "history-seed.jsonl");
-    const conversation = seed.ensureConversation("codex", artifactPath, null);
-    const sessionId = conversation.generations.at(-1)!.id;
-    const delivery = seed.holdDelivery(conversation.id, "Historical delivery", "history-seed", "text");
-    seed.recordDeliveryOutcome(delivery.id, "failed", "historical failure");
-    seed.upsert({
-      key: { engine: "codex", sessionId }, artifactPath, cwd: directory, accountId: null,
-      launchProfile: emptyLaunchProfile({ cwd: directory }), status: "dead", host: null,
-      structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null,
-        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null,
-        pendingAttention: [], activeFlags: [] },
-      claimEpoch: 0, claimOwner: null, pendingAction: null,
-    });
-  }
-  const data = JSON.parse(fs.readFileSync(filename, "utf8")) as RegistryFile;
-  const receipt = data.receipts[begun.receipt.launchId]!;
-  data.receipts = {};
-  for (let i = 0; i < failedCount; i++) {
-    const launchId = `historical_launch_${i}`;
-    data.receipts[launchId] = { ...receipt, launchId, conversationId: `conversation_history_${i}` };
-  }
-  if (fullHistory) {
-    const entry = Object.values(data.entries)[0]!;
-    const conversation = Object.values(data.conversations)[0]!;
-    data.entries = {};
-    data.conversations = {};
-    for (let i = 0; i < historyCount; i++) {
-      const id = `conversation_history_${i}` as const;
-      const sessionId = `history_${i}`;
-      const artifactPath = path.join(directory, `${sessionId}.jsonl`);
-      // Operator roots holding a grantable connector, spread through the history as they are in production.
-      const mcpServers = i % 85 === 0 && i / 85 < grantedRoots ? ["viewer", "telegram"] : ["viewer"];
-      if (i < 5188) data.entries[`codex:${sessionId}`] = {
-        ...entry, key: { engine: "codex", sessionId }, artifactPath,
-        launchProfile: { ...entry.launchProfile!, mcpServers },
-      };
-      data.conversations[id] = {
-        ...conversation, id,
-        ...(mcpServers.length > 1 ? { agentRole: null, delegationDepth: 0 } : {}),
-        turn: { state: "terminal", source: "assistant", terminalAt: receipt.createdAt, observedAt: receipt.createdAt },
-        generations: conversation.generations.map((generation) => ({
-          ...generation, id: sessionId, path: artifactPath, launchProfile: { ...generation.launchProfile, mcpServers },
-        })),
-      };
-    }
-    const held = Object.values(data.heldDeliveries)[0]!;
-    data.heldDeliveries = {};
-    for (let i = 0; i < 1719; i++) {
-      const id = `historical_delivery_${i}`;
-      data.heldDeliveries[id] = {
-        ...held, id, conversationId: `conversation_history_${i}`, clientMessageId: id,
-        command: { ...held.command, operationId: `historical_operation_${i}` },
-        state: i < 153 ? "failed" : "delivered",
-      };
-    }
-    for (let i = failedCount; i < 6623; i++) {
-      const launchId = `historical_launch_${i}`;
-      data.receipts[launchId] = {
-        ...receipt, launchId, conversationId: `conversation_history_${i}`,
-        state: i < 6458 ? "completed" : i < 6590 ? "conflicted" : i < 6611 ? "starting"
-          : i < 6618 ? "host-verified" : i < 6622 ? "pane-bound" : "path-pending",
-      };
-    }
-  }
-  fs.writeFileSync(filename, JSON.stringify(data));
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-  const client = {
-    snapshot: async () => journal.snapshot(),
-    readSnapshot: async (kind, conversationIds) => {
-      const { projectSnapshotRead } = await import("./snapshotReads");
-      return projectSnapshotRead(journal.snapshotRead({ version: 1, kind, ...(conversationIds ? { conversationIds } : {}) }), kind, conversationIds);
-    },
-    events: async (after) => journal.replay(after),
-    append: async (event) => journal.append(event),
-    command: async (command) => journal.executeOperation(command),
-    operationStatus: async (id, options) => options?.currentRetryLeaf ? journal.currentRetryResult(id) : journal.operationResult(id),
-    producerCursor: async (kind, prefix) => journal.producerCursor(kind, prefix),
-    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
-    transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
-  } satisfies Partial<RuntimeHostClient> as RuntimeHostClient;
-  return { directory, registry, journal, client };
-}
 
 for (const responseMs of [5_000, 11_000]) test(`slow startup keyed read completes after ${responseMs} ms and reconnects reuse ready`, async () => {
   const f = fixture(0);
@@ -715,135 +601,6 @@ test.each([["codex", false], ["codex", true], ["claude", false], ["claude", true
 });
 
 
-test("the full retained history completes within the promoted serving budget", async () => {
-  const f = fixture(672, true);
-  const initial = f.registry.readOnlySnapshot();
-  expect(Object.keys(initial.receipts)).toHaveLength(6623);
-  expect(Object.keys(initial.conversations)).toHaveLength(8078);
-  expect(Object.keys(initial.entries)).toHaveLength(5188);
-  const failed = Object.values(initial.receipts).filter((receipt) => receipt.state === "failed");
-  // Seed only the runtime's retained session window. Startup must publish the
-  // remaining historical registry rows through the real socket and journal.
-  for (let i = 0; i < 862; i++) f.journal.append({
-    scope: { type: "session", id: `conversation_history_${i}` }, kind: "session-status",
-    producer: { kind: "structured-delivery-controller", eventKey: `history:${i}` },
-    payload: {
-      conversationId: `conversation_history_${i}`, sessionKey: { engine: "codex", sessionId: `history_${i}` },
-      hostKind: "codex-app-server", host: "dead", turn: "unknown", provenance: "structured",
-      accountId: null, parentConversationId: null, cwd: f.directory,
-      artifactPath: path.join(f.directory, `history_${i}.jsonl`), activeTurnId: null,
-    },
-  });
-  const counts: Record<string, number> = {};
-  const host = new RuntimeHost(f.journal);
-  // A short private endpoint also fits Unix sockaddr limits on CI.
-  const socketPath = path.join(isolated, "sockets", "history.sock");
-  const server = serveRuntimeHost(socketPath, { handle: async (request, options) => {
-    counts[request.method] = (counts[request.method] ?? 0) + 1;
-    // Three seconds exceeds the measured 2.6s full snapshot HTTP read. Other
-    // calls pay 5ms before actual socket/journal work; live status reads were <1ms.
-    await Bun.sleep(request.method === "snapshot" ? 3000 : 5);
-    return host.handle(request, options);
-  } });
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const client = new UnixRuntimeHostClient(socketPath);
-  const started = performance.now();
-  try {
-    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
-      registry: f.registry, client, refreshTranscriptState: async () => {},
-      adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
-    }), () => {}, { waitUntilReady: true });
-    const elapsedMs = performance.now() - started;
-    console.log(JSON.stringify({ history: { receipts: 6623, conversations: 8078, entries: 5188 }, counts, elapsedMs }));
-    /* The budget is held by what startup asks the host for, counted below: no
-       full snapshot (three seconds each here), and a bounded number of every
-       other call. The time is reported above, never asserted (#1761). */
-    expect(counts.snapshot ?? 0).toBe(1); // One narrow activity projection, independent of receipt history.
-    expect(counts["session-read"]).toBeGreaterThan(0);
-    expect(counts.append).toBeGreaterThan(4300);
-    expect(counts["operation-status"]).toBe(153); // 672 terminal and 21 live-owned pre-identity receipts need no reads.
-    expect(structuredStartupStatus()?.state).toBe("ready");
-    expect(Object.values(f.registry.readOnlySnapshot().receipts).filter((receipt) => receipt.state === "failed").slice(0, 672)).toEqual(failed);
-    const contender = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/startupPipelineContender.ts"), f.directory], {
-      env: { ...process.env }, stdout: "pipe", stderr: "pipe",
-    });
-    const output = new Response(contender.stdout).text();
-    const errors = new Response(contender.stderr).text();
-    expect(await contender.exited).toBe(0);
-    expect(await errors).toBe("");
-    expect(JSON.parse(await output)).toMatchObject({ created: true, error: null });
-  } finally {
-    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    f.journal.close();
-  }
-}, 130_000);
-
-
-test("granted operator rows keep HTTP answering through a full retained-history startup", async () => {
-  const f = fixture(672, true, 8078, 60);
-  const granted = Object.values(f.registry.readOnlySnapshot().conversations)
-    .filter((conversation) => conversation.generations.at(-1)!.launchProfile.mcpServers.includes("telegram"));
-  expect(granted).toHaveLength(60);
-  const counts: Record<string, number> = {};
-  const host = new RuntimeHost(f.journal);
-  const socketPath = path.join(isolated, "sockets", "granted.sock");
-  const server = serveRuntimeHost(socketPath, { handle: async (request, options) => {
-    counts[request.method] = (counts[request.method] ?? 0) + 1;
-    return host.handle(request, options);
-  } });
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const client = new UnixRuntimeHostClient(socketPath);
-  // The Viewer's own HTTP answers from this event loop; probe it the whole way through.
-  const http = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
-  const latencies: number[] = [];
-  let probing = true;
-  const probe = (async () => {
-    while (probing) {
-      const sent = performance.now();
-      await (await fetch(`http://127.0.0.1:${http.port}/`)).text();
-      latencies.push(performance.now() - sent);
-      await Bun.sleep(50);
-    }
-  })();
-  const delay = monitorEventLoopDelay({ resolution: 10 });
-  delay.enable();
-  const started = performance.now();
-  try {
-    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
-      registry: f.registry, client, refreshTranscriptState: async () => {},
-      adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
-    }), () => {}, { waitUntilReady: true });
-    const elapsedMs = performance.now() - started;
-    probing = false;
-    await probe;
-    delay.disable();
-    const httpMaxMs = Math.max(...latencies);
-    console.log(JSON.stringify({ granted: granted.length, counts, elapsedMs, httpProbes: latencies.length, httpMaxMs,
-      eventLoopMaxMs: delay.max / 1e6 }));
-    expect(structuredStartupStatus()?.state).toBe("ready");
-    /* Each row a structured host can own is read for its signals and again for its fallback, and each failed
-       launch twice by spawn recovery. The other 2890 historical conversations are not read at all. */
-    expect(counts["session-read"]).toBeLessThanOrEqual(2 * 5188 + 2 * 672);
-    /* Before the decision was reused, this history took over sixty seconds to
-       reach ready here. The elapsed time, the slowest HTTP probe and the
-       event-loop delay are reported above, never asserted: all three measure
-       the runner as much as the startup (#1761). The call counts are what
-       hold the repair. */
-    // The decision is reused, never skipped: each granted root keeps exactly its grant.
-    for (const conversation of granted) {
-      expect(f.registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
-    }
-  } finally {
-    probing = false;
-    await probe;
-    http.stop(true);
-    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    f.journal.close();
-  }
-}, 180_000);
-
 test("ready startup survives a second module realm without any adoption calls", async () => {
   const f = fixture(0);
   let adoptions = 0;
@@ -954,6 +711,16 @@ test("only a changed runtime generation starts incremental recovery after ready"
   let refreshes = 0;
   let generations = 0;
   const client = { ...f.client, startupGeneration: async () => { generations++; return generation; } };
+  let prepared = true;
+  const read = f.registry.readOnlySnapshot.bind(f.registry);
+  const prepare = f.registry.prepareReadOnlySnapshot.bind(f.registry);
+  f.registry.readOnlySnapshot = () => {
+    if (!prepared) throw new Error("replacement generation refreshed synchronously");
+    return read();
+  };
+  f.registry.prepareReadOnlySnapshot = async (signal, options) => {
+    const file = await prepare(signal, options); prepared = true; return file;
+  };
   const dependencies = { registry: f.registry, client, orchestratorSeats: () => [],
     refreshTranscriptState: async () => { refreshes++; },
     adopt: async () => { adoptions++; return []; }, adoptClaude: async () => { adoptions++; return []; },
@@ -964,7 +731,7 @@ test("only a changed runtime generation starts incremental recovery after ready"
     await adoptStructuredHostsAtStartup(dependencies);
     expect(adoptions).toBe(0);
     expect(refreshes).toBe(1);
-    generation = "generation-b";
+    generation = "generation-b"; prepared = false;
     await Promise.all([adoptStructuredHostsAtStartup(dependencies), adoptStructuredHostsAtStartup(dependencies)]);
     expect(adoptions).toBe(0); // No unaccepted hosts in the replacement generation.
     expect(refreshes).toBe(1);
@@ -972,7 +739,121 @@ test("only a changed runtime generation starts incremental recovery after ready"
     await adoptStructuredHostsAtStartup(dependencies);
     expect(adoptions).toBe(0);
   } finally {
+    f.registry.readOnlySnapshot = read; f.registry.prepareReadOnlySnapshot = prepare;
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
     f.journal.close(); f.registry.close();
   }
 });
+
+
+test("historical fallback publication uses fresh keyed rows after awaited session reads", async () => {
+  const f = fixture(0, true, 40);
+  const { completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  let phase = "";
+  let changed = false;
+  const entry = f.registry.readOnlySnapshot().entries["codex:history_0"]!;
+  const original = f.registry.readOnlySnapshot.bind(f.registry);
+  const client = { ...f.client, readSession: async (identity: Parameters<NonNullable<RuntimeHostClient["readSession"]>>[0]) => {
+    await Promise.resolve();
+    if (!changed && identity.conversationId === "conversation_history_0") {
+      changed = true;
+      f.registry.upsert({ ...entry, status: "idle" });
+    }
+    return f.journal.readSession(identity);
+  } };
+  try {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client, deferStartupWork: true });
+    f.registry.readOnlySnapshot = () => {
+      if (phase === "publishing historical host fallbacks") throw new Error("fallback rebuilt the whole registry");
+      return original();
+    };
+    await completeStructuredDeliveryQueueStartup([], name => { phase = name; });
+    expect(changed).toBe(true);
+    expect(f.journal.readSession({ conversationId: "conversation_history_0" })?.turn).toBe("idle");
+  } finally {
+    f.registry.readOnlySnapshot = original;
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close(); f.registry.close();
+  }
+});
+
+
+test("registry preparation precedes pipeline admission at every startup phase", async () => {
+  const f=fixture(0);
+  const { stateLeaseHoldsInFlight }=await import("@/lib/state/sqliteStateStore");
+  const original=f.registry.prepareReadOnlySnapshot.bind(f.registry);let prepared=0;
+  f.registry.prepareReadOnlySnapshot=async signal=>{
+    prepared++;
+    expect(stateLeaseHoldsInFlight().filter(hold=>hold.collection==="pipelines")).toEqual([]);
+    return original(signal);
+  };
+  try {
+    await adoptStructuredHostsAtStartup({registry:f.registry,client:f.client,refreshTranscriptState:async()=>{},adopt:async()=>[],adoptClaude:async()=>[],orchestratorSeats:()=>[]});
+    expect(prepared).toBeGreaterThan(0);
+  } finally {
+    f.registry.prepareReadOnlySnapshot=original;
+    await bindStructuredDeliveryQueue([],{registry:f.registry,client:null});
+    f.journal.close();f.registry.close();
+  }
+});
+
+test("marker repair and historical publication share one prepared selection", async () => {
+  const f = fixture(0, true, 40);
+  const { completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const original = f.registry.prepareReadOnlySnapshot.bind(f.registry);
+  let preparations = 0;
+  try {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    f.registry.prepareReadOnlySnapshot = async signal => {
+      if (++preparations > 1) throw new Error("historical publication repeated complete registry preparation per row");
+      return original(signal);
+    };
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(preparations).toBe(1);
+    expect(f.journal.readSession({ conversationId: "conversation_history_39" })).not.toBeNull();
+  } finally {
+    f.registry.prepareReadOnlySnapshot = original;
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close(); f.registry.close();
+  }
+});
+
+
+test("phase boundaries prepare invalidated registry views after runtime reads", async () => {
+  const f = fixture(0, true, 40);
+  const peer = new AgentRegistry(f.registry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const entry = peer.structuredHostEntries()[0]!;
+  const read = f.registry.readOnlySnapshot.bind(f.registry);
+  const prepare = f.registry.prepareReadOnlySnapshot.bind(f.registry);
+  let prepared = true, writes = 0;
+  const moved = () => {
+    peer.upsert({ ...entry, claimEpoch: entry.claimEpoch + ++writes });
+    prepared = false;
+  };
+  f.registry.readOnlySnapshot = () => {
+    if (!prepared) throw new Error("phase attempted a synchronous refresh after an external write");
+    return read();
+  };
+  f.registry.prepareReadOnlySnapshot = async signal => {
+    const snapshot = await prepare(signal); prepared = true; return snapshot;
+  };
+  const client = new Proxy(f.client, { get(target, property) {
+    const value = Reflect.get(target, property);
+    if (!["readSession", "snapshot", "readSnapshot", "effectBatch"].includes(String(property)) || typeof value !== "function") return value;
+    return async (...args: unknown[]) => { const result = await value.apply(target, args); moved(); return result; };
+  } });
+  try {
+    const retries: number[] = [];
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({ registry: f.registry, client,
+      refreshTranscriptState: async () => { moved(); }, adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [] }),
+      () => {}, { schedule: (_callback, ms) => { retries.push(ms); return { unref() {} }; } });
+    expect(retries).toEqual([]);
+    expect(writes).toBeGreaterThan(0);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+  } finally {
+    f.registry.readOnlySnapshot = read; f.registry.prepareReadOnlySnapshot = prepare;
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    peer.close(); f.registry.close(); f.journal.close();
+  }
+}, 30_000);

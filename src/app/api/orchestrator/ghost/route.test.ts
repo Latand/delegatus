@@ -8,6 +8,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 import { internalServiceHeaders, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { readDeputies } from "@/lib/orchestrator/deputies";
 import { setDeputyRootResolverForTests } from "@/lib/orchestrator/deputyAsker";
@@ -77,7 +78,7 @@ test("an MCP call that names no conversation is refused: nobody could be named a
 test("the voice gateway and the operator's browser are admitted and reach the command", async () => {
   /* No seat is designated in the sandbox, so the command's own refusal is
      what comes back: the admission let both through. */
-  for (const headers of [{ [VIEWER_SPAWN_CAPABILITY_HEADER]: ROOT_CAPABILITY, ...internalServiceHeaders("mcp") }, {}]) {
+  for (const headers of [{ [VIEWER_SPAWN_CAPABILITY_HEADER]: ROOT_CAPABILITY, ...internalServiceHeaders("mcp") }, { cookie: `llv_operator=${soloBrowserSession()}` }] as Array<Record<string, string>>) {
     const response = await POST(ask(headers));
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ code: "seat_not_found" });

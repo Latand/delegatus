@@ -1,3 +1,4 @@
+import { readHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { engineRecordSince, processLaunchedAt } from "@/lib/runtime/liveness";
@@ -16,7 +17,7 @@ import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, histor
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
-import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import type { PendingPermissionRequest, PendingQuestionRequest } from "@/lib/runtime/permissionRequests";
 import type { Engine, FileEntry } from "@/lib/types";
 
 import {
@@ -78,6 +79,8 @@ export type AgentLivenessReason =
   /** A live host holds a tool permission request nobody has answered (#2215):
       the turn waits on an answer, never on the provider. */
   | "permission_request"
+  /** A live structured host is blocked on an operator question. */
+  | "question"
   /** The zombie: an open turn whose host is gone. Nothing will ever finish it. */
   | "host_gone_turn_open"
   /** The host exited after its turn settled — a finished or killed stage. */
@@ -107,6 +110,8 @@ export interface AgentLivenessPipelineRef {
 }
 
 export interface AgentLivenessRecord {
+  hostExit?: HostExitRecord | null;
+  previousHostExit?: HostExitRecord;
   activity?: AgentActivity;
   verified?: boolean;
   previousPaths?: string[];
@@ -128,6 +133,8 @@ export interface AgentLivenessRecord {
   /** The pending request when `reason` is `permission_request`: the tool,
       what it would do, and the engine's reason for asking. */
   permission?: PendingPermissionRequest | null;
+  /** The pending native question when `reason` is `question`. */
+  question?: PendingQuestionRequest | null;
   /** Measured milliseconds since `lastRecordAt`; null without tail evidence. */
   silentForMs: number | null;
   /** Milliseconds this conversation has been silent while in the `stalled` or
@@ -651,8 +658,12 @@ export function evaluateLiveness(input: {
   providerProgressAt?: number | null;
   /** The oldest permission request the live host holds open, if any. */
   pendingPermission?: PendingPermissionRequest | null;
+  pendingQuestion?: PendingQuestionRequest | null;
   settledStage?: boolean;
-}): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string; permission?: PendingPermissionRequest } {
+}): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string; permission?: PendingPermissionRequest; question?: PendingQuestionRequest } {
+  if (input.host.state === "alive" && input.pendingQuestion) {
+    return { lifecycle: "waiting", reason: "question", question: input.pendingQuestion };
+  }
   /* An unanswered permission request is the turn's whole explanation: the
      engine waits for an answer, so the silence is neither a stall nor the
      provider (#2215). */
@@ -1473,6 +1484,9 @@ async function livenessSnapshotWithin(
     const pendingPermission = host.state === "alive" && host.kind === "structured"
       ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
       : null;
+    const pendingQuestion = host.state === "alive" && host.kind === "structured"
+      ? registryEntry?.structuredHost?.pendingQuestions?.[0] ?? null
+      : null;
     const pipeline = narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
       ?? pipelines.byPath.get(entry.path) ?? null;
     const matchingStage = conversationId && pipeline?.conversationId
@@ -1504,6 +1518,7 @@ async function livenessSnapshotWithin(
       providerThrottleAt: providerThrottle.throttledAt,
       providerProgressAt: evidence?.providerProgressAt ?? null,
       pendingPermission,
+      pendingQuestion,
       settledStage: Boolean(settledStage),
     });
     return {
@@ -1514,6 +1529,8 @@ async function livenessSnapshotWithin(
       lastRecordMs,
       silentForMs: verdict.verified ? silentForMs : null,
       host,
+      hostExit: host.state === "gone" ? readHostExit(registryEntry?.hostExitProcess ?? registryEntry?.structuredHost?.exitProcess ?? registryEntry?.structuredHost?.process) : null,
+      previousHostExit: registryEntry?.previousHostExit,
       pipeline,
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],
     };
@@ -1534,10 +1551,13 @@ async function livenessSnapshotWithin(
     turnState: row.turnState,
     // Setup evidence stays inside the registry verdict; the record names the host.
     host: { state: row.host.state, kind: row.host.kind, pid: row.host.pid },
+    hostExit: row.hostExit,
+    ...(row.previousHostExit ? { previousHostExit: row.previousHostExit } : {}),
     lifecycle: row.lifecycle,
     reason: row.reason,
     retryAt: row.retryAt ?? null,
     ...(row.permission ? { permission: row.permission } : {}),
+    ...(row.question ? { question: row.question } : {}),
     silentForMs: row.silentForMs,
     stalledForMs: row.lifecycle === "stalled" || row.lifecycle === "gone" ? row.silentForMs : null,
     pipeline: row.pipeline,

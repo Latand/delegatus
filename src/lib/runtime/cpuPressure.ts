@@ -74,7 +74,7 @@ export class CpuPressureGate {
 
 /** Queue position and whole minutes change only as the wait progresses. */
 export function cpuPressureHoldDetail(hold: CpuPressureHold, subject = "stage start"): string {
-  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.remainingMs, hold.queue.stalledMs, hold.queue.priority);
+  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.waitedMs, hold.queue.stalledMs, hold.queue.priority, hold.queue.heldBy);
   const since = new Date(hold.since).toISOString();
   return hold.deferred
     ? `${subject} deferred by CPU pressure: held since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%); it starts once pressure stays below ${hold.policy.releaseBelow}% for ${hold.policy.releaseAfterMs / 1000} s`

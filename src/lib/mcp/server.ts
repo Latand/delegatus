@@ -1,3 +1,4 @@
+import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -79,6 +80,7 @@ export const MCP_TOOL_NAMES = [
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   "stage_report",
   "leave_lesson",
@@ -147,6 +149,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   /* Records the calling attempt's own completion, which the stage then settles
      on. A replayed clientRequestId must answer with the report the first call
@@ -3648,6 +3651,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
     'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
@@ -3670,7 +3674,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
-    "Create a durable board task.",
+    "Create a durable board task. Give every promise a future dueAt. Pass dueTz with dueAt when creating the task. A promise within an existing outcome is an open step on that task, whose dueAt must be no later than the earliest open promise.",
     "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
@@ -3682,6 +3686,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
+    "Give an undated open task a dueAt when you touch it. Reschedule with a future dueAt and dueReason (1 to 200 characters) when moving a passed date later; this records a slip. Moves before the date passes or to an earlier instant count nothing. Only the operator may clear a date. Keep the task due no later than its earliest open promise.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
     "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
@@ -3720,15 +3725,16 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
-  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes and import batch; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
+    "When an operator corrects a result or reveals a misunderstood task, call in that same turn with correction:true and lesson, naming the misread in why and the preventing practice in rule at the narrowest true level. This includes seat-relayed corrections. Any recorded stage conversation, including a clean or review role, may leave corrections before stage_report or after settlement; each call is independent of the closing request. A registered role conversation outside a pipeline may also leave corrections, using its server-attributed role and project. Correction calls carry no applied/misled measurements. New work alone needs no correction lesson.",
     "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
     "A project's designated orchestrator seat may also call unasked, with lesson or rewrite, for a practice that can come back; a defect goes to a board task (create_task). While Delegatus memory is on, the operator's own root conversation may call unasked too, with lesson at scope project or machine or with rewrite of a rule it reads. Write no names of people, accounts, emails, tokens, ids or absolute paths.",
     "Answer the lesson request after stage_report exactly once with rewrite {id, rule, why}, lesson {scope, role?, rule, why}, problem {statement, evidence}, or none (usual for a stage handed no findings; on a fix round, say why the class cannot recur).",
     "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
     "Rewrite an active rule this stage reads, keeping its id and level and a reversible version. A lesson is active immediately. Task narration belongs only in the stage report: a fixed identifier check refuses it and stores nothing.",
     "Report a concrete project defect, inconsistency or documentation/specification mismatch with problem and evidence. It goes to the project's designated seat as a wake item; the seat decides whether to propose a task or issue and asks the operator. Agents create none from this answer. Concrete file paths and broken facts are steered to problem; machine rules must hold across projects.",
-    "The server resolves the conversation's attempt. Clean roles and review gates leave no lessons. Every accepted answer consumes the request; refusals leave it open. Why stays on the record and out of startup instructions. Privacy detectors give hints; they do not refuse lessons.",
+    "The server resolves the conversation's attempt. Clean roles and review gates leave only correction lessons. Every accepted closing answer consumes the request; refusals leave it open. Why stays on the record and out of startup instructions. Privacy detectors give hints; they do not refuse lessons.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
@@ -3753,7 +3759,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
   agent_fleet: "Read the fleet summary first for counts by engine, model, effort and account, pipeline/seat/other placement, stalled and limit-wait counts, and account session/weekly use. Counts are [live, running]; default summary stays under 2 KB with folding. detail:true or an engine/model/effort/account/state/pipelineId/conversationId filter adds per-agent rows, cached memory where available, and a 24 KB page with nextCursor. No transcript bodies or paths. Account/model/effort come from durable host, generation and launch records; absent accounts are unknown. A seat, deputy or worker sees its own project; operator root sees all; unidentified callers must name project. Name accounts as account A / account B in public bridge reports. Some counts may be partial: read coverage.",
-  agent_activity: "Use agent_fleet first for compact fleet counts and account usage. Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
+  agent_activity: "Use agent_fleet first for compact fleet counts and account usage. Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} for an unanswered tool permission (reason permission_request), or question {tool, toolUseId, questions, since} for an unanswered native question (reason question); answer it with conversation_action answer using toolUseId as requestId. Compact answers drop the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
@@ -3800,7 +3806,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
   account_project_binding: [
-    "List, add and remove the bindings that decide which accounts a project's work may run on. `action` is list (the default), add or remove; add and remove need `engine`, `accountId` and `project`.",
+    "List and change the bindings that decide which accounts a project's work may run on. `action` is list (the default), add, remove or set-fallback; mutations need `engine`, `accountId` and `project`. Add accepts `fallback:true`; set-fallback requires a boolean `fallback` and an existing binding. Fallback accounts are selected only after primary allowed accounts lose capacity. Named pins retain their choice.",
     "Every answer is a READ of the record. A list answers the whole binding table. An add or a remove answers the row it changed — `engine`, `accountId`, `project`, `changed`, and `bound` re-read from the store after the write — with that project's allowed accounts for that engine; a mutation the re-read does not show is refused rather than reported ok.",
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
@@ -3825,11 +3831,12 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `nextChosen` (the account the reset-aware selector would choose for unpinned work in the caller's project, when available), `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`; the next choice is computed before narrowing. A read of the durable observations the accounts panel shows; it never asks a provider.",
   issue_report: [
-    "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
+    "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. The seat prepares a scrubbed draft through the dedicated issue-reporter without asking for preparation consent, then asks once before publication to approve the exact text. Nothing is filed without the digest of a preview the operator approved.",
     "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
     "action preview takes title, body and your privacyJudgment (assessment, removed, harmlessHints with reasons, uncertainties), stores the exact text with that judgment and remaining hints, and answers its digest. Known-name source failures appear as hintWarnings and leave the agent to review the text. Any identified session may preview.",
     "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText in the operator's interface language that marks where the published text starts and ends and lists them after it. To an orchestrator seat it also answers approvalForm: {issueReport}. Put previewText in the existing chat as it is, then pass issueReport to publish_prototype_review without taskId; the server composes the exact consent form. The operator decides last and may approve a text that has hints.",
     "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the newest approval form of this preview the seat asked after reading it back, and publishes when a person (the operator or a team member) chose its approving option (`issue_report_approval_required` with `reason` no_form, not_answered or not_an_approval otherwise, and nothing is sent). A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision never approves. An amended answer counts as it now stands. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approval form. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
+    ISSUE_REPORT_RESPONSE_RULE,
     "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
   ].join(" "),
   telegram_bot_chats: [
@@ -3922,6 +3929,8 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
   .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
 
 const pipelineStageSchema = z.object({
+  runtime: z.literal("codex-cloud").optional()
+    .describe("Run reviewer/verifier in Codex Cloud on the published lane branch. Requires engine codex, an explicit model, a capable current-cloud transport and the project's codexCloudEnvironmentId setting. Omitted keeps local execution. Builder/fix stages are not supported."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
@@ -4047,6 +4056,7 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
@@ -4124,7 +4134,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
-    dueAt: z.string().optional(),
+    dueAt: z.string(),
     dueTz: z.string().optional(),
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
@@ -4297,7 +4307,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     merge: z.array(z.object({ into: z.string(), from: z.array(z.string()).min(1).max(512), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     move: z.array(z.object({ id: z.string(), to: z.string(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     split: z.array(z.object({ id: z.string(), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional() }).strict()).min(2).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
-    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate", "budget"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     adopt: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS) }).strict()).min(1).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(40).optional(),
     drop: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000), forRoom: z.boolean().optional() }).strict()).max(40).optional(),
     defer: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512) }).strict()).max(40).optional(),
@@ -4306,6 +4316,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).strict().refine(args => args.action === "read" ? ![args.scopes, args.rewrite, args.merge, args.move, args.split, args.archive, args.restore, args.problem, args.adopt, args.drop, args.defer].some(value => value !== undefined) : !!args.scopes && args.scope === undefined && args.cursor === undefined, "read takes scope/cursor; apply takes scopes and editorial operations"),
   leave_lesson: z.object({
     clientRequestId: clientRequestIdSchema,
+    correction: z.literal(true).optional().describe("A same-turn operator correction lesson, independent of the closing stage request."),
     applied: z.array(z.string().regex(/^r_[a-f0-9]{16}$/)).max(5).optional().describe("Delivered rule ids that changed what this stage did."),
     misled: z.array(z.string().regex(/^r_[a-f0-9]{16}$/)).max(5).optional().describe("Delivered rule ids that were wrong or stale."),
     lesson: z.object({
@@ -4321,7 +4332,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     }).strict().optional(),
     problem: z.object({ statement: lessonTextSchema(1, PROBLEM_MAX_CHARS), evidence: lessonTextSchema(1, PROBLEM_EVIDENCE_MAX_CHARS) }).strict().optional().describe("Observed project defect or mismatch with evidence, for the designated seat to decide and ask the operator."),
     none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe("One line: on a fix round say why the class cannot recur on another task; otherwise why there is no lesson."),
-  }).strict().refine(args => [args.none, args.rewrite, args.lesson, args.problem].filter(value => value !== undefined).length === 1, "give exactly one of none, rewrite, lesson or problem"),
+  }).strict().refine(args => [args.none, args.rewrite, args.lesson, args.problem].filter(value => value !== undefined).length === 1, "give exactly one of none, rewrite, lesson or problem").refine(args => !args.correction || (args.lesson !== undefined && args.applied === undefined && args.misled === undefined), "a correction requires lesson without delivery measurements"),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
@@ -4720,14 +4731,15 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
-    action: z.enum(["list", "add", "remove"]).optional()
-      .describe("list (default) reads the whole record; add and remove change it and answer with the changed row read back."),
+    fallback: z.boolean().optional().describe("Use this binding only when primary allowed accounts have no capacity. Required for set-fallback; optional on add."),
+    action: z.enum(["list", "add", "remove", "set-fallback"]).optional()
+      .describe("list reads the record; add, remove and set-fallback change a binding and return its stored state."),
     engine: z.enum(["claude", "codex"]).optional()
-      .describe("Engine the account belongs to. Required to add or remove."),
+      .describe("Engine the account belongs to. Required for mutations."),
     accountId: z.string().trim().min(1).optional()
-      .describe("Account to allow on, or stop allowing on, the project. Required to add or remove."),
+      .describe("Account to allow on, or stop allowing on, the project. Required for mutations."),
     project: z.string().trim().min(1).optional()
-      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
+      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()
@@ -4743,8 +4755,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
     curation: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
       .describe("Role memory curator: independent per-project timer, enabled by default, minimum gap 1–168 hours, default 6; null restores 6. Every trigger respects this gap. Needs no reason."),
-    maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
-      .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
+    maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional(), window: z.object({ timeZone: z.string(), weekdays: z.array(z.number()), startHour: z.number(), endHour: z.number() }).nullable().optional() }).optional()
+      .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason. Optional window: IANA timeZone, ISO weekdays 1–7, startHour inclusive and endHour exclusive (0–24, same day); null removes it. Missed windows skip and overdue intervals coalesce into one run."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().trim().min(1).optional()
@@ -4927,10 +4939,17 @@ export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(tool
     // An invalid sentinel keeps a refused proposal invalid at the strict callback.
     proposal: schema.shape.proposal.catch(() => null),
   })];
-  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
-    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-  )) : schema];
+  if (toolName !== "create_task" && toolName !== "update_task") return [toolName, schema];
+  const transport = schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([field, fieldSchema]) => fieldSchema.isOptional() || toolName === "create_task" && field === "dueAt")
+      .map(([field, fieldSchema]) => [field, (field === "dueAt" && toolName === "create_task" ? fieldSchema.optional() : fieldSchema)
+        .catch((context: { input: unknown } | undefined) => context?.input)]),
+  ));
+  // Advertise the strict requirement while missing/invalid dates reach our
+  // callback for TASK_DUE_REQUIRED, before any receipt is acquired.
+  return [toolName, toolName === "create_task" ? transport.meta({
+    required: Object.entries(schema.shape).filter(([, field]) => !field.isOptional()).map(([name]) => name),
+  }) : transport];
 })) as typeof TOOL_INPUT_SCHEMAS;
 
 /** Presentation only: neither a client name nor a User-Agent
@@ -4971,16 +4990,17 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     const schema = TOOL_INPUT_SCHEMAS[toolName];
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
-      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
+      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]).meta(TOOL_TRANSPORT_SCHEMAS[toolName].meta() ?? {}),
     }, async (args, extra) => {
       if (taskMutation || toolName === "voice_tools") {
         const parsed = schema.safeParse(args);
         if (!parsed.success) {
           const issues = parsed.error.issues.map(issue => ({ field: issue.path.join("."), message: issue.message }));
-          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
+          const missingDue = toolName === "create_task" && ((args as McpToolArgs).dueAt === undefined || (args as McpToolArgs).dueAt === null || (args as McpToolArgs).dueAt === "");
+          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), missingDue ? "TASK_DUE_REQUIRED" : toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
             toolName === "voice_tools" ? "Invalid voice tools proposal. Use a registry package name with an optional version or a pinned entryFile; launch variables and inline credentials are refused."
               : issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
-            { field: issues[0]?.field, issues });
+            { field: missingDue ? "dueAt" : issues[0]?.field, issues });
           return response(result);
         }
       }

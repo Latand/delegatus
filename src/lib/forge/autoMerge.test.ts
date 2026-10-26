@@ -16,9 +16,9 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const {
-  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge, sweepTaskFinishes,
+  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
-const { ForgeAppWriteRefused } = await import("./appWrite");
+const { ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter } = await import("./appWrite");
 const { pipelineGraphError } = await import("../pipelines/store");
 
 afterAll(() => {
@@ -89,7 +89,7 @@ const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "
 
 /** A fake GitHub: pull requests, commits, the base's required contexts, and
     legacy update receipts; any new GitHub branch update is refused. */
-function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
+function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; classicRead?: string; rulesRead?: string; rulesRefusal?: boolean; queuedMerge?: "unreadable" | "open" | "malformed"; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
   let clock = T0;
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -100,11 +100,18 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let mergeRefusal: string | null = null;
+  let failConfirmation = false;
+  let afterMutation: ((pipeline: Pipeline) => Promise<void>) | null = null;
   const fail = (stderr: string) => Object.assign(new Error("Command failed: gh"), { stderr });
 
   const run = async (args: string[]): Promise<string> => {
     calls.push(args);
     if (args[0] === "pr" && args[1] === "view") {
+      if (failConfirmation) {
+        failConfirmation = false;
+        if (options.queuedMerge === "malformed") return "{}";
+        throw fail("confirmation unavailable");
+      }
       const pr = prs.get(Number(args[2]))!;
       return JSON.stringify({
         state: pr.state,
@@ -134,7 +141,12 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (pr.reviewRead === "refused") throw fail("reviews unavailable");
       return pr.reviewRead ?? (pr.reviews ?? []).map((review) => JSON.stringify({ reviewer: review.user.login, isBot: review.user.type === "Bot", state: review.state })).join("\n");
     }
-    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return JSON.stringify(options.required ?? []);
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/rules/branches/`)) {
+      expect(args.slice(2)).toEqual(["--paginate", "--jq", "@json"]);
+      if (options.rulesRefusal) throw fail("branch rules unavailable");
+      return options.rulesRead ?? "[]";
+    }
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return options.classicRead ?? JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
     if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
@@ -147,7 +159,8 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (mergeRefusal) throw fail(mergeRefusal);
       const match = args[args.indexOf("--match-head-commit") + 1];
       if (match !== pr.head) throw fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)");
-      pr.state = "MERGED";
+      if (options.queuedMerge === "unreadable" || options.queuedMerge === "malformed") failConfirmation = true;
+      else if (!options.queuedMerge) pr.state = "MERGED";
       return "";
     }
     throw new Error(`unexpected gh ${args.join(" ")}`);
@@ -159,7 +172,8 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     log: (line: string) => { logs.push(line); },
     now: () => clock,
     run,
-    write: async (args: string[], repository: string) => {
+    write: async (args: string[], repository: string, beforeDispatch?: () => void) => {
+      beforeDispatch?.();
       writes.push({ args, repository });
       if (writeRefusal) throw new ForgeAppWriteRefused(writeRefusal);
       return run(args);
@@ -171,6 +185,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       const draft = structuredClone(pipeline);
       if (!change(draft)) return false;
       pipelines.set(id, draft);
+      if (afterMutation) await afterMutation(draft);
       return true;
     },
     setting: () => setting,
@@ -195,6 +210,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     taskStatus: (id: string) => tasks.get(id),
     setSetting: (next: Partial<MergeOnReviewSetting>) => { setting = { ...setting, ...next }; },
     refuseMerges: (message: string) => { mergeRefusal = message; },
+    afterMutation: (callback: (pipeline: Pipeline) => Promise<void>) => { afterMutation = callback; },
     /** Every call that went through the App write seam, and how to refuse them. */
     writes,
     refuseAppWrites: (message: string | null) => { writeRefusal = message; },
@@ -229,6 +245,152 @@ function retainedUpdate(h: ReturnType<typeof harness>, head: string, extra: Part
 }
 
 beforeEach(() => resetAutoMergeForTests());
+
+test("regression: task finishes continue while the optional post-merge forge read is held", async () => {
+  const completed = lane("L1");
+  completed.taskIds = ["task-1", "task-2"];
+  completed.finishesTaskIds = ["task-1"];
+  const h = harness({ lanes: [completed], prs: [openPr(11)], tasks: ["task-1", "task-2"] });
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+  expect(h.merge("L1")?.state).toBe("merged");
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const readEntered = new Promise<void>(resolve => { entered = resolve; });
+  let reads = 0;
+  const run = h.ports.run;
+  const ports = { ...h.ports, prepareRead: async () => {}, run: async (args: string[]) => {
+    if (args[1]?.endsWith("/commits/main")) {
+      reads++; entered(); await held;
+      throw new Error("optional forge read unavailable");
+    }
+    return run(args);
+  } };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  let recovery: Promise<unknown> | null | undefined;
+  try {
+    scheduleAutoMerge(ports);
+    recovery = host.__llvPostMergeRunning;
+    await readEntered;
+    await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-1")).toBe("done");
+    h.pipeline("L1").finishesTaskIds!.push("task-2");
+    h.advance(60_000);
+    scheduleAutoMerge(ports);
+    await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-2")).toBe("done");
+    expect(reads).toBe(1);
+  } finally {
+    release();
+    await host.__llvAutoMergeRunning;
+    await recovery;
+    await host.__llvPostMergeRunning;
+  }
+  expect(h.pipeline("L1").taskFinishes?.map(finish => finish.taskId)).toEqual(["task-1", "task-2"]);
+});
+
+test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot delay recovery enrolled on a later controller tick", async heldKind => {
+  const watched = lane("watched");
+  watched.merge = { state: "merged", by: "auto-merge", postMergeWatch: true, repository: REPO, prNumber: 12, mergeCommit: HEAD_B,
+    recovery: { firstRedAt: iso(T0 - 60 * 60_000), failures: [{ name: "ci", excerpt: "failed" }], fixPipelineId: "fix" } } as PipelineMerge;
+  watched.merge.postMergeWatch = false;
+  const blocked = lane("ordinary");
+  if (heldKind === "watched") blocked.merge = { ...watched.merge, repository: "acme/held", prNumber: 11, mergeCommit: HEAD_C, postMergeWatch: true };
+  const h = harness({ lanes: [blocked, watched], prs: [openPr(11), openPr(12, { state: "MERGED" })], required: ["ci"] });
+  let release!: () => void; let entered!: () => void; let recorded!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const readEntered = new Promise<void>(resolve => { entered = resolve; });
+  const revertRecorded = new Promise<void>(resolve => { recorded = resolve; });
+  let recoveryReads = 0; let revertWrites = 0;
+  const ports = { ...h.ports, prepareRead: async () => {},
+    run: async (args: string[]) => {
+      if ((heldKind === "ordinary" && args[0] === "pr" && args[1] === "view" && args[2] === "11") || args[1]?.endsWith("repos/acme/held/commits/main")) {
+        entered(); await held; throw new Error("held forge read unavailable");
+      }
+      if (args[1]?.startsWith("repos/acme/held/branches/")) return JSON.stringify(["ci"]);
+      if (args[1]?.startsWith("repos/acme/held/rules/")) return "[]";
+      if (args[1]?.endsWith("/commits/main")) { recoveryReads++; return JSON.stringify({ sha: HEAD_B }); }
+      if (args[1]?.includes("check-runs")) return JSON.stringify({ name: "ci", status: "completed", conclusion: "failure", completed_at: iso(T0) });
+      if (args[1]?.includes("/status")) return "";
+      if (args[1]?.includes("pulls?")) return "";
+      if (args[1]?.endsWith("/pulls/12")) return JSON.stringify({ node_id: "PR_fixture" });
+      return h.ports.run(args);
+    },
+    write: async () => { revertWrites++; return JSON.stringify({ data: { revertPullRequest: { revertPullRequest: { number: 13 } } } }); },
+    mutate: async (id: string, change: (pipeline: Pipeline) => boolean) => {
+      const changed = await h.ports.mutate(id, change);
+      if (h.merge("watched")?.recovery?.revertPr) recorded();
+      return changed;
+    },
+  };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let firstRecovery: Promise<unknown> | null | undefined;
+  try {
+    scheduleAutoMerge(ports);
+    firstRecovery = host.__llvPostMergeRunning;
+    await readEntered;
+    h.pipeline("watched").merge!.postMergeWatch = true;
+    h.advance(60_000);
+    scheduleAutoMerge(ports);
+    await Promise.race([revertRecorded, new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error("watched recovery waited for an unrelated forge read")), 2000);
+    })]);
+    expect(recoveryReads).toBe(2);
+    expect(revertWrites).toBe(1);
+    const { postMergeSeatSignals } = await import("./postMerge");
+    expect(postMergeSeatSignals([h.pipeline("watched")], "repo-fixture")).toHaveLength(1);
+  } finally {
+    clearTimeout(deadline); release();
+    await firstRecovery;
+    await host.__llvAutoMergeRunning;
+    await host.__llvPostMergeRunning;
+  }
+});
+
+test.each(["before-write", "credential-mint", "in-flight"] as const)("operator rejection at merge reconciles the actual effect: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const project = `atlas-merge-${phase}`;
+  const { task } = await admitProactiveTask({ ...candidate(`merge-${phase}`), project }, { ...context(), project }, undefined, authority());
+  const completed = lane("proactive-merge");
+  completed.taskIds = [task.id];
+  const h = harness({ lanes: [completed], prs: [openPr(11)] });
+  await h.sweep();
+  expect(h.writes).toEqual([]);
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+  let rejected = false;
+  const reject = async () => {
+    if (rejected) return;
+    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+    rejected = true;
+  };
+  if (phase === "before-write") h.afterMutation(async pipeline => { if (pipeline.merge?.state === "merging") await reject(); });
+  else {
+    const actualWrite = h.ports.write;
+    h.ports.write = forgeWriter(h.ports.run, forgeAppWriter(sandbox, 1_000, {
+      source: { HOME: sandbox, NODE_ENV: "test" },
+      tokens: new ForgeAppTokenSource(async () => {
+        if (phase === "credential-mint") await reject();
+        return { token: "fixture", expiresAt: null };
+      }),
+      exec: async args => {
+        // exec is the real dispatch seam: rejection here follows write start.
+        if (phase === "in-flight") await reject();
+        return actualWrite(args, REPO);
+      },
+    }), () => true);
+  }
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3);
+  expect(rejected).toBe(true);
+  if (phase !== "in-flight") {
+    expect(h.writes).toEqual([]);
+    expect(h.merge(completed.id)).toMatchObject({ state: "blocked", reason: expect.stringContaining("rejected") });
+  } else {
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
+  }
+});
 
 describe("outstanding human reviews (#2866)", () => {
   test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND", "DIRTY", "UNKNOWN", "DRAFT"])("CHANGES_REQUESTED blocks in %s", async (mergeStateStatus) => {
@@ -608,6 +770,145 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B], mergedHead: HEAD_B });
     expect(h.updates()).toHaveLength(0);
+  });
+
+  test.each(["unreadable", "open", "malformed"] as const)("an accepted queue request with %s confirmation stays merging until landing is proved", async queuedMerge => {
+    const h = harness({ queuedMerge, lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.prs.get(11)!.state).toBe("OPEN");
+    expect(h.merge("L1")).toMatchObject({ state: "merging", mergedAt: null });
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(MERGE_POLL_MS * 2, () => h.merge("L1")?.state === "merged");
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test.each(["[]", "[]\n[]\n", "[{\"type\":\"pull_request\"}]\n[]"])("empty requirements allow a settled PR to merge: %s", async (rulesRead) => {
+    const h = harness({ rulesRead, lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.run(MERGE_SETTLE_MS * 2, () => h.merge("L1")?.state === "merged");
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test.skipIf(!Bun.which("gh"))("required-check arguments are accepted by the installed GitHub CLI offline", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.sweep();
+    const reads = h.calls.filter(args => args[0] === "api" && args[1]?.includes("/branches/"));
+    expect(reads).toHaveLength(2);
+    for (const args of reads) {
+      // --help validates real flags without credentials or a network request.
+      expect(execFileSync("gh", [...args, "--help"], { encoding: "utf8", timeout: 5_000 })).toContain("--jq");
+    }
+  });
+
+  test.skipIf(!Bun.which("gh"))("GitHub CLI emits compact page records for empty and inherited branch rules", async () => {
+    const pages: unknown[] = [
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ruleset-ci" }] } }],
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "inherited-ci" }] } }],
+    ];
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(url.pathname + (url.searchParams.has("page") ? "?page=2" : ""));
+        const index = url.searchParams.has("page") ? 1 : 0;
+        return Response.json(url.pathname === "/empty" ? [] : pages[index], {
+          headers: url.pathname !== "/empty" && index === 0
+            ? { Link: `<${url.origin}/rules?page=2>; rel="next"` } : {},
+        });
+      },
+    });
+    try {
+      const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+      const run = h.ports.run;
+      h.ports.run = async (args) => {
+        if (!args[1]?.includes("/rules/branches/")) return run(args);
+        // A fixed inert token satisfies gh's auth preflight; only our listener is used.
+        const child = Bun.spawn(["gh", "api", `${server.url}${requests.length === 0 ? "empty" : "rules"}`, ...args.slice(2)], {
+          env: { ...process.env, GH_TOKEN: "offline", GH_ENTERPRISE_TOKEN: "offline", GITHUB_TOKEN: "", GITHUB_ENTERPRISE_TOKEN: "", NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" },
+          stdout: "pipe", stderr: "pipe", timeout: 5_000,
+        });
+        const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+        return stdout;
+      };
+      await h.run(MERGE_SETTLE_MS * 2, () => h.merge("L1")?.state === "merged");
+      expect(h.merge("L1")?.state).toBe("merged");
+      expect(requests).toEqual(["/empty"]);
+      resetAutoMergeForTests();
+      const inherited = harness({ lanes: [lane("L2")], prs: [openPr(12)] });
+      const original = inherited.ports.run;
+      inherited.ports.run = args => args[1]?.includes("/rules/branches/") ? h.ports.run(args) : original(args);
+      await inherited.sweep();
+      expect(inherited.merge("L2")?.reason).toBe("waiting for ruleset-ci, inherited-ci");
+      expect(requests).toEqual(["/empty", "/rules", "/rules?page=2"]);
+      inherited.prs.get(12)!.checks = [green("ci"), green("ruleset-ci"), green("inherited-ci")];
+      await inherited.run(MERGE_SETTLE_MS * 2, () => inherited.merge("L2")?.state === "merged");
+      expect(inherited.merge("L2")?.state).toBe("merged");
+      resetAutoMergeForTests();
+      pages[1] = {};
+      const broken = harness({ lanes: [lane("L3")], prs: [openPr(13)] });
+      const brokenRun = broken.ports.run;
+      broken.ports.run = args => args[1]?.includes("/rules/branches/") ? h.ports.run(args) : brokenRun(args);
+      await broken.run(MERGE_SETTLE_MS * 2);
+      expect(broken.merge("L3")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+      expect(broken.merges()).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("active ruleset contexts across pages hold a CLEAN PR until every check arrives", async () => {
+    const h = harness({ required: ["ci"], rulesRead: [
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ci" }, { context: "ruleset-ci" }] } }],
+      [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "inherited-ci" }] } }],
+    ].map(page => JSON.stringify(page)).join("\n"), lanes: [lane("L1")], prs: [openPr(11, { base: "release/next" })] });
+    await h.run(MERGE_SETTLE_MS * 2);
+    expect(h.merges()).toEqual([]);
+    expect(h.merge("L1")).toMatchObject({ state: "waiting-checks", reason: "waiting for ruleset-ci, inherited-ci" });
+    expect(h.calls).toContainEqual(["api", `repos/${REPO}/rules/branches/release%2Fnext`, "--paginate", "--jq", "@json"]);
+    expect(h.calls.some(args => args[1] === `repos/${REPO}/branches/release%2Fnext`)).toBe(true);
+    h.prs.get(11)!.checks = [green("ci"), green("ruleset-ci"), pending("inherited-ci")];
+    await h.run(MERGE_POLL_MS * 2);
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.checks = [green("ci"), green("ruleset-ci"), green("inherited-ci")];
+    await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merge("L1")?.state).toBe("merged");
+  });
+
+  for (const invalid of [
+    { classicRead: "not-json" }, { classicRead: "null" }, { classicRead: '["ci",42]' },
+    { rulesRead: "not-json" }, { rulesRead: "" }, { rulesRead: "  \n" }, { rulesRead: "{}" }, { rulesRead: "[{}]" }, { rulesRead: "[null]" },
+    { rulesRead: "[]\nnot-json" }, { rulesRead: "[]\nnull" },
+    { rulesRefusal: true },
+    { rulesRead: '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}]\n{}' },
+    { rulesRead: '[{"type":"required_status_checks","parameters":{}}]' },
+    { rulesRead: '[{"type":"required_status_checks","parameters":{"required_status_checks":[{}]}}]' },
+  ]) {
+    test(`invalid required-check discovery fails closed: ${JSON.stringify(invalid)}`, async () => {
+      const h = harness({ ...invalid, lanes: [lane("L1")], prs: [openPr(11)] });
+      await h.run(MERGE_SETTLE_MS * 2);
+      expect(h.merges()).toEqual([]);
+      expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+    });
+  }
+
+  test("failed discovery is read again after recovery without caching partial requirements", async () => {
+    const options = { rulesRead: '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ruleset-ci"}]}}]\n{}',
+      lanes: [lane("L1")], prs: [openPr(11)] };
+    const h = harness(options);
+    await h.sweep();
+    expect(h.merge("L1")?.readFailures).toBe(1);
+    expect(h.merges()).toEqual([]);
+    options.rulesRead = "[]";
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.calls.filter(args => args[1]?.includes("/rules/branches/"))).toHaveLength(2);
+    expect(h.calls).toContainEqual(["api", `repos/${REPO}/branches/main`, "--jq",
+      "[.protection.required_status_checks | (.contexts[]?, .checks[]?.context)]"]);
   });
 
   test("a rollup missing a required context waits until it arrives", async () => {

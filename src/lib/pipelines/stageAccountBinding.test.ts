@@ -17,7 +17,7 @@ fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 fs.mkdirSync(process.env.HOME, { recursive: true });
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-const { accountManager } = await import("@/lib/accounts/manager");
+const { accountManager, ProjectAccountRefusedError } = await import("@/lib/accounts/manager");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
 const { stageDigest } = await import("./stageDigest");
@@ -163,7 +163,7 @@ async function tierOverrideFixture() {
   for (const account of [accountA, accountB]) {
     fs.writeFileSync(path.join(account.home, "auth.json"), "{}");
     fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({
-      models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }, ...(account.id === accountB.id ? [{ id: "ultrafast" }] : [])] }],
+      models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }, ...(account.id === accountB.id ? [{ id: "ultrafast" }] : [])] }, { slug: "gpt-6-luna", service_tiers: [{ id: "priority" }] }],
     }));
   }
   const ports = portsAllowing([accountA.id, accountB.id]);
@@ -196,6 +196,24 @@ async function tierOverrideFixture() {
   return { id: pipeline.id, ports, accountA, accountB };
 }
 
+
+test("create names every evaluated account and alternative models when the stage model lacks the tier", async () => {
+  const { ports, accountA, accountB } = await tierOverrideFixture();
+  const stages = [{ ...draft().stages[0]!, engine: "codex" as const, model: "gpt-6-luna", effort: "high", serviceTier: "ultrafast" }];
+  const result = await createPipelineFromRequest({ ...draft(), stages }, ports, { allowOperatorDraftWithoutLineage: true });
+  expect(result.status).toBe(400);
+  expect(result.error).toContain("serviceTier ultrafast for model gpt-6-luna");
+  expect(result.error).toContain(`account "account A" (${accountA.id}): gpt-6-luna offered: priority`);
+  expect(result.error).toContain(`account "account B" (${accountB.id}): gpt-6-luna offered: priority; ultrafast offered for other models on this account: gpt-6.1-sol`);
+  const inherited = await createPipelineFromRequest({ ...draft(), stages: [{ ...draft().stages[0]!,
+    role: { roleId: "builder", params: { mode: "apply-fixes" } }, serviceTier: "ultrafast",
+  }] }, ports, { allowOperatorDraftWithoutLineage: true });
+  expect(inherited.error).toBe(result.error);
+  const accepted = await createPipelineFromRequest({ ...draft(), stages: [{ ...stages[0]!, model: "gpt-6.1-sol" }] }, ports, { allowOperatorDraftWithoutLineage: true });
+  expect(accepted.error).toBeUndefined();
+  expect(accepted.pipeline).toBeDefined();
+});
+
 test.each([["next attempt", undefined], ["apply now", true]] as const)("override-stage validates the tier against the requested account (%s)", async (_mode, applyNow) => {
   const { id, ports, accountA, accountB } = await tierOverrideFixture();
   const result = await patchPipeline(id, {
@@ -210,13 +228,17 @@ test.each([["next attempt", undefined], ["apply now", true]] as const)("override
 });
 
 test.each([["next attempt", undefined], ["apply now", true]] as const)("override-stage tier-only changes keep the existing account pin (%s)", async (_mode, applyNow) => {
-  const { id, ports } = await tierOverrideFixture();
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
   const before = structuredClone(loadPipelines()[0]);
   const result = await patchPipeline(id, {
     action: "override-stage", stageId: "build", serviceTier: "ultrafast", applyNow,
   }, ports);
   expect(result.status).toBe(400);
-  expect(result.error).toContain("no account in this project's pool offers serviceTier ultrafast; offered: priority");
+  expect(result.error).toContain(`pinned account "${accountA.id}"`);
+  expect(result.error).toContain('account "account A"');
+  expect(result.error).toContain("gpt-6.1-sol offered: priority");
+  expect(result.error).not.toContain(accountB.id);
+  expect(result.error).not.toContain("pool");
   expect(loadPipelines()[0]).toEqual(before);
 });
 
@@ -253,6 +275,66 @@ test("clearing a live pin selects an account offering the requested tier through
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.to).toEqual(result.runtimeSwitch!.to);
 });
 
+test.each([
+  ["role default", "one account"], ["role default", "both accounts"],
+  ["retained explicit", "one account"], ["retained explicit", "both accounts"],
+] as const)("apply now names the allowed tier scope after an unavailable real selection (%s, %s)", async (source, scope) => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const catalogs = [accountA, accountB].map(account => ({ file: path.join(account.home, "models_cache.json"), content: fs.readFileSync(path.join(account.home, "models_cache.json")) }));
+  try {
+    ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast", promptScaffold: "Builder guidance" });
+    const configured = await patchPipeline(id, {
+      action: "override-stage", stageId: "build", account: null,
+      ...(source === "role default" ? { role: { roleId: "builder", params: { mode: "apply-fixes" } } } : { serviceTier: "ultrafast" }),
+    }, ports);
+    expect(configured.error).toBeUndefined();
+    expect(configured.pipeline!.stages[0]!.effectiveRole.serviceTierSource).toBe(source === "role default" ? "role-default" : "explicit");
+
+    const accounts = scope === "one account" ? [accountA] : [accountA, accountB];
+    ports.allowedAccountIds = () => accounts.map(account => account.id);
+    seedAccountSource(BINDINGS_SOURCE, {
+      schemaVersion: 1,
+      bindings: accounts.map(account => ({ engine: "codex", accountId: account.id, project: ATLAS, createdAt: ports.now() })),
+    });
+    const catalog = (tiers: string[]) => JSON.stringify({ models: [
+      { slug: "gpt-6.1-sol", service_tiers: tiers.map(tier => ({ id: tier })) },
+      { slug: "gpt-6-astra", service_tiers: [{ id: "ultrafast" }] },
+    ] });
+    fs.writeFileSync(path.join(accountA.home, "models_cache.json"), catalog(["priority"]));
+    if (scope === "both accounts") fs.writeFileSync(path.join(accountB.home, "models_cache.json"), catalog(["standard", "priority"]));
+    const before = structuredClone(loadPipelines()[0]);
+    const request = { action: "override-stage" as const, stageId: "build", ...(source === "role default" ? { effort: "xhigh" } : {}), applyNow: true };
+    const refused = await patchPipeline(id, request, ports);
+    expect(refused.status).toBe(409);
+    expect(refused.error).toContain("serviceTier ultrafast for model gpt-6.1-sol; evaluated allowed accounts:");
+    expect(refused.error).toContain(`account "account A" (${accountA.id}): gpt-6.1-sol offered: priority; ultrafast offered for other models on this account: gpt-6-astra`);
+    if (scope === "both accounts") expect(refused.error).toContain(`account "account B" (${accountB.id}): gpt-6.1-sol offered: priority, standard; ultrafast offered for other models on this account: gpt-6-astra`);
+    else expect(refused.error).not.toContain(accountB.id);
+    expect(refused.runtimeSwitch).toBeUndefined();
+    expect(loadPipelines()[0]).toEqual(before);
+
+    fs.writeFileSync(path.join(accountA.home, "models_cache.json"), catalog(["priority", "ultrafast"]));
+    const accepted = await patchPipeline(id, request, ports);
+    expect(accepted.error).toBeUndefined();
+    expect(accepted.runtimeSwitch?.to).toMatchObject({ accountId: accountA.id, accountPinned: false, model: "gpt-6.1-sol", effort: source === "role default" ? "xhigh" : "high", serviceTier: "ultrafast" });
+  } finally {
+    for (const { file, content } of catalogs) fs.writeFileSync(file, content);
+  }
+});
+
+test.each(["unavailable", "exhausted"] as const)("apply now keeps the capacity refusal when an allowed account offers the tier (%s)", async kind => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const configured = await patchPipeline(id, { action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast" }, ports);
+  expect(configured.error).toBeUndefined();
+  const before = structuredClone(loadPipelines()[0]);
+  ports.resolveProjectSpawn = () => ({ kind, allowedAccountIds: [accountA.id, accountB.id], resetsAt: null });
+  const result = await patchPipeline(id, { action: "override-stage", stageId: "build", effort: "xhigh", applyNow: true }, ports);
+  expect(result.status).toBe(409);
+  expect(result.error).toBe("no allowed target account is available");
+  expect(result.runtimeSwitch).toBeUndefined();
+  expect(loadPipelines()[0]).toEqual(before);
+});
+
 test.each(["unsupported", "unknown", "absent"] as const)("live tier validation refuses an unsafe selector result (%s)", async selection => {
   const { id, ports, accountA } = await tierOverrideFixture();
   const before = structuredClone(loadPipelines()[0]);
@@ -265,6 +347,10 @@ test.each(["unsupported", "unknown", "absent"] as const)("live tier validation r
     action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast", applyNow: true,
   }, ports);
   expect(result.status).toBe(409);
+  if (selection !== "unknown") {
+    expect(result.error).toContain(`selected account "${accountA.id}"`);
+    expect(result.error).toContain("gpt-6.1-sol offered: priority");
+  }
   expect(result.runtimeSwitch).toBeUndefined();
   expect(loadPipelines()[0]).toEqual(before);
 });
@@ -495,7 +581,7 @@ test("stage tier narrows selection and the durable launch profile; role fallback
   const accountB = createManagedCodexAccount("account B");
   for (const account of [accountA, accountB]) {
     fs.writeFileSync(path.join(account.home, "auth.json"), "{}");
-    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(account.id === accountB.id ? [{ id: "ultrafast" }] : [])] }] }));
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(account.id === accountB.id ? [{ id: "ultrafast" }] : [])] }, { slug: "gpt-6-luna", service_tiers: [{ id: "priority" }] }] }));
   }
   const input = { ...spawnInput(null), role: { ...spawnInput(null).role, engine: "codex" as const, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", serviceTierSource: "explicit" as "explicit" | "role-default" }, clientAttemptId: "tier-stage-required" };
   const reserved: string[] = [];
@@ -506,7 +592,8 @@ test("stage tier narrows selection and the durable launch profile; role fallback
     expect(resolve.mock.calls[0]?.[1]?.unavailableIds).toEqual(listCodexAccounts().filter(account => account.id !== accountB.id).map(account => account.id));
     expect(agentRegistry().readOnlySnapshot().receipts[reserved[0]!]!.launchProfile).toMatchObject({ serviceTier: "ultrafast", fast: true });
     const count = reserved.length;
-    await expect(defaultPipelinePorts().spawnAgent({ ...input, requestedAccountId: accountA.id }, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("offered: priority");
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, requestedAccountId: accountA.id }, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow(`pinned account "${accountA.id}": account "account A" (${accountA.id}): gpt-6-astra offered: priority`);
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, role: { ...input.role, model: "gpt-6-luna" }, requestedAccountId: accountB.id }, () => {})).rejects.toThrow("gpt-6-luna offered: priority; ultrafast offered for other models on this account: gpt-6-astra");
     expect(reserved).toHaveLength(count);
     // Exhausted preferred pool retries the same project without the tier exclusion.
     resolve.mockImplementationOnce(() => ({ kind: "unavailable", allowedAccountIds: [accountA.id, accountB.id] }))
@@ -516,10 +603,111 @@ test("stage tier narrows selection and the durable launch profile; role fallback
     expect(resolve.mock.calls.at(-1)?.[1]?.unavailableIds).toEqual([]);
     const ports = portsAllowing(null);
     ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" });
-    const created = await createPipelineFromRequest({ ...draft(), stages: [{ ...draft().stages[0]!, serviceTier: null }] }, ports, { allowOperatorDraftWithoutLineage: true });
-    expect(created.pipeline?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+    const created = await createPipelineFromRequest({ ...draft(), stages: [{ ...draft().stages[0]!, engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: null, preferredServiceTier: "ultrafast" }] }, ports, { allowOperatorDraftWithoutLineage: true });
+    expect(created.pipeline?.stages[0]).toMatchObject({ serviceTier: null, preferredServiceTier: "ultrafast", effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default", preferredServiceTier: "ultrafast" } });
     const priority = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", serviceTier: "priority" }, ports);
     expect(priority.error).toBeUndefined();
-    expect(priority.pipeline?.stages[0]).toMatchObject({ serviceTier: "priority", effectiveRole: { serviceTier: "priority", serviceTierSource: "explicit" } });
+    expect(priority.pipeline?.stages[0]).toMatchObject({ serviceTier: "priority", preferredServiceTier: "ultrafast", effectiveRole: { serviceTier: "priority", serviceTierSource: "explicit", preferredServiceTier: "ultrafast" } });
+    const model = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", model: "gpt-6-luna" }, ports);
+    expect(model.error).toBeUndefined();
+    const effort = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", effort: "xhigh" }, ports);
+    expect(effort.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === created.pipeline!.id)?.stages[0]).toMatchObject({
+      model: "gpt-6-luna", effort: "xhigh", preferredServiceTier: "ultrafast",
+      effectiveRole: { model: "gpt-6-luna", effort: "xhigh", preferredServiceTier: "ultrafast" },
+    });
   } finally { resolve.mockRestore(); }
+});
+
+test("create_pipeline accepts ultrafast from an allowed legacy model catalogue", async () => {
+  const { accountA, accountB, ports } = await tierOverrideFixture();
+  fs.writeFileSync(path.join(accountB.home, "models_cache.json"), JSON.stringify({ models: [
+    { slug: "gpt-6.1-sol", additional_speed_tiers: ["fast", "ultrafast"] },
+  ] }));
+  const result = await createPipelineFromRequest({ ...draft(accountB.id), stages: [{
+    ...draft(accountB.id).stages[0]!, engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast",
+  }] }, ports, { allowOperatorDraftWithoutLineage: true });
+  expect(result.error).toBeUndefined();
+  expect(result.pipeline?.stages[0]?.effectiveRole.serviceTier).toBe("ultrafast");
+  expect(result.pipeline?.stages[0]?.account).not.toBe(accountA.id);
+});
+
+test("automatic ultrafast launch falls back to available priority inside the allowed pool", async () => {
+  const { createManagedCodexAccount, listCodexAccounts } = await import("@/lib/accounts/codex");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
+  const accountA = createManagedCodexAccount("priority account");
+  const accountB = createManagedCodexAccount("exhausted ultrafast account");
+  const excluded = createManagedCodexAccount("excluded ultrafast account");
+  for (const [account, tiers] of [[accountA, ["priority"]], [accountB, ["ultrafast"]], [excluded, ["ultrafast"]]] as const) {
+    fs.writeFileSync(path.join(account.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", service_tiers: tiers.map(id => ({ id })),
+    }] }));
+  }
+  const ports = portsAllowing([accountA.id, accountB.id]);
+  const now = Date.now();
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [accountA, accountB].map(account => ({
+    engine: "codex", accountId: account.id, project: ATLAS, createdAt: new Date(now).toISOString(),
+  })) });
+  const accounts = listCodexAccounts().map(account => ({ id: account.id, authPresent: true }));
+  const observations = [accountA, accountB, excluded].map(account => ({ engine: "codex" as const, accountId: account.id,
+    authenticated: true, authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "tier-fallback",
+    provenance: { source: "live" as const, reason: null, staleSince: null },
+    limits: { session: null, weekly: { usedPercent: account.id === accountB.id ? 100 : 25, resetsAt: now / 1000 + 86400 },
+      plan: "pro", capturedAt: now / 1000, credits: { hasCredits: true, balance: "10", unlimited: false } },
+  }));
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
+    const selected = selectProjectAccount({ ...request, engine, accounts, observations, now,
+      bindings: [accountA, accountB].map(account => ({ engine: "codex" as const, accountId: account.id, project: ATLAS, createdAt: new Date(now).toISOString() })) });
+    return selected.kind === "available"
+      ? { kind: "available", account: accountManager.resolveSpawn("codex", selected.accountId) }
+      : selected;
+  });
+  const reserved: string[] = [];
+  const input = { ...spawnInput(null), role: { ...spawnInput(null).role, engine: "codex" as const, model: "gpt-6.1-sol",
+    effort: "high", serviceTier: "ultrafast", serviceTierSource: "role-default" as const,
+    preferredServiceTier: "ultrafast" }, requireAccountCapacity: true };
+  try {
+    await expect(defaultPipelinePorts().spawnAgent(input, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("runtime host");
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).toContain(accountA.id);
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).not.toContain(excluded.id);
+    expect(resolve.mock.calls[1]?.[1]?.unavailableIds).toContain(accountB.id);
+    expect(resolve.mock.calls[1]?.[1]?.unavailableIds).not.toContain(excluded.id);
+    const receipt = agentRegistry().readOnlySnapshot().receipts[reserved[0]!]!;
+    expect(receipt.accountId).toBe(accountA.id);
+    expect(receipt.launchProfile).toMatchObject({ serviceTier: "priority", fast: true });
+    expect(receipt.launchProfile).not.toMatchObject({ serviceTier: "ultrafast" });
+
+    resolve.mockClear();
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, unavailableAccountIds: [accountB.id], clientAttemptId: "quota-excluded-ultrafast" }, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("runtime host");
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).toContain(accountB.id);
+    const quotaFallbackReceipt = agentRegistry().readOnlySnapshot().receipts[reserved.at(-1)!]!;
+    expect(quotaFallbackReceipt.accountId).toBe(accountA.id);
+    expect(quotaFallbackReceipt.launchProfile.serviceTier).toBe("priority");
+
+    resolve.mockClear();
+    observations.find(item => item.accountId === accountA.id)!.limits!.weekly!.usedPercent = 100;
+    const reservedCount = reserved.length;
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, clientAttemptId: "priority-exhausted" }, () => {}))
+      .rejects.toThrow(ProjectAccountRefusedError);
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[1]?.[1]?.model).toBe("gpt-6.1-sol");
+    expect(reserved).toHaveLength(reservedCount);
+
+    resolve.mockClear();
+    observations.find(item => item.accountId === accountA.id)!.limits!.weekly!.usedPercent = 25;
+    fs.writeFileSync(path.join(accountA.home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", service_tiers: [],
+    }] }));
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, clientAttemptId: "standard-fallback" }, reservation => { reserved.push(reservation.launchId); }))
+      .rejects.toThrow("runtime host");
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[1]?.[1]?.unavailableIds).toEqual([]);
+    const standardReceipt = agentRegistry().readOnlySnapshot().receipts[reserved.at(-1)!]!;
+    expect(standardReceipt.accountId).toBe(accountA.id);
+    expect(standardReceipt.launchProfile.serviceTier).toBe("standard");
+  } finally { resolve.mockRestore(); clearAccountFixture(BINDINGS_SOURCE); }
 });

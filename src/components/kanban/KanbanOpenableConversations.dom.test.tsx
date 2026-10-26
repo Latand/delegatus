@@ -197,7 +197,10 @@ test("every conversation a card counts opens on click, loaded on this board or n
   expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl" }));
 });
 
-test("a failed launch shows at once with its error, opens its launch view, and counts as no conversation", () => {
+test.each([
+  "account limit reached",
+  "the Claude CLI refused bypass permissions under root; set IS_SANDBOX=1 in the container environment or run as a non-root user",
+])("a failed launch shows its cause on the card and launch view: %s", (reason) => {
   const failed = task("failed", {
     text: "Fix the upload retries",
     assignments: [{ launchId: "launch-failed", conversationId: "conversation_failed", path: "spawn:launch-failed", panePid: null, state: "spawning", error: null, at: iso(NOW - 120), engine: "claude" }],
@@ -206,7 +209,7 @@ test("a failed launch shows at once with its error, opens its launch view, and c
     path: "spawn:launch-failed", conversationId: "conversation_failed", title: "Fix the upload retries", project: "fixture",
     root: "claude-projects", kind: "session", fmt: "claude", engine: "claude", mtime: NOW - 120, size: 0, activity: "idle",
     proc: null, pid: null, parent: null, model: null, pendingQuestion: null, waitingInput: null, name: "launch-failed",
-    spawn: { launchId: "launch-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_failed", state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+    spawn: { launchId: "launch-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_failed", state: "failed", initialMessage: "failed", retrySafe: true, error: reason },
   } as unknown as FileEntry;
   const opened: string[] = [];
   const retried: string[] = [];
@@ -216,14 +219,15 @@ test("a failed launch shows at once with its error, opens its launch view, and c
   expect(failedCard.querySelector("[data-member]")).toBeNull();
   const row = failedCard.querySelector('[data-launch-failed="launch-failed"]') as HTMLElement | null;
   expect(row?.textContent).toContain("Launch failed");
-  expect(row?.querySelector('[data-launch-error="launch-failed"]')?.textContent).toBe("account limit reached");
+  expect(row?.querySelector('[data-launch-error="launch-failed"]')?.textContent).toBe(reason);
   expect(row?.querySelector('[data-launch-dismiss="launch-failed"]')).not.toBeNull();
   flushSync(() => (row!.querySelector('[data-launch-open="launch-failed"]') as HTMLElement).click());
   expect(opened).toEqual(["spawn:launch-failed"]);
-  /* The launch view it opens carries the error and a working Retry. */
+  /* The launch view keeps the cause in its error tooltip and a working Retry. */
   const launchView = host.querySelector('[data-launch-state="failed"]') as HTMLElement | null;
   expect(launchView?.textContent).toContain("The launch ended with an error.");
   expect(launchView?.textContent).toContain("First message: failed");
+  expect(launchView?.querySelector('[data-launch-chip="error"]')?.getAttribute("title")).toBe(reason);
   flushSync(() => (launchView!.querySelector("[data-launch-retry]") as HTMLElement).click());
   expect(retried).toEqual(["spawn:launch-failed"]);
 });

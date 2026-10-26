@@ -7,19 +7,36 @@ import { existingInternalServiceHeaders, INTERNAL_SERVICES } from "@/lib/agent/c
 import { readRelayStore } from "./store";
 import { viewerBootGateKey } from "../../../bin/viewerGateKey.mjs";
 
+/** Structured replies cross the same egress boundary as transcript answers.
+ * Tool arguments are inputs to the existing service-tool admission boundary. */
+export function scrubOwnerReply(value: unknown, credentials: readonly string[] = []): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const raw = value as Record<string, unknown>;
+  if (raw.action === "call") return value;
+  const scrub = (part: unknown): unknown => typeof part === "string" ? scrubOwnerOutput(part, credentials)
+    : Array.isArray(part) ? part.map(scrub)
+      : part && typeof part === "object" ? Object.fromEntries(Object.entries(part).map(([key, item]) => [key, scrub(item)])) : part;
+  const clean = scrub(raw) as Record<string, unknown>;
+  // Offsets refer to the original text. Never retarget a mention after a scrub.
+  if (clean.text !== raw.text) clean.mentions = [];
+  return clean;
+}
+
 /** Owner-only egress boundary. Never log its input or a redaction failure. */
 export function scrubOwnerOutput(text: string, credentials: readonly string[] = []): string {
   const store = readRelayStore();
-  const known = [currentOperatorSpawnCapability(), viewerBootGateKey(process.env), process.env.LLV_SPAWN_CAPABILITY, ...credentials,
+  const known = [currentOperatorSpawnCapability(), viewerBootGateKey(process.env), process.env.LLV_SPAWN_CAPABILITY, process.env.LLV_CODEX_CLOUD_TOKEN, ...credentials,
     ...store.relays.map(r => r.credential), ...store.pending.flatMap(p => [p.poll_secret, p.code]),
     ...INTERNAL_SERVICES.flatMap(service => Object.values(existingInternalServiceHeaders(service)).flatMap(value => [value, value.slice(value.indexOf(".") + 1)])),
   ].filter((value): value is string => !!value).sort((a, b) => b.length - a.length);
   // Replace exact values first: generic filters must not leave a fragment of one.
   let clean = text;
-  for (const value of known) clean = clean.split(value).join("[redacted]");
+  const forms = known.flatMap(value => [value, Buffer.from(value).toString("base64"), Buffer.from(value).toString("base64url")])
+    .sort((a, b) => b.length - a.length);
+  for (const value of forms) clean = clean.split(value).join("[redacted]");
   // Check known values before any pattern can cut an encoded value into parts.
   const decoded = decodeSensitiveText(clean, false, undefined, true);
-  if (decoded.error || known.some(value => decoded.text.includes(value))
+  if (decoded.error || forms.some(value => decoded.text.includes(value))
     || knownProviderSecretOffset(decoded.text) >= 0) return "[redacted]";
   // A raw pattern may match only a suffix of an encoded credential. Require
   // its result to agree with redacting the original decoded input in full.

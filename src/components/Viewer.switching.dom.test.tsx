@@ -506,6 +506,9 @@ async function mountAlphaDesktop(): Promise<{ host: HTMLElement; paint: Mileston
   rememberReaders("beta", [BETA_A, BETA_B]);
   const host = await mountViewer("alpha");
   const paint = await until(() => painted(host, [SHORT.path, LONG.path, TOOLS.path]));
+  /* Each feed still settles on its own timers for a moment after its first
+     rows paint. Let that finish so a step counts only the renders it causes. */
+  await advance(1_000);
   // 97aa4ac7c adds the own-message navigator on an animation frame; the
   // progressive initial window also finishes after the first rows paint.
   // Measure gestures only after those initial commits have finished.

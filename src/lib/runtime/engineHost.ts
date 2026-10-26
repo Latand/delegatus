@@ -6,7 +6,7 @@ import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import type { MessageOrigin } from "./messageOrigin";
-import type { PendingPermissionRequest, PendingToolUse } from "./permissionRequests";
+import type { PendingPermissionRequest, PendingQuestionRequest, PendingToolUse } from "./permissionRequests";
 import type { RuntimeSendSettings, RuntimeHostDiagnostics } from "./contracts";
 import type { RuntimeVoiceDelivery, RuntimeVoiceResponse } from "./voiceDelivery";
 import {
@@ -133,6 +133,7 @@ export type RuntimeEvent =
   | { kind: "session-status"; status: "active" | "idle" | "unhosted" | "dead"; activeFlags?: string[]; seq: number };
 
 export interface HostState {
+  exitProcess?: import("@/lib/processIdentity").ProcessIdentity;
   signalDomain?: AgentSignalDomain;
   /** Present when this launch runs without the signal boundary. */
   signalBoundary?: SignalBoundaryOff;
@@ -153,6 +154,8 @@ export interface HostState {
       what the tool would do and why the engine asked. A subset of
       `pendingAttention`; absent from hosts that raise none. */
   pendingPermissions?: PendingPermissionRequest[];
+  /** Native questions with their choices and receipt time. */
+  pendingQuestions?: PendingQuestionRequest[];
   /** The pending attentions that are native questions or plans, each with
       the transcript tool use it answers. A subset of `pendingAttention`;
       absent from hosts that raise none. */

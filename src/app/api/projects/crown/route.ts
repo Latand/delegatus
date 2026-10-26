@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -8,7 +9,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
+async function workspacePOST(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
   let payload: unknown = null;
@@ -29,5 +30,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!setProjectCrown(canonicalProject(project), crowned)) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the crown state" }, { status: 500, headers });
   }
-  return NextResponse.json({ ok: true, crownedProjects: projectCurationSnapshot().crowned }, { headers });
+  return NextResponse.json({ ok: true, crownedProjects: projectCurationSnapshot().crowned.filter(project => { const scope = requestWorkspaceScope(request); return !scope || scope.access(project) !== "none"; }) }, { headers });
 }
+
+export const POST = workspaceRoute("/api/projects/crown", workspacePOST);

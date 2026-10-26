@@ -4,6 +4,10 @@
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
+# Recording/waiting is outside admission: a waiter must never take a slot.
+if [[ ${1:-} == --record || ${1:-} == --wait ]]; then
+  exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/gate-wait.ts" "$@"
+fi
 slots=${LLV_GATE_SLOTS:-6}
 if [[ ! "$slots" =~ ^[1-9][0-9]*$ ]]; then
   echo "LLV_GATE_SLOTS must be a positive integer" >&2
@@ -15,6 +19,8 @@ poll=${LLV_GATE_POLL_SECONDS:-2}
 
 # CPU placement: the same defaults as src/lib/runtime/cpuPlacement.ts. Each
 # setting is read as DELEGATUS_X, then as the LLV_X an entry point folds it into.
+# owned-runner always applies CPUWeight=10 and IOWeight=10 to the check service,
+# including the no-placement and namespace handoff paths.
 slice=${LLV_GATE_SLICE:-delegatus-agents-work.slice}
 # The machine's online CPUs whatever this process's affinity, like onlineCpuCount.
 cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -89,6 +95,10 @@ pre_push_parent() {
 # without a user manager does it run in a leaf of the agent's own scope, whose
 # memory cap then applies; that fallback is announced, never silent.
 run() {
+  if [[ -n ${LLV_GATE_WAIT_STARTED:-} ]]; then
+    printf 'running\n' > "$LLV_GATE_WAIT_STARTED"
+    unset LLV_GATE_WAIT_STARTED
+  fi
   if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]] && ! user_manager; then
     echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-8G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
     exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
@@ -122,7 +132,8 @@ if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
 # (docs/design/remote-gate-runner.md §8.3). The runner file sits under the
 # passwd home, which agents' private HOME and XDG_CONFIG_HOME do not hide. The
 # client either exits with the remote verdict or writes "here", and the command
-# is then admitted and run on this machine as before.
+# is then admitted and run on this machine as before. A saturation decision
+# is advisory: it skips no pressure, queue, slot or containment checks below.
 runner_client="$(dirname "${BASH_SOURCE[0]}")/gate-runner/client.ts"
 if [[ ${LLV_GATE_RUNNER:-} != off && ${NODE_ENV:-} != test && -f $runner_client && $(uname -s 2>/dev/null) == Linux ]] \
   && [[ -n ${LLV_GATE_RUNNER:-} || -n ${LLV_GATE_RUNNER_CONFIG:-} || -f "$(getent passwd "$(id -u)" | cut -d: -f6)/.config/delegatus/gate-runner.json" ]]; then
@@ -174,16 +185,24 @@ if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
     sleep 0.02
   done
 fi
+# Propagate helper failures; only a lost slot race retries.
+claim() {
+  local code=0
+  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" || code=$?
+  if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
+  return "$code"
+}
 queue_key="command:$$:$RANDOM:$RANDOM"
+queued_at=$(date +%s)
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
   if ! command -v flock >/dev/null; then
-    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
+    if claim; then end_cpu_wait; run "$@"; fi
   else
     for ((i=1; i<=slots; i++)); do
       exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
       if flock -n 9; then
-        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
+        if claim; then end_cpu_wait; run "$@"; fi
       fi
       exec 9>&-
     done

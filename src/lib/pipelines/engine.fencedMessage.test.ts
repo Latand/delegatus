@@ -1,6 +1,8 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, crypto } from "./engine.fixture";
+import { afterAll, expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, crypto, stageHostChild } from "./engine.fixture";
 import { SEND_LOST_REASON, SEND_UNVERIFIED_REASON } from "@/lib/runtime/sendSettlement";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { startUnreapedChild } from "@/lib/testing/unreapedChild";
+import { processIdentityMayRun, processIdentityStatus } from "@/lib/processIdentity";
 
 test("a fenced first message relaunches automatically and succeeds", async () => {
   const h = harness();
@@ -374,3 +376,345 @@ test("fenced retry delivers once across controller processes before and after di
     expect(JSON.parse(fs.readFileSync(path.join(root, "transport.json"), "utf8"))).toMatchObject({ deliveries: 1 });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 120_000);
+
+const recordedHosts: Awaited<ReturnType<typeof stageHostChild>>[] = [];
+/* A case that times out never reaches its finally; its host is ended after the
+   file's last test so it cannot outlive the file. */
+async function ownedHost() {
+  const host = await stageHostChild();
+  recordedHosts.push(host);
+  return host;
+}
+afterAll(async () => { for (const host of recordedHosts.splice(0)) await host.end(); });
+
+/* 2026-10-23: four failed-startup recoveries parked on "could not terminate its
+   recorded host: stage launch changed or wrote its transcript before
+   termination" while the recorded host pid no longer existed, and a manual
+   retry-stage then replaced each one. A fenced first-message launch whose
+   recorded host is a real child this test started, stopped through the
+   production recorded-identity adapter over a real registry and journal. Every
+   ladder signal is recorded and never sent; the host ends only by `end`. */
+async function fencedLaunchWithRecordedHost(recordedIdentity?: (host: import("@/lib/processIdentity").ProcessIdentity) => import("@/lib/processIdentity").ProcessIdentity) {
+  const h = harness();
+  const stages = [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null }] as const;
+  const pipeline = await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "fenced-recorded-host-"));
+  const registry = new AgentRegistry(path.join(root, "agent-registry.json"));
+  const journal = new RuntimeJournal(path.join(root, "runtime-journal.sqlite"), { structuredHosts: true, now: () => Date.parse("2026-10-23T12:00:00Z") });
+  const host = await ownedHost();
+  setAgentRegistryForTests(registry);
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, transport: "structured", role: "builder",
+    launchProfile: { title: "Recorded host fixture" },
+    clientAttemptId: "fenced-recorded-host-launch", conversationId: `conversation_${crypto.randomUUID()}` });
+  if (begun.kind !== "created") throw new Error("failed to reserve the recorded-host fixture launch");
+  const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+  const artifactPath = path.join(root, `rollout-2026-10-23T12-00-00-${key.sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  // The Viewer generation that started the host is this test process, still running.
+  const claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  const recorded = recordedIdentity?.(host.process) ?? host.process;
+  expect(registry.stageStructuredSpawn(begun.receipt.launchId, { key, artifactPath, cwd: root,
+    accountId: "account-a", launchProfile: begun.receipt.launchProfile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: recorded, eventCursor: 0,
+      protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner, pendingAction: null }).kind).toBe("settled");
+  // The spawn layer could not confirm the host's cleanup, so the row keeps its exact process identity.
+  expect(registry.failStructuredSpawn(begun.receipt.launchId, SEND_LOST_REASON, { retainRegisteredHost: true }).claimed).toBe(true);
+  expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!.structuredHost?.process).toEqual(recorded);
+  const operationId = `spawn_message_${begun.receipt.launchId}`;
+  journal.append({ scope: { type: "session", id: begun.receipt.conversationId }, kind: "session-status", payload: {
+    conversationId: begun.receipt.conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted",
+    turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+  } });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: `spawn_${begun.receipt.launchId}`,
+    conversationId: begun.receipt.conversationId, text: "Build", policy: "queue" });
+  journal.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON }, { fromStatuses: ["queued"] });
+  const lane = loadPipelines().find(item => item.id === pipeline.id)!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  Object.assign(attempt, { state: "spawning", error: null, launchId: begun.receipt.launchId,
+    conversationId: begun.receipt.conversationId, sessionId: null, agentPath: null, paneId: null });
+  lane.state = "running";
+  lane.stateDetail = null;
+  lane.cursor!.state = "spawning";
+  savePipelines([lane]);
+  const signals: string[] = [];
+  const row = () => registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+  const tick = async (terminateOwnedHost: (key: { engine: string; sessionId: string }) => Promise<boolean>, now = "2026-10-23T12:00:00.000Z") => {
+    const production = defaultPipelinePorts({
+      spawnRecoveryClient: () => ({ operationStatus: async (id: string) => journal.currentRetryResult(id) } as never),
+      termination: { signal: (pid, value) => { signals.push(`${value}:${pid}`); }, terminateOwnedHost },
+    });
+    await tickPipelines([], { ...h.ports, spawnReceipt: production.spawnReceipt, claimSpawnRetry: production.claimSpawnRetry,
+      fencedFirstMessageRetrySafe: production.fencedFirstMessageRetrySafe, stopStageAgent: production.stopStageAgent,
+      scheduleTick: () => {}, sleep: forbiddenSleep, now: () => now });
+  };
+  return { h, root, registry, host, key, artifactPath, launchId: begun.receipt.launchId, signals, row, tick,
+    attempt: () => loadPipelines()[0]!.runs[0]!.attempts[0]!,
+    end: async () => { setAgentRegistryForTests(null); journal.close(); registry.close(); await host.end(); } };
+}
+
+function expectReplacedAfterFailedStartup(f: Awaited<ReturnType<typeof fencedLaunchWithRecordedHost>>) {
+  const lane = loadPipelines()[0]!;
+  expect(lane.stateDetail ?? "").not.toContain("could not terminate its recorded host");
+  expect(lane.state).toBe("running");
+  expect(f.attempt()).toMatchObject({ state: "pending", launchId: null, fencedMessageRetries: 1,
+    retiredLaunches: [{ launchId: f.launchId, error: SEND_LOST_REASON }] });
+}
+
+test("failed startup recovery replaces the attempt when the stop's own release ends the host and its last write moves the transcript", async () => {
+  const f = await fencedLaunchWithRecordedHost();
+  try {
+    const spawned = f.h.spawnInputs.length;
+    // The runtime's own release: the host process ends, writing one last record as it exits.
+    await f.tick(async () => {
+      await f.host.end();
+      fs.appendFileSync(f.artifactPath, JSON.stringify({ type: "session_meta", payload: { id: "exiting-host" } }) + "\n");
+      return true;
+    });
+    expectReplacedAfterFailedStartup(f);
+    // The ladder ran to its end: no signal was needed, and the row is retired.
+    expect(f.signals).toEqual([]);
+    expect(f.row()).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null, structuredTerminationSurvivors: [] });
+    await f.tick(async () => false, "2026-10-23T12:00:01.000Z");
+    expect(f.h.spawnInputs).toHaveLength(spawned + 1);
+    expect(f.attempt()).toMatchObject({ state: "running", retiredLaunches: [{ launchId: f.launchId }] });
+  } finally { await f.end(); }
+});
+
+test("failed startup recovery replaces the attempt when the host is gone and the row was retired under the stop", async () => {
+  const f = await fencedLaunchWithRecordedHost();
+  try {
+    await f.tick(async () => {
+      await f.host.end();
+      const before = f.registry.readOnlySnapshot();
+      const next = structuredClone(before);
+      Object.assign(next.entries[`codex:${f.key.sessionId}`]!, { status: "dead", claimOwner: null, structuredHost: null, structuredTerminationSurvivors: [] });
+      f.registry.restoreSnapshot(before, next);
+      return true;
+    });
+    expectReplacedAfterFailedStartup(f);
+    expect(f.signals).toEqual([]);
+  } finally { await f.end(); }
+});
+
+test("failed startup recovery replaces the attempt without a signal when the recorded pid now names another process", async () => {
+  // The recorded start identity no longer matches the process at that pid.
+  const f = await fencedLaunchWithRecordedHost(host => ({ ...host, startIdentity: `${host.startIdentity}:recycled` }));
+  const viewer = await ownedHost();
+  try {
+    const before = f.registry.readOnlySnapshot();
+    const next = structuredClone(before);
+    next.entries[`codex:${f.key.sessionId}`]!.claimOwner = `structured-host:${JSON.stringify(viewer.process)}`;
+    f.registry.restoreSnapshot(before, next);
+    let asked = 0;
+    await f.tick(async () => { asked++; return false; });
+    expectReplacedAfterFailedStartup(f);
+    expect(asked).toBe(0);
+    expect(f.signals).toEqual([]);
+    const { processIdentityStatus } = await import("@/lib/processIdentity");
+    expect(processIdentityStatus(f.host.process)).toBe("alive");
+  } finally { await f.end(); await viewer.end(); }
+});
+
+test("a turn the exiting host wrote while it stopped keeps the launch: the first message is never sent twice", async () => {
+  const f = await fencedLaunchWithRecordedHost();
+  try {
+    const spawned = f.h.spawnInputs.length;
+    await f.tick(async () => {
+      await f.host.end();
+      fs.appendFileSync(f.artifactPath, [
+        { timestamp: "2026-10-23T12:00:00.000Z", type: "session_meta", payload: { id: "exiting-host" } },
+        { timestamp: "2026-10-23T12:00:00.000Z", type: "event_msg", payload: { type: "task_started" } },
+      ].map(row => JSON.stringify(row)).join("\n") + "\n");
+      return true;
+    });
+    expect(f.attempt()).toMatchObject({ launchId: f.launchId });
+    expect(f.attempt().retiredLaunches).toBeUndefined();
+    expect(f.h.spawnInputs).toHaveLength(spawned);
+    expect(loadPipelines()[0]!.stateDetail).toBe("waiting for the failed startup host to terminate; keeping uncommitted work");
+  } finally { await f.end(); }
+});
+
+test.each(["unset", "set"] as const)("failed startup recovery never signals a live writing host whose row moved to another process, and parks (control socket %s)", async socket => {
+  const socketSet = socket === "set";
+  const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
+  if (socketSet) process.env.LLV_RUNTIME_HOST_SOCKET = path.join(process.env.TMPDIR!, "closed-runtime-host.sock");
+  const f = await fencedLaunchWithRecordedHost();
+  const peer = await ownedHost();
+  try {
+    await f.tick(async () => {
+      fs.appendFileSync(f.artifactPath, JSON.stringify({ type: "session_meta", payload: { id: "live-host" } }) + "\n");
+      const before = f.registry.readOnlySnapshot();
+      const next = structuredClone(before);
+      const entry = next.entries[`codex:${f.key.sessionId}`]!;
+      entry.structuredHost = { ...entry.structuredHost!, process: peer.process };
+      f.registry.restoreSnapshot(before, next);
+      return true;
+    });
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("needs_decision");
+    expect(lane.stateDetail).toContain("failed startup recovery could not terminate its recorded host");
+    expect(f.attempt()).toMatchObject({ launchId: f.launchId });
+    expect(f.signals).toEqual([]);
+    const { processIdentityStatus } = await import("@/lib/processIdentity");
+    expect(processIdentityStatus(f.host.process)).toBe("alive");
+    expect(processIdentityStatus(peer.process)).toBe("alive");
+    // The report names the channel this process actually had.
+    if (socketSet) {
+      expect(lane.stateDetail).toContain("structured delivery controller");
+      expect(lane.stateDetail).not.toContain("LLV_RUNTIME_HOST_SOCKET is unset");
+    } else expect(lane.stateDetail).toContain("LLV_RUNTIME_HOST_SOCKET is unset");
+  } finally {
+    if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
+    await f.end(); await peer.end();
+  }
+});
+
+test.each(["host", "owner"] as const)("socketless startup recovery defers within its own deadline and recovers after %s exit", async exited => {
+  const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  const f = await fencedLaunchWithRecordedHost();
+  const viewer = await ownedHost();
+  try {
+    const before = f.registry.readOnlySnapshot();
+    const next = structuredClone(before);
+    next.entries[`codex:${f.key.sessionId}`]!.claimOwner = `structured-host:${JSON.stringify(viewer.process)}`;
+    f.registry.restoreSnapshot(before, next);
+    let asked = 0;
+    await f.tick(async () => { asked++; return false; });
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launchId });
+    expect(f.attempt().controllerWait).toBeUndefined();
+    expect(f.attempt().startupOwnerWait).toEqual({ launchId: f.launchId, deadline: "2026-10-23T12:10:00.000Z" });
+    expect(f.attempt().unresolvedTermination).toBeUndefined();
+    expect(asked).toBe(0);
+    expect(f.signals).toEqual([]);
+    await f.tick(async () => { asked++; return false; }, "2026-10-23T12:09:59.000Z");
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(f.attempt().controllerWait).toBeUndefined();
+    expect(asked).toBe(0);
+    if (exited === "host") await f.host.end();
+    else await viewer.end();
+    // Exit evidence wins even when the handoff's deadline has now elapsed.
+    await f.tick(async () => { asked++; await f.host.end(); return true; }, "2026-10-23T12:10:01.000Z");
+    expectReplacedAfterFailedStartup(f);
+    expect(f.attempt().startupOwnerWait).toBeUndefined();
+    const spawned = f.h.spawnInputs.length;
+    await f.tick(async () => false, "2026-10-23T12:10:02.000Z");
+    await f.tick(async () => false, "2026-10-23T12:10:03.000Z");
+    expect(f.h.spawnInputs).toHaveLength(spawned + 1);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
+    await f.end(); await viewer.end();
+  }
+});
+
+test("a live starting Viewer's handoff deadline survives controller restarts and ownership changes", async () => {
+  const inheritedRoot = process.env.LLV_FENCED_OWNER_WAIT_ROOT;
+  if (inheritedRoot) {
+    const h = harness();
+    savePipelines(JSON.parse(fs.readFileSync(path.join(inheritedRoot, "owner-lane.json"), "utf8")));
+    const registry = new AgentRegistry(path.join(inheritedRoot, "agent-registry.json"));
+    const journal = new RuntimeJournal(path.join(inheritedRoot, "runtime-journal.sqlite"), { structuredHosts: true });
+    try {
+      setAgentRegistryForTests(registry);
+      const production = defaultPipelinePorts({
+        spawnRecoveryClient: () => ({ operationStatus: async (id: string) => journal.currentRetryResult(id) } as never),
+        termination: { signal: () => { throw new Error("live owner's engine must not be signalled"); },
+          terminateOwnedHost: async () => { throw new Error("live owner's engine must not be released"); } },
+      });
+      await tickPipelines([], { ...h.ports, spawnReceipt: production.spawnReceipt, claimSpawnRetry: production.claimSpawnRetry,
+        fencedFirstMessageRetrySafe: production.fencedFirstMessageRetrySafe, stopStageAgent: production.stopStageAgent,
+        scheduleTick: () => {}, sleep: forbiddenSleep, now: () => process.env.LLV_FENCED_OWNER_WAIT_NOW! });
+      expect(h.spawnInputs).toHaveLength(0);
+      fs.writeFileSync(path.join(inheritedRoot, "owner-lane.json"), JSON.stringify(loadPipelines()));
+    } finally { setAgentRegistryForTests(null); journal.close(); registry.close(); }
+    return;
+  }
+
+  const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  const f = await fencedLaunchWithRecordedHost();
+  const viewer = await ownedHost();
+  const successor = await ownedHost();
+  const setOwner = (identity: typeof viewer.process) => {
+    const before = f.registry.readOnlySnapshot();
+    const next = structuredClone(before);
+    next.entries[`codex:${f.key.sessionId}`]!.claimOwner = `structured-host:${JSON.stringify(identity)}`;
+    f.registry.restoreSnapshot(before, next);
+  };
+  try {
+    setOwner(viewer.process);
+    await f.tick(async () => { throw new Error("must defer to live owner"); });
+    const wait = f.attempt().startupOwnerWait;
+    expect(wait).toEqual({ launchId: f.launchId, deadline: "2026-10-23T12:10:00.000Z" });
+    fs.writeFileSync(path.join(f.root, "owner-lane.json"), JSON.stringify(loadPipelines()));
+    for (const [index, now] of ["2026-10-23T12:05:00.000Z", "2026-10-23T12:09:59.000Z",
+      "2026-10-23T12:10:00.000Z", "2026-10-23T13:00:00.000Z", "2026-10-24T12:00:00.000Z"].entries()) {
+      if (index === 1) setOwner(successor.process);
+      const childRoot = path.join(f.root, `controller-${index}`);
+      for (const name of ["home", "config", "tmp", "state"]) fs.mkdirSync(path.join(childRoot, name), { recursive: true });
+      const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern",
+        "a live starting Viewer's handoff deadline survives controller restarts and ownership changes"], {
+        env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
+          TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: path.join(childRoot, "state"),
+          LLV_FENCED_OWNER_WAIT_ROOT: f.root, LLV_FENCED_OWNER_WAIT_NOW: now },
+        stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(60_000),
+      });
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
+      const [lane] = JSON.parse(fs.readFileSync(path.join(f.root, "owner-lane.json"), "utf8"));
+      expect(lane.state).toBe(index < 2 ? "running" : "needs_decision");
+      expect(lane.runs[0].attempts[0]).toMatchObject({ launchId: f.launchId, startupOwnerWait: wait });
+      expect(lane.runs[0].attempts[0].fencedMessageRetries ?? 0).toBe(0);
+      expect(lane.runs[0].attempts[0].retiredLaunches).toBeUndefined();
+      expect(processIdentityMayRun(f.host.process)).toBeTrue();
+      if (index >= 2) expect(lane.stateDetail).toContain("timed out waiting for the starting Viewer");
+    }
+    expect(f.signals).toEqual([]);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
+    await f.end(); await viewer.end(); await successor.end();
+  }
+}, 120_000);
+
+test.skipIf(process.platform !== "linux")("an exited unreaped starting Viewer receives immediate recorded-host recovery", async () => {
+  const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  const f = await fencedLaunchWithRecordedHost();
+  const viewer = await startUnreapedChild();
+  try {
+    expect(processIdentityStatus(viewer.zombie)).toBe("alive");
+    expect(processIdentityMayRun(viewer.zombie)).toBeFalse();
+    const before = f.registry.readOnlySnapshot();
+    const next = structuredClone(before);
+    next.entries[`codex:${f.key.sessionId}`]!.claimOwner = `structured-host:${JSON.stringify(viewer.zombie)}`;
+    f.registry.restoreSnapshot(before, next);
+    let asked = 0;
+    await f.tick(async () => { asked++; await f.host.end(); return true; });
+    expect(asked).toBe(1);
+    expectReplacedAfterFailedStartup(f);
+    expect(f.attempt().startupOwnerWait).toBeUndefined();
+    expect(f.signals).toEqual([]);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
+    await f.end(); await viewer.stop();
+  }
+});
+
+test("failed startup recovery replaces a recorded host that exited before recovery", async () => {
+  const f = await fencedLaunchWithRecordedHost();
+  try {
+    await f.host.end();
+    await f.tick(async () => false);
+    expectReplacedAfterFailedStartup(f);
+    expect(f.signals).toEqual([]);
+  } finally { await f.end(); }
+});

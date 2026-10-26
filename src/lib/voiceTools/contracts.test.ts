@@ -7,6 +7,19 @@ const base = (): VoiceToolServer => ({ ...proposalSchema.parse({ name: "music", 
   generation: 1, owner: "installation", audience: ["voice"], state: "pending", proposedBy: { kind: "conversation", conversationId: null, at: "2026-01-01T00:00:00Z" }, approval: null,
   tools: { search: { enabled: true, acts: false } }, catalog: { digest: digest([tool()]), fetchedAt: "2026-01-01T00:00:00Z", tools: [tool()] }, lastDryRun: null });
 
+test.each([
+  ["🎵".repeat(4), true],
+  ["🎵".repeat(3) + "a", false],
+  ["🎵".repeat(4096), true],
+  ["🎵".repeat(4096) + "a", false],
+  ["a".repeat(8), true],
+  ["a".repeat(7), false],
+  ["a".repeat(8192), true],
+  ["a".repeat(8193), false],
+])("secret boundary case %# preserves its UTF-16 length bound", (value, valid) => {
+  expect(secretsSchema.safeParse({ music: { value, destinations: ["https://example.invalid"] } }).success).toBe(valid);
+});
+
 test("every pinned approval field changes the digest, with stable key ordering", () => {
   const source = base();
   const changes: ((server: VoiceToolServer) => void)[] = [
@@ -95,6 +108,27 @@ test("catalogs bound count, UTF-8 descriptions, schema bytes, depth, validity an
   expect(toolName("music", "Long".repeat(32))).not.toBe(toolName("music", "long".repeat(31) + "else"));
   expect(validate([{ ...tool(), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false, title: "Search" } }])[0].annotations)
     .toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false, title: "Search" });
+});
+
+test("catalog schema byte and depth limits accept the boundary and refuse one beyond it", () => {
+  const ajv = new Ajv({ strict: false });
+  const validate = (schema: Record<string, unknown>) => validateCatalog("music", [{ ...tool(), inputSchema: schema }], s => { ajv.compile(s); });
+  const schema = { type: "object", description: "" };
+  // JSON syntax counts too; multibyte text makes a character-count check fail.
+  const remaining = 8192 - Buffer.byteLength(JSON.stringify(schema));
+  schema.description = "🎵".repeat(Math.floor(remaining / 4)) + "x".repeat(remaining % 4);
+  expect(Buffer.byteLength(JSON.stringify(schema))).toBe(8192);
+  expect(validate(schema)[0].inputSchema).toEqual(schema);
+  expect(() => validate({ ...schema, description: schema.description + "x" })).toThrow("CATALOG_BOUNDS");
+
+  const nested = (levels: number): Record<string, unknown> => {
+    let node: Record<string, unknown> = {};
+    for (let i = 1; i < levels; i++) node = { child: node };
+    return { type: "object", default: node };
+  };
+  // The root and the object under default contribute two of the ten levels.
+  expect(validate(nested(9))).toHaveLength(1);
+  expect(() => validate(nested(10))).toThrow("CATALOG_BOUNDS");
 });
 
 test("vault accounting bounds serialized UTF-8 after JSON escaping", () => {

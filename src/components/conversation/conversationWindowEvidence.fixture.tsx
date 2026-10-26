@@ -5,10 +5,14 @@ import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationCo
 
 
 import { DeputyBlock } from "./DeputyBlock";
-import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
+import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { StagesSheet } from "@/components/kanban/StagesSheet";
+import { summarizePipeline } from "@/components/kanban/pipelineSummary";
+import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { StageDrafts } from "@/components/kanban/stageDrafts";
+import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
-import { SLOT_ROW_H } from "@/components/scheme/layout";
-import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import type { StageSlot } from "@/components/scheme/layout";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
@@ -47,7 +51,7 @@ import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
-import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
+import { appendComposerDraft, RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
 import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
@@ -106,6 +110,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "retired-orchestrator"
   | "file-confirmation"
   | "seat-inbox"
   | "parallel-failure"
@@ -1108,6 +1113,51 @@ function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture 
   createRoot(root).render(scene);
 }
 
+function mountRetiredOrchestrator(root: HTMLElement): void {
+  fakeHost.engine = "claude";
+  fakeHost.lines = [LIFE_OPENING];
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({ useLogTail: () => ({
+    lines: fakeHost.lines, linesStart: 0, size: fakeHost.lines.length, loading: false, error: null,
+    tickTime: null, paused: false, setPaused() {}, clear() {}, hasMore: false, loadingOlder: false,
+    loadOlder: async () => 0, prependGen: 0,
+  }) });
+  installFakeComposerHost();
+  const file = { ...lifeFile(), title: "Orchestrator", activity: "idle" as const, mtime: Date.now() / 1000 };
+  const originalFetch = window.fetch;
+  let rotated = false;
+  let sends = 0;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), location.origin);
+    if (init?.method === "POST" && /^\/api\/(?:tmux|runtime\/send|orchestrator\/message)$/.test(url.pathname)) sends += 1;
+    if (url.pathname === "/api/orchestrator/seat") {
+      if (rotated && params.get("detailFailure") === "1" && url.searchParams.get("scope") !== "all") {
+        return Response.json({ error: "temporarily unavailable" }, { status: 503 });
+      }
+      const current = rotated ? "conversation_current" : file.conversationId;
+      return Response.json({
+        seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
+          state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+        exists: true, viewerMcpRegistered: true,
+        previous: rotated ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
+        all: { conversationIds: [current], paths: [rotated ? "/fixtures/current.jsonl" : file.path],
+          previous: { conversationIds: rotated ? [file.conversationId] : [], paths: rotated ? [file.path] : [] } },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof window.fetch;
+  enqueueOutbox(file.conversationId!, { id: "retired-message", text: "Saved operator message", images: 0, at: Date.now() });
+  updateOutbox(file.conversationId!, "retired-message", { state: "failed", error: "recipient replaced", settledAt: Date.now() });
+  appendComposerDraft(file.conversationId!, "Unsent draft stays here");
+  Object.assign(window, { retiredOrchestrator: {
+    rotate: () => { rotated = true; document.dispatchEvent(new Event("visibilitychange")); },
+    sends: () => sends,
+  } });
+  createRoot(root).render(<main data-evidence-case="retired-orchestrator" className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+    <BranchPane file={file} tasks={[]} isRoot chromeInMenu />
+  </main>);
+}
+
 /** The composer's side of the fake host: a hosted structured session, its
     receipts and the transport behind Send. */
 function installFakeComposerHost(): void {
@@ -1872,18 +1922,32 @@ if (root && requested === "memory-cap") {
     source: "stage", clamped: !unenforced, enforced: !unenforced,
   } };
   const pipeline = { id: "memory-demo", task: "Scoped agent memory", project: "demo", state: "completed", stages: [stage],
-    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null };
+    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null } as unknown as Pipeline;
   const slot = { key: "memory-demo", pipeline, stage, attempt, index: 0, total: 1, presentation: "completed" } as unknown as StageSlot;
-  createRoot(root).render(<main className="min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary"><div className="mx-auto flex max-w-2xl flex-col gap-3">
-    <div data-memory-surface="completed" className="h-[250px] shrink-0"><StageCompletedCard slot={slot} /></div>
-    <div data-memory-surface="placeholder" className="h-[350px] shrink-0"><StagePlaceholderPane slot={slot} interactive={false} /></div>
-    <div data-memory-surface="row" className="shrink-0" style={{ height: SLOT_ROW_H + 72 }}><StageStatusRow slot={slot} expanded={false} /></div>
-  </div></main>);
+  const summary = summarizePipeline(pipeline);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  const surface = params.get("surface") ?? "stages";
+  createRoot(root).render(<main className="kb min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary">
+    {surface === "stages" ? <div data-memory-surface="stages" className="fixed inset-0"><StagesSheet
+      title={pipeline.task} summary={summary}
+      panes={[{ stage: pipeline.stages[0]!, folded: false, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
+      flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={noop}
+      onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+    /></div> : surface === "placeholder"
+      ? <div data-memory-surface="placeholder" className="mx-auto h-[350px] max-w-2xl"><StagePlaceholderPane slot={slot} interactive={false} /></div>
+      : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
+  </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
+else if (root && requested === "retired-orchestrator") mountRetiredOrchestrator(root);
 else if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "payload-notice") mountPayloadNotice(root);
 else if (root && (requested === "long-history" || requested === "codex-history")) mountLongHistory(root);

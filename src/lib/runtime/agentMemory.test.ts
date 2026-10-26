@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { agentMemoryCeiling, GIB } from "./agentMemory";
+import { readHostExit, reclaimHostExit, recordHostExit } from "./hostExit";
 
 test("reserves the core budget and bounds each agent at launch", () => {
   for (const [n, gb] of [[1,53],[5,42],[8,26.5],[11,19],[14,15],[20,10.5],[30,7],[53,4]]) {
@@ -76,7 +77,7 @@ test("probe requires delegated memory and a successful fake scope runner", () =>
     expect(probeAgentScopes(options)).toBeNull();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
-function fakeCell() {
+function fakeCell(identity?: (pid: number) => string | null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-cell-"));
   const group = `/${basePlan.slice}/${basePlan.unit}`;
   const dir = path.join(root, group);
@@ -87,12 +88,46 @@ function fakeCell() {
   fs.writeFileSync(slice, "oom 0\noom_kill 0\n");
   const calls: string[][] = [];
   let notify = () => {};
-  const cell = new AgentMemoryCell(basePlan, { cgroupRoot: root, cgroupForPid: () => group, now: () => 100_000,
+  const cell = new AgentMemoryCell(basePlan, { identity, cgroupRoot: root, cgroupForPid: () => group, now: () => 100_000,
     watch: ((_file: string, listener: () => void) => { notify = listener; return { close() {} }; }) as unknown as typeof fs.watch,
     runner: (command, args) => { calls.push([command, ...args]); return ""; } });
   cell.attach(123);
   return { cell, file, slice, calls, notify: () => notify(), dispose: () => { cell.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
+for (const alive of [false, true]) test(`scope cleanup records only a native host that still runs (alive=${alive})`, () => {
+  const native = { pid: 2147482501, startIdentity: `fixture-scope-exit-${alive}`, bootEpoch: "fixture-boot" };
+  const fixture = fakeCell(pid => pid === native.pid && alive ? native.startIdentity : null);
+  try {
+    fixture.cell.setExitProcess(native);
+    if (!alive) { recordHostExit(native, null, "SIGKILL"); reclaimHostExit(native); }
+    fs.writeFileSync(fixture.file, "oom 1\noom_kill 1\n");
+    fixture.cell.settleExit({ expected: false });
+    expect(fixture.calls).toHaveLength(1);
+    expect(fixture.calls[0]).toContain(basePlan.unit!);
+    expect(readHostExit(native)?.stop?.path ?? null).toBe(alive ? "agent-memory-scope-reap" : null);
+  } finally { fixture.dispose(); }
+});
+test("launch population varies automatic caps while repeated descendant OOMs leave the session running", () => {
+  // The launch population, rather than the engine or role, explains these caps.
+  expect([1, 5, 7, 10, 12].map((liveAgents) => agentMemoryCeiling(30 * GIB, liveAgents).limitBytes / GIB))
+    .toEqual([12.5, 10, 7, 5, 4]);
+  expect(agentMemoryCeiling(30 * GIB, 12, {}, { project: 6 * GIB, role: 8 * GIB, stage: 12 * GIB }))
+    .toMatchObject({ limitBytes: 12 * GIB, requestedBytes: 12 * GIB, source: "stage", clamped: false });
+
+  const fixture = fakeCell();
+  try {
+    for (let kills = 1; kills <= 3; kills++) {
+      fs.writeFileSync(fixture.file, `oom ${kills}\noom_kill ${kills}\n`);
+      fixture.notify();
+      expect(fixture.cell.snapshot()).toMatchObject({ kills, lastKill: { limit: "agent", fatal: false } });
+      expect(fixture.cell.fatalMemoryExit).toBe(false);
+      expect(fixture.calls).toEqual([]);
+    }
+    // An orderly session exit after recovering from child failures is not fatal.
+    expect(fixture.cell.settleExit({ expected: true })?.fatal).toBe(false);
+    expect(fixture.calls).toEqual([]);
+  } finally { fixture.dispose(); }
+});
 for (const kind of ["agent", "shared", "system"] as const) test(`fake cgroup attributes ${kind} kills and retains fatal evidence after collection`, () => {
   const fixture = fakeCell();
   try {
@@ -389,6 +424,32 @@ function watchdogChild() {
   return Object.assign(new EventEmitter(), { pid: 123, exitCode: null as number | null, signalCode: null as NodeJS.Signals | null,
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
 }
+for (const outcome of ["ready", "refused", "attachment-error"] as const) test(`a deferred socket spawn binds memory to its native root (${outcome})`, async () => {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const spawnReady = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const child = Object.assign(watchdogChild(), { spawnReady });
+  const failed = new Promise<Error>(resolve => child.once("error", resolve));
+  const killed: number[] = [];
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null, limitBytes: 100, budgetBytes: 1000 }, {
+    identity: pid => { if (outcome === "attachment-error") throw new Error("fixture attachment failed"); return `${pid}:native`; },
+    sample: () => [{ pid: 124, identity: "124:native", rss: 101, name: "agent" }],
+    kill: pid => { killed.push(pid); },
+  });
+  try {
+    cell.wrapSpawn(() => child as unknown as ChildProcessWithoutNullStreams)("agent", [], {});
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([]);
+    child.pid = 124;
+    if (outcome === "refused") reject(new Error("fixture launch refused"));
+    else resolve();
+    await spawnReady.catch(() => {});
+    if (outcome === "attachment-error") expect((await failed).message).toBe("fixture attachment failed");
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual(outcome === "ready" ? [124] : []);
+    expect(killed).not.toContain(123);
+  } finally { cell.close(); }
+});
 for (const launch of ["wrapSpawn", "attach"] as const) for (const limit of ["agent", "shared"] as const) test(`watchdog ${launch} acquires an initially unavailable owned identity and enforces the ${limit} limit`, () => {
   const child = watchdogChild();
   const killed: number[] = [];

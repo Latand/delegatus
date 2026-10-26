@@ -13,7 +13,8 @@ export type RelayTargetSettings = {
   answered_by: "install" | "service";
   fallback: "service" | "none";
   enabled: boolean;
-  engine: "claude" | "codex" | null;
+  engine: "claude" | "codex" | "codex-cloud" | null;
+  cloudEnvironmentId?: string | null;
   model: string | null;
   effort: string | null;
   project: string | null;
@@ -93,6 +94,9 @@ export type RelayStore = {
   pending: PendingRelay[];
 };
 export type RunRecord = {
+  /** Written before Cloud dispatch. A confirmed failure clears it for fallback;
+   * a completed turn remains fenced until its completion is accepted. */
+  cloudExecution?: "uncertain" | "completed";
   /** Execution ended; retained delivery/cleanup custody owns no target slot. */
   capacityReleased?: true;
   /** The service accepted this request's completion; recovery only cleans up. */
@@ -100,7 +104,16 @@ export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
-  ownerTurn?: { diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+  ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    delivery?: import("./protocol").OwnerDelivery;
+    /** Persisted before /complete; an absent ACK never authorizes /send. */
+    completionAttempt?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[] };
+    lateAnswer?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[];
+      clientKey?: string; payload?: import("./cloneSend").CloneSendInput; firstAttemptAt?: number; nextAttemptAt?: number;
+      parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
+        receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
+      status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows fall back to startedAt. */
     cancelledAt?: string;
     /** The target slot was released while this custody record is retained. */
@@ -386,10 +399,13 @@ export async function reserveRunAsync(
   record: RunRecord,
   maxConcurrent: number | undefined,
   until: number,
+  replaceStoppedOwner = false,
 ): Promise<"added" | "duplicate" | "full"> {
   let outcome: "added" | "duplicate" | "full" = "full";
   await updateRunLedgerAsync((ledger) => {
-    if (ledger.runs.some((run) => run.requestId === record.requestId)) {
+    const previous = ledger.runs.find(run => run.requestId === record.requestId);
+    if (previous && !(replaceStoppedOwner && previous.ownerTurn?.confirmed
+      && record.ownerTurn?.restartRetries === 1 && previous.relayId === record.relayId && previous.targetId === record.targetId)) {
       outcome = "duplicate";
       return ledger;
     }
@@ -402,7 +418,7 @@ export async function reserveRunAsync(
     )
       return ledger;
     outcome = "added";
-    return { ...ledger, runs: [...ledger.runs, record] };
+    return { ...ledger, runs: [...ledger.runs.filter(run => run.requestId !== record.requestId), record] };
   }, until);
   return outcome;
 }
@@ -483,8 +499,7 @@ export async function settleRelayRequestClaimAsync(
     writeRelayFile(file, { v: 1, claims });
   }, until);
 }
-/** A target this install has not configured: no engine, so it is not
- * answered until the operator picks one (§B.9). */
+/** New targets use Cloud; existing settings are retained when targets refresh. */
 export function newTargetSettings(
   target: ExternalRelayTarget,
 ): RelayTargetSettings {
@@ -494,8 +509,8 @@ export function newTargetSettings(
     answered_by: target.answered_by,
     fallback: target.fallback,
     enabled: true,
-    engine: null,
-    model: null,
+    engine: "codex-cloud",
+    model: "gpt-6.1-sol",
     effort: null,
     project: null,
     concurrency: 1,
@@ -505,7 +520,7 @@ export function newTargetSettings(
 /**
  * The service's list, in its order, over the stored settings: a target it
  * still lists keeps the operator's settings and takes the service's name,
- * `answered_by` and `fallback`; a new one arrives unconfigured; one it no
+ * `answered_by` and `fallback`; a new one uses the Cloud default; one it no
  * longer lists is dropped.
  */
 export function mergeRelayTargets(

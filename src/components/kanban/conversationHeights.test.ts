@@ -21,3 +21,15 @@ test("the in-card conversation height is at least the old height at every window
 test("the seat's default height is 75% of the window, its drag stop", () => {
   expect(/--seat-default-h:\s*([^;]+);/.exec(css)?.[1]?.trim()).toBe("75dvh");
 });
+
+/* The agent window's entrance (board task d5e2680a): a fade of the whole
+   layer, declared only where motion is welcome, that never moves or scales. */
+test("the agent window fades in, opacity only, and only without reduced motion", () => {
+  const rule = ".kb .agent-window-layer[data-agent-window] > * { animation: kb-conversation-in var(--motion-base) var(--ease-standard); }";
+  const at = css.indexOf(rule);
+  expect(at).toBeGreaterThan(-1);
+  expect(css.indexOf(rule, at + 1)).toBe(-1);
+  expect(css.slice(css.lastIndexOf("@media", at), at)).toStartWith("@media (prefers-reduced-motion: no-preference)");
+  expect(css.match(/kb-conversation-in/g)).toHaveLength(2);
+  expect(css).toContain("@keyframes kb-conversation-in { from { opacity: 0; } to { opacity: 1; } }");
+});

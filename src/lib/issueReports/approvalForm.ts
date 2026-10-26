@@ -21,6 +21,10 @@ import type { PrototypeQuestion, PrototypeReviewRound } from "@/lib/prototypeRev
 
 export type IssueReportLanguage = "en" | "uk";
 
+/** The seat and reporter share this response policy; the decision form below
+    still binds publication to the exact preview. */
+export const ISSUE_REPORT_RESPONSE_RULE = "A plain decline ends the report. Revise only when the operator requests an edit or reopens reporting; preview edits again and obtain fresh exact-text approval before publication.";
+
 /** The form's one question. */
 export const ISSUE_REPORT_QUESTION_ID = "publish-report";
 

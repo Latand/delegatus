@@ -459,7 +459,8 @@ share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage start
 the head can start under sustained pressure, with two seconds between admissions.
 A test, a driver or any instance on a state directory of its own queues its
 stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
-nobody polls for a minute is passed over.
+nobody polls for a minute is passed over, and so is a command ticket whose
+owner the kernel cannot verify once it stops checking in.
 Queue waits are excluded from hook and command execution budgets. On Linux a
 gate then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
@@ -496,6 +497,27 @@ See `docs/design/cpu-placement.md#release-build-admission-and-deadlines`.
 
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
+
+For a command whose admission or execution can outlast a foreground tool call,
+start one recording in the engine's background-command facility:
+
+```sh
+bash scripts/gate-slot.sh --record "$TMPDIR/check.log" bun run test <file>
+```
+
+After `recording started`, make one blocking call with a tool timeout above
+540 seconds: `bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`.
+It waits up to nine minutes, then prints one line with the state and the last
+20 log lines (at most 16 KiB). Queued output includes the latest admission
+position and reason; running output means admission completed. An exit of 124
+with a queued/running state means the run remains active: repeat the same wait.
+A finished state includes the command's exit code, which the wait also returns.
+`--wait LOG <seconds>` changes only that wait's deadline, from zero through
+540 seconds. Longer deadlines refuse with exit 2, leaving time for startup and
+output within a ten-minute foreground window. Unknown logs refuse with exit 2.
+Use a fresh log path for every recording; logs and their `.gate`
+sidecars remain available for later waits. Waiters take no slot and send no
+completion notifications. Use these waits in place of sleep/poll loops.
 
 Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real

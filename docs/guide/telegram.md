@@ -59,8 +59,12 @@ answers with.
 
 ### How a question is answered
 
-- **Who answers.** A one-shot agent on your signed-in Claude or Codex account,
-  with no shell, no tools and none of your instruction files.
+- **Who answers.** New targets use Codex Cloud with GPT-6.1 Sol. Each question
+  starts a fresh Cloud thread with the same composed input and structured reply
+  as the local one-shot agent. Claude and local Codex remain selectable.
+  A confirmed Cloud failure tries the local Codex path once.
+  An unconfirmed disconnect retains the request across restarts and blocks
+  another Cloud or local execution on redelivery.
 - **What comes with a question.** Who asked it and their rights in the chat, a
   short memory of the chat and an index of the service's own tools. When one of
   those tools fits better, the agent hands the question back to the service.
@@ -75,8 +79,18 @@ answers with.
 ### Owner tools
 
 - **Full agent for the owner**, off by default on each target, runs the relay
-  owner's requests as ordinary Delegatus agents with full access to this
-  computer.
+  owner's requests with full access. With Codex Cloud and a repository
+  environment configured for the target project, work runs there. Otherwise
+  it uses an ordinary local agent in the verified project repository. An
+  unavailable or deleted repository returns a configuration failure. These
+  turns share one target time cap across tool rounds and local fallback,
+  even after the service's request window closes.
+  A late answer arrives as a new text message replying
+  to your original message in the same topic. Files are omitted with a note.
+  Delivery requires the service's owner delivery context and clone send route;
+  an unavailable route keeps the answer saved for retry. Missing delivery
+  context keeps it saved as pending. An interrupted owner turn is retried once
+  after startup.
 - When the service offers them, the card can create a new clone.
 - A published prototype review goes to the paired owner's private chat, where a
   reply records the decision.

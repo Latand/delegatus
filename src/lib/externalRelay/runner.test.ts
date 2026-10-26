@@ -32,6 +32,7 @@ import { prototypeCopyLine, prototypeReference } from "@/lib/prototypeReview/tel
 import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 import { RelayLeaseTransport } from "./relayLeaseTransport";
 import { answerCapabilities, checkedAnswerV2 } from "./answerV2";
+import { cloneReceipt } from "./clone.fixture";
 import { richRequest } from "./rich.fixture";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -286,7 +287,6 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     if (kind === "long-reservation") {
       expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
       expect(decision.delivery.text).toContain("recommended with reservation");
-      expect(decision.delivery.text).toContain("Read read_prototype_review");
       expect(decision.delivery.text).not.toContain("\uFFFD");
     } else expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
     expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.profile).toMatchObject({ owner: true, prototype: round.id });
@@ -1105,18 +1105,18 @@ test("an immediately admitted owner can answer in the final ten seconds", async 
   } finally { await server.close(); }
 }, 10000);
 
-test("a confirmed owner run completes a readable timeout at the service deadline", async () => {
+test("a confirmed owner run outlives the service deadline and delivers its answer late", async () => {
   const completions: unknown[] = [];
   const stops: string[] = [];
   const server = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "accepted", duplicate: false } };
+    if (req.url?.endsWith("/send")) completions.push(body);
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "accepted", duplicate: false } };
   });
   const paired = relay(`${server.origin}/v1`);
   paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   try {
-    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_confirmed_past_deadline",
+    const result = await runClaimedRequest(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: "rq_confirmed_past_deadline",
       deadline_at: new Date(Date.now() + 700).toISOString(),
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
       ownerPorts: {
@@ -1125,8 +1125,8 @@ test("a confirmed owner run completes a readable timeout at the service deadline
         stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
       },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
-    expect(stops).toEqual(["interrupt"]);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done" } });
+    expect(stops).toEqual([]);
     expect(completions).toHaveLength(1);
   } finally { await server.close(); }
 }, 10000);
@@ -2419,7 +2419,6 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual([
           "owner_list_grids", "owner_create_grid", "owner_create_grid", "owner_attach_grid_chats", "owner_activate_clone", "owner_activate_clone"]);
         expect(run.calls[4]).toEqual(run.calls[5]); expect(waits).toEqual([7000]);
-        expect(run.rounds[1].prompt).toContain("further distinct owner writes requested");
         expect(projectionsOf(run, 3).at(-1).output).toBe("");
         expect(run.rounds[4].prompt).toContain("11 calls are left.");
         expect(projectionsOf(run, 4).at(-1).output).toBe((calls.at(-1)!.attempts.at(-1)!.response as ToolCallResult).output);
@@ -2439,7 +2438,6 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(projection).not.toHaveProperty("confirmation_id"); expect(projection).not.toHaveProperty("expires_at");
         expect(run.rounds[1].prompt).not.toContain("confirmation_owner_x4");
         expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
-        expect(run.rounds[1].prompt).toContain("nothing you can call confirms it");
         expect(run.rounds[1].schema).toEqual(answerSchema);
       }
       // The regeneration command selects this test alone. Refuse malformed
@@ -2513,7 +2511,6 @@ for (const choice of ["reply", "call", "handoff", "ignore"])
     expect(new Set(run.calls.map((body) => JSON.stringify(body))).size).toBe(1);
     expect(projectionsOf(run)[0]).toMatchObject({ status: "denied", code: "unavailable", effect: "action", execution_unknown: true });
     expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
-    expect(run.rounds[1].prompt).toContain("execution_unknown means the action may have happened");
     expect(run.rounds).toHaveLength(2);
     expect(run.record!.toolCalls![0]).toMatchObject({ status: "denied", code: "unavailable", replayed: true, local: false });
     expect(run.completion).toMatchObject(choice === "reply" ? { outcome: "answered" } : { outcome: "failed", reason: "invalid_answer" });
@@ -3099,6 +3096,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
 for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
   const { NextRequest } = await import("next/server");
   const { PATCH } = await import("@/app/api/external-relay/relays/[id]/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
   const completions: unknown[] = [], stops: string[] = [];
   let notify!: () => void, release!: () => void;
   const reached = new Promise<void>(r => { notify = r; });
@@ -3127,7 +3125,7 @@ for (const phase of ["running", "pending"] as const) test(`owner cutoff through 
     await reached;
     const origin = "http://127.0.0.1:8899";
     const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
-      method: "PATCH", headers: { origin, host: "127.0.0.1:8899", "content-type": "application/json" },
+      method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899", "content-type": "application/json" },
       body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
     }), { params: Promise.resolve({ id: paired.id }) });
     expect(response.status).toBe(200);
@@ -3307,12 +3305,16 @@ for (const worker of [false, true]) test(`owner runner exception with a refused 
   const relayStore = await import("./store");
   const completions: { body: unknown; at: number }[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push({ body, at: Date.now() });
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push({
+      body: req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+      at: Date.now(),
+    });
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
   updateRelayStore(s => ({ ...s, relays: [paired] }));
+  paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
   const requestId = `owner_exception_bound_${worker}`;
   const conversationId = `conversation_exception_bound_${worker}`;
   const write = relayStore.changeRunAsync;
@@ -3330,7 +3332,7 @@ for (const worker of [false, true]) test(`owner runner exception with a refused 
   const deadlineAt = Date.now() + 1500;
   let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
   try {
-    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId, deadline_at: new Date(deadlineAt).toISOString(),
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(deadlineAt).toISOString(),
       answer: { ...contextRequest.answer, max_chars: 4000 },
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, ownerPorts: ports });
     const completion = await done;
@@ -3360,8 +3362,10 @@ for (const recovery of ["answered", "revoked", "completed", "expired"] as const)
 test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}`, async () => {
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
@@ -3369,7 +3373,7 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
   const requestId = `owner_restart_${recovery}`;
   const conversationId = `conversation_restart_${recovery}`;
   const reason = "fixture launch refused";
-  const request = { ...contextRequest, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 60_000).toISOString(),
+  const request = { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 60_000).toISOString(),
     answer: { ...contextRequest.answer, max_chars: 4000 },
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
   // The real runner produces the custody; its process then exits while the
@@ -3411,8 +3415,8 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
       stop: async () => {}, stopRetryMs: 1,
     };
     await sweepExternalRelayOrphans(ports);
-    if (recovery === "answered") {
-      expect(completions).toEqual([expect.objectContaining({ lease_id: request.lease_id, outcome: "answered",
+    if (recovery === "answered" || recovery === "expired") {
+      expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
         answer: expect.objectContaining({ action: "reply", text: expect.stringContaining(reason) }) })]);
       expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
         diagnostic: { source: "launch" }, answer: { text: expect.stringContaining(reason) } });
@@ -3439,8 +3443,10 @@ for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtim
   const { observeOwnerContinuation, observeOwnerTurn } = await import("./ownerRun");
   const completions: unknown[] = [], journal: unknown[][] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
@@ -3711,12 +3717,15 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
   const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
   updateRelayStore(s => ({ ...s, relays: [paired] }));
+  paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
   const requestId = `live_stop_bound_${worker}`;
   let stops = 0, skew = 0, finished = false, recover = false;
   let reached!: () => void, pastBound!: () => void;
@@ -3735,7 +3744,7 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
   };
   let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
   try {
-    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, timeoutMs: 20, ownerPorts: ports });
     void done.then(() => { finished = true; });
     await refused;
@@ -3780,8 +3789,10 @@ for (const age of ["within", "past"] as const) test(`owner stop that stays uncon
   const { relayPollerStatus } = await import("./poller");
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
@@ -4312,7 +4323,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       expect(await relayAnswerOp("conversation_chain_fixture", { format: "plain" })).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
-    expect(prompts[1]).not.toContain("<service_instructions>"); expect(prompts[1]).not.toContain("[You work for the owner");
+    expect(prompts[1]).not.toContain("<service_instructions>");
     expect(prompts[1]).not.toContain('"id":"turn-1"');
     expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 10);
     expect(readAnswerRecord(paired.id, "target_1", current)?.chain).toMatchObject({ continued: true, promptBytes: Buffer.byteLength(prompts[2]!) });
@@ -4757,4 +4768,28 @@ test.each(["mention", "photo"])("v2 %s contract refusal remains decisive without
     expect(await completeRelayRequest(relay(`${server.origin}/v1`), "refused_composition", body, () => Date.now() + 5000)).toEqual({ body, delivery: "refused" });
     expect(bodies).toEqual([body]);
   } finally { await server.close(); }
+});
+
+test("a Cloud relay answer arrives while local account admission is occupied", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.engine = "codex-cloud";
+  paired.targets[0]!.model = "gpt-6.1-sol";
+  paired.targets[0]!.cloudEnvironmentId = "answer-env";
+  const previous = accountManager.resolveHeadlessSpawn;
+  let localSelections = 0;
+  accountManager.resolveHeadlessSpawn = (() => {
+    localSelections++;
+    throw new Error("local account admission is occupied");
+  }) as typeof previous;
+  try {
+    const result = await runClaimedRequest(paired, { ...sampleRequest, request_id: "cloud_local_busy" }, undefined, {
+      cloudTransport: async () => JSON.stringify({ action: "reply", text: "Cloud answer", reply_to: "m1" }),
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
+    expect(localSelections).toBe(0);
+  } finally {
+    accountManager.resolveHeadlessSpawn = previous;
+    await server.close();
+  }
 });

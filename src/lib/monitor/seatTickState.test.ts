@@ -31,6 +31,7 @@ const row = {
   ...emptySeatTickState(),
   seatEpoch: 7,
   lastCheckAt: "2026-08-28T12:00:00.000Z",
+  localFinishedLaneCursor: "pipeline_local_cursor",
   lastWakeAt: "2026-08-28T11:00:00.000Z",
   deployResumeThrough: "2026-08-28T10:00:00.000Z",
   lastWakeReasons: ["stalled" as const],
@@ -98,6 +99,18 @@ test("recovered authentication notice debt survives persistence and a new seat e
   expect(successor.authNoticesOwed).toEqual([notice]);
   writeSeatTickState("viewer", successor, file);
   expect(readSeatTickState("viewer", file).authNoticesOwed).toEqual([notice]);
+});
+
+test("memory problem credit debt survives persistence and a new seat epoch", () => {
+  const file = path.join(SANDBOX, "memory-problem-credit.json");
+  const debt = { shown: ["problem-version"], recipient: { conversationId: CONVERSATION, seatEpoch: 7 } };
+  writeSeatTickState("viewer", { ...row, itemsShown: debt.shown, memoryProblemCreditOwed: debt }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.memoryProblemCreditOwed).toEqual(debt);
+  const successor = seatTickStateForEpoch(reopened, 8);
+  expect(successor.memoryProblemCreditOwed).toEqual(debt);
+  writeSeatTickState("viewer", successor, file);
+  expect(readSeatTickState("viewer", file).memoryProblemCreditOwed).toEqual(debt);
 });
 
 test("one project's write leaves the others' rows alone", () => {
@@ -362,6 +375,7 @@ test("a rotation keeps the harvest cursor: what the project was told is not the 
   const rotated = seatTickStateForEpoch({ ...row, harvestedChildren: [CHILD] }, 8);
   expect(rotated.seatEpoch).toBe(8);
   expect(rotated.harvestedChildren).toEqual([CHILD]);
+  expect(rotated.localFinishedLaneCursor).toBe(row.localFinishedLaneCursor);
   expect(rotated.stalledSeen).toEqual([]);
 });
 

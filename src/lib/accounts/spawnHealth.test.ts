@@ -166,6 +166,81 @@ function account(id: string, expiresAt: number, authPresent = true, refreshable 
   return { id, label: id, kind: "managed", home, projectsDir: path.join(home, "projects"), authPresent, createdAt: 0 };
 }
 
+test("production Claude health selection keeps fallback behind every healthy primary", async () => {
+  const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+  const { accountProjectBindings, bindAccountToProject } = await import("./projectBindings");
+  const { selectProjectAccount } = await import("./projectSelection");
+  const { resolveHealthySpawnAccount } = await import("./manager");
+  removeStateDir();
+  const project = "repo-health-fallback";
+  const ids = ["bbb-primary", "zzz-primary", "aaa-fallback"];
+  const failed = new Set<string>();
+  const probed: string[] = [];
+  const fetchBefore = globalThis.fetch;
+  try {
+    for (const id of ids) {
+      createManagedClaudeAccount(id, {
+        config: { baseUrl: `https://${id}.invalid`, model: "model-large", smallFastModel: null },
+        token: crypto.randomUUID(),
+      }, { id });
+      expect(bindAccountToProject("claude", id, project, () => new Date(NOW).toISOString(), id === "aaa-fallback").ok).toBe(true);
+    }
+    // The shared rule picks A before the fresh health pass rejects it. B and
+    // the alphabetically earlier fallback remain current in that same pass.
+    expect(selectProjectAccount({ project, engine: "claude", accounts: listClaudeAccounts(),
+      observations: [], bindings: accountProjectBindings() })).toMatchObject({ accountId: "bbb-primary" });
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const id = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).hostname.split(".")[0];
+      probed.push(id);
+      return failed.has(id) ? new Response(null, { status: 401 }) : Response.json({ data: [{ id: "model-large" }] });
+    }) as typeof globalThis.fetch;
+    failed.add("bbb-primary");
+    expect((await resolveHealthySpawnAccount("claude", undefined, project)).accountId).toBe("zzz-primary");
+    expect(probed.slice().sort()).toEqual(ids.slice().sort());
+    failed.add("zzz-primary");
+    expect((await resolveHealthySpawnAccount("claude", undefined, project)).accountId).toBe("aaa-fallback");
+    failed.delete("zzz-primary");
+    expect((await resolveHealthySpawnAccount("claude", undefined, project)).accountId).toBe("zzz-primary");
+    expect((await resolveHealthySpawnAccount("claude", "aaa-fallback", project)).accountId).toBe("aaa-fallback");
+    failed.add("zzz-primary");
+    failed.add("aaa-fallback");
+    await expect(resolveHealthySpawnAccount("claude", undefined, project)).rejects.toMatchObject({ name: "ProjectAccountRefusedError" });
+  } finally {
+    globalThis.fetch = fetchBefore;
+    removeStateDir();
+  }
+});
+
+for (const primaryHealth of ["current", "last-known", "unavailable"] as const) {
+  test(`Claude health ranks a ${primaryHealth} primary before fallback preference`, async () => {
+    const primary = account("zzz-primary", NOW + 60_000);
+    const fallback = account("aaa-fallback", NOW + 60_000);
+    const selected = await selectHealthyClaudeAccount([fallback, primary], fallback.id, {
+      now: () => NOW,
+      probe: async candidate => candidate.id === fallback.id || primaryHealth === "current" ? current()
+        : primaryHealth === "last-known" ? lastKnown() : unavailable(),
+      refresh: async () => { throw new Error("current credentials must not refresh"); },
+    }, false, fallback.id, undefined, [fallback.id]);
+    expect(selected.account.id).toBe(primaryHealth === "unavailable" ? fallback.id : primary.id);
+  });
+}
+
+for (const refreshSucceeds of [true, false]) {
+  test(`Claude health tries an expired primary before fallback when refresh succeeds: ${refreshSucceeds}`, async () => {
+    const primary = account("zzz-primary", NOW - 1);
+    const fallback = account("aaa-fallback", NOW + 60_000);
+    const expiredFallback = account("bbb-fallback", NOW - 1);
+    const refreshed: string[] = [];
+    const selected = await selectHealthyClaudeAccount([fallback, primary, expiredFallback], fallback.id, {
+      now: () => NOW,
+      probe: async () => current(),
+      refresh: async candidate => { refreshed.push(candidate.id); return refreshSucceeds ? current() : unavailable(); },
+    }, false, fallback.id, undefined, [fallback.id, expiredFallback.id]);
+    expect(refreshed).toEqual([primary.id]);
+    expect(selected.account.id).toBe(refreshSucceeds ? primary.id : fallback.id);
+  });
+}
+
 for (const kind of ["legacy", "managed"] as const) {
   for (const uncertainty of ["discovery", "metadata"] as const) {
     test("production spawn caller refuses " + kind + " requested account uncertainty at " + uncertainty, async () => {
@@ -292,6 +367,34 @@ for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"],
         read.mockRestore();
         providerReply = null;
         removeStateDir();
+      }
+    });
+  }
+}
+
+for (const state of ["unknown", "unsafe", "absent"] as const) {
+  for (const scope of ["unbound", "allowed", "excluded"] as const) {
+    test(`automatic Claude credential ${state} diagnosis respects the ${scope} pool`, async () => {
+      const { clearAccountTestState } = await import("./accountsStoreFixture");
+      const { bindAccountToProject } = await import("./projectBindings");
+      const { resolveHealthySpawnAccount } = await import("./manager");
+      clearAccountTestState(process.env.LLV_STATE_DIR!);
+      setSubscriptionApiConsent(true);
+      seedAccountRegistry("claude", { version: 1, active: "default", accounts: [], retired: [] });
+      const project = "repo-credential-diagnosis";
+      if (scope !== "unbound") expect(bindAccountToProject("claude", scope === "allowed" ? "default" : "not-listed", project,
+        () => new Date(NOW).toISOString()).ok).toBe(true);
+      const read = spyOn(credentials, "readClaudeCredentials").mockReturnValue({ state });
+      const readsBefore = providerReads;
+      try {
+        await expect(resolveHealthySpawnAccount("claude", undefined, project)).rejects.toMatchObject({
+          name: state === "unknown" && scope !== "excluded" ? "ClaudeCredentialUnavailableError" : "ProjectAccountRefusedError",
+        });
+        expect(providerReads).toBe(readsBefore);
+      } finally {
+        read.mockRestore();
+        clearAccountTestState(process.env.LLV_STATE_DIR!);
+        setSubscriptionApiConsent(true);
       }
     });
   }

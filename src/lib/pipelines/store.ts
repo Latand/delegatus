@@ -1,3 +1,4 @@
+import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -303,6 +304,7 @@ function isAttempt(value: unknown, index: number): boolean {
   const attempt = value as Record<string, unknown>;
   return (
     attempt.n === index + 1 &&
+    (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
@@ -387,12 +389,21 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
+    isStartupOwnerWait(attempt.startupOwnerWait) &&
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPriorWriterStop(attempt.priorWriterStop) &&
     isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+function isStartupOwnerWait(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  return typeof wait.launchId === "string" && wait.launchId.length > 0
+    && typeof wait.deadline === "string" && Number.isFinite(Date.parse(wait.deadline));
 }
 
 function isPriorWriterStop(value: unknown): boolean {
@@ -446,7 +457,9 @@ function isAttemptDefinition(value: unknown): boolean {
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
   const role = definition.role;
-  return validAgentMemoryMax(definition.agentMemoryMaxBytes) && typeof definition.boundAt === "string"
+  return (definition.runtime === undefined || definition.runtime === "codex-cloud")
+    && validAgentMemoryMax(definition.agentMemoryMaxBytes)
+    && typeof definition.boundAt === "string"
     && typeof definition.stageDigest === "string"
     && typeof definition.prompt === "string"
     && isNullableString(definition.account)
@@ -662,6 +675,7 @@ function isStage(value: unknown): value is PipelineStage {
     (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
     (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
     (stage.serviceTier == null || typeof stage.serviceTier === "string") &&
+    (stage.preferredServiceTier === undefined || (typeof stage.preferredServiceTier === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(stage.preferredServiceTier))) &&
     validAgentMemoryMax(stage.agentMemoryMaxBytes) &&
     (stage.access === undefined || stage.access === "read-only" || stage.access === "read-write") &&
     (stage.sandbox === undefined || stage.sandbox === "full" || stage.sandbox === "restricted") &&
@@ -673,6 +687,7 @@ function isStage(value: unknown): value is PipelineStage {
     )) &&
     isEffectiveRole(stage.effectiveRole)
   )) return false;
+  if (cloudStageConfigurationError(stage as PipelineStage)) return false;
   const effective = stage.effectiveRole;
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
   if (stage.outputs !== undefined && effective.access !== "read-only") return false;
@@ -682,6 +697,7 @@ function isStage(value: unknown): value is PipelineStage {
   if (stage.model !== undefined && stage.model !== effective.model) return false;
   if (stage.effort !== undefined && stage.effort !== effective.effort) return false;
   if (stage.serviceTier != null && stage.serviceTier !== effective.serviceTier) return false;
+  if (stage.preferredServiceTier !== undefined && stage.preferredServiceTier !== effective.preferredServiceTier) return false;
   if (stage.access !== undefined && stage.access !== effective.access) return false;
   if (referencedRoleId === null && effective.promptScaffold !== null) return false;
   if (referencedRoleId !== null && !effective.promptScaffold?.trim()) return false;
@@ -1340,9 +1356,10 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
-export async function loadPipelineOwnershipForStartupAsync(): Promise<PipelineStartupOwnership[]> {
+export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>): Promise<PipelineStartupOwnership[]> {
   const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("ownership");
-  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).map(row => ({ ...row,
+  const selected = ids && new Set(ids);
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id) || row.attempts.some(attempt => attempt.conversationId !== null && conversationIds?.has(attempt.conversationId))).map(row => ({ ...row,
     attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
 }
 
@@ -1506,6 +1523,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
@@ -1666,12 +1684,18 @@ export function pipelineRegistryHealth(): RegistryRecordIssue[] {
   });
 }
 
+function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
+  return pipeline.runs.some(run => run.attempts.some(attempt => attempt.conversationId || attempt.agentPath || attempt.paneId));
+}
+
 function pipelineControllerActive(pipeline: Pipeline): boolean {
   if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
   if (pipeline.activationCloseRequested) return true;
-  if (pipeline.state === "closed") return Boolean(pipeline.unconfirmedHosts?.length);
-  if (pipeline.state === "completed") {
-    return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
+  if (pipeline.state === "completed" || pipeline.state === "closed") {
+    // A scoped controller holds an attempt window. Keep its eligibility
+    // conservative; the scheduler checks host identity in the stored row.
+    return Boolean(pipeline.unconfirmedHosts?.length) || (!pipeline.terminalReap?.settledAt
+      && (pipeline.state === "completed" || controllerPipelineKeys()?.includes(pipeline.id) || pipelineHasRecordedHost(pipeline)));
   }
   return true;
 }
@@ -2146,6 +2170,16 @@ export function archivedPipelinesRevision(): number {
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
+  if (pipeline.unconfirmedHosts?.length) return false;
+  if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
+    && pipelineHasRecordedHost(pipeline)) return false;
+  /* The task-finish sweep reads the hot collection and records its durable
+     outcome on the marked lane. Keep that lane visible to the sweep while any
+     linked mark is unresolved, including while another lane on the task is
+     still open. Once every mark has a finish receipt, ordinary archival is
+     safe (and a task reopened afterwards intentionally stays open). */
+  const finishedTasks = new Set((pipeline.taskFinishes ?? []).map((finish) => finish.taskId));
+  if (pipeline.state === "completed" && (pipeline.finishesTaskIds ?? []).some((taskId) => pipeline.taskIds.includes(taskId) && !finishedTasks.has(taskId))) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still

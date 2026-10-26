@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST, reviewReadPOST } from "./http";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
@@ -48,7 +49,7 @@ beforeEach(() => saveTasks([task()]));
 function task() { return { id: "task-prototype", project: "project-a", status: "inbox" as const, placement: "unplaced" as const, text: "Review layout", assignments: [], sources: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }; }
 afterEach(async () => { await settlePrototypeDeliveriesForTests(); injectStateWriteFaultForTests(null); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 function request(url: string, body?: unknown) {
-  return new NextRequest(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+  return new NextRequest(`http://localhost${url}`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 async function source() { const root = await fs.mkdtemp(path.join(process.env.HOME!, "prototype-source-")); roots.push(root); return root; }
 async function fullInput(key = "full"): Promise<PublishPrototypeInput & { variants: NonNullable<PublishPrototypeInput["variants"]> }> {

@@ -9,6 +9,21 @@ const IMAGE_REF: StructuredImageRef = {
   bytes: 67,
 };
 
+test("durable replay accepts a legacy colon-delimited idempotency key without widening new command input", () => {
+  const legacy = {
+    conversationId: "conv-one",
+    operationId: "legacy-operation",
+    idempotencyKey: "seat-tick:legacy:attempt",
+    action: "add",
+    binding: { threadId: "thread-one", accountId: null },
+    text: "resume the admitted work",
+  };
+  expect(() => parseRuntimeCommand("native-queue", legacy)).toThrow("idempotencyKey is invalid");
+  expect(parseRuntimeCommand("native-queue", legacy, { durableReplay: true })).toMatchObject({
+    idempotencyKey: "seat-tick:legacy:attempt",
+  });
+});
+
 test("dedicated runtime command parsers freeze the Opus request bodies", () => {
   expect(parseRuntimeCommand("send", {
     conversationId: "conv-one",

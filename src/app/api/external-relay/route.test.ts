@@ -9,7 +9,9 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const { GET } = await import("./route");
 const { POST } = await import("./pairings/route");
 const origin = "http://127.0.0.1:8899";
-const local = { headers: { origin, host: "127.0.0.1:8899" } };
+const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+const operator = () => ({ cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899" });
+const local = () => ({ headers: operator() });
 test("status refreshes the targets and omits credential and poll secret", async () => {
   const { updateRelayStore } = await import("@/lib/externalRelay/store");
   const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
@@ -71,13 +73,13 @@ test("status refreshes the targets and omits credential and poll secret", async 
   }));
   try {
     const response = await GET(
-      new NextRequest(`${origin}/api/external-relay`, local),
+      new NextRequest(`${origin}/api/external-relay`, local()),
     );
     expect(response.status).toBe(200);
     const text = await response.text();
     expect(reads).toEqual(["Bearer secret_credential"]);
     expect(JSON.parse(text).relays[0].targets).toMatchObject([
-      { id: "linked_later", name: "Linked later", engine: null },
+      { id: "linked_later", name: "Linked later", engine: "codex-cloud" },
     ]);
     expect(text).toContain("pending");
     expect(text).not.toContain("secret_credential");
@@ -100,7 +102,7 @@ test("mutation guards cross origin and staging", async () => {
     const staging = await POST(
       new NextRequest(`${origin}/api/external-relay/pairings`, {
         method: "POST",
-        headers: { origin, host: "127.0.0.1:8899" },
+        headers: operator(),
         body: "{}",
       }),
     );
@@ -174,14 +176,14 @@ test("a pairing the service ended leaves the store after one check", async () =>
       ],
     }));
     const checked = await CHECK(
-      new NextRequest(`${origin}/api/external-relay/pairings/ended`, local),
+      new NextRequest(`${origin}/api/external-relay/pairings/ended`, local()),
       { params: Promise.resolve({ id: "ended" }) },
     );
     expect(await checked.json()).toMatchObject({
       pairing: { status: "denied", reason: "Declined by the owner" },
     });
     const listed = await (
-      await GET(new NextRequest(`${origin}/api/external-relay`, local))
+      await GET(new NextRequest(`${origin}/api/external-relay`, local()))
     ).json();
     expect(
       listed.pending.some((item: { id: string }) => item.id === "ended"),
@@ -222,7 +224,7 @@ test("settings this install refuses answer with local codes, never the service's
     PATCH(
       new NextRequest(`${origin}/api/external-relay/relays/route_relay`, {
         method: "PATCH",
-        headers: { ...local.headers, "content-type": "application/json" },
+        headers: { ...operator(), "content-type": "application/json" },
         body,
       }),
       { params: Promise.resolve({ id: "route_relay" }) },
@@ -275,6 +277,10 @@ test("settings this install refuses answer with local codes, never the service's
     expect(response.status).toBe(200);
     expect((await response.json()).relay.targets[0].ownerTier).toBe(value);
   }
+  const cloud = await patch(JSON.stringify({ target: { id: "bot", engine: "codex-cloud", model: "gpt-6.1-sol", cloudEnvironmentId: "answer-env" } }));
+  expect(cloud.status).toBe(200);
+  expect((await cloud.json()).relay.targets[0]).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", cloudEnvironmentId: "answer-env" });
+  expect((await patch(JSON.stringify({ target: { id: "bot", cloudEnvironmentId: 42 } }))).status).toBe(400);
 });
 test("recent answers and one exchange are read-only reads for the operator alone", async () => {
   const { answerRecorder } = await import("@/lib/externalRelay/answers");
@@ -292,16 +298,16 @@ test("recent answers and one exchange are read-only reads for the operator alone
   recorder.finish({ outcome: "answered", answer: { action: "reply", text: "Thursday.", reply_to: "m1" }, delivery: "accepted" });
   const params = (extra: Record<string, string> = {}) => ({ params: Promise.resolve({ id: "route_relay", targetId: "bot", requestId: "rq_route", ...extra }) });
   const url = `${origin}/api/external-relay/relays/route_relay/targets/bot/answers`;
-  const listed = await list.GET(new NextRequest(url, local), params());
+  const listed = await list.GET(new NextRequest(url, local()), params());
   expect(listed.status).toBe(200);
   expect(await listed.json()).toMatchObject({
     retentionDays: 30,
     answers: [{ requestId: "rq_route", outcome: "answered", request: "When is the meetup?", answer: "Thursday." }],
   });
-  const shown = await one.GET(new NextRequest(`${url}/rq_route`, local), params());
+  const shown = await one.GET(new NextRequest(`${url}/rq_route`, local()), params());
   expect(shown.status).toBe(200);
   expect((await shown.json()).answer).toMatchObject({ requestId: "rq_route", engine: "claude", input: { respond_to: "m1" } });
-  expect((await one.GET(new NextRequest(`${url}/rq_none`, local), params({ requestId: "rq_none" }))).status).toBe(404);
+  expect((await one.GET(new NextRequest(`${url}/rq_none`, local()), params({ requestId: "rq_none" }))).status).toBe(404);
   const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
   const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
   setCallerConversationResolverForTests((digest) => (digest ? "agent" : null));
