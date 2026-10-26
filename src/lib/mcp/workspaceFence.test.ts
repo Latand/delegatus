@@ -228,6 +228,22 @@ test("a durable member binding stays fenced when its authority store disappears"
   expect(dispatched).toEqual([]);
 });
 
+test("expired author history retains legacy workspace authority across a fresh process", async () => {
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  store.recordMessageAuthor({ clientMessageId: "legacy-older-owner", conversationId: "conversation_member", memberId: owner.id, at: AT, textDigest: null });
+  store.recordMessageAuthor({ clientMessageId: "legacy-latest-member", conversationId: "conversation_member", memberId: member.id, at: AT, textDigest: null });
+  store.recordMessageAuthor({ clientMessageId: "unbound-history", conversationId: null, memberId: member.id, at: AT, textDigest: null });
+  store.pruneEvents(Date.parse("2028-10-20T09:00:00.000Z"));
+  expect([...store.messageAuthors(["legacy-older-owner", "legacy-latest-member", "unbound-history"]).keys()]).toEqual(["legacy-latest-member"]);
+  const reader = `import { conversationWorkspacePrincipal } from ${JSON.stringify(path.resolve("src/lib/team/workspacePrincipal.ts"))}; console.log(JSON.stringify(conversationWorkspacePrincipal(${JSON.stringify(snapshot)}, "conversation_member")));`;
+  const child = spawnSync(process.execPath, ["-e", reader], { env: process.env, encoding: "utf8" });
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout.trim())).toEqual({ memberId: member.id, workspaceId: W1 });
+  resetTeamStoreForTests(); store = teamStore();
+  expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+  expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
+});
+
 test("membership removal, revocation and project moves refuse saved receipts after reopening the store", async () => {
   expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
   store.removeWorkspaceMember(W1, member.id);

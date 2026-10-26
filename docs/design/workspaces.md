@@ -970,6 +970,10 @@ restart. Existing member-directed conversations resolve their latest recorded
 message author. Owner conversations and installation-owned seats without a
 member binding retain their existing reach.
 
+History pruning keeps the latest author row for each conversation as authority,
+including tied timestamps in admission order. Older message rows and unbound
+history still expire; expiry and restart never widen a legacy member session.
+
 The production MCP dispatcher checks the binding before pagination and
 receipt replay. It uses slice (b)'s `workspaceScope` for current membership
 and the bound workspace for project placement. Explicit projects, tasks,

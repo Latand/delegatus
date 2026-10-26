@@ -688,7 +688,14 @@ export class TeamStore {
   pruneEvents(nowMs: number): void {
     this.db.query("DELETE FROM events WHERE at < ?").run(new Date(nowMs - EVENT_RETENTION_MS).toISOString());
     this.db.query(`DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY id DESC LIMIT -1 OFFSET ?)`).run(EVENT_MAX_ROWS);
-    this.db.query("DELETE FROM message_authors WHERE at < ?").run(new Date(nowMs - MESSAGE_AUTHOR_RETENTION_MS).toISOString());
+    // The last attribution is also a legacy conversation's workspace authority.
+    // Keep one row per conversation after history expires so pruning cannot
+    // turn a member-directed session into an installation-owned one.
+    this.db.query(`DELETE FROM message_authors WHERE at < ? AND (conversation_id IS NULL OR rowid <> (
+      SELECT newest.rowid FROM message_authors newest
+      WHERE newest.conversation_id = message_authors.conversation_id
+      ORDER BY newest.at DESC, newest.rowid DESC LIMIT 1
+    ))`).run(new Date(nowMs - MESSAGE_AUTHOR_RETENTION_MS).toISOString());
   }
 
   /* ---- workspaces ------------------------------------------------------- */
