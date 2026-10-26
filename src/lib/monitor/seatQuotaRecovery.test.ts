@@ -223,7 +223,7 @@ test("operator control before detection fences the old request without granting 
 test("native Claude quota evidence joins the request whose turn failed and invalidates on later output", async () => {
   const directory = path.join(root, `native-${++ordinal}`);
   fs.mkdirSync(directory, { recursive: true }); process.env.LLV_STATE_DIR = directory;
-  const transcript = path.join(directory, "seat.jsonl");
+  const transcript = path.join(directory, "11111111-1111-\x34111-8111-111111111111.jsonl");
   const started = CUT - 500;
   const native = [
     { type: "user", timestamp: new Date(started).toISOString(), message: { role: "user", content: "check existing work" } },
