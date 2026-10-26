@@ -1,3 +1,4 @@
+import { normalizeMaintenanceWindow, type MaintenanceWindow } from "@/lib/boardMaintenance/window";
 import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
 import fs from "node:fs";
 import { autonomyActive, changeAutonomy, endedAutonomy, type AutonomySetting, type AutonomyChange, type AutonomyDecisionInput } from "./autonomy";
@@ -90,6 +91,7 @@ export interface SeatTickSettingsActor {
 }
 
 export interface BoardMaintenanceSetting {
+  window?: MaintenanceWindow | null;
   enabled: boolean;
   intervalHours: number;
   updatedAt: string;
@@ -145,7 +147,7 @@ export interface EffectiveSeatTickSettings {
   turboHistory?: TurboSetting[];
   release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
-  maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
+  maintenance: { enabled: boolean; intervalHours: number; intervalMs: number; window?: MaintenanceWindow | null };
   maintenanceSetting?: BoardMaintenanceSetting | null;
   curation?: { enabled: boolean; intervalHours: number; intervalMs: number };
   curationSetting?: BoardMaintenanceSetting | null;
@@ -186,7 +188,7 @@ export interface SeatTickSettingsChange {
   autonomyDecision?: AutonomyDecisionInput;
   release?: ReleaseSettingChange;
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null; why?: string | null };
-  maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
+  maintenance?: { enabled?: boolean; intervalHours?: number | string | null; window?: MaintenanceWindow | null };
   curation?: { enabled?: boolean; intervalHours?: number | string | null };
   enabled?: boolean;
   /** `null` restores the default interval. */
@@ -250,12 +252,14 @@ function normalizeInterval(value: unknown): number | null {
   return Math.min(SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES, value);
 }
 
-function normalizeMaintenance(value: unknown): BoardMaintenanceSetting | null {
+function normalizeMaintenance(value: unknown, withWindow = false): BoardMaintenanceSetting | null {
   if (!value || typeof value !== "object") return null;
   const r = value as Partial<BoardMaintenanceSetting>;
   const actor = normalizeActor(r.setBy);
+  const window = withWindow ? normalizeMaintenanceWindow(r.window) : null;
+  if (withWindow && r.window != null && !window) return null;
   return typeof r.enabled === "boolean" && Number.isInteger(r.intervalHours) && r.intervalHours! >= 1 && r.intervalHours! <= 168 && isoOrNull(r.updatedAt) && actor
-    ? { enabled: r.enabled, intervalHours: r.intervalHours!, updatedAt: r.updatedAt!, setBy: actor } : null;
+    ? { enabled: r.enabled, intervalHours: r.intervalHours!, ...(withWindow && r.window !== undefined ? { window } : {}), updatedAt: r.updatedAt!, setBy: actor } : null;
 }
 
 function normalizeRow(project: string, value: unknown): SeatTickSettings {
@@ -271,7 +275,7 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     ...(normalizeRelease(raw.release) ? { release: normalizeRelease(raw.release) } : {}),
     ...(normalizeAutoRotate(raw.autoRotate) ? { autoRotate: normalizeAutoRotate(raw.autoRotate) } : {}),
     ...(normalizeMaintenance(raw.curation) ? { curation: normalizeMaintenance(raw.curation) } : {}),
-    ...(normalizeMaintenance(raw.maintenance) ? { maintenance: normalizeMaintenance(raw.maintenance) } : {}),
+    ...(normalizeMaintenance(raw.maintenance, true) ? { maintenance: normalizeMaintenance(raw.maintenance, true) } : {}),
     enabled: raw.enabled !== false,
     wakeIntervalMinutes: normalizeInterval(raw.wakeIntervalMinutes),
     reason: typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.slice(0, REASON_LIMIT) : null,
@@ -409,12 +413,21 @@ export function checkpointSeatTickSettingsRollbackMirrorForDemotion(filePath = s
   settingsStore().checkpointRollbackMirror(filePath);
 }
 
+/** SQLite rows bypass the legacy parser. Validate a caller's projection without
+ * normalizing unrelated rows inside the shared store's read-modify-write. */
+function withValidatedMaintenanceWindow(settings: SeatTickSettings): SeatTickSettings {
+  const maintenance = settings.maintenance;
+  if (maintenance?.window == null) return settings;
+  const window = normalizeMaintenanceWindow(maintenance.window);
+  return { ...settings, maintenance: window ? { ...maintenance, window } : null };
+}
+
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
-  return withInstructionLines(settingsStore().read(filePath).projects[project] ?? defaultSeatTickSettings(project));
+  return withInstructionLines(withValidatedMaintenanceWindow(settingsStore().read(filePath).projects[project] ?? defaultSeatTickSettings(project)));
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {
-  return Object.fromEntries(Object.entries(settingsStore().read(filePath).projects).map(([project, row]) => [project, withInstructionLines(row)]));
+  return Object.fromEntries(Object.entries(settingsStore().read(filePath).projects).map(([project, row]) => [project, withInstructionLines(withValidatedMaintenanceWindow(row))]));
 }
 
 /** Serialized read-modify-write of one project's row. Only that row is
@@ -443,8 +456,9 @@ export function effectiveSeatTickSettings(
   nowMs: number,
   defaultWakeIntervalMs: number,
 ): EffectiveSeatTickSettings {
+  settings = withValidatedMaintenanceWindow(settings);
   const intervalHours = settings.maintenance?.intervalHours ?? 3;
-  const maintenance = { enabled: settings.maintenance?.enabled ?? false, intervalHours, intervalMs: intervalHours * 3_600_000 };
+  const maintenance = { enabled: settings.maintenance?.enabled ?? false, intervalHours, intervalMs: intervalHours * 3_600_000, window: settings.maintenance?.window ?? null };
   const expiry = settings.until ? Date.parse(settings.until) : Number.NaN;
   const lapsed = Number.isFinite(expiry) && expiry <= nowMs && !seatTickSettingsAreDefault(settings);
   const configured = settings.updatedAt !== null;
@@ -637,7 +651,12 @@ export function applySeatTickSettingsChange(
         if (hours !== given) notes.push(`maintenance.intervalHours normalized to ${hours}`);
       }
     }
-    maintenance = { enabled: on, intervalHours: hours, updatedAt: context.at, setBy: context.actor };
+    let window = maintenance?.window ?? null;
+    if (Object.hasOwn(raw, "window")) {
+      window = raw.window === null ? null : normalizeMaintenanceWindow(raw.window);
+      if (raw.window !== null && !window) return { ok: false, error: "maintenance.window requires an IANA time zone, weekdays 1–7, and integer hours 0 <= startHour < endHour <= 24" };
+    }
+    maintenance = { enabled: on, intervalHours: hours, window, updatedAt: context.at, setBy: context.actor };
   }
   let curation = current.curation;
   if (Object.hasOwn(change, "curation")) {

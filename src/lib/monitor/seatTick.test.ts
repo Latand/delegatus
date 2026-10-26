@@ -2612,3 +2612,15 @@ test("B: the next bounded wake carries a saved operator answer ahead of open lan
   expect(result.verdict.items.map(item => item.id)).toEqual(["prototype-answer:round-a:key-a"]);
   expect(result.verdict.items[0]!.label).toBe(answer);
 });
+
+test("a closed maintenance window leaves active pipeline wake decisions independent", () => {
+  for (const before of [
+    input({ pipelines: [lane()], events: [event()] }),
+    input({ pipelines: [lane({ pausedBy: "other", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })] }),
+  ]) {
+    const expected = seatTickDecision(before);
+    expect(expected.verdict.kind).toBe("wake");
+    const settings = { ...before.settings, maintenance: { ...before.settings.maintenance, enabled: true, window: { timeZone: "Etc/UTC", weekdays: [1], startHour: 0, endHour: 1 } } };
+    expect(seatTickDecision({ ...before, settings })).toEqual(expected);
+  }
+});
