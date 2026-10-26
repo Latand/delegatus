@@ -34182,17 +34182,15 @@ describe("Celestia clone creation in the relay card", () => {
     const out = path.resolve(".artifacts/celestia-clone-create");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const portrait = async (from: string, to: string) => {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs><rect width="160" height="160" fill="url(#g)"/><circle cx="80" cy="70" r="34" fill="#ffffff" fill-opacity="0.85"/><rect x="38" y="112" width="84" height="40" rx="20" fill="#ffffff" fill-opacity="0.85"/></svg>`;
       return `data:image/jpeg;base64,${(await sharp(Buffer.from(svg)).jpeg({ quality: 80 }).toBuffer()).toString("base64")}`;
     };
     const candidates = await Promise.all([["#3b4a8f", "#8a6fd1"], ["#173b4f", "#3c8fb0"], ["#7a3a1c", "#e08a3c"], ["#24563a", "#7cc08a"]]
       .map(async ([from, to], index) => ({ storage_key: `avatars/${index + 1}.png`, preview: await portrait(from!, to!) })));
-    const combos = [
-      { width: 1440, scheme: "light", lang: "uk" }, { width: 1440, scheme: "dark", lang: "en" },
-      { width: 390, scheme: "dark", lang: "uk" }, { width: 390, scheme: "light", lang: "en" },
-    ] as const;
+    const combos = ([390, 915, 1440] as const).flatMap(width => (["en", "uk"] as const)
+      .flatMap(lang => (["light", "dark"] as const).map(scheme => ({ width, lang, scheme }))));
     const readings: Record<string, unknown>[] = [];
     try {
       for (const { width, scheme, lang } of combos) {
@@ -34269,7 +34267,7 @@ describe("Celestia clone creation in the relay card", () => {
               return win;
             }) as unknown as typeof window.open;
             Object.assign(window, { cloneFake: {
-              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!)]; },
+              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })]; },
               create: (name: string) => {
                 fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
@@ -34315,7 +34313,16 @@ describe("Celestia clone creation in the relay card", () => {
 
           await page.evaluate(() => (window as unknown as Fake).cloneFake.withClones());
           await frame("list", "[data-external-relay-target='beta']");
+          expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1 Sol");
           expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
+
+          for (const [id, key] of [["beta", "externalRelay.target.ownerTierCloudHint"], ["league", "externalRelay.target.ownerTierHint"]] as const) {
+            const target = card.locator(`[data-external-relay-target='${id}']`);
+            await target.locator("[data-external-relay-target-fold]").click();
+            expect(await target.locator("[data-external-relay-owner-tier-hint]").textContent()).toBe(translate(lang, key));
+            await frame(`${id === "beta" ? "cloud" : "local"}-settings`, `[data-external-relay-target='${id}'][data-open]`);
+            await target.locator("[data-external-relay-target-fold]").click();
+          }
 
           await card.locator("[data-clone-open]").click();
           const name = lang === "uk" ? "Нічна Сова" : "Night Owl";
@@ -34343,9 +34350,9 @@ describe("Celestia clone creation in the relay card", () => {
           await card.locator("[data-clone-setup-failed]").waitFor({ state: "detached", timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
-          /* The new clone takes the signed-in engine with its default model, answered here. */
-          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Opus 5.5" }).waitFor({ timeout: 15_000 });
-          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "claude", model: "opus", answered_by: "install" });
+          /* The new clone takes the Cloud default, answered here. */
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1 Sol" }).waitFor({ timeout: 15_000 });
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
           expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
           await frame("created", "[data-clone-created]");
           expect(await card.locator("[data-clone-created]").textContent()).toContain(translate(lang, "externalRelay.clone.created", { name, username: lang === "uk" ? "nichna_sova_bot" : "night_owl_bot" }));
