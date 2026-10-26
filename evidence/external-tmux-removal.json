@@ -1,0 +1,1221 @@
+{
+  "date": "2026-10-24",
+  "startingCommit": "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+  "outcome": "fixed",
+  "changedFiles": [
+    "docker-compose.yml",
+    "docs/design/state-sqlite-migration.md",
+    "docs/design/windows-support.md",
+    "docs/verification/test-path-inventory.md",
+    "evidence/external-tmux-removal.json",
+    "scripts/deploy-staging.test.ts",
+    "scripts/deploy-staging.ts",
+    "scripts/migrate-legacy-tmux.ts",
+    "scripts/runtime-host-viewer-adapter.ts",
+    "src/app/api/files/route.test.ts",
+    "src/lib/agent/migration.test.ts",
+    "src/lib/agent/migration.ts",
+    "src/lib/stateOwnership.entryPoints.test.ts",
+    "src/lib/tmux.test.ts",
+    "src/lib/tmux.ts",
+    "src/runtime-host/candidateContainer.test.ts",
+    "src/runtime-host/candidateContainer.ts",
+    "src/runtime-host/deployment.test.ts",
+    "src/runtime-host/stagingContainer.test.ts",
+    "src/runtime-host/stagingContainer.ts"
+  ],
+  "callerAudit": [
+    {
+      "removed": [
+        "LLV_LEGACY_TMUX_EXTERNAL",
+        "DELEGATUS_LEGACY_TMUX_EXTERNAL",
+        "legacyTmuxExternal",
+        "externalTmuxMode",
+        "CANONICAL_EXTERNAL_SESSION"
+      ],
+      "formerCallers": [
+        "docker-compose.yml: environment declarations",
+        "src/runtime-host/candidateContainer.ts: candidate environment",
+        "src/runtime-host/stagingContainer.ts: staging environment",
+        "scripts/runtime-host-viewer-adapter.ts: startCandidate",
+        "scripts/deploy-staging.ts: main",
+        "src/lib/tmux.ts: activeTmuxSession"
+      ],
+      "finding": "The only runtime reader selected the retired external tmux branch. All declarations, transport fields and internal callers in that branch are removed; only regression inputs retain the names."
+    },
+    {
+      "removed": [
+        "legacy-tmux-migration-complete",
+        "resolveTmuxEndpointContract",
+        "TmuxEndpointContractInput",
+        "TmuxEndpointContract",
+        "tmuxEndpointContract",
+        "viewerCandidateTmuxEnvironment",
+        "viewerComposeServiceUid"
+      ],
+      "formerCallers": [
+        "src/lib/tmux.ts: endpoint and health wrappers",
+        "scripts/runtime-host-viewer-adapter.ts: startCandidate",
+        "scripts/deploy-staging.ts: main",
+        "src/lib/tmux.test.ts",
+        "src/runtime-host/candidateContainer.test.ts"
+      ],
+      "finding": "The completion marker had two readers and no concrete writer. The UID helper had only the two marker-selection callers. Endpoint selection now uses TMUX_TMPDIR directly; the existing health response shape is retained without obsolete migration errors."
+    },
+    {
+      "removed": [
+        "viewerCandidateVolumes"
+      ],
+      "formerCallers": [
+        "src/runtime-host/candidateContainer.ts: viewerCandidateDockerArgs",
+        "src/runtime-host/stagingContainer.ts: stagingDockerArgs"
+      ],
+      "finding": "Its only added behavior was the external supervisor mount. Both callers now consume the unchanged Compose volumes directly; ordinary bind validation and create_host_path behavior remain covered."
+    },
+    {
+      "removed": [
+        "scripts/migrate-legacy-tmux.ts"
+      ],
+      "formerCallers": [
+        "src/lib/stateOwnership.entryPoints.test.ts: entry-point smoke test"
+      ],
+      "finding": "No package command, executable, workflow or script invoked it. It implemented preflight only, and had no cutover command. The smoke test and obsolete documentation reference were removed with it."
+    },
+    {
+      "removed": [
+        "src/lib/agent/migration.ts",
+        "src/lib/agent/migration.test.ts"
+      ],
+      "formerCallers": [
+        "scripts/migrate-legacy-tmux.ts: createLegacyMigration and persistLegacyMigration",
+        "src/lib/agent/migration.test.ts: runLegacyCutover and migration fixtures"
+      ],
+      "finding": "runLegacyCutover had no production caller or concrete action adapter. The remaining exports belonged solely to the uncalled preflight script and their dedicated tests. The entire isolated module and its five tests were removed."
+    }
+  ],
+  "preserved": [
+    "src/lib/runtime/codexAppServerHost.ts",
+    "src/lib/runtime/claudeStreamBrokerHost.ts",
+    "src/lib/runtime/spawnTransport.ts",
+    "src/runtime-host/host.ts",
+    "Ordinary tmux transport, TMUX_TMPDIR, attach, pane ownership and spawn fencing",
+    "LLV_ALLOW_LEGACY_VIEWER and its active launch guard",
+    "bin/legacySystemd.mjs: still imported and called by bin/cli.mjs to explain retired installations"
+  ],
+  "verification": {
+    "testCommand": "bun --config=<temporary bunfig without test preload> test <file> --timeout=60000",
+    "isolation": [
+      "fresh HOME",
+      "fresh XDG_CONFIG_HOME",
+      "fresh TMPDIR",
+      "fresh LLV_STATE_DIR"
+    ],
+    "runtime": "Bun 1.4.0",
+    "selection": "Every test file directly importing a changed module, including dynamic and mocked imports; changed tests and the deleted migration test were included. Two extra reference-bearing tests were also run.",
+    "redFirst": {
+      "command": "bun --config=<temporary bunfig without test preload> test src/lib/tmux.test.ts src/runtime-host/candidateContainer.test.ts --test-name-pattern=\"retired external mode\"",
+      "exit": 1,
+      "pass": 0,
+      "fail": 2
+    },
+    "head": {
+      "totals": {
+        "pass": 680,
+        "fail": 42,
+        "skip": 95,
+        "executedFiles": 24,
+        "failingFiles": 7
+      },
+      "files": [
+        {
+          "file": "scripts/deploy-staging.test.ts",
+          "exit": 0,
+          "pass": 9,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "scripts/runtime-host-viewer-adapter.test.ts",
+          "exit": 0,
+          "pass": 46,
+          "fail": 0,
+          "skip": 2,
+          "failedTests": []
+        },
+        {
+          "file": "src/app/api/access/phone/route.test.ts",
+          "exit": 1,
+          "pass": 48,
+          "fail": 2,
+          "skip": 0,
+          "failedTests": [
+            "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+            "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+          ]
+        },
+        {
+          "file": "src/app/api/accounts/codex/route.test.ts",
+          "exit": 0,
+          "pass": 28,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/app/api/files/route.test.ts",
+          "exit": 1,
+          "pass": 144,
+          "fail": 8,
+          "skip": 0,
+          "failedTests": [
+            "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+            "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+            "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+            "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+            "a cross-process SQLite pipeline commit invalidates a warm files projection",
+            "project query changes reuse one global scan snapshot",
+            "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+            "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+          ]
+        },
+        {
+          "file": "src/app/api/session/title/route.test.ts",
+          "exit": 0,
+          "pass": 15,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/app/api/tmux/targets/route.test.ts",
+          "exit": 0,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/accounts/migration/provider.test.ts",
+          "exit": 0,
+          "pass": 49,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/agent/codexSpawnPolicy.test.ts",
+          "exit": 1,
+          "pass": 12,
+          "fail": 1,
+          "skip": 4,
+          "failedTests": [
+            "installed v2 router checks ephemeral with product launch arguments"
+          ]
+        },
+        {
+          "file": "src/lib/agent/migration.test.ts",
+          "status": "removed",
+          "pass": 0,
+          "fail": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/agent/spawnMemory.test.ts",
+          "exit": 0,
+          "pass": 12,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/agent/transcriptHost.test.ts",
+          "exit": 0,
+          "pass": 27,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/conversation/resumeLiveness.test.ts",
+          "exit": 1,
+          "pass": 0,
+          "fail": 1,
+          "skip": 0,
+          "failedTests": [
+            "a detector timeout after starting a legacy host settles resume, immediate send, and deliverability from one live record"
+          ]
+        },
+        {
+          "file": "src/lib/delivery.test.ts",
+          "exit": 1,
+          "pass": 55,
+          "fail": 12,
+          "skip": 0,
+          "failedTests": [
+            "idle reconfiguration survives a transient host miss and resumes after verified termination",
+            "a resume that cannot build a command names the failing condition (issue #935)",
+            "a resume whose recorded account this machine no longer has asks the rule instead (#1279)",
+            "message-triggered relaunches carry the stored MCP grant on both the direct and root-relay paths",
+            "tmux Resume carries the stored ultrafast tier into the command",
+            "tmux message reopen resolves ultrafast with resumeFast=undefined",
+            "tmux message reopen resolves ultrafast with resumeFast=true",
+            "tmux message reopen resolves ultrafast with resumeFast=false",
+            "tmux reconfigure effort only keeps ultrafast",
+            "tmux reconfigure to Standard clears the durable tier and attach",
+            "tmux branch relay carries the root's ultrafast tier into its reopen command",
+            "a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed"
+          ]
+        },
+        {
+          "file": "src/lib/flows/engine.test.ts",
+          "exit": 0,
+          "pass": 5,
+          "fail": 0,
+          "skip": 72,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/pipelines/engine.ports.test.ts",
+          "exit": 1,
+          "pass": 54,
+          "fail": 17,
+          "skip": 0,
+          "failedTests": [
+            "a concurrent pipeline replay and its recovery projections withhold staged identity (#1123)",
+            "a fixer self-fail persists its branch adoption before returning to the pipeline branch",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: Another issue noticed",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: Users cannot save",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: historical red tests",
+            "a stage's fresh pushed branch and PR are adopted before the next stage",
+            "a restarted controller finishes its recorded branch adoption (after merge: false)",
+            "a restarted controller finishes its recorded branch adoption (after merge: true)",
+            "a stage branch is adopted onto an owned delivery branch when the lane ref is absent",
+            "a successor lane on a pull request branch settles its passed stage after a completed lane",
+            "a successor lane on a pull request branch settles its passed stage after a closed lane",
+            "a busy-to-terminal stage retries settlement after collecting fresh branch protection",
+            "a stage branch is adopted from durable terminal evidence before the scanner projects it",
+            "a divergent stage branch retaining accepted content is adopted without moving its source (uninterrupted)",
+            "a divergent stage branch retaining accepted content is adopted without moving its source (before-ref)",
+            "a divergent stage branch retaining accepted content is adopted without moving its source (after-ref)"
+          ]
+        },
+        {
+          "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+          "exit": 0,
+          "pass": 0,
+          "fail": 0,
+          "skip": 15,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+          "exit": 0,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/stateOwnership.entryPoints.test.ts",
+          "exit": 0,
+          "pass": 32,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/tmux.test.ts",
+          "exit": 0,
+          "pass": 36,
+          "fail": 0,
+          "skip": 2,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/candidateContainer.test.ts",
+          "exit": 0,
+          "pass": 19,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/deployment.test.ts",
+          "exit": 1,
+          "pass": 35,
+          "fail": 1,
+          "skip": 0,
+          "failedTests": [
+            "managed auto retains a disconnected request through late admission and a newer main"
+          ]
+        },
+        {
+          "file": "src/runtime-host/dockerNames.test.ts",
+          "exit": 0,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/hostSuccessor.test.ts",
+          "exit": 0,
+          "pass": 36,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/stagingContainer.test.ts",
+          "exit": 0,
+          "pass": 11,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        }
+      ]
+    },
+    "baseline": {
+      "totals": {
+        "pass": 689,
+        "fail": 42,
+        "skip": 95,
+        "executedFiles": 25,
+        "failingFiles": 7
+      },
+      "files": [
+        {
+          "file": "scripts/deploy-staging.test.ts",
+          "exit": 0,
+          "pass": 9,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "scripts/runtime-host-viewer-adapter.test.ts",
+          "exit": 0,
+          "pass": 46,
+          "fail": 0,
+          "skip": 2,
+          "failedTests": []
+        },
+        {
+          "file": "src/app/api/access/phone/route.test.ts",
+          "exit": 1,
+          "pass": 48,
+          "fail": 2,
+          "skip": 0,
+          "failedTests": [
+            "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+            "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+          ]
+        },
+        {
+          "file": "src/app/api/accounts/codex/route.test.ts",
+          "exit": 0,
+          "pass": 28,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/app/api/files/route.test.ts",
+          "exit": 1,
+          "pass": 145,
+          "fail": 8,
+          "skip": 0,
+          "failedTests": [
+            "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+            "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+            "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+            "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+            "a cross-process SQLite pipeline commit invalidates a warm files projection",
+            "project query changes reuse one global scan snapshot",
+            "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+            "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+          ]
+        },
+        {
+          "file": "src/app/api/session/title/route.test.ts",
+          "exit": 0,
+          "pass": 15,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/app/api/tmux/targets/route.test.ts",
+          "exit": 0,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/accounts/migration/provider.test.ts",
+          "exit": 0,
+          "pass": 49,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/agent/codexSpawnPolicy.test.ts",
+          "exit": 1,
+          "pass": 12,
+          "fail": 1,
+          "skip": 4,
+          "failedTests": [
+            "installed v2 router checks ephemeral with product launch arguments"
+          ]
+        },
+        {
+          "file": "src/lib/agent/migration.test.ts",
+          "exit": 0,
+          "pass": 5,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/agent/spawnMemory.test.ts",
+          "exit": 0,
+          "pass": 12,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/agent/transcriptHost.test.ts",
+          "exit": 0,
+          "pass": 27,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/conversation/resumeLiveness.test.ts",
+          "exit": 1,
+          "pass": 0,
+          "fail": 1,
+          "skip": 0,
+          "failedTests": [
+            "a detector timeout after starting a legacy host settles resume, immediate send, and deliverability from one live record"
+          ]
+        },
+        {
+          "file": "src/lib/delivery.test.ts",
+          "exit": 1,
+          "pass": 55,
+          "fail": 12,
+          "skip": 0,
+          "failedTests": [
+            "idle reconfiguration survives a transient host miss and resumes after verified termination",
+            "a resume that cannot build a command names the failing condition (issue #935)",
+            "a resume whose recorded account this machine no longer has asks the rule instead (#1279)",
+            "message-triggered relaunches carry the stored MCP grant on both the direct and root-relay paths",
+            "tmux Resume carries the stored ultrafast tier into the command",
+            "tmux message reopen resolves ultrafast with resumeFast=undefined",
+            "tmux message reopen resolves ultrafast with resumeFast=true",
+            "tmux message reopen resolves ultrafast with resumeFast=false",
+            "tmux reconfigure effort only keeps ultrafast",
+            "tmux reconfigure to Standard clears the durable tier and attach",
+            "tmux branch relay carries the root's ultrafast tier into its reopen command",
+            "a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed"
+          ]
+        },
+        {
+          "file": "src/lib/flows/engine.test.ts",
+          "exit": 0,
+          "pass": 5,
+          "fail": 0,
+          "skip": 72,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/pipelines/engine.ports.test.ts",
+          "exit": 1,
+          "pass": 54,
+          "fail": 17,
+          "skip": 0,
+          "failedTests": [
+            "a concurrent pipeline replay and its recovery projections withhold staged identity (#1123)",
+            "a fixer self-fail persists its branch adoption before returning to the pipeline branch",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: Another issue noticed",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: Users cannot save",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+            "a fixer self-fail with a committed head goes to review with its findings as notes: historical red tests",
+            "a stage's fresh pushed branch and PR are adopted before the next stage",
+            "a restarted controller finishes its recorded branch adoption (after merge: false)",
+            "a restarted controller finishes its recorded branch adoption (after merge: true)",
+            "a stage branch is adopted onto an owned delivery branch when the lane ref is absent",
+            "a successor lane on a pull request branch settles its passed stage after a completed lane",
+            "a successor lane on a pull request branch settles its passed stage after a closed lane",
+            "a busy-to-terminal stage retries settlement after collecting fresh branch protection",
+            "a stage branch is adopted from durable terminal evidence before the scanner projects it",
+            "a divergent stage branch retaining accepted content is adopted without moving its source (uninterrupted)",
+            "a divergent stage branch retaining accepted content is adopted without moving its source (before-ref)",
+            "a divergent stage branch retaining accepted content is adopted without moving its source (after-ref)"
+          ]
+        },
+        {
+          "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+          "exit": 0,
+          "pass": 0,
+          "fail": 0,
+          "skip": 15,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+          "exit": 0,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/stateOwnership.entryPoints.test.ts",
+          "exit": 0,
+          "pass": 34,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/lib/tmux.test.ts",
+          "exit": 0,
+          "pass": 36,
+          "fail": 0,
+          "skip": 2,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/candidateContainer.test.ts",
+          "exit": 0,
+          "pass": 20,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/deployment.test.ts",
+          "exit": 1,
+          "pass": 35,
+          "fail": 1,
+          "skip": 0,
+          "failedTests": [
+            "managed auto retains a disconnected request through late admission and a newer main"
+          ]
+        },
+        {
+          "file": "src/runtime-host/dockerNames.test.ts",
+          "exit": 0,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/hostSuccessor.test.ts",
+          "exit": 0,
+          "pass": 36,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        },
+        {
+          "file": "src/runtime-host/stagingContainer.test.ts",
+          "exit": 0,
+          "pass": 11,
+          "fail": 0,
+          "skip": 0,
+          "failedTests": []
+        }
+      ]
+    },
+    "baselineMethod": "git stash push --include-untracked; run against the unchanged starting commit; restore the same stash and verify the diff hash",
+    "newFailedTests": [],
+    "typecheck": {
+      "command": "NODE_OPTIONS=--max-old-space-size=8192 bun x tsc --noEmit",
+      "exit": 0
+    },
+    "eslint": {
+      "command": "bun x eslint <touched TypeScript files>",
+      "exit": 0,
+      "errors": 0,
+      "warnings": 2,
+      "baselineWarnings": 2
+    },
+    "mcpBuild": {
+      "command": "bun run build:mcp",
+      "headExit": 0,
+      "baselineExit": 0
+    },
+    "runtimeHost": {
+      "command": "bun scripts/verify-runtime-host.ts",
+      "exit": 0,
+      "successionCompleted": true,
+      "listenerAnswered": 27,
+      "listenerPolls": 27,
+      "socketAnswered": 27,
+      "socketPolls": 27
+    },
+    "viewerInitial": {
+      "command": "bun scripts/verify-viewer-runtime.ts",
+      "exit": 1,
+      "reason": "No production build was present."
+    },
+    "containmentDiagnostic": {
+      "command": "DELEGATUS_AGENT_CPU=off bun --config=<temporary bunfig without preload> test src/lib/pipelines/engine.ports.test.ts --timeout=60000",
+      "exit": 1,
+      "pass": 70,
+      "fail": 1,
+      "skip": 0,
+      "reason": "The normal run refuses publication because this container has no systemd user manager. Disabling CPU placement in the isolated diagnostic makes these 16 assertions pass.",
+      "resolvedFailedTests": [
+        "a fixer self-fail persists its branch adoption before returning to the pipeline branch",
+        "a fixer self-fail with a committed head goes to review with its findings as notes: Another issue noticed",
+        "a fixer self-fail with a committed head goes to review with its findings as notes: Users cannot save",
+        "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "a fixer self-fail with a committed head goes to review with its findings as notes: historical red tests",
+        "a stage's fresh pushed branch and PR are adopted before the next stage",
+        "a restarted controller finishes its recorded branch adoption (after merge: false)",
+        "a restarted controller finishes its recorded branch adoption (after merge: true)",
+        "a stage branch is adopted onto an owned delivery branch when the lane ref is absent",
+        "a successor lane on a pull request branch settles its passed stage after a completed lane",
+        "a successor lane on a pull request branch settles its passed stage after a closed lane",
+        "a busy-to-terminal stage retries settlement after collecting fresh branch protection",
+        "a stage branch is adopted from durable terminal evidence before the scanner projects it",
+        "a divergent stage branch retaining accepted content is adopted without moving its source (uninterrupted)",
+        "a divergent stage branch retaining accepted content is adopted without moving its source (before-ref)",
+        "a divergent stage branch retaining accepted content is adopted without moving its source (after-ref)"
+      ],
+      "remainingFailedTests": [
+        "a concurrent pipeline replay and its recovery projections withhold staged identity (#1123)"
+      ],
+      "targetedControl": {
+        "test": "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "exit": 0,
+        "pass": 1,
+        "fail": 0
+      }
+    },
+    "issueLookup": {
+      "issue": 2112,
+      "result": "The requested GitHub API returned HTTP 403 (curl exit 22). No issue claim was used as proof."
+    },
+    "testCountDifference": {
+      "baselineMinusHead": 9,
+      "removedMigrationTests": 5,
+      "removedScriptEntryPointCases": 2,
+      "removedExternalHealthApiTest": 1,
+      "externalMountAndMarkerTestsReplacedByOneRegression": 1
+    },
+    "preliminaryImporterRun": {
+      "command": "bun --config=<temporary bunfig without test preload> test <file> --timeout=60000",
+      "totals": {
+        "pass": 679,
+        "fail": 43,
+        "skip": 95
+      },
+      "reasonForRepeat": "The deployment-adapter test required the MCP bundle, which was not built. Built the bundle, then repeated the affected files and the complete importer set with fresh short sandbox paths."
+    },
+    "mcpAndMarkerFollowup": {
+      "command": "bun --config=<temporary bunfig without preload> test <each of scripts/runtime-host-viewer-adapter.test.ts and src/lib/tmux.test.ts> --timeout=60000",
+      "totals": {
+        "pass": 82,
+        "fail": 0,
+        "skip": 4
+      },
+      "exits": [
+        0,
+        0
+      ]
+    },
+    "productionBuild": {
+      "command": "bun run build",
+      "exit": 0,
+      "cssWarnings": 1
+    },
+    "whitespace": {
+      "command": "git diff --check",
+      "exit": 0
+    },
+    "viewerGateWrapper": {
+      "command": "bash scripts/gate-slot.sh bun scripts/verify-viewer-runtime.ts",
+      "exit": 1,
+      "modulesLoaded": 36,
+      "modulesProbed": 36,
+      "httpStatus": 200,
+      "semanticVerdict": true,
+      "failure": "The portable owned-runner child guardian treated an exited zombie as alive and failed cleanup. No systemd user manager or writable cgroup is available."
+    },
+    "viewerDirect": {
+      "command": "bun scripts/verify-viewer-runtime.ts",
+      "exit": 1,
+      "modulesLoaded": 36,
+      "modulesProbed": 36,
+      "httpStatus": 200,
+      "semanticVerdict": true,
+      "failure": "The script automatically enters the owned runner. Its portable child guardian again rejected already-exited zombie children during cleanup."
+    },
+    "trackedDiffSha256BeforeAndAfterStash": "8d90c089dd96e290a4b830ee1dc97721c02817bd6b8e37d0b87f1371f0873fcd"
+  },
+  "callerAuditScope": "All tracked files, including hidden configuration and workflows, were searched. No non-test caller or declaration of the removed symbols remains. This evidence record is excluded from that final search.",
+  "reviewRounds": [
+    "Traced every removed entry point and symbol through all tracked files, including hidden configuration and workflows; preserved active callers outside the retired mode.",
+    "Reviewed deployment environment and mount changes against the existing structured host implementations and ordinary tmux behavior; verified those host implementations have no diff.",
+    "Compared the complete importer test sets on the change and the starting commit, checked types and lint, built production output, and exercised both runtime processes in isolated state."
+  ],
+  "localApplication": {
+    "recordedAt": "2026-10-26T15:42:47.948246+00:00",
+    "baseCommit": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+    "cloudResult": 65,
+    "cloudPatchSha256": "61f05df7c95cdfb2b55033431b2793b2d66146242df0c3c83116903c7f8a3157",
+    "originalRecord": "The top-level verification preserves the cloud run. This section records application and verification on the captured main revision.",
+    "recoveredChecks": "Typecheck and the Bun runtime-host rehearsal completed in the prior attempt. Their source snapshot and frozen dependency graph match the resumed attempt; complete results and the rehearsal report were inspected before reuse.",
+    "driftResolution": "src/lib/tmux.ts retains main's DeliveryAdmissionGuard argument and final authorization before session creation while removing the retired external branch.",
+    "sourceSha256": {
+      "docker-compose.yml": "76bccd534258e6490b1b658701e8f940e00c95af8b34e60ef03caf668cce5126",
+      "docs/design/state-sqlite-migration.md": "62e3eaa02f55dbcdce2fbc2e57a5820bfb86ee87c7cfe720c08d62b62d500058",
+      "docs/design/windows-support.md": "61a7da8452d5b65e5a6aaa9cfba694e982500f82ff4810a968bdf4e6f8d2cb69",
+      "docs/verification/test-path-inventory.md": "b761825b11d8a9db2b3341e635531e6b04428456a6a99dec02be4a429ab2bb7e",
+      "scripts/deploy-staging.test.ts": "b27f8583e779245340a878dbab0ade8eb6fcc0589d809d941254a9191bb22bf2",
+      "scripts/deploy-staging.ts": "2b4bbd3b3e0380df0954a1afec07e65806762400b89cdfecc13efeaa5a8aee00",
+      "scripts/migrate-legacy-tmux.ts": null,
+      "scripts/runtime-host-viewer-adapter.ts": "8c38e06f16f33e4aabe707a4d484b55ce208702c92cfd8163b7ee876871ba984",
+      "src/app/api/files/route.test.ts": "1258ebd66436c3b79e84054926b964f36c17ce70a92e3a0aa4142347fa070780",
+      "src/lib/agent/migration.test.ts": null,
+      "src/lib/agent/migration.ts": null,
+      "src/lib/stateOwnership.entryPoints.test.ts": "69a054e7aabee8d1f2aa0f1fab9194e9dd5b6354269956f9c0796adc080b5d27",
+      "src/lib/tmux.test.ts": "1fbc90a176ea18a5e8242e9c1465d3bbf6f117f0a2eb0aa9600c28b9b10f8a5b",
+      "src/lib/tmux.ts": "f72578285a5b3bdb356591c932f62b0d1b44c47c18a6ce0ac871589256c6e278",
+      "src/runtime-host/candidateContainer.test.ts": "367b570fab8fcf2ffa712fc47b5044585bbe605e05920449fe6076673baa64b2",
+      "src/runtime-host/candidateContainer.ts": "396eec37672e3b96a01e7b84712c10ce1ceb16e0acbbee64068319df951b7003",
+      "src/runtime-host/deployment.test.ts": "177a93a41a83630ac6cb9d5b8f0cd8709c39dd79ee808459b8f5ee744f14a8a6",
+      "src/runtime-host/stagingContainer.test.ts": "2c9108e4b6e35504ba191d0420b64e8e972bd6b38443a044e8117b5d3a769e6c",
+      "src/runtime-host/stagingContainer.ts": "d2e0c91712db75cf0cb033fb29dd9c561609770db7bfd056154eaeb3eaf64f12"
+    },
+    "sourceSnapshotSha256": "4b4a93a11442b6fae21c24c28e66a780b8c885bb3b09611e9f97b1256ed89bb4",
+    "dependencies": {
+      "install": "bun install --frozen-lockfile --ignore-scripts",
+      "exit": 0,
+      "sharedDependencyTargetChanged": false,
+      "next": "16.4.2",
+      "bun": "1.4.0"
+    },
+    "procedure": {
+      "wrapper": "scripts/gate-slot.sh at the captured base revision; sequential commands with owned-runner cleanup",
+      "selection": "Each of the seven surviving touched tests plus the deployment adapter and proactive tmux tests, one file per process. Every failing whole file repeated three times on head and three times on base.",
+      "isolation": [
+        "checkEnvironment then isolatedEnvironment",
+        "fresh HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, LLV_STATE_DIR and TMPDIR per file",
+        "short temporary alias resolving into stage-owned scratch",
+        "Viewer control endpoint on closed loopback port 1"
+      ],
+      "discardedSetupAttempts": [
+        "The supplied dependency link had an older Next version and lacked three pinned Sigstore packages. A private frozen install replaced the link without modifying its shared target.",
+        "The ownership setup could not build the MCP bundle before that install. The resumed validation builds the head and base MCP bundles before the final ownership and adapter tests."
+      ]
+    },
+    "tests": [
+      {
+        "file": "scripts/deploy-staging.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "scripts/deploy-staging.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:38:41.974Z",
+        "finishedAt": "2026-10-26T15:38:42.816Z",
+        "exit": 0,
+        "pass": 9,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/files/route.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:38:42.817Z",
+        "finishedAt": "2026-10-26T15:39:01.293Z",
+        "exit": 1,
+        "pass": 144,
+        "fail": 8,
+        "skip": 0,
+        "failedTests": [
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "project query changes reuse one global scan snapshot",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+        ]
+      },
+      {
+        "file": "src/lib/stateOwnership.entryPoints.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/stateOwnership.entryPoints.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:39:01.294Z",
+        "finishedAt": "2026-10-26T15:39:07.293Z",
+        "exit": 0,
+        "pass": 32,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/lib/tmux.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/tmux.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:39:07.293Z",
+        "finishedAt": "2026-10-26T15:39:10.530Z",
+        "exit": 0,
+        "pass": 38,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/runtime-host/candidateContainer.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/runtime-host/candidateContainer.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:39:10.531Z",
+        "finishedAt": "2026-10-26T15:39:11.855Z",
+        "exit": 0,
+        "pass": 19,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/runtime-host/deployment.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/runtime-host/deployment.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:39:11.857Z",
+        "finishedAt": "2026-10-26T15:39:13.993Z",
+        "exit": 1,
+        "pass": 35,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ]
+      },
+      {
+        "file": "src/runtime-host/stagingContainer.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/runtime-host/stagingContainer.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:39:13.994Z",
+        "finishedAt": "2026-10-26T15:39:14.441Z",
+        "exit": 0,
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "file": "scripts/runtime-host-viewer-adapter.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "scripts/runtime-host-viewer-adapter.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:39:14.441Z",
+        "finishedAt": "2026-10-26T15:40:31.742Z",
+        "exit": 0,
+        "pass": 46,
+        "fail": 0,
+        "skip": 2,
+        "failedTests": []
+      },
+      {
+        "file": "src/lib/tmux.proactive.test.ts",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/tmux.proactive.test.ts"
+        ],
+        "startedAt": "2026-10-26T15:40:31.743Z",
+        "finishedAt": "2026-10-26T15:40:43.780Z",
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      }
+    ],
+    "baselineComparisons": [
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "classification": "pre-existing",
+        "failedTests": [
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "project query changes reuse one global scan snapshot",
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior"
+        ],
+        "head": [
+          {
+            "round": 1,
+            "pass": 144,
+            "fail": 8,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 2,
+            "pass": 144,
+            "fail": 8,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 3,
+            "pass": 144,
+            "fail": 8,
+            "skip": 0,
+            "exit": 1
+          }
+        ],
+        "base": [
+          {
+            "round": 1,
+            "pass": 145,
+            "fail": 8,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 2,
+            "pass": 145,
+            "fail": 8,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 3,
+            "pass": 145,
+            "fail": 8,
+            "skip": 0,
+            "exit": 1
+          }
+        ]
+      },
+      {
+        "file": "src/runtime-host/deployment.test.ts",
+        "classification": "pre-existing",
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ],
+        "head": [
+          {
+            "round": 1,
+            "pass": 35,
+            "fail": 1,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 2,
+            "pass": 35,
+            "fail": 1,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 3,
+            "pass": 35,
+            "fail": 1,
+            "skip": 0,
+            "exit": 1
+          }
+        ],
+        "base": [
+          {
+            "round": 1,
+            "pass": 35,
+            "fail": 1,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 2,
+            "pass": 35,
+            "fail": 1,
+            "skip": 0,
+            "exit": 1
+          },
+          {
+            "round": 3,
+            "pass": 35,
+            "fail": 1,
+            "skip": 0,
+            "exit": 1
+          }
+        ]
+      }
+    ],
+    "skippedTests": {
+      "count": 2,
+      "reason": "The two existing Docker preservation cases require an explicit LLV_MANAGED_DOCKER_TEST_IMAGE; the legacy case additionally requires LLV_LEGACY_ADAPTER_FIXTURE. Those optional fixtures were not supplied."
+    },
+    "newFailingTests": [],
+    "bundleBuilds": [
+      {
+        "side": "head",
+        "command": [
+          "bun",
+          "run",
+          "build:mcp"
+        ],
+        "exit": 0
+      },
+      {
+        "side": "base",
+        "command": [
+          "bun",
+          "run",
+          "build:mcp"
+        ],
+        "exit": 0
+      }
+    ],
+    "checks": [
+      {
+        "name": "eslint",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "node_modules/eslint/bin/eslint.js",
+          "scripts/deploy-staging.test.ts",
+          "scripts/deploy-staging.ts",
+          "scripts/runtime-host-viewer-adapter.ts",
+          "src/app/api/files/route.test.ts",
+          "src/lib/stateOwnership.entryPoints.test.ts",
+          "src/lib/tmux.test.ts",
+          "src/lib/tmux.ts",
+          "src/runtime-host/candidateContainer.test.ts",
+          "src/runtime-host/candidateContainer.ts",
+          "src/runtime-host/deployment.test.ts",
+          "src/runtime-host/stagingContainer.test.ts",
+          "src/runtime-host/stagingContainer.ts"
+        ],
+        "exit": 0,
+        "startedAt": "2026-10-26T15:42:23.370Z",
+        "finishedAt": "2026-10-26T15:42:29.456Z"
+      },
+      {
+        "name": "typecheck",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ],
+        "exit": 0,
+        "startedAt": "2026-10-26T14:01:36.331Z",
+        "finishedAt": "2026-10-26T14:23:52.829Z"
+      },
+      {
+        "name": "runtime-host",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "scripts/verify-runtime-host.ts",
+          "--runtime",
+          "bun"
+        ],
+        "exit": 0,
+        "startedAt": "2026-10-26T14:23:52.830Z",
+        "finishedAt": "2026-10-26T14:49:15.682Z"
+      }
+    ],
+    "runtimeHost": {
+      "ok": true,
+      "runtime": "bun 1.4.0",
+      "succession": {
+        "predecessorReadyMs": 1013,
+        "successorTookOverMs": 504,
+        "completed": true
+      },
+      "listener": {
+        "windowMs": 15000,
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "socket": {
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      }
+    },
+    "safety": {
+      "uiFilesChanged": [],
+      "liveDeploymentPerformed": false,
+      "liveSessionMigrationPerformed": false,
+      "rehearsal": "Two private runtime-host generations, an ephemeral loopback port, a private socket and a stub Docker command."
+    },
+    "performanceClaim": null
+  }
+}

@@ -97,7 +97,7 @@ function stagingFixture(): { home: string; context: Parameters<typeof stagingAge
     image: stagingImageName(revision),
     service,
     paths: stagingStatePaths(stateDir),
-    tmux: { legacyTmuxExternal: "0", tmuxTmpdir: "/tmp" },
+    tmux: { tmuxTmpdir: "/tmp" },
   };
   return { home, context, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }

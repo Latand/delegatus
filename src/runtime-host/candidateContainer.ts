@@ -1,5 +1,4 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import fs from "node:fs";
 import path from "node:path";
 
 import { viewerBootGateKey } from "@/lib/access/phoneAccessBootGate";
@@ -33,7 +32,6 @@ export interface ViewerComposeService {
 
 export interface ViewerCandidateContainerOverrides {
   runtimeSocket: string;
-  legacyTmuxExternal: string;
   tmuxTmpdir: string;
 }
 
@@ -159,50 +157,6 @@ export function viewerCandidateGateKey(configJson: string): string | null {
   return viewerBootGateKey(viewerComposeServiceFromConfig(configJson).environment);
 }
 
-export function viewerComposeServiceUid(service: ViewerComposeService): string {
-  const uid = service.user.split(":", 1)[0];
-  if (!uid || !/^\d+$/.test(uid)) throw new Error("Viewer Compose user must begin with a numeric uid");
-  return uid;
-}
-
-export function viewerCandidateTmuxEnvironment(
-  stateDir: string,
-  uid: string,
-  configured: Pick<ViewerCandidateContainerOverrides, "legacyTmuxExternal" | "tmuxTmpdir">,
-  exists: (filename: string) => boolean = fs.existsSync,
-): Pick<ViewerCandidateContainerOverrides, "legacyTmuxExternal" | "tmuxTmpdir"> {
-  const migrationComplete = exists(path.join(stateDir, "legacy-tmux-migration-complete"));
-  return migrationComplete
-    ? { legacyTmuxExternal: "1", tmuxTmpdir: `/run/user/${uid}/agent-log-viewer` }
-    : configured;
-}
-
-export function viewerCandidateVolumes(
-  service: ViewerComposeService,
-  overrides: Pick<ViewerCandidateContainerOverrides, "legacyTmuxExternal" | "tmuxTmpdir">,
-): ViewerComposeVolume[] {
-  if (overrides.legacyTmuxExternal !== "1") return service.volumes;
-  if (!path.isAbsolute(overrides.tmuxTmpdir)) throw new Error("External tmux directory must be absolute");
-
-  const existing = service.volumes.find((volume) => volume.target === overrides.tmuxTmpdir);
-  if (existing) {
-    if (existing.source !== overrides.tmuxTmpdir || existing.read_only) {
-      throw new Error("External tmux directory mount does not expose the host supervisor path");
-    }
-    return service.volumes;
-  }
-
-  return [
-    ...service.volumes,
-    {
-      type: "bind",
-      source: overrides.tmuxTmpdir,
-      target: overrides.tmuxTmpdir,
-      bind: {},
-    },
-  ];
-}
-
 /** Compose short binds explicitly request source creation. Docker --volume
  * preserves that policy; --mount keeps explicit false and older snapshots strict. */
 function candidateBindArgs(volume: ViewerComposeVolume): string[] {
@@ -232,7 +186,6 @@ export function viewerCandidateDockerArgs(
     DELEGATUS_HOT_STATE_RELEASE_REVISION: candidate.revision,
     LLV_RUNTIME_EVENTS: "1",
     LLV_RUNTIME_HOST_SOCKET: overrides.runtimeSocket,
-    LLV_LEGACY_TMUX_EXTERNAL: overrides.legacyTmuxExternal,
     LLV_ALLOW_LEGACY_VIEWER: "1",
     TMUX_TMPDIR: overrides.tmuxTmpdir,
   });
@@ -241,7 +194,7 @@ export function viewerCandidateDockerArgs(
     "dev.live-log-viewer.managed": "1",
     "dev.live-log-viewer.revision": candidate.revision,
   };
-  const volumes = viewerCandidateVolumes(service, overrides);
+  const volumes = service.volumes;
   const command = service.command?.map((argument) => argument.replaceAll("$$", () => "$")) ?? [];
   const args = [
     "docker", "run", "-d",

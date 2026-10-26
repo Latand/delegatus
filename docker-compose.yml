@@ -28,7 +28,6 @@ x-viewer-common: &viewer-common
     # Keep /tmp until the explicit migration flag is enabled. The supervisor
     # endpoint lives outside the disposable Viewer container.
     TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
-    LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
     HF_HOME: ${HOME:-/home/user}/.cache/huggingface
     LLV_WHISPER_VENV: /opt/llv-whisper-venv
     LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
@@ -71,7 +70,6 @@ services:
       LLV_DOCKER_GID: ${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}
       LLV_ENV_FILE: ${DELEGATUS_ENV_FILE:-${LLV_ENV_FILE:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/service.env}}
       LLV_TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
-      LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
       LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
       LLV_ALLOW_LEGACY_VIEWER: ${DELEGATUS_ALLOW_LEGACY_VIEWER:-${LLV_ALLOW_LEGACY_VIEWER:-0}}
       # The profile gate is the activation switch; a started runtime-host is
@@ -113,7 +111,6 @@ services:
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
       TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
-      LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
       HF_HOME: ${HOME:-/home/user}/.cache/huggingface
       LLV_WHISPER_VENV: /opt/llv-whisper-venv
       LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
@@ -136,7 +133,6 @@ services:
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
       TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
-      LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
       HF_HOME: ${HOME:-/home/user}/.cache/huggingface
       LLV_WHISPER_VENV: /opt/llv-whisper-venv
       LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}

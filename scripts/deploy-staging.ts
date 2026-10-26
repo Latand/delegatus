@@ -38,9 +38,7 @@ import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "../src/lib
 import { stagingReleaseRecord, STAGING_RELEASE_FILE, type StagingReleaseRecord } from "../src/lib/staging";
 import {
   viewerComposeSnapshotWithoutUnsupportedApiCredentials,
-  viewerCandidateTmuxEnvironment,
   viewerComposeServiceFromConfig,
-  viewerComposeServiceUid,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror } from "../src/runtime-host/canonicalMirror";
 import { viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
@@ -332,13 +330,7 @@ async function main(): Promise<void> {
     catch { fs.rmSync(sourceDir, { recursive: true, force: true }); }
   }
 
-  /* The host tmux supervisor migration marker lives in prod state; reading it
-     here (operator-side) keeps the staging containers on the same tmux
-     transport as prod without the staging instance touching prod state. */
-  const tmux = viewerCandidateTmuxEnvironment(prodStateDir, viewerComposeServiceUid(service), {
-    legacyTmuxExternal: service.environment.LLV_LEGACY_TMUX_EXTERNAL || "0",
-    tmuxTmpdir: service.environment.TMUX_TMPDIR || "/tmp",
-  });
+  const tmux = { tmuxTmpdir: service.environment.TMUX_TMPDIR || "/tmp" };
   const context = { revision, image, service, paths, tmux };
 
   fs.mkdirSync(stagingStateDir, { recursive: true, mode: 0o700 });

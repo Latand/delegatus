@@ -6,7 +6,6 @@ import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
 
 import {
   AGENT_REGISTRY_SQLITE_ENV,
-  viewerCandidateVolumes,
   viewerRegistryBackendMode,
   type ViewerCandidateContainerOverrides,
   type ViewerComposeService,
@@ -81,7 +80,7 @@ export interface StagingContainerContext {
   image: string;
   service: ViewerComposeService;
   paths: StagingStatePaths;
-  tmux: Pick<ViewerCandidateContainerOverrides, "legacyTmuxExternal" | "tmuxTmpdir">;
+  tmux: Pick<ViewerCandidateContainerOverrides, "tmuxTmpdir">;
   port?: number;
 }
 
@@ -124,7 +123,6 @@ function stagingEnvironment(context: StagingContainerContext): Record<string, st
     LLV_VIEWER_DEPLOY_TARGET: context.paths.releaseTarget,
     LLV_VIEWER_PORT: String(port),
     LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${port}`,
-    LLV_LEGACY_TMUX_EXTERNAL: context.tmux.legacyTmuxExternal,
     TMUX_TMPDIR: context.tmux.tmuxTmpdir,
     /* The manager's default cwd must name a checkout the HOST can see. Inside the
        container process.cwd() is /app, which the orchestrator route would fall back
@@ -172,7 +170,7 @@ function stagingDockerArgs(
     [STAGING_LABEL]: "1",
     "dev.live-log-viewer.revision": context.revision,
   };
-  const volumes = viewerCandidateVolumes(context.service, context.tmux);
+  const volumes = context.service.volumes;
   return [
     "docker", "run", "-d",
     "--restart", context.service.restart,
