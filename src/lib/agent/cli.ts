@@ -1,4 +1,5 @@
 import { REPOSITORY_IDENTITY, repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
+import { OPERATOR_CREDENTIAL_ENV, withoutOperatorCredentials } from "./operatorCredentials";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { codexOperatorQuestionPolicy } from "./operatorQuestionPolicy";
@@ -166,7 +167,7 @@ export interface ResumeSpec {
 }
 
 export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<ResumeSpec> {
-  const source = await repositoryPublicationSource(spec.cwd, process.env);
+  const source = await repositoryPublicationSource(spec.cwd, withoutOperatorCredentials(process.env));
   spec = { ...spec, publicationIdentity: source[REPOSITORY_IDENTITY] ?? null };
   if (spec.publicationSettings) {
     const settings = { ...spec.publicationSettings,
@@ -252,7 +253,7 @@ export interface FreshSpecOptions {
   deferClaudeSpawnPolicy?: boolean;
 }
 
-const CLAUDE_SHADOWED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "LLV_TOKEN"];
+const CLAUDE_SHADOWED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", ...OPERATOR_CREDENTIAL_ENV];
 
 function telegramTokenAssignment(mcpServers: readonly string[]): string {
   if (!mcpServers.includes("telegram")) return "";
@@ -289,8 +290,8 @@ function providerLaunchModel(home: string, requested: string | null | undefined)
 }
 
 function codexEnvPrefix(home: string, mcpServers: readonly string[]): string {
-  const tokenUnset = mcpServers.includes("telegram") ? "" : ` -u ${TELEGRAM_CONNECTOR_TOKEN_ENV}`;
-  return `env -u LLV_TOKEN${tokenUnset} CODEX_HOME=${shellQuote(home)}`;
+  const unsets = [OPERATOR_CREDENTIAL_ENV[0], ...(mcpServers.includes("telegram") ? [] : [TELEGRAM_CONNECTOR_TOKEN_ENV]), ...OPERATOR_CREDENTIAL_ENV.slice(1)];
+  return `env ${unsets.map(name => `-u ${name}`).join(" ")} CODEX_HOME=${shellQuote(home)}`;
 }
 
 export interface ResumeSpecOptions {
@@ -339,8 +340,7 @@ function normalizedMcpServers(value: readonly string[] | undefined): string[] {
 }
 
 function configuredCodexMcpServers(home: string, cwd: string): string[] {
-  const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: home };
-  delete env.LLV_TOKEN;
+  const env = withoutOperatorCredentials({ ...process.env, CODEX_HOME: home });
   // eslint-disable-next-line no-restricted-syntax -- Legacy terminal-launch MCP discovery invoked by serving launch controls.
   const listed = spawnSync(resolveCodexBinary(), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
     cwd,

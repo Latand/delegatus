@@ -76,6 +76,7 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
+import { LaneReviewSheet } from "@/components/laneReview/LaneReviewSheet";
 import { clipTitle, textField, withField } from "./taskText";
 import { BoardHistory, type HistoryEntry } from "./boardHistory";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
@@ -435,6 +436,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const draftsVersion = useSyncExternalStore(stageDrafts.subscribe, stageDrafts.version, stageDrafts.version);
   const [stagePanels, setStagePanels] = useState<ReadonlyMap<string, StagePanel>>(() => new Map());
   const [sheet, setSheet] = useState<SheetTarget | null>(null);
+  /* The lane review sheet (docs/design/lane-diff-comments.md); one of the two sheets is open at a time. */
+  const [review, setReview] = useState<{ pipelineId: string; title: string; opener: HTMLElement | null } | null>(null);
   /* Pane folds and attempt choices outlive one opening of the sheet, as the prototype's do. */
   const [paneFolds, setPaneFolds] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [paneAttempts, setPaneAttempts] = useState<ReadonlyMap<string, number>>(() => new Map());
@@ -1701,6 +1704,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.pipelineAct.menu") },
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
+        { type: "item", id: "review-changes", label: t("laneReview.menu"), keepFocus: true, onSelect: () => openReview(pipeline, title) },
         /* In the card's ⋯ the task's own Attach sits a few rows up, so the lane's names what it attaches to. */
         linksItem({ kind: "pipeline", id: pipeline.id }, inCardMenu ? t("workLinks.attachPipeline") : undefined),
         checksItem(pipeline.id),
@@ -2155,8 +2159,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const summary = cardsByIdRef.current.get(cardId)?.pipelines.find((entry) => entry.pipeline.id === pipeline.id);
     const focus = stageId ?? (summary ? currentStageId(summary.pipeline, summary.views) : null);
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setReview(null);
     setSheet({ cardId, pipelineId: pipeline.id, focus, opener });
   }, []);
+  const openReview = useCallback((pipeline: Pipeline, title: string) => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSheet(null);
+    setReview({ pipelineId: pipeline.id, title, opener });
+  }, []);
+  const closeReview = useCallback(() => {
+    setReview((current) => {
+      const back = current?.opener;
+      queueMicrotask(() => (back?.isConnected && back !== document.body ? back : rootRef.current?.querySelector<HTMLElement>(".board-frame"))?.focus({ preventScroll: true }));
+      return null;
+    });
+  }, []);
+  /* The board behind the review sheet takes no input while it is open. */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!review || !root) return;
+    const held = [...root.children].filter((element) => !element.hasAttribute("data-lane-review-scrim") && !element.hasAttribute("inert"));
+    for (const element of held) element.setAttribute("inert", "");
+    return () => {
+      for (const element of held) element.removeAttribute("inert");
+    };
+  }, [review]);
   const closeSheet = useCallback(() => {
     setSheet((current) => {
       if (current) {
@@ -3082,6 +3109,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       </div>
       <div ref={parkRef} className="reader-park" aria-hidden="true" />
       {sheetView}
+      {review ? (
+        <LaneReviewSheet
+          key={review.pipelineId}
+          pipelineId={review.pipelineId}
+          title={review.title}
+          onClose={closeReview}
+          onOpenConversation={(conversationId) => {
+            closeReview();
+            openRecorded({ path: null, conversationId });
+          }}
+        />
+      ) : null}
       {/* The window's reader, and the agent it is bringing in, in a slot of
           its own under it: laid out on screen and not drawn, so its feed
           reads while the one shown stays. Keyed by agent, so the incoming

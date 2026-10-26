@@ -2,8 +2,9 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 // Isolate before importing the route's state-resolving module graph.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-orchestrator-relay-"));
@@ -89,6 +90,8 @@ function request(capability?: string, body: Record<string, unknown> = {}, header
     body: JSON.stringify(body),
   });
 }
+/** A Delegatus page's fetch: it carries the session its navigation opened. */
+const browser = () => ({ cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" });
 function relayBody(recipient: string, text = "Please investigate this issue.") {
   return { orchestratorRelayProject: "project-b", conversationId: recipient, clientMessageId: "fixture-send", text };
 }
@@ -183,7 +186,7 @@ test("HTTP refuses worker, unidentified and invalid-capability relays before del
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: "orchestrator_relay_refused", admission: "refused" });
   }
-  expect((await POST(request("invalid", relayBody(recipient.id), { "sec-fetch-site": "same-origin" }))).status).toBe(403);
+  expect((await POST(request("invalid", relayBody(recipient.id), browser()))).status).toBe(403);
   expect(delivered).toEqual([]);
 });
 
@@ -233,7 +236,7 @@ test("a seat cannot auto-create a missing recipient through the unchanged operat
 
 test("the operator browser still sends its own words", async () => {
   const recipient = actor("project-b");
-  expect((await POST(request(undefined, relayBody(recipient.id), { "sec-fetch-site": "same-origin" }))).status).toBe(200);
+  expect((await POST(request(undefined, relayBody(recipient.id), browser()))).status).toBe(200);
   expect(delivered[0]).toMatchObject({ text: "Please investigate this issue.", origin: { kind: "operator" } });
 });
 
@@ -284,7 +287,17 @@ for (const engine of ["claude", "codex"] as const) test(`voice confirmation reac
   expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("delivered");
   expect(delivered).toHaveLength(1);
   expect((await orchestratorPOST(request(undefined, { project: "voice-project", conversationId: recipient.id, clientMessageId: "forged", text: "forged",
-    voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
+    voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } }, browser()))).status).toBe(409);
+  // The in-process delivery above needed no cookie; an HTTP voice body that
+  // only stamps fetch metadata is refused before any proposal is read.
+  for (const post of [orchestratorPOST, POST]) {
+    const refused = await post(request(undefined, { project: "voice-project", orchestratorRelayProject: "voice-project", conversationId: recipient.id,
+      clientMessageId: "forged-without-session", text: "forged", voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } },
+    { "sec-fetch-site": "same-origin", origin: "http://127.0.0.1" }));
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: "orchestrator_relay_refused", admission: "refused" });
+  }
+  expect(delivered).toHaveLength(1);
 });
 
 for (const engine of ["claude", "codex"] as const) test(`a spoken request and the same request asked again each reach ${engine} through the real relay, and a model repeat adds none`, async () => {
@@ -484,7 +497,7 @@ for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
           if (author === "gateway") setDeputyRootResolverForTests(() => otherSender!.id);
           const conflict = await post(request(otherSender?.capability,
             { ...boundRecipient, text: author === "seat" ? body.text : original.text },
-            { "sec-fetch-site": "same-origin" }));
+            browser()));
           expect(conflict.status).toBe(409);
           expect(await conflict.json()).not.toHaveProperty("operationId");
           const originalRetry = await post(request(sender.capability, retryBody));
@@ -558,9 +571,9 @@ test("HTTP relay reservations bind the authenticated seat and separate browser a
     sender = actor("project-a");
     expect((await post(request(sender.capability, body))).status).toBe(409);
     const reserved = Object.values(registry.readOnlySnapshot().heldDeliveries).find(row => row.command.operationId === receipt.operationId)!;
-    expect((await post(request(undefined, { ...body, text: reserved.text }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
+    expect((await post(request(undefined, { ...body, text: reserved.text }, browser()))).status).toBe(409);
     const browserKey = { ...body, clientMessageId: `browser-${index}`, text: reserved.text };
-    expect((await post(request(undefined, browserKey, { "sec-fetch-site": "same-origin" }))).status).toBe(200);
+    expect((await post(request(undefined, browserKey, browser()))).status).toBe(200);
     expect((await post(request(sender.capability, { ...body, clientMessageId: browserKey.clientMessageId }))).status).toBe(409);
   }
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(6);
@@ -573,7 +586,7 @@ for (const [index, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
     setDeputyRootResolverForTests(() => gateway.id);
     const recipient = actor("project-b");
     const body = { ...relayBody(recipient.id, "same words"), project: "project-b" };
-    const browserHeaders = { "sec-fetch-site": "same-origin" };
+    const browserHeaders = browser();
     const operator = await post(request(undefined, body, browserHeaders));
     expect(operator.status).toBe(200);
     const operatorReceipt = await operator.json();
@@ -686,7 +699,7 @@ for (const author of ["operator", "gateway"] as const) {
     if (gateway) setDeputyRootResolverForTests(() => gateway.id);
     const recipient = actor("project-b");
     const body = { project: "project-b", text: " hello ", clientMessageId: ` ${author}-retry ` };
-    const headers = { "sec-fetch-site": "same-origin" };
+    const headers = browser();
     const first = await orchestratorPOST(request(gateway?.capability, body, headers));
     expect(first.status).toBe(200);
     const receipt = await first.json();
@@ -786,7 +799,7 @@ test("gateway MCP recovery never inherits an operator receipt after a lost HTTP 
   actor("project-b");
   const args = { clientRequestId: "gateway-lost-conflict", project: "project-b", text: "same words" };
   const downstreamKey = `mcp_orchestrator_${crypto.createHash("sha256").update(args.clientRequestId).digest("hex")}`;
-  const operator = await orchestratorPOST(request(undefined, { project: args.project, text: args.text, clientMessageId: downstreamKey }, { "sec-fetch-site": "same-origin" }));
+  const operator = await orchestratorPOST(request(undefined, { project: args.project, text: args.text, clientMessageId: downstreamKey }, browser()));
   expect(operator.status).toBe(200);
   const operatorReceipt = await operator.json();
   process.env.LLV_SPAWN_CAPABILITY = gateway.capability;
@@ -939,3 +952,42 @@ for (const loseResponse of [false, true]) test(`MCP relay follows a seat rotated
   expect(posts).toBe(1);
   expect(delivered).toHaveLength(1);
 });
+
+
+for (const mode of ["accepted", "refused", "uncertain", "exception", "null"] as const) {
+  test(`linked transport selection never retries an owned send: ${mode}`, async () => {
+    const { deliverLinkedSeatMessage, setLinkedSeatEnqueueForTests } = await import("@/lib/links/seatMessageDelivery");
+    const delivery = await import("@/lib/delivery");
+    actor("project-b");
+    let probes = 0;
+    const guard = () => {};
+    const failure = new Error("structured answer lost");
+    const legacy = spyOn(delivery, "deliverConversationMessage").mockImplementation(async input => {
+      expect(input.admissionGuard).toBe(guard);
+      expect(input.pid).toBeNull();
+      return { ok: true, target: null, outcome: "held", operationId: "legacy-dispatch" } as never;
+    });
+    setLinkedSeatEnqueueForTests(async input => {
+      probes++;
+      expect(input.admissionGuard).toBe(guard);
+      expect(input.text).toContain("Prepared linked words.");
+      if (mode === "exception") throw failure;
+      if (mode === "null") return null;
+      if (mode === "accepted") return { ok: true, structured: true, outcome: "queued", target: null, operationId: "linked-dispatch" } as never;
+      return { ok: false, structured: true, outcome: "failed", status: 409, error: "Dispatch refused", code: "fixture-refused",
+        ...(mode === "uncertain" ? { operationId: "linked-uncertain" } : {}) };
+    });
+    try {
+      const pending = deliverLinkedSeatMessage("project-b", "Prepared linked words.", "Shared project", `peer:00112233:dispatch-${mode}`, guard);
+      if (mode === "exception") await expect(pending).rejects.toBe(failure);
+      else expect(await pending).toEqual(mode === "accepted" ? { st: "accepted", operationId: "linked-dispatch" }
+        : mode === "null" ? { st: "accepted", operationId: "legacy-dispatch" }
+        : mode === "uncertain" ? { st: "retry" } : { st: "refused", code: "fixture-refused" });
+      expect(probes).toBe(1);
+      expect(legacy).toHaveBeenCalledTimes(mode === "null" ? 1 : 0);
+    } finally {
+      legacy.mockRestore();
+      setLinkedSeatEnqueueForTests(null);
+    }
+  });
+}

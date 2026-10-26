@@ -1,4 +1,5 @@
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +28,7 @@ const ORIGIN = "http://127.0.0.1:8899";
 const get = (project: string) => GET(new NextRequest(`${ORIGIN}/api/projects/settings?project=${encodeURIComponent(project)}`));
 const put = (body: unknown) => PUT(new NextRequest(`${ORIGIN}/api/projects/settings`, {
   method: "PUT",
-  headers: { "content-type": "application/json", origin: ORIGIN, host: "127.0.0.1:8899" },
+  headers: { cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json", origin: ORIGIN, host: "127.0.0.1:8899" },
   body: JSON.stringify(body),
 }));
 

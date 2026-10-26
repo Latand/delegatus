@@ -6,7 +6,7 @@ import os from "node:os";
 
 import { expect, test } from "bun:test";
 
-import { ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { launchOverheadBytes } from "./handoffDigest";
 import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
 import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
@@ -45,8 +45,8 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 58, and a v57 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(58);
+test("the default mandate is at version 60, and a v59 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(60);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -123,7 +123,9 @@ test("the default mandate is at version 58, and a v57 seat reads as stale", () =
   expect(orchestratorMandateStale(55)).toBe(true);
   expect(orchestratorMandateStale(56)).toBe(true);
   expect(orchestratorMandateStale(57)).toBe(true);
-  expect(orchestratorMandateStale(58)).toBe(false);
+  expect(orchestratorMandateStale(58)).toBe(true);
+  expect(orchestratorMandateStale(59)).toBe(true);
+  expect(orchestratorMandateStale(60)).toBe(false);
 });
 
 /**
@@ -190,6 +192,10 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   57: "928041c147b9f068a23674313b33c285c78555fa6a8afc0a89aeb20f49e99639",
   // v58 states the maintenance practice and ships #3083's working rule 16.
   58: "632ee54064e12e71db96a1ed427d0fc6f59566d6983d4b659429056ca7f4fb38",
+  // v59 requires a lesson in the same turn as an operator correction.
+  59: "ed78e7ff8d5027b1f42a2dafcfe04a1fe17574b955bb473da5930c54f34d0732",
+  // v60 shortens rule 13 to preserve rotation history alongside the correction duty.
+  60: "d424c6e968bb1c646b975e88e3827eff2d13513abaedaafb81ee242f69d32175",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -587,8 +593,10 @@ test("the role table keeps the delivered default inside the structured envelope"
      30 112 bytes, both bounds 300 higher. The scaffold and the spawn envelope
      still fit with 1 673 bytes to spare; handoffDigest.test.ts states what the
      same 536 bytes take from a rotation's history. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_850);
-  expect(Buffer.byteLength(delivered) + launchOverheadBytes("spawn", { mode: "standard" })).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_650);
+  /* v59 adds the correction duty once in rule 13, spending 250 bytes of the
+     reserved history room; the actual structured envelope remains the bound. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_600);
+  expect(Buffer.byteLength(delivered) + launchOverheadBytes("spawn", { mode: "standard" })).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_400);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -804,4 +812,20 @@ test("a seat's launch prompt carries the evidence and publication duties of rule
   const launch = roleSpawnPrompt(resolved.value, orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
   expect(launch.split(WORKING_RULES_SHORT)).toHaveLength(2);
   expect(launch).not.toContain(WORKING_RULES);
+});
+
+
+test("default and retained seat mandates require same-turn correction lessons once", () => {
+  const instruction = OPERATOR_CORRECTION_RULE;
+  for (const source of [ORCHESTRATOR_SYSTEM_PROMPT, "A stored seat mandate."]) {
+    const delivered = orchestratorMandateForDelivery(source);
+    expect(orchestratorMandateForDelivery(delivered).split(instruction)).toHaveLength(2);
+  }
+});
+
+test("a retained v59 rule 13 upgrades to the compact current rule once", () => {
+  const previous = `13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question. ${OPERATOR_CORRECTION_RULE}`;
+  const current = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
+  expect(orchestratorMandateUpgraded(previous)).toBe(current);
+  expect(orchestratorMandateUpgraded(current)).toBe(current);
 });

@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { verifiedPackageArchive } from "./provenance";
 import { manualInstallRoot, PackageRunner, registryRevision } from "./package";
 import { realPorts } from "./steps";
 import { spawnSync } from "node:child_process";
@@ -78,9 +79,10 @@ for (const broken of [false, true]) test(`package install verifies runtime artif
     return 0;
   } };
   const runner = new PackageRunner(record, "bun", { LLV_STATE_DIR: join(directory, "state") }, join(directory, "logs"), () => {}, ports,
-    async () => ({ sha: "a".repeat(40), short: "aaaaaaa", version: "1.0.1", date: "" }));
+    async () => ({ sha: "a".repeat(40), short: "aaaaaaa", version: "1.0.1", date: "" }),
+    async () => ({ path: join(directory, "verified.tgz"), remove: async () => {} }));
   await runner.start("a".repeat(40), { version: "1.0.1" });
-  expect(calls).toEqual([["bun", "add", "--exact", "delegatus-cli@1.0.1"]]);
+  expect(calls).toEqual([["bun", "add", "--exact", join(directory, "verified.tgz")]]);
   expect(runner.state.state).toBe(broken ? "failed" : "done");
   if (!broken) expect(JSON.parse(readFileSync(pointer, "utf8"))).toMatchObject({ kind: "package", version: "1.0.1", baseVersion: "1.0.0" });
 });
@@ -93,4 +95,44 @@ test("manual standalone launch resolves the install carrying its launcher", () =
   writeFileSync(join(install, "bin", "cli.mjs"), "");
   expect(manualInstallRoot(standalone)).toBe(install);
   expect(manualInstallRoot(join(root, "unrelated"))).toBeNull();
+});
+
+test("a package without verified provenance is refused before the installer starts", async () => {
+  const directory = mkdtempSync(join(root, "unsigned-"));
+  const calls: string[][] = [];
+  const runner = new PackageRunner({ releasesDir: join(directory, "releases") } as LauncherRecord, "bun", {}, join(directory, "logs"), () => {},
+    { ...realPorts(() => {}), run: async (argv: string[]) => { calls.push(argv); return 0; } },
+    async () => ({ sha: "a".repeat(40), short: "aaaaaaa", version: "1.0.1", date: "" }),
+    (version, target, dir) => verifiedPackageArchive(version, target, dir, (async () => Response.json({ name: "delegatus-cli", version, gitHead: target })) as unknown as typeof fetch));
+  await runner.start("a".repeat(40), { version: "1.0.1" });
+  expect(calls).toHaveLength(0);
+  expect(runner.state.state).toBe("failed");
+  expect(runner.state.steps[0]!.failure).toMatchObject({ kind: "error", text: expect.stringContaining("provenance") });
+});
+
+test("the real Bun installer accepts the verified local archive and publishes its runtime", async () => {
+  const directory = mkdtempSync(join(root, "native-archive-"));
+  const source = join(directory, "payload", "package");
+  mkdirSync(join(source, "dist", "standalone"), { recursive: true }); mkdirSync(join(source, "bin"));
+  writeFileSync(join(source, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "1.0.1" }));
+  for (const file of ["dist/standalone/server.js", "dist/runtime-host.mjs", "bin/launcher-relaunch.mjs"]) writeFileSync(join(source, file), "");
+  const archive = join(directory, "verified.tgz");
+  expect(spawnSync("tar", ["-czf", archive, "-C", join(directory, "payload"), "package"]).status).toBe(0);
+  const base = join(directory, "base"); mkdirSync(base); writeFileSync(join(base, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  const pointer = join(directory, "release.json");
+  const record = { installRoot: base, releasesDir: join(directory, "releases"), releasePointer: pointer } as LauncherRecord;
+  const ports = { ...realPorts(() => {}), run: async (argv: string[], options: { cwd: string; env: Record<string, string> }) => {
+    const child = Bun.spawn(argv, { cwd: options.cwd, env: options.env, stdout: "pipe", stderr: "pipe" });
+    try {
+      const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, out + error).toBe(0); return code;
+    } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
+  } };
+  const runner = new PackageRunner(record, process.execPath, { ...process.env, BUN_INSTALL_CACHE_DIR: join(directory, "cache") } as Record<string, string>, join(directory, "logs"), () => {}, ports,
+    async () => ({ sha: "a".repeat(40), short: "aaaaaaa", version: "1.0.1", date: "" }),
+    async () => ({ path: archive, remove: async () => { rmSync(archive); } }));
+  await runner.start("a".repeat(40), { version: "1.0.1" });
+  expect(runner.state.state).toBe("done");
+  expect(JSON.parse(readFileSync(pointer, "utf8"))).toMatchObject({ kind: "package", version: "1.0.1" });
+  expect(() => readFileSync(archive)).toThrow();
 });

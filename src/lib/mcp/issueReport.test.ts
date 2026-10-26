@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
@@ -94,7 +95,7 @@ type Publisher = (report: { title: string; body: string }, repository: string) =
 type ApprovalForm = { title: string; questions: PrototypeQuestion[] };
 
 function request(url: string, body: unknown): NextRequest {
-  return new NextRequest(`http://localhost${url}`, { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" }, body: JSON.stringify(body) });
+  return new NextRequest(`http://localhost${url}`, { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, body: JSON.stringify(body) });
 }
 
 /* The operator's answers, as the form's question takes them. */

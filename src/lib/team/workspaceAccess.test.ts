@@ -490,13 +490,15 @@ describe("workspace authority", () => {
     process.env.HOME = root;
     try {
       const privateDir = path.join(root, ".codex");
-      const projectDir = path.join(root, "project");
+      const projectDir = path.join(root, "Projects", "project");
       fs.mkdirSync(privateDir);
-      fs.mkdirSync(projectDir);
+      fs.mkdirSync(projectDir, { recursive: true });
       fs.writeFileSync(path.join(privateDir, "auth.json"), JSON.stringify({ fixture: true }));
       fs.writeFileSync(path.join(projectDir, "README.md"), "catalog project");
+      fs.writeFileSync(path.join(root, "README.md"), "home project");
       fs.symlinkSync(path.join(privateDir, "auth.json"), path.join(projectDir, "linked.json"));
       const project = projectForCwd(projectDir)!;
+      fs.writeFileSync(path.join(root, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: projectDir, projectRoot: projectDir }, home: { cwd: root, projectRoot: root } } }));
       replaceConversationCatalog([{ ...conversationCatalogSnapshot()[0]!, project }]);
       const undiscovered = projectForCwd(privateDir);
       for (const actor of [manager, member, outsider]) {
@@ -516,13 +518,17 @@ describe("workspace authority", () => {
       placeProject(store, owner, undiscovered, W1);
       for (const actor of [manager, member]) expect((await artifactGET(request("/api/artifact?path=~/.codex/auth.json", actor))).status).toBe(403);
       const file = `/api/artifact?path=${encodeURIComponent(path.join(projectDir, "README.md"))}`;
-      const real = await artifactGET(request(file, manager));
-      expect(real.status).toBe(200);
-      expect(await real.text()).toBe("catalog project");
+      for (const actor of [manager, owner]) {
+        const real = await artifactGET(request(file, actor));
+        expect(real.status).toBe(200);
+        expect(await real.text()).toBe("catalog project");
+      }
       expect((await artifactGET(request(file, member))).status).toBe(403);
-      const privateRead = await artifactGET(request("/api/artifact?path=~/.codex/auth.json", owner));
-      expect(privateRead.status).toBe(200);
-      await privateRead.body?.cancel();
+      for (const file of ["~/README.md", "~/.codex/auth.json"]) {
+        const privateRead = await artifactGET(request(`/api/artifact?path=${encodeURIComponent(file)}`, owner));
+        expect(privateRead.status).toBe(403);
+        await privateRead.body?.cancel();
+      }
       expect((await placementPUT(request("/api/team/workspace-projects", manager, "PUT", { project, workspaceId: W1 }))).status).toBe(200);
       const placed = await artifactGET(request(file, member));
       expect(placed.status).toBe(200);
