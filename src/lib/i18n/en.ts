@@ -669,10 +669,6 @@ export const en = {
   "rail.createFailed": "Couldn't create the project",
 
   // ProjectDashboard
-  "dash.branchesLive": { one: "{count} branch running", other: "{count} branches running" },
-  "dash.trees": { one: "{count} tree", other: "{count} trees" },
-  "dash.recentConvos": { one: "{count} recent conversation", other: "{count} recent conversations" },
-  "dash.quietTrees": { one: "{count} quiet tree", other: "{count} quiet trees" },
   "dash.openProjects": "Open project list",
   "dash.createMenu": "Create",
   "dash.moreMenu": "More actions",
