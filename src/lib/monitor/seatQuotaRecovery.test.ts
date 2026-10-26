@@ -248,6 +248,11 @@ test("native Claude quota evidence joins the request whose turn failed and inval
     expect(ports.current(observation!)).toBe(true);
     const again = await ports.observe("fixture", seat);
     expect(again?.evidence).toBe(observation?.evidence);
+    fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: new Date(CUT + 1).toISOString(),
+      interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } }) + "\n");
+    const afterRestart = await ports.observe("fixture", seat, CUT);
+    expect(afterRestart?.evidence.terminalProviderMessage?.ts).toBe(CUT);
+    expect(afterRestart?.evidence.turnStartedAt).toBe(started);
     beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate work", clientRequestId: "native-seat", mode: "existing", now: seat.designatedAt });
     completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: "native-seat", conversationId: conversation.id,
       path: transcript, now: seat.designatedAt });
