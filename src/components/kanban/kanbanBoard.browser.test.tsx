@@ -39494,3 +39494,255 @@ describe("new task default deadline", () => {
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
+
+/* docs/design/card-progress-estimate.md, prototype variant 3: a short bar between
+   the status dot and the state words, filled to the agent's estimate. Over the
+   stages board with `progress=1`: two cards with running work (a sweep on the
+   unfilled part), idle cards, a stale and a done card, and cards with no estimate
+   (no bar). 390, 820 and 1440 px, both languages and themes; the reduced-motion
+   frame at 1440. Run it with
+   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task progress estimate'
+   under isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR (scripts/gate-slot.sh). */
+describe("task progress estimate", () => {
+  type Expected = { id: string; status: "assigned" | "blocked" | "done"; value: number | null; running: boolean; stale: boolean; role: "builder" | "architect" | null; age: string | null; coloured: boolean };
+  const CARDS_UNDER_TEST: Expected[] = [
+    { id: "t-search", status: "assigned", value: 35, running: true, stale: false, role: "builder", age: "18m", coloured: true },
+    { id: "t-upload", status: "assigned", value: 65, running: true, stale: false, role: "builder", age: "12m", coloured: false },
+    { id: "t-export", status: "assigned", value: 0, running: true, stale: false, role: "builder", age: "6m", coloured: false },
+    { id: "t-links", status: "assigned", value: 100, running: false, stale: false, role: "builder", age: "9m", coloured: true },
+    { id: "t-disk", status: "assigned", value: null, running: false, stale: false, role: null, age: null, coloured: false },
+    { id: "t-limits", status: "blocked", value: 50, running: false, stale: true, role: "architect", age: "2d", coloured: false },
+    { id: "t-compact", status: "done", value: 100, running: false, stale: true, role: null, age: "2d", coloured: false },
+  ];
+
+  browserTest("the bar sits beside the dot, fills to the estimate and glows only while work runs", async () => {
+    const out = path.resolve(".artifacts/task-progress-bar");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    const frames = [
+      { name: "phone-390", width: 390, height: 844, phone: true },
+      { name: "desktop-820", width: 820, height: 900, phone: false },
+      { name: "desktop-1440", width: 1440, height: 900, phone: false },
+    ];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const frame of frames) for (const motion of ["no-preference", "reduce"] as const) {
+        /* The reduced-motion frame is taken at one width and one theme per language. */
+        if (motion === "reduce" && (frame.name !== "desktop-1440" || theme !== "light")) continue;
+        const label = `${frame.name}-${lang}-${theme}${motion === "reduce" ? "-reduced" : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages&progress=1#p=atlas`, { width: frame.width, height: frame.height }, theme, lang, motion, frame.phone);
+        try {
+          await page.waitForSelector(frame.phone ? "[data-phone-card]" : "[data-kanban-card]", { state: "attached" });
+          const shots: Buffer[] = [];
+          for (const spec of CARDS_UNDER_TEST) {
+            const cardSelector = frame.phone ? `[data-phone-card="task:${spec.id}"]` : `[data-kanban-card="task:${spec.id}"]`;
+            if (frame.phone) {
+              await page.locator(`[data-phone-kanban-tab="${spec.status}"]`).click();
+            } else {
+              /* A narrow board is tabbed (820 px beside the sidebar): its columns are tabs. */
+              const tab = page.locator(`[role="tab"][data-tab="${spec.status}"]`);
+              if (await tab.count()) await tab.click();
+            }
+            const card = page.locator(cardSelector);
+            await card.waitFor({ state: "attached" });
+            await card.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(async (error) => {
+              await page.screenshot({ path: path.join(out, `${label}-${spec.id}-not-visible.png`) });
+              throw new Error(`${label} ${spec.id}: ${error.message.split("\n")[0]}`);
+            });
+            await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            const read = await card.evaluate((element, wantPhone) => {
+              const q = (selector: string) => element.querySelector<HTMLElement>(selector);
+              const bar = q(".task-progress");
+              const textRects = (node: Element | null) => {
+                const rects: DOMRect[] = [];
+                if (!node) return rects;
+                const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+                for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                  if (!text.textContent?.trim()) continue;
+                  const range = document.createRange(); range.selectNodeContents(text);
+                  for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) rects.push(rect);
+                }
+                return rects;
+              };
+              const words = q(".card-state-words");
+              const dot = q(".card-state-dot");
+              const wordRects = textRects(words);
+              const probe = document.createElement("canvas").getContext("2d")!;
+              const luminance = (color: string) => {
+                probe.clearRect(0, 0, 1, 1); probe.fillStyle = "#000"; probe.fillStyle = color; probe.fillRect(0, 0, 1, 1);
+                const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+                const lin = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+                return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!);
+              };
+              const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
+              const surface = (node: Element) => {
+                for (let n: Element | null = node; n; n = n.parentElement) {
+                  const c = getComputedStyle(n).backgroundColor;
+                  if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") return c;
+                }
+                return "rgb(255, 255, 255)";
+              };
+              const base = {
+                phone: wantPhone,
+                hasBar: Boolean(bar),
+                stateWords: words?.textContent?.trim() ?? null,
+              };
+              if (!bar || !dot || !words) return base;
+              const box = bar.getBoundingClientRect();
+              const dotBox = dot.getBoundingClientRect();
+              const cardBox = element.getBoundingClientRect();
+              const fill = bar.querySelector<HTMLElement>(".task-progress-fill")!;
+              const glow = bar.querySelector<HTMLElement>(".task-progress-glow");
+              const inner = bar.clientWidth;
+              const style = getComputedStyle(bar);
+              const stale = bar.getAttribute("data-task-progress") === "stale";
+              const swatch = document.createElement("span");
+              swatch.style.color = "var(--task-progress-stripe)";
+              bar.appendChild(swatch);
+              const stripe = getComputedStyle(swatch).color;
+              swatch.remove();
+              const fillColour = stale ? stripe : getComputedStyle(fill).backgroundColor;
+              const card = surface(element);
+              const sweep = glow ? getComputedStyle(glow, "::after") : null;
+              const wordsAfterBar = wordRects.every((rect) => rect.left >= box.right - 0.5);
+              const lines = new Set(wordRects.map((rect) => Math.round(rect.top))).size;
+              return {
+                ...base,
+                value: Number(bar.getAttribute("aria-valuenow")),
+                valueText: bar.getAttribute("aria-valuetext"),
+                label: bar.getAttribute("aria-label"),
+                stale,
+                box: { width: box.width, height: box.height, left: box.left, right: box.right },
+                dotRight: dotBox.right,
+                gapToDot: box.left - dotBox.right,
+                wordsAfterBar,
+                firstWordLeft: Math.min(...wordRects.map((rect) => rect.left)),
+                lines,
+                wordsClipped: words.scrollHeight > words.clientHeight + 1,
+                /* The same line with the bar taken out: a clamp that also cuts it there is not the bar's doing. */
+                wordsClippedWithoutBar: (() => { bar.style.display = "none"; const clipped = words.scrollHeight > words.clientHeight + 1; bar.style.display = ""; return clipped; })(),
+                insideCard: box.left >= cardBox.left && box.right <= cardBox.right && box.top >= cardBox.top && box.bottom <= cardBox.bottom,
+                inViewport: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+                verticalCentreOffset: (box.top + box.height / 2) - (dotBox.top + dotBox.height / 2),
+                fillRatio: fill.getBoundingClientRect().width / inner,
+                running: bar.hasAttribute("data-running"),
+                glow: glow ? { animationName: sweep!.animationName, background: sweep!.backgroundImage.slice(0, 80), left: glow.getBoundingClientRect().left - box.left } : null,
+                trackContrast: contrast(style.borderTopColor, card),
+                insideColour: style.backgroundColor,
+                fillColour,
+                fillContrastInside: contrast(fillColour, style.backgroundColor),
+                fillContrastCard: contrast(fillColour, card),
+                cardColour: card,
+              };
+            }, frame.phone);
+            readings.push({ label, lang, theme, motion, card: spec.id, ...read });
+            const fail = (text: string) => failures.push(`${label} ${spec.id}: ${text}`);
+            const r = read as unknown as { hasBar: boolean; box: { width: number; height: number }; value: number; fillRatio: number; wordsAfterBar: boolean; gapToDot: number; verticalCentreOffset: number; insideCard: boolean; inViewport: boolean; wordsClipped: boolean; wordsClippedWithoutBar: boolean; running: boolean; stale: boolean; trackContrast: number; fillContrastInside: number; glow: { animationName: string; left: number } | null; valueText: string | null };
+            if (spec.value === null) {
+              if (r.hasBar) fail("a card with no estimate draws a bar");
+              shots.push(await card.screenshot());
+              continue;
+            }
+            if (!r.hasBar) { fail("no bar"); continue; }
+            if (Math.abs(r.box.width - 36) > 0.5 || Math.abs(r.box.height - 8) > 0.5) fail(`bar is ${r.box.width}x${r.box.height}, not 36x8`);
+            if (r.value !== spec.value) fail(`value ${r.value}`);
+            if (Math.abs(r.fillRatio - spec.value / 100) > 0.02) fail(`fill ${r.fillRatio} for ${spec.value}%`);
+            if (!r.wordsAfterBar) fail("state words overlap the bar");
+            if (r.gapToDot < 0 || r.gapToDot > 8) fail(`bar is ${r.gapToDot}px from the dot`);
+            if (Math.abs(r.verticalCentreOffset) > 0.5) fail(`bar centre is ${r.verticalCentreOffset}px off the dot's`);
+            if (!r.insideCard) fail("bar leaves its card");
+            if (!r.inViewport) fail("bar is outside the window");
+            if (r.wordsClipped && !r.wordsClippedWithoutBar) fail("the bar makes the state sentence run into the two-line clamp");
+            if (r.running !== spec.running) fail(`running ${r.running}`);
+            if (r.stale !== spec.stale) fail(`stale ${r.stale}`);
+            if (r.trackContrast < 3) fail(`track outline against the card is ${r.trackContrast.toFixed(2)}:1`);
+            if (r.fillContrastInside < 3) fail(`fill against the track's inside is ${r.fillContrastInside.toFixed(2)}:1`);
+            if (spec.running && spec.value < 100) {
+              if (!r.glow) fail("running work has no sweep");
+              else if (motion === "no-preference" && r.glow.animationName !== "task-progress-glow") fail(`sweep animation is ${r.glow.animationName}`);
+              else if (motion === "reduce" && r.glow.animationName !== "none") fail("the sweep moves under reduced motion");
+              else if (Math.abs(r.glow.left - (36 - 2) * spec.value / 100 - 1) > 1.5) fail(`sweep starts ${r.glow.left}px in, not at the fill's end`);
+            } else if (r.glow) fail("idle work has a sweep");
+            const age = lang === "en" ? spec.age : spec.age!.replace("m", " хв").replace("d", " д");
+            const who = spec.role ? translate(lang, `roleCopy.${spec.role}.name` as never) : translate(lang, "cardState.progress.byOperator");
+            const wantLine = translate(lang, spec.stale ? "cardState.progress.lineStale" : "cardState.progress.line", { value: spec.value, age: lang === "en" ? `${age} ago` : `${age} тому`, who });
+            const norm = (text: string | null) => (text ?? "").replace(/ /g, " ");
+            if (norm(r.valueText) !== wantLine) fail(`accessible value "${norm(r.valueText)}" is not "${wantLine}"`);
+            shots.push(await card.screenshot());
+            if (!frame.phone && (spec.id === "t-search" || spec.id === "t-upload") && motion === "no-preference") {
+              /* A mouse on the dot opens its popover, above the dot as every state popover does; its second line says
+                 value, age and author. It may cover the start of its own card's title while it is open, never another
+                 card's text, and it stays in the window. */
+              for (const closed of [true, false]) {
+                const collapsed = (await card.getAttribute("data-collapsed")) === "1";
+                if (closed !== collapsed) {
+                  await card.locator("[data-card-state-toggle]").click();
+                  await page.waitForFunction(([selector, want]) => document.querySelector(selector as string)?.getAttribute("data-collapsed") === want, [cardSelector, closed ? "1" : "0"]);
+                  await card.scrollIntoViewIfNeeded();
+                  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                }
+                /* The bar is inside the dot's hover target: a mouse on it opens the same popover (the other card: on the dot). */
+                await card.locator(spec.id === "t-upload" ? ".task-progress" : ".card-state-dot").hover({ force: true });
+                const pop = page.locator("[data-card-progress-line]");
+                await pop.waitFor();
+                await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                const popRead = await pop.evaluate((line, selector) => {
+                  const bubbleNode = line.closest("[role='tooltip']")!;
+                  const box = bubbleNode.getBoundingClientRect();
+                  const host = document.querySelector(selector)!;
+                  const own: string[] = [];
+                  const foreign: string[] = [];
+                  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                    if (!text.textContent?.trim() || bubbleNode.contains(text)) continue;
+                    const range = document.createRange(); range.selectNodeContents(text);
+                    for (const rect of range.getClientRects()) {
+                      const x = Math.min(rect.right, box.right) - Math.max(rect.left, box.left);
+                      const y = Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top);
+                      if (x > 1 && y > 1) {
+                        /* Text clipped away by a scroller or a collapsed row paints nothing under the bubble. */
+                        const stack = document.elementsFromPoint(Math.max(rect.left, box.left) + x / 2, Math.max(rect.top, box.top) + y / 2);
+                        const parent = text.parentElement!;
+                        if (!stack.some((element) => parent.contains(element))) continue;
+                        (host.contains(text) ? own : foreign).push(text.textContent.trim().slice(0, 40)); break;
+                      }
+                    }
+                  }
+                  const cardBox = host.getBoundingClientRect();
+                  return {
+                    text: line.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+                    box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width }, insideCard: box.right <= cardBox.right && box.bottom <= cardBox.bottom && box.left >= cardBox.left && box.top >= cardBox.top - 1,
+                    own, foreign,
+                  };
+                }, cardSelector);
+                readings.push({ label, card: spec.id, cardState: closed ? "closed" : "open", popover: popRead });
+                if (norm(popRead.text) !== wantLine) fail(`popover line "${norm(popRead.text)}"`);
+                if (!popRead.inside) fail(`${closed ? "closed" : "open"} card: popover leaves the window`);
+                if (popRead.foreign.length) fail(`${closed ? "closed" : "open"} card: popover covers another card's text ${JSON.stringify(popRead.foreign)}`);
+                await page.screenshot({ path: path.join(out, `${label}-${spec.id}-popover-${closed ? "closed" : "open"}.png`) });
+                await page.mouse.move(2, 2);
+              }
+            }
+          }
+          let top = 0;
+          const layers: { input: Buffer; top: number; left: number }[] = [];
+          let width = 0;
+          for (const shot of shots) {
+            const meta = await sharp(shot).metadata();
+            layers.push({ input: shot, top, left: 0 });
+            top += meta.height! + 8;
+            width = Math.max(width, meta.width!);
+          }
+          await sharp({ create: { width, height: top, channels: 4, background: theme === "dark" ? "#101114" : "#f4f1ea" } }).composite(layers).png().toFile(path.join(out, `${label}-cards.png`));
+          await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 900_000);
+});

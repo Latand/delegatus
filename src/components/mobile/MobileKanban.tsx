@@ -575,7 +575,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
         <NeedBadge item={item} />
       </span>
       {state ? (
-        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined} />
+        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined}
+          progress={item.kind === "task" && card.task?.progress ? { progress: card.task.progress, running: card.workingSinceMs !== null, color: card.color ? TASK_COLOR_HEX[card.color] : null } : undefined} />
       ) : motion}
       {item.kind === "task" && card.task && hasTaskMeta(card.task) ? <span className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></span> : null}
       <TaskStepsLine summary={card.stepSummary} />

@@ -11,6 +11,7 @@ import { useLocale } from "@/lib/i18n";
 import type { TaskPriority } from "@/lib/tasks/types";
 
 import { cardStatePopover, cardStateText, type CardState } from "./cardState";
+import { progressLine, TaskProgressBar, type CardProgress } from "./TaskProgressBar";
 
 /*
  * The closed card's one state line (docs/design/calm-task-cards-build.md
@@ -20,14 +21,19 @@ import { cardStatePopover, cardStateText, type CardState } from "./cardState";
  * one-line popover, the owner and how long, by hover, focus or tap.
  */
 
+/** The card holding the dot: a bubble with a second line stays inside it rather than reach over the card above. */
+const withinCard = (dot: Element | null) => dot?.closest(".card")?.getBoundingClientRect() ?? null;
+
 /** The dot and its popover. On the phone's card face, which is one button, it is passive. */
-export function CardStateDot({ state, nowMs, title, interactive }: { state: CardState; nowMs: number; title: string; interactive: boolean }) {
+export function CardStateDot({ state, nowMs, title, interactive, estimate }: { state: CardState; nowMs: number; title: string; interactive: boolean; estimate?: CardProgress }) {
   const { t } = useLocale();
   const ref = useRef<HTMLSpanElement>(null);
   const pressed = useRef(false);
   const [open, setOpen] = useState(false);
   const age = state.sinceMs === null ? "" : humanizeDuration(Math.max(0, (nowMs - state.sinceMs) / 1000));
   const words = cardStatePopover(t, state, age).replace(/\s+$/, "");
+  /* The bar beside the dot prints no number: its value, age and author are the popover's second line. */
+  const estimateWords = estimate ? progressLine(t, estimate.progress, nowMs) : null;
   useEffect(() => {
     if (!open) return;
     const away = (event: PointerEvent) => {
@@ -43,9 +49,10 @@ export function CardStateDot({ state, nowMs, title, interactive }: { state: Card
       className="card-state-dot"
       data-owner={state.owner}
       data-card-state-dot=""
+      data-progress={estimate ? "" : undefined}
       role="button"
       tabIndex={0}
-      aria-label={`${t("cardState.dotAria", { title })}: ${words}`}
+      aria-label={`${t("cardState.dotAria", { title })}: ${words}${estimateWords ? `. ${estimateWords}` : ""}`}
       aria-expanded={open}
       /* A mouse opens it by hovering; a tap focuses and clicks it, so only the click toggles it. */
       onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
@@ -60,8 +67,9 @@ export function CardStateDot({ state, nowMs, title, interactive }: { state: Card
       }}
     >
       {open ? (
-        <TooltipBubble anchorRef={ref} side="top" align="left" className="card-state-pop">
+        <TooltipBubble anchorRef={ref} side="top" align="left" className="card-state-pop" within={estimate ? () => withinCard(ref.current) : undefined}>
           <span data-card-state-pop={state.owner}>{words}</span>
+          {estimateWords ? <span className="card-state-pop-estimate" data-card-progress-line="">{estimateWords}</span> : null}
         </TooltipBubble>
       ) : null}
     </span>
@@ -79,7 +87,7 @@ export function PriorityMark({ priority }: { priority: TaskPriority }) {
   );
 }
 
-export function CardStateLine({ state, nowMs, title, motion, priority, spend, onToggle, expanded, phone = false }: {
+export function CardStateLine({ state, nowMs, title, motion, priority, spend, onToggle, expanded, phone = false, progress }: {
   state: CardState;
   nowMs: number;
   /** The card's title, for the dot's and the toggle's labels. */
@@ -94,6 +102,8 @@ export function CardStateLine({ state, nowMs, title, motion, priority, spend, on
   expanded?: boolean;
   /** The phone's card face is one button: nothing in it is a control. */
   phone?: boolean;
+  /** The agent's estimate for the task, drawn as a short bar beside the dot; absent when nobody reported one. */
+  progress?: CardProgress;
 }) {
   const { t, locale } = useLocale();
   const clock = (ms: number) => clockText(ms, locale, browserZone());
@@ -109,7 +119,8 @@ export function CardStateLine({ state, nowMs, title, motion, priority, spend, on
   ) : <span className="card-state-words motion" data-card-state-text="">{motion}</span>;
   return (
     <div className={`card-state${phone ? " phone" : ""}`} data-card-state={state.owner} data-card-state-subject={state.subject.kind}>
-      <CardStateDot state={state} nowMs={nowMs} title={title} interactive={!phone} />
+      <CardStateDot state={state} nowMs={nowMs} title={title} interactive={!phone} estimate={progress} />
+      {progress ? <TaskProgressBar info={progress} title={title} nowMs={nowMs} /> : null}
       {onToggle && !phone ? (
         <button
           type="button"
