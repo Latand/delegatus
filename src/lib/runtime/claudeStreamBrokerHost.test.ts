@@ -1,3 +1,4 @@
+import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
@@ -4253,5 +4254,25 @@ test("seat inbox broker persists layout before writing and refuses a changed lay
     const echoed = events.load(host.identity.sessionId).find(e => e.kind === "item" && e.deliveryEcho);
     expect(echoed?.kind === "item" ? echoed.deliveryEcho : undefined)
       .toMatchObject({ operationId: entry.id, memberOperationIds: ["wire-one", "wire-two"] });
+  } finally { await host.release(); }
+});
+
+for (const ending of ["release", "external"] as const) test(`Claude host exit observer retains ${ending} source during cleanup`, async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.adopt("00000000-0000-0000-0000-000000000000", {
+    cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(), readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    processIdentity: () => `fixture-claude-exit-${ending}`, shutdownGraceMs: 5,
+    signalProcess: () => { throw Object.assign(new Error("no such group"), { code: "ESRCH" }); },
+    spawnProcess: fakeSpawn(child, {}),
+  });
+  const process = (await host.health()).exitProcess!;
+  try {
+    if (ending === "release") await withHostStopOrigin({ path: "recovery", operationId: "recovery-fixture-operation" }, () => host.release());
+    else { child.emit("exit", null, "SIGKILL"); child.emit("close", null, "SIGKILL"); }
+    expect(readHostExit(process)?.exit?.signal).toBe(ending === "release" ? "SIGTERM" : "SIGKILL");
+    expect(readHostExit(process)?.stop?.operationId ?? null).toBe(ending === "release" ? "recovery-fixture-operation" : null);
+    expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
 });

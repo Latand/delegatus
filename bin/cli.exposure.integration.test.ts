@@ -73,9 +73,17 @@ async function probe(hostname: string, port: number): Promise<number> {
   });
 }
 
-async function waitForStatus(hostname: string, port: number, expected: number): Promise<void> {
+async function waitForStatus(hostname: string, port: number, expected: number, state: string): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
+    // A request to the launcher's temporary port-free listener can keep its
+    // close pending. Probe only after the Viewer fixture has actually started.
+    try { await readFile(path.join(state, "web.pid"), "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await Bun.sleep(50);
+      continue;
+    }
     if (await probe(hostname, port) === expected) return;
     await Bun.sleep(50);
   }
@@ -200,12 +208,14 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
   const runtimeHost = path.join(fixture, "dist", "runtime-host.mjs");
   const home = path.join(fixture, "home");
   const state = path.join(fixture, "state");
+  const runtime = path.join(fixture, "runtime");
   await Promise.all([
     mkdir(bin, { recursive: true }),
     mkdir(nextBin, { recursive: true }),
     mkdir(path.dirname(runtimeHost), { recursive: true }),
     mkdir(home, { recursive: true }),
     mkdir(state, { recursive: true }),
+    mkdir(runtime, { mode: 0o700 }),
   ]);
   await Promise.all([
     /* The tailnet banner prints its QR code with it; without it the launcher
@@ -311,12 +321,16 @@ throw new Error("fixture QR failure");
   delete inherited.LLV_QUIET_DIAGNOSTICS;
   delete inherited.DELEGATUS_QUIET_DIAGNOSTICS;
   delete inherited.JOURNAL_STREAM;
+  // The gate's user bus describes its own OOM policy. A fixture must not
+  // inspect that service or print its warning as part of a clean install.
+  delete inherited.DBUS_SESSION_BUS_ADDRESS;
   return {
     cli: path.join(bin, "cli.mjs"),
     env: {
       ...inherited,
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
+      XDG_RUNTIME_DIR: runtime,
       LLV_STATE_DIR: state,
       TMPDIR: path.join(fixture, "tmp"),
       LLV_BUN_EXECUTABLE: process.execPath,
@@ -336,7 +350,7 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   children.add(child);
   const output = captureOutput(child);
 
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   await output.waitFor("Open http://", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
@@ -378,7 +392,7 @@ test("a machine that still has the retired systemd unit is told how to move to D
 
   await output.waitFor("The systemd install of Delegatus is retired: Docker is the only install.", 10_000);
   await output.waitFor("Open http://", 10_000);
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   expect(output.text()).toContain("systemctl --user disable --now agent-log-viewer.service\n");
   expect(output.text()).toContain(`rm ${path.join(unitDir, "agent-log-viewer.service")}\n`);
   expect(output.text()).toContain("https://github.com/Latand/delegatus/blob/main/docs/docker.md");
@@ -409,7 +423,7 @@ test("a pre-existing non-loopback listener does not impersonate a widened Viewer
   children.add(child);
   const output = captureOutput(child);
 
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   await output.waitFor("Open http://", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
@@ -457,7 +471,7 @@ test("an address the platform will not evaluate neither stops startup nor claims
     `the exposure check skipped addresses this machine would not answer for: ${nonLoopbackAddress}`,
     10_000,
   );
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   // The probe could not answer for that address and the guard read nothing into
@@ -639,7 +653,7 @@ test("a remembered choice whose publish fails says so and advertises no tailnet 
   const output = captureOutput(child);
 
   await output.waitFor("Open http://", 15_000);
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   /* The publish failed, so the tailnet address answers nothing: the banner
      that would carry it, and its QR, are not printed. */
   expect(output.text()).toContain("listener already in use");
@@ -667,7 +681,7 @@ test("a remembered choice whose Tailscale went away starts locally and says why"
   const output = captureOutput(child);
 
   await output.waitFor("this start is local only", 10_000);
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; gated: boolean };
   expect(answer.tailnetUrl).toBeNull();
   /* The gate stays on. A background mapping an earlier tailnet start left
@@ -718,7 +732,10 @@ test("an ordinary start prints only the URL and setup hint", async () => {
   children.add(child);
   const output = captureOutput(child);
   await output.waitFor(`Open http://127.0.0.1:${port}/`, 10_000);
-  await Bun.sleep(100);
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+  child.kill("SIGINT");
+  expect(await waitForExit(child, 10_000)).toBe(0);
+  await closed;
   expect(output.text().split(/\r?\n/).filter(line => line.trim())).toEqual([
     `  Open http://127.0.0.1:${port}/ in your browser.`,
     ...agentStartupMessage("en", { home: fixture.env.HOME, envPath: fixture.env.PATH }).split("\n"),
@@ -779,7 +796,7 @@ for (const scenario of [
         } finally { reader.releaseLock(); }
       });
       try {
-        await waitForStatus("127.0.0.1", port, 200);
+        await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
         for (const role of ["viewer", "runtime-host"]) {
           expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, `${role}-quiet.json`), "utf8")))
             .toEqual({ quiet: scenario.quiet });
@@ -846,7 +863,7 @@ writeFileSync(path.join(process.env.LLV_STATE_DIR, "runtime-control.json"), JSON
   });
   children.add(child);
   const output = captureOutput(child);
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   await output.waitFor("Open http://", 10_000);
   expect(await (await fetch(`http://127.0.0.1:${port}/api/access`)).json()).toMatchObject({ gated: true });
   expect(await (await fetch(`http://127.0.0.1:${port}/api/control-port`)).json()).toEqual({ port: String(port) });

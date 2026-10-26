@@ -462,3 +462,14 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
   }
 }, 30_000);
 }
+
+
+test("feature discovery excludes operator credentials from the real child", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-credential-probe-"));
+  try {
+    const binary = path.join(root, "probe.mjs");
+    const names = ["LLV_TOKEN", "DELEGATUS_TOKEN", "LLV_OPERATOR_TOKEN", "DELEGATUS_OPERATOR_TOKEN"];
+    fs.writeFileSync(binary, `#!${process.execPath}\nif (${JSON.stringify(names)}.some(name=>process.env[name]!==undefined)) process.exit(9);\nif(JSON.stringify(process.argv.slice(2))!==JSON.stringify(["features","list"])) process.exit(10);\nconsole.log("multi_agent stable true");\n`, { mode: 0o700 });
+    expect(readCodexFeatures(binary, { ...process.env, ...Object.fromEntries(names.map(name => [name, "fixture"])) })).toEqual([{ name: "multi_agent", stage: "stable", enabled: true }]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
