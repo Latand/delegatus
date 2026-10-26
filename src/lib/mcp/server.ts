@@ -3805,7 +3805,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
   account_project_binding: [
-    "List, add and remove the bindings that decide which accounts a project's work may run on. `action` is list (the default), add or remove; add and remove need `engine`, `accountId` and `project`.",
+    "List and change the bindings that decide which accounts a project's work may run on. `action` is list (the default), add, remove or set-fallback; mutations need `engine`, `accountId` and `project`. Add accepts `fallback:true`; set-fallback requires a boolean `fallback` and an existing binding. Fallback accounts are selected only after primary allowed accounts lose capacity. Named pins retain their choice.",
     "Every answer is a READ of the record. A list answers the whole binding table. An add or a remove answers the row it changed — `engine`, `accountId`, `project`, `changed`, and `bound` re-read from the store after the write — with that project's allowed accounts for that engine; a mutation the re-read does not show is refused rather than reported ok.",
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
@@ -4730,14 +4730,15 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
-    action: z.enum(["list", "add", "remove"]).optional()
-      .describe("list (default) reads the whole record; add and remove change it and answer with the changed row read back."),
+    fallback: z.boolean().optional().describe("Use this binding only when primary allowed accounts have no capacity. Required for set-fallback; optional on add."),
+    action: z.enum(["list", "add", "remove", "set-fallback"]).optional()
+      .describe("list reads the record; add, remove and set-fallback change a binding and return its stored state."),
     engine: z.enum(["claude", "codex"]).optional()
-      .describe("Engine the account belongs to. Required to add or remove."),
+      .describe("Engine the account belongs to. Required for mutations."),
     accountId: z.string().trim().min(1).optional()
-      .describe("Account to allow on, or stop allowing on, the project. Required to add or remove."),
+      .describe("Account to allow on, or stop allowing on, the project. Required for mutations."),
     project: z.string().trim().min(1).optional()
-      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
+      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()

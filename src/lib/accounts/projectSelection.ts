@@ -4,6 +4,7 @@ import { turboCreditExemptFor } from "./turboCreditExemption";
 import type { DurableQuotaObservation } from "./migration/contracts";
 import {
   allowedAccountIdsForProject,
+  fallbackAccountIdsForProject,
   type AccountProjectBinding,
   type BindingEngine,
 } from "./projectBindings";
@@ -215,8 +216,10 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
   const preferred = allowed === null || (input.preferredId && allowed.includes(input.preferredId))
     ? input.preferredId ?? null
     : null;
-  const selected = selectHeadlessAccount(
-    candidates,
+  const fallbackIds = new Set(input.engine === "copilot" ? []
+    : fallbackAccountIdsForProject(input.project, input.engine, input.bindings));
+  const choose = (pool: typeof candidates) => selectHeadlessAccount(
+    pool,
     [...input.observations],
     preferred,
     [...(input.excludedIds ?? [])],
@@ -224,6 +227,9 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
     input.model,
     id => input.engine === "codex" && turboCreditExemptFor(input.project, id, input.now),
   );
+  const primary = requestedId ? candidates : candidates.filter(account => !fallbackIds.has(account.id));
+  const primarySelection = choose(primary);
+  const selected = primarySelection.kind === "available" ? primarySelection : choose(candidates);
   if (selected.kind === "available") return selected;
   const consulted = requestedId ? [requestedId] : allowed ?? permitted.map((account) => account.id);
   return selected.kind === "exhausted"
@@ -276,6 +282,12 @@ export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput):
   if (!allowed.includes(targetId)) {
     return { kind: "not_allowed", accountId: targetId, allowedAccountIds: allowed };
   }
+  const fallbackIds = fallbackAccountIdsForProject(input.project, input.engine, input.bindings);
+  if (fallbackIds.includes(targetId)) {
+    const primary = selectProjectAccount({ ...input,
+      accounts: allowed.filter(id => !fallbackIds.includes(id)).map(id => ({ id, authPresent: true })) });
+    if (primary.kind === "available") return { kind: "unavailable", allowedAccountIds: allowed };
+  }
   const selected = selectHeadlessAccount(
     /* `authPresent` is asserted rather than read from a catalog on purpose:
        this seam judges CAPACITY, and the observation itself reports a signed
@@ -311,5 +323,6 @@ export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput):
  */
 export function placedAccountHolds(input: Omit<AutomaticAccountTargetInput, "targetId"> & { accountId: string }): boolean {
   if (allowedAccountIdsForProject(input.project, input.engine, input.bindings) === null) return false;
-  return admitAutomaticAccountTarget({ ...input, targetId: input.accountId }).kind === "available";
+  return selectProjectAccount({ ...input, accounts: [{ id: input.accountId, authPresent: true }],
+    requestedId: input.accountId, requireCapacity: true }).kind === "available";
 }
