@@ -1,3 +1,4 @@
+import { bindHostExitWriter, hostExitText, hostExitWriterPending, hostExitWriterRegistered, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,9 @@ import { bindSignalDomain, nativeProcessId, normalizeSignalBoundaryOff, recordSi
 export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; signalDomain?: AgentSignalDomain; signalBoundary?: SignalBoundaryOff }
 export type CodexTransport = Pick<ChildProcessWithoutNullStreams, "pid" | "stdin" | "stdout" | "stderr" | "kill"> & EventEmitter;
 const prefix = "codex-unix:";
+
+import { nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
+export { nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
 
 export function codexSocketPath(endpoint: string): string | null {
   if (!endpoint.startsWith(prefix)) return null;
@@ -106,6 +110,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   private socket: WebSocket | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
   private closed = false;
+  private readonly durableExitExpected: boolean;
   private readonly directoryIdentity: { ino: number; dev: number };
 
   private constructor(owner: CodexSocketOwner) {
@@ -114,6 +119,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     this.startIdentity = owner.process.startIdentity!;
     this.bootEpoch = owner.process.bootEpoch!;
     this.endpoint = owner.endpoint;
+    this.durableExitExpected = hostExitWriterPending(owner.process) || Boolean(readHostExit(owner.process)?.exit);
     this.directoryIdentity = fs.lstatSync(path.dirname(codexSocketPath(owner.endpoint)!));
     this.stdin = new Writable({ write: (chunk, _encoding, callback) => {
       if (this.socket?.readyState !== WebSocket.OPEN) { callback(new Error("Codex callback connection is closed")); return; }
@@ -156,6 +162,9 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     const file = path.join(directory, "rpc.sock");
     const diagnosticFile = path.join(directory, "startup.stderr");
     const fifo = path.join(directory, "startup.fifo");
+    let supervisedProcess: ProcessIdentity | undefined;
+    let launchHandle: ChildProcessWithoutNullStreams | undefined;
+    let supervisionReady: Promise<void> = Promise.resolve();
     const drain = await startStderrDrain(fifo, diagnosticFile);
     let writer: number | null = drain?.writer ?? null;
     fs.rmSync(fifo, { force: true });
@@ -191,20 +200,61 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       writer = null;
       fs.rmSync(diagnosticFile, { force: true });
     };
+    const failureMessage = (reason: string, detail: string, handle = launchHandle): string => {
+      let native = supervisedProcess;
+      let domain: AgentSignalDomain | undefined;
+      try { domain = handle && signalDomain(handle); native = domain?.native ?? native; } catch { /* The launch refusal already names an invalid receipt. */ }
+      const recorded = readHostExit(native);
+      const evidence = recorded?.exit ? recorded : domain ? recorded : readHostExitSpool(directory);
+      // No host was admitted. Keep its terminal evidence in the returned
+      // failure, retained by the launch attempt, rather than orphaned slots.
+      let cleanupRefused = false;
+      for (const identity of [native, supervisedProcess]) {
+        try { if (identity?.startIdentity && !hostExitWriterPending(identity)) reclaimHostExit(identity); }
+        catch { cleanupRefused = true; }
+      }
+      const retained = evidence?.exit ? `; ${hostExitText(evidence)} at ${evidence.exit.at}` : "";
+      return redactBounded(`${redactBounded(reason, 1600)}${retained}${cleanupRefused ? "; exit receipt cleanup refused" : ""}${detail && !reason.includes(detail) ? `; stderr: ${detail}` : ""}`, 2400);
+    };
     const base = (binary: string, argv: string[], env: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams => {
       // Keep native stdio independent of the Viewer: a bounded drain outlives it.
       // A wrapper reads its own diagnostic name back after its setup fails.
       if (writer !== null && env.env?.LLV_SIGNAL_DIAGNOSTIC) fs.symlinkSync(diagnosticFile, env.env.LLV_SIGNAL_DIAGNOSTIC);
       let child: ReturnType<typeof spawn>;
-      try { child = spawn(binary, argv, { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] }); }
+      try {
+        child = spawn(process.execPath, ["-e", socketWaitOwnerSource, "--", JSON.stringify([directory, binary, ...argv])], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
+      }
       finally {
         if (writer !== null) fs.closeSync(writer);
         writer = null;
       }
+      {
+        supervisionReady = (async () => {
+          const ready = path.join(directory, "native.json");
+          const deadline = performance.now() + 10_000;
+          while (!fs.existsSync(ready) && child.exitCode === null && child.signalCode === null && performance.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          if (!fs.existsSync(ready)) throw startupFailure("native wait owner did not become ready");
+          const pid = JSON.parse(fs.readFileSync(ready, "utf8")).pid;
+          if (!Number.isSafeInteger(pid) || pid <= 1) throw startupFailure("native wait owner returned an invalid pid");
+          supervisedProcess = captureProcessIdentity(pid);
+          if (supervisedProcess.startIdentity) bindHostExitWriter(directory, supervisedProcess, captureProcessIdentity(child.pid!));
+        })();
+        // A launch adapter may wait for native output before returning its
+        // handle. Discover its pid independently of that adapter.
+        void supervisionReady.catch(() => {});
+      }
       const streams = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
       // Bun exposes read-only stream properties. The memory-cell adapter needs
       // stream handles, while the native process itself keeps no Viewer pipes.
-      return new Proxy(child, { get(target, key) {
+      return launchHandle = new Proxy(child, { get(target, key) {
+        if (key === "spawnReady") return supervisionReady;
+        if (key === "pid") return supervisedProcess?.pid ?? target.pid;
+        if (key === "kill") return (signal: NodeJS.Signals = "SIGTERM") => {
+          if (!supervisedProcess || processIdentityStatus(supervisedProcess) !== "alive") return false;
+          try { process.kill(supervisedProcess.pid, signal); return true; } catch { return false; }
+        };
         if (key === "stdin" || key === "stdout" || key === "stderr") return streams[key];
         const value = Reflect.get(target, key, target);
         return typeof value === "function" ? value.bind(target) : value;
@@ -217,51 +267,84 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     catch (error) {
       const detail = await diagnostic(true);
       closeDiagnostic();
-      fs.rmdirSync(directory);
       const reason = error instanceof Error ? error.message : String(error);
       // A wrapper that read the same redacted startup stderr already carries it.
-      throw new Error(redactBounded(`${reason}${detail && !reason.includes(detail) ? `; stderr: ${detail}` : ""}`, 2400));
+      const message = failureMessage(reason, detail);
+      fs.rmSync(directory, { recursive: true, force: true });
+      throw new Error(message);
     }
     let failure: Error | undefined;
     child.on("error", error => { failure = error; });
     // spawn reports errors such as ENOENT on the next turn, without a pid.
     if (!child.pid) await new Promise<void>(resolve => setImmediate(resolve));
-    const monitorIdentity = child.pid ? procBackend.processIdentity(child.pid) : null;
-    const pid = nativeProcessId(child);
-    const identity = pid ? procBackend.processIdentity(pid) : null;
+    let monitorIdentity = child.pid ? procBackend.processIdentity(child.pid) : null;
+    let pid = nativeProcessId(child);
+    let identity: string | null = null;
+    const deadline = Date.now() + 10_000;
     try {
+      await supervisionReady;
+      monitorIdentity = supervisedProcess?.startIdentity ?? monitorIdentity;
+      pid = nativeProcessId(child);
+      identity = pid ? procBackend.processIdentity(pid) : null;
+      if (supervisedProcess && pid !== supervisedProcess.pid) {
+        // The namespace's waiter owns the native record. This outer waiter
+        // observed only the launch handle and must leave no receipt for it.
+        fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ discard: true }), { mode: 0o600 });
+        reclaimHostExit(supervisedProcess);
+      }
+      const nativeExit = () => {
+        const retained = readHostExit(signalDomain(child)?.native ?? supervisedProcess)?.exit;
+        if (retained) return retained;
+        try { return JSON.parse(fs.readFileSync(path.join(directory, "native-exit.json"), "utf8")) as NonNullable<ReturnType<typeof readHostExit>>["exit"]; }
+        catch { return null; }
+      };
+      const endedReason = () => {
+        const exited = nativeExit();
+        return exited?.signal ? `exited on signal ${exited.signal}` : exited?.code !== null && exited?.code !== undefined
+          ? `exited with code ${exited.code}` : child.signalCode ? `exited on signal ${child.signalCode}` : `exited with code ${child.exitCode}`;
+      };
+      if (!identity && !failure && child.exitCode === null && child.signalCode === null && !nativeExit()) {
+        const until = Date.now() + 1_000;
+        while (!nativeExit() && child.exitCode === null && child.signalCode === null && Date.now() < until) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      }
       if (!pid || !identity) throw startupFailure(failure ? redactBounded(failure.message, 300)
-        : child.exitCode !== null ? `exited with code ${child.exitCode}`
-          : child.signalCode !== null ? `exited on signal ${child.signalCode}` : "process identity is unavailable",
-      !failure && child.exitCode === null && child.signalCode === null);
+        : child.exitCode !== null || child.signalCode !== null || nativeExit() ? endedReason() : "process identity is unavailable",
+      !failure && !nativeExit() && child.exitCode === null && child.signalCode === null);
       const owner = { endpoint: prefix + file, process: captureProcessIdentity(pid, undefined, identity), signalDomain: signalDomain(child), signalBoundary: signalBoundaryOff(child) };
-      const deadline = Date.now() + 10_000;
       while (!verifiedCodexSocketOwner(owner)) {
         if (failure || child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) {
           const reason = failure ? redactBounded(failure.message, 300)
-            : child.exitCode !== null ? `exited with code ${child.exitCode}`
-              : child.signalCode !== null ? `exited on signal ${child.signalCode}` : "timed out after 10000ms";
+            : child.exitCode !== null || child.signalCode !== null ? endedReason() : "timed out after 10000ms";
           throw startupFailure(reason, fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined);
         }
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       const transport = await this.reconnect(owner);
+      if (failure) { transport.disconnect(); throw failure; }
+      fs.writeFileSync(path.join(directory, "attached"), "", { mode: 0o600 });
       if (drain) transport.stderrDrained = drain.finished;
+      child.on("exit", () => transport.processEnded());
       child.on("close", () => transport.processEnded());
       child.unref();
       return transport;
     } catch (error) {
       const detail = await diagnostic(child.exitCode !== null || child.signalCode !== null);
-      const message = redactBounded(`${error instanceof Error ? error.message : String(error)}${detail ? `; stderr: ${detail}` : ""}`, 2400);
+      const reason = error instanceof Error ? error.message : String(error);
+      const message = redactBounded(`${reason}${detail ? `; stderr: ${detail}` : ""}`, 2400);
       if (child.pid && child.exitCode === null && child.signalCode === null
-        && monitorIdentity && procBackend.processIdentity(child.pid) !== monitorIdentity) {
+        && monitorIdentity && procBackend.processIdentity(child.pid) !== null && procBackend.processIdentity(child.pid) !== monitorIdentity) {
         throw new Error(`Codex callback setup cleanup identity changed; ${message}`, { cause: error });
       }
-      if (child.pid && child.exitCode === null && child.signalCode === null && (!monitorIdentity || procBackend.processIdentity(child.pid) === monitorIdentity)) {
+      if (child.pid && child.exitCode === null && child.signalCode === null && (!monitorIdentity || procBackend.processIdentity(child.pid) === null || procBackend.processIdentity(child.pid) === monitorIdentity)) {
         const stopped = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
-        const signalled = signalAgentDomain(child, "SIGKILL");
-        if (signalled === undefined) signalProcessGroup(child.pid, "SIGKILL", process.kill);
-        else if (!signalled) throw new Error(`Codex callback setup cleanup identity could not be verified; ${message}`, { cause: error });
+        const record = () => pid && identity ? recordHostStop(captureProcessIdentity(pid, undefined, identity), "SIGKILL", "codex-socket-startup-cleanup") : undefined;
+        const signalled = signalAgentDomain(child, "SIGKILL", record);
+        if (signalled === undefined) {
+          const withdraw = record();
+          if (!signalProcessGroup(child.pid, "SIGKILL", process.kill)) withdraw?.();
+        } else if (!signalled) throw new Error(`Codex callback setup cleanup identity could not be verified; ${message}`, { cause: error });
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([stopped, new Promise<never>((_resolve, reject) => {
@@ -269,16 +352,19 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
           })]);
         } finally { if (timer) clearTimeout(timer); }
       }
+      const complete = failureMessage(reason, detail, child);
       fs.rmSync(directory, { recursive: true, force: true });
-      throw new Error(message, { cause: error });
+      throw new Error(complete, { cause: error });
     } finally {
       closeDiagnostic();
     }
   }
 
   kill(signal: NodeJS.Signals | number = "SIGTERM"): boolean {
-    if (procBackend.processIdentity(this.pid) !== this.startIdentity) return false;
-    try { process.kill(this.pid, signal); return true; } catch { return false; }
+    if (procBackend.processIdentity(this.pid) !== this.startIdentity || procBackend.processExited(this.pid)) return false;
+    const withdraw = recordHostStop({ pid: this.pid, startIdentity: this.startIdentity, bootEpoch: this.bootEpoch }, String(signal), "codex-socket-kill");
+    if (procBackend.processIdentity(this.pid) !== this.startIdentity) { withdraw?.(); return false; }
+    try { process.kill(this.pid, signal); return true; } catch { withdraw?.(); return false; }
   }
 
   private async connect(): Promise<void> {
@@ -309,6 +395,23 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   }
 
   private processEnded(): void {
+    if (this.closed) return;
+    const process = { pid: this.pid, startIdentity: this.startIdentity, bootEpoch: this.bootEpoch };
+    if (processIdentityStatus(process) === "alive") return;
+    if (hostExitWriterPending(process)) return;
+    // A detached native waiter persists before its launcher exits. Polling
+    // can notice the native death first; keep polling until that write lands.
+    let retained = readHostExit(process)?.exit;
+    if (!retained) {
+      // A pre-upgrade or externally launched listener has no retained waiter.
+      if (!this.durableExitExpected || hostExitWriterRegistered(process)) {
+        recordHostExit(process, null, null);
+        retained = readHostExit(process)?.exit;
+      }
+    }
+    // Replacing the owning row can already have transferred this receipt
+    // into launch history. A late local callback must not recreate its files.
+    const { code, signal } = retained ?? { code: null, signal: null };
     // Remove only the private directory this connection originally verified.
     const file = codexSocketPath(this.endpoint)!;
     if (procBackend.processIdentity(this.pid) !== this.startIdentity) {
@@ -323,7 +426,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     }
     if (this.closed) return;
     this.disconnect();
-    this.emit("exit");
-    this.emit("close");
+    this.emit("exit", code, signal);
+    this.emit("close", code, signal);
   }
 }
