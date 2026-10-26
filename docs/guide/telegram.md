@@ -63,6 +63,8 @@ answers with.
   starts a fresh Cloud thread with the same composed input and structured reply
   as the local one-shot agent. Claude and local Codex remain selectable.
   A confirmed Cloud failure tries the local Codex path once.
+  An unconfirmed disconnect retains the request across restarts and blocks
+  another Cloud or local execution on redelivery.
 - **What comes with a question.** Who asked it and their rights in the chat, a
   short memory of the chat and an index of the service's own tools. When one of
   those tools fits better, the agent hands the question back to the service.

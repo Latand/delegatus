@@ -25,7 +25,7 @@ export function scrubOwnerReply(value: unknown, credentials: readonly string[] =
 /** Owner-only egress boundary. Never log its input or a redaction failure. */
 export function scrubOwnerOutput(text: string, credentials: readonly string[] = []): string {
   const store = readRelayStore();
-  const known = [currentOperatorSpawnCapability(), viewerBootGateKey(process.env), process.env.LLV_SPAWN_CAPABILITY, ...credentials,
+  const known = [currentOperatorSpawnCapability(), viewerBootGateKey(process.env), process.env.LLV_SPAWN_CAPABILITY, process.env.LLV_CODEX_CLOUD_TOKEN, ...credentials,
     ...store.relays.map(r => r.credential), ...store.pending.flatMap(p => [p.poll_secret, p.code]),
     ...INTERNAL_SERVICES.flatMap(service => Object.values(existingInternalServiceHeaders(service)).flatMap(value => [value, value.slice(value.indexOf(".") + 1)])),
   ].filter((value): value is string => !!value).sort((a, b) => b.length - a.length);

@@ -94,6 +94,9 @@ export type RelayStore = {
   pending: PendingRelay[];
 };
 export type RunRecord = {
+  /** Written before Cloud dispatch. A confirmed failure clears it for fallback;
+   * a completed turn remains fenced until its completion is accepted. */
+  cloudExecution?: "uncertain" | "completed";
   /** Execution ended; retained delivery/cleanup custody owns no target slot. */
   capacityReleased?: true;
   /** The service accepted this request's completion; recovery only cleans up. */

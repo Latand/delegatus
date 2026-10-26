@@ -1,5 +1,5 @@
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
-import { cloudEnvironment, runCloudRelay, type CloudTransport } from "./cloud";
+import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
@@ -247,6 +247,7 @@ export async function runClaimedRequest(
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
+  const ownerCredentials = [relay.credential, process.env.LLV_CODEX_CLOUD_TOKEN].filter((value): value is string => !!value);
   let diagnostic: OwnerTurnDiagnostic | undefined;
   const recordDiagnostic = (value: OwnerTurnDiagnostic) => {
     diagnostic ??= value;
@@ -267,6 +268,7 @@ export async function runClaimedRequest(
   const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
   let rounds = 0;
   let ownerTools: ReturnType<typeof openOwnerServiceTools> | null = null;
+  let localOwnerConversationId: string | null = null;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let transport: RelayLeaseTransport | InlineRelayLeaseTransport | null = null;
@@ -311,16 +313,16 @@ export async function runClaimedRequest(
         // the same durable delivery path as every other late owner answer.
         stagedAttachments = [];
         const answer = ownerFailureAnswer(request, owner, ownerTurnDiagnostic("observation",
-          "The service window closed before the handoff could be requested", [relay.credential]), [relay.credential]);
+          "The service window closed before the handoff could be requested", ownerCredentials), ownerCredentials);
         return answer ? { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt } : null;
       };
       body = explainExpiredHandoff() ?? body;
       if (recovery && ownerExecution && owner && (body.outcome === "declined" || body.outcome === "failed")) {
-        const cause = ownerTurnDiagnostic("launch", `Owner retry could not start: ${body.reason}`, [relay.credential]);
+        const cause = ownerTurnDiagnostic("launch", `Owner retry could not start: ${body.reason}`, ownerCredentials);
         recordDiagnostic(cause);
         failureReply = true;
         await changeRunAsync(requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, diagnostic: cause } }), Date.now() + 5000);
-        const answer = ownerFailureAnswer(request!, owner, cause, [relay.credential]);
+        const answer = ownerFailureAnswer(request!, owner, cause, ownerCredentials);
         if (answer) body = { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt };
       }
       // Persist the local decision before any delivery wait: a restart must
@@ -428,7 +430,7 @@ export async function runClaimedRequest(
         catch { console.error("External relay completed capacity release pending"); retryCapacityRelease(); }
         // A retained row (an unconfirmed owner stop or a pending capacity
         // release) leaves recovery cleanup only, never a second completion.
-        if (recorded && !capacityReleased) await recordAcceptedCompletion(requestId);
+        if (recorded && (cloud || !capacityReleased)) await recordAcceptedCompletion(requestId);
       }
       if (!ownerPastWindow() && caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
       if (initiallyLate && body.outcome === "answered" && sent.delivery !== "accepted") {
@@ -505,12 +507,13 @@ export async function runClaimedRequest(
   let duplicate = false;
   let run: EphemeralAgentRun | null = null;
   let runFinished = false;
+  let cloudUncertain = false;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
   // A refused cutoff write can leave cancel absent from the ledger. The
   // unsettled owner still owns its capacity, chain reservation and files.
-  const ownerRunPending = () => !!owner && !!run && !runFinished;
+  const ownerRunPending = () => cloudUncertain || !!owner && !!run && !runFinished;
   // A full owner turn (no prototype answer) answers at its execution cap with
   // the fixed status notice while its stop is still unconfirmed.
   let boundedOwnerTurn = false;
@@ -833,9 +836,22 @@ export async function runClaimedRequest(
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
     request.input = hydrated.request.input;
     callAbort.signal.throwIfAborted();
-    if (owner && !usingCloud && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
-      () => ownerRelayAuthorizedAsync(relay.id, target.id, requestId));
-    if ((!owner || usingCloud) && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
+    if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
+      async () => {
+        const registry = cloud && localOwnerConversationId
+          ? await (await import("@/lib/agent/registry")).prepareAgentRegistry() : null;
+        if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)) return false;
+        if (registry && localOwnerConversationId) {
+          // Binding can precede continuation admission. A foreign conversation
+          // must not borrow this request's tools while that admission awaits.
+          const generation = registry.conversation(localOwnerConversationId as `conversation_${string}`)?.generations.at(-1);
+          if (!generation?.launchProfile?.cwd) return false;
+          try { cloudOwnerDirectory(target.project, generation.launchProfile.cwd); } catch { return false; }
+        }
+        return true;
+      });
+    if (ownerTools && usingCloud) loop = ownerTools.loop;
+    else if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
       if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
@@ -847,7 +863,7 @@ export async function runClaimedRequest(
       // Service tools never read the Delegatus board; their names stay local.
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
-    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
+    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => !leaseUnavailable && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
     let result: EphemeralAgentResult | null = null;
     let completion: ExternalRelayDecision | null = null;
     const executionExpired = cloud && owner && !prototype ? new Promise<"expired">(resolve => {
@@ -906,13 +922,14 @@ export async function runClaimedRequest(
         }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
           ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
           authorize: () => { if (cloud && Date.now() >= executionDeadline || leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked or execution deadline expired"); },
-          credentials: [relay.credential],
+          credentials: ownerCredentials,
           onDiagnostic: recordDiagnostic,
           rawDeadlineAt: rawRequest.deadline_at,
           inboundContext: inbound?.prompt,
           request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId, initialPrompt) => {
+            localOwnerConversationId = conversationId;
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             if (conversation) {
               conversation.conversationId = conversationId;
@@ -957,13 +974,29 @@ export async function runClaimedRequest(
           ["prompt"]: owner ? ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes) + "\n" + agentPrompt : agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
-          transport: runtime?.cloudTransport,
+          transport: async input => {
+            // A restart after this write cannot prove the remote turn stopped.
+            cloudUncertain = true;
+            await changeRunAsync(requestId, current => ({ ...current, cloudExecution: "uncertain" }), Date.now() + 5000);
+            try {
+              const text = await (runtime?.cloudTransport ?? cloudTransport)(input);
+              await changeRunAsync(requestId, current => ({ ...current, cloudExecution: "completed" }), Date.now() + 5000);
+              cloudUncertain = false;
+              return text;
+            } catch (error) {
+              if (error instanceof CloudFailure && error.confirmed) {
+                await changeRunAsync(requestId, current => ({ ...current, cloudExecution: undefined }), Date.now() + 5000);
+                cloudUncertain = false;
+              }
+              throw error;
+            }
+          },
           authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || owner && (Date.now() >= executionDeadline || !ownerRelayAuthorized(relay.id, target.id, requestId))) throw new Error("relay authorization revoked or execution deadline expired"); },
           onProgress: steps?.observe,
           ...(owner ? { decode: (text: string) => {
             let value: unknown;
-            try { value = JSON.parse(text); } catch { return ownerAnswer(text, request, owner!, [relay.credential]); }
-            return scrubOwnerReply(value, [relay.credential]);
+            try { value = JSON.parse(text); } catch { return ownerAnswer(text, request, owner!, ownerCredentials); }
+            return scrubOwnerReply(value, ownerCredentials);
           } } : {}),
           onFallback: () => { cloudFailed = true; console.info("External relay Cloud failure confirmed; trying local execution once"); },
           local: async () => {
@@ -983,7 +1016,7 @@ export async function runClaimedRequest(
         if (error instanceof EphemeralProfileError)
           return await finish(declined(leaseId, "profile_error"));
         if (!diagnostic) {
-          const value = ownerTurnDiagnostic("launch", error, [relay.credential]);
+          const value = ownerTurnDiagnostic("launch", error, ownerCredentials);
           recordDiagnostic(value);
           console.error("External relay agent launch failed", JSON.stringify({ requestId, diagnostic: value }));
         }
@@ -1050,15 +1083,15 @@ export async function runClaimedRequest(
       }
       finally { if (requestTimer) clearTimeout(requestTimer); }
       if (owner && !prototype && (cloud || result.status === "timeout") && Date.now() >= executionDeadline) return await finishOwnerTimeout(started);
-      ownerParts?.close();
+      if (!usingCloud || cloudFailed || result.status !== "done") ownerParts?.close();
       if (result.diagnostic) recordDiagnostic(result.diagnostic);
       else if (result.status === "failed") {
-        recordDiagnostic({ ...ownerTurnDiagnostic("observation", "Agent process failed", [relay.credential]),
+        recordDiagnostic({ ...ownerTurnDiagnostic("observation", "Agent process failed", ownerCredentials),
           exitCode: result.code, signal: result.signal });
         console.error("External relay agent failed", JSON.stringify({ requestId, diagnostic }));
       }
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
-      await ownerTools?.close(result.status);
+      if (!usingCloud || cloudFailed || result.status !== "done") await ownerTools?.close(result.status);
       if (conversation && !owner) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }
@@ -1073,6 +1106,10 @@ export async function runClaimedRequest(
       const decision = result?.status === "done"
         ? loop && !final ? checkedRoundV2(result.answer, request, caps!, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }, answerDrops) : checkedAnswerV2(result.answer, request, caps!, { handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown, stagedAttachments: owner ? stagedAttachments.length : 0 }, answerDrops)
         : null;
+      if (usingCloud && !cloudFailed && (!decision || !("kind" in decision))) {
+        ownerParts?.close();
+        await ownerTools?.close(result.status);
+      }
       if (caps?.generate && !owner && result?.imageHome && result.threadId) {
         const directory = path.join(result.imageHome, "generated_images", result.threadId);
         let names = new Set<string>();
@@ -1116,7 +1153,7 @@ export async function runClaimedRequest(
           duration_ms: Date.now() - started,
         }
       : owner && diagnostic && result?.status !== "cancelled" && allowOwnerReply?.()
-      ? { lease_id: leaseId, outcome: "answered", answer: ownerFailureAnswer(request, owner, diagnostic, [relay.credential])!, duration_ms: Date.now() - started }
+      ? { lease_id: leaseId, outcome: "answered", answer: ownerFailureAnswer(request, owner, diagnostic, ownerCredentials)!, duration_ms: Date.now() - started }
       : failed(
           leaseId,
           result?.status === "violation"
@@ -1131,6 +1168,13 @@ export async function runClaimedRequest(
         );
     return await finish(body);
   } catch (error) {
+    if (cloudUncertain) {
+      // No completion or retry can establish what the disconnected Cloud did.
+      // The durable row fences redelivery, including after Viewer restart.
+      console.error("External relay Cloud execution unconfirmed; request custody retained");
+      recorder?.finish({ outcome: "execution_uncertain", answer: null, delivery: null, ...loopRecord() });
+      return null;
+    }
     if (leaseUnavailable || error instanceof ExternalRelayError && error.status === 409 && error.code === "lease_lost") {
       leaseUnavailable = true;
       recorder?.finish({ outcome: "lease_lost", answer: null, delivery: null });
@@ -1142,7 +1186,7 @@ export async function runClaimedRequest(
     if (!diagnostic) {
       // Record, journal and hand the first failure to durable owner custody
       // before cancelling: the stop below may wait for host confirmation.
-      const value = ownerTurnDiagnostic("exception", error, [relay.credential]);
+      const value = ownerTurnDiagnostic("exception", error, ownerCredentials);
       recordDiagnostic(value);
       console.error("Owner relay turn failed", JSON.stringify({ requestId, diagnostic: value }));
     }
@@ -1151,7 +1195,7 @@ export async function runClaimedRequest(
       // Durable custody keeps the reason and its reply even if host control
       // never confirms. Awaited before the stop: its synchronous cutoff write
       // must not contend with this write's file lock.
-      const kept = request ? ownerFailureCustody(request, owner, diagnostic, deadline.at, [relay.credential]) : { diagnostic };
+      const kept = request ? ownerFailureCustody(request, owner, diagnostic, deadline.at, ownerCredentials) : { diagnostic };
       try { await changeRunAsync(requestId, current => current.ownerTurn && !current.ownerTurn.diagnostic
         ? { ...current, ownerTurn: { ...current.ownerTurn, ...kept } } : current, Date.now() + 5000); }
       catch { console.error("Owner relay diagnostic persistence unavailable; the stop cutoff retries it"); }
@@ -1165,7 +1209,7 @@ export async function runClaimedRequest(
         boundTimer = setTimeout(() => resolve("expired"), remainingMs(deadline)); boundTimer.unref();
       }) : null;
       try {
-        const ended = run.done.then(() => "ended" as const);
+        const ended = run.done.then(() => "ended" as const, () => "ended" as const);
         if (await (bound ? Promise.race([ended, bound]) : ended) === "expired") return await finishOwnerTimeout(deadline.receivedAt);
       } finally { if (boundTimer) clearTimeout(boundTimer); }
     }
@@ -1173,7 +1217,7 @@ export async function runClaimedRequest(
       failureReply = true;
       stagedAttachments = [];
       if (allowOwnerReply?.()) return await finish({ lease_id: leaseId, outcome: "answered",
-        answer: ownerFailureAnswer(request, owner, diagnostic!, [relay.credential])!, duration_ms: Date.now() - deadline.receivedAt });
+        answer: ownerFailureAnswer(request, owner, diagnostic!, ownerCredentials)!, duration_ms: Date.now() - deadline.receivedAt });
     }
     return await finish(failed(leaseId, "agent_error"));
   } finally {
@@ -1218,7 +1262,7 @@ export async function runClaimedRequest(
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
         // Pending stops and released owner stops both keep their custody record.
-        const custodyPending = !!held?.ownerTurn?.completionAttempt || !!held?.ownerTurn?.lateAnswer || ownerRunPending() || !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
+        const custodyPending = !!held?.cloudExecution && (held.cloudExecution === "uncertain" || !held.completionAccepted) || !!held?.ownerTurn?.completionAttempt || !!held?.ownerTurn?.lateAnswer || ownerRunPending() || !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
         if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
       } catch (error) {
         console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");

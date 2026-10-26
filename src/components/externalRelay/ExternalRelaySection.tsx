@@ -525,7 +525,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               data-external-relay-owner-tier="" disabled={actions.busy}
               onClick={() => actions.patchTarget(target, { ownerTier: target.ownerTier !== true })} />
           </SettingLine>
-          <p data-external-relay-owner-tier-hint="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierHint")}</p>
+          <p data-external-relay-owner-tier-hint="" className="text-caption leading-4 text-muted">{t(target.engine === "codex-cloud" ? "externalRelay.target.ownerTierCloudHint" : "externalRelay.target.ownerTierHint")}</p>
           {noAccount ? (
             <p data-external-relay-no-account="" className="flex items-start gap-1.5 text-caption leading-4 text-warning">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />

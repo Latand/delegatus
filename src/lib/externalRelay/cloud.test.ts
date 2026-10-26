@@ -63,7 +63,7 @@ test("owner full-agent Cloud thread chooses the repository environment", async (
 import { spyOn } from "bun:test";
 import { accountManager } from "@/lib/accounts/manager";
 import { runClaimedRequest } from "./runner";
-import { updateRelayStore, type PairedRelay } from "./store";
+import { readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { contextRequest } from "./request.fixture";
 import { startTestRelay } from "./testRelay";
 import { readAnswerRecord } from "./answers";
@@ -197,6 +197,7 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
     for (const beat of beats) expect(Object.keys(beat)).toEqual(["lease_id", "seq", "progress"]);
     expect(beats.map(beat => beat.seq)).toEqual(beats.map((_, i) => i + 1));
     expect(readAnswerRecord(relay.id, "target_1", "cloud_delivery")).toMatchObject({ engine: "codex-cloud", outcome: "answered", delivery: "accepted" });
+    expect(readRunLedger().runs.some(row => row.requestId === "cloud_delivery")).toBe(false);
     expect(select).not.toHaveBeenCalled();
   } finally { select.mockRestore(); await server.close(); }
 }, 45000);
@@ -328,25 +329,28 @@ for (const receipt of ["missing", "wrong-config", "wrong-cwd", "missing-instance
   });
 
 import { formatGuide } from "./rich.fixture";
-for (const rich of [false, true]) for (const encoding of ["raw", "percent", "base64", "path", "identity", "safe"] as const)
-  test(`structured owner egress (${rich ? "rich" : "plain"}, ${encoding})`, async () => {
+for (const credentialSource of ["relay", "cloud"] as const) for (const rich of [false, true]) for (const encoding of ["raw", "percent", "base64", "path", "identity", "safe"] as const)
+  test(`structured owner egress (${credentialSource}, ${rich ? "rich" : "plain"}, ${encoding})`, async () => {
     const secret = ["synthetic", "relay", "credential"].join("-");
     const value = encoding === "percent" ? Array.from(secret, c => `%${c.charCodeAt(0).toString(16)}`).join("")
       : encoding === "base64" ? Buffer.from(secret).toString("base64")
       : encoding === "path" ? ["", "srv", "fixture", "private.txt"].join("/")
         : encoding === "identity" ? ["fixture", "example.test"].join("@") : encoding === "safe" ? "Ready" : secret;
+    const previousToken = process.env.LLV_CODEX_CLOUD_TOKEN;
+    if (credentialSource === "cloud") process.env.LLV_CODEX_CLOUD_TOKEN = secret;
     const sent: unknown[] = [];
     const server = await startTestRelay((req, body) => {
       if (req.url?.endsWith("/complete")) sent.push(body);
       return { body: { status: "ok", features: rich ? ["relay_rich_messages"] : [] } };
     });
-    const relay: PairedRelay = { id: "cloud_scrub", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "", credential: secret,
+    const relayCredential = credentialSource === "relay" ? secret : "fixture";
+    const relay: PairedRelay = { id: "cloud_scrub", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "", credential: relayCredential,
       owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 32000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
     updateRelayStore(store => ({ ...store, relays: [relay] }));
-    const requestId = `scrub_${rich}_${encoding}`;
+    const requestId = `scrub_${credentialSource}_${rich}_${encoding}`;
     const answer = { action: "reply", text: `${value} User`, reply_to: "m1", ...(rich ? { format: "rich_markdown", mentions: [
       { author_key: "u1", offset: Array.from(value).length + 1, length: 4 },
     ], buttons: [[{ text: value, url: encoding === "safe" ? "https://example.test/docs" : `https://example.test/?value=${value}` }]] } : {}) };
@@ -354,7 +358,10 @@ for (const rich of [false, true]) for (const encoding of ["raw", "percent", "bas
       const result = await runClaimedRequest(relay, { ...contextRequest, request_id: requestId,
         ...(rich ? { features: ["relay_rich_messages"] } : {}), answer: { max_chars: 32000, progress: "none" },
         input: { ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: [], requester: { ...contextRequest.input.requester, is_owner: true } },
-      }, undefined, { leaseWorker: false, cloudTransport: async () => JSON.stringify(answer) });
+      }, undefined, { leaseWorker: false, cloudTransport: async () => {
+        if (credentialSource === "cloud") process.env.LLV_CODEX_CLOUD_TOKEN = "rotated-cloud-credential";
+        return JSON.stringify(answer);
+      } });
       expect(result).toMatchObject({ outcome: "answered" });
       expect(sent).toHaveLength(1);
       const history = readAnswerRecord(relay.id, "target_1", requestId);
@@ -368,7 +375,10 @@ for (const rich of [false, true]) for (const encoding of ["raw", "percent", "bas
         }
         if (rich) expect(result).toMatchObject({ answer: { mentions: [] } });
       }
-    } finally { await server.close(); }
+    } finally {
+      if (previousToken === undefined) delete process.env.LLV_CODEX_CLOUD_TOKEN; else process.env.LLV_CODEX_CLOUD_TOKEN = previousToken;
+      await server.close();
+    }
   });
 
 for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launch", "valid"] as const)
@@ -417,6 +427,124 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
 
 import * as client from "./client";
 import { cloudOwnerDirectory, runOwnerAgent } from "./ownerRun";
+import { relayServiceToolsOp } from "./ownerServiceTools";
+import { relayAnswerOp } from "./ownerAnswer";
+
+for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const)
+  test(`confirmed Cloud fallback keeps request-bound service tools and effects: ${prior}`, async () => {
+    const repository = seedRepository();
+    const priorAction = prior === "action" || prior === "unknown";
+    const priorCall = priorAction || prior === "rich";
+    const tool = priorAction ? "write_note" : "lookup_notes";
+    const effect = priorAction ? "action" : "read";
+    const relay: PairedRelay = { id: "cloud_tools", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
+      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+      targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
+        engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: repository.project, cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
+    updateRelayStore(store => ({ ...store, relays: [relay] }));
+    const calls: unknown[] = [];
+    const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route, _method, body) => {
+      if (route.endsWith("/tool-calls")) {
+        calls.push(body);
+        return { status: 200, body: { ...(body as object), tool, status: prior === "unknown" ? "outcome_unknown" : "ok", output: "Found", truncated: false,
+          effect, delivered: false, replayed: false, calls_remaining: 15 } } as never;
+      }
+      return { status: 200, body: { status: "ok" } } as never;
+    });
+    const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+      engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env },
+    } });
+    const { prepareAgentRegistry } = await import("@/lib/agent/registry");
+    const registry = await prepareAgentRegistry();
+    const lookup = spyOn(registry, "conversation").mockReturnValue({ id: "conversation_fallback_tools", engine: "codex",
+      generations: [{ id: "generation_fallback_tools", launchProfile: { cwd: repository.cwd } }] } as never);
+    let cloud = 0, launches = 0;
+    let list: unknown, described: unknown, called: unknown, repeated: unknown, parts: unknown;
+    try {
+      const result = await runClaimedRequest(relay, { ...contextRequest, request_id: `cloud_fallback_tools_${prior}`, answer: { max_chars: 4000, progress: "none" },
+        ...(prior === "rich" ? { features: ["relay_rich_messages"] } : {}),
+        input: { ...contextRequest.input, ...(prior === "rich" ? { format: formatGuide } : {}), tools: [{ name: tool, summary: "Notes", mode: "direct", effect, parameters: { type: "object", properties: {} } }],
+          requester: { ...contextRequest.input.requester, is_owner: true } },
+      }, undefined, { leaseWorker: false, cloudTransport: async () => {
+        cloud++;
+        if (priorCall && cloud === 1) return JSON.stringify({ action: "call", text: "", reply_to: null, calls: [{ tool, arguments: "{}", cursor: null }] });
+        throw new CloudFailure(true);
+      }, ownerPorts: {
+        launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } }; },
+        observe: async () => {
+          if (prior === "reassigned") expect(spawnSync("git", ["-C", repository.cwd, "remote", "add", "origin", "https://example.test/fixture/reassigned.git"], { env: checkEnvironment(process.env) }).status).toBe(0);
+          list = await relayServiceToolsOp("conversation_fallback_tools", { op: "list" });
+          described = await relayServiceToolsOp("conversation_fallback_tools", { op: "describe", names: [tool] });
+          called = await relayServiceToolsOp("conversation_fallback_tools", { op: "call", calls: [{ tool, arguments: {} }] });
+          repeated = await relayServiceToolsOp("conversation_fallback_tools", { op: "call", calls: [{ tool, arguments: {} }] });
+          if (prior === "rich") parts = await relayAnswerOp("conversation_fallback_tools", {
+            format: "rich_markdown", buttons: [[{ text: "Open docs", url: "https://example.test/docs" }]],
+          });
+          return { state: "ended", finalText: prior === "unknown" ? "[ignore]" : "Done" };
+        }, stop: async () => {}, pollMs: 1,
+      } });
+      expect(launches).toBe(1);
+      expect(cloud).toBe(priorCall ? 2 : 1);
+      if (prior === "reassigned") {
+        expect(list).toBeNull(); expect(described).toBeNull(); expect(called).toBeNull(); expect(calls).toHaveLength(0);
+      } else {
+        expect(list).toMatchObject({ tools: [{ name: tool }] });
+        expect(described).toMatchObject({ tools: [{ name: tool, parameters: expect.any(Object) }] });
+        expect(called).toMatchObject({ status: "completed", ...(prior === "none" ? { results: [{ status: "ok" }] } : {}) });
+        expect(repeated).toEqual(called);
+        expect(calls).toHaveLength(1);
+        expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", ...(prior === "unknown" ? {} : { text: "Done" }) } });
+        if (prior === "unknown") expect(called).toMatchObject({ callsLeft: 0, actionSent: true });
+        if (prior === "rich") {
+          expect(parts).toMatchObject({ format: "rich_markdown", buttons: [[{ text: "Open docs" }]] });
+          expect(result).toMatchObject({ answer: { format: "rich_markdown", buttons: [[{ text: "Open docs" }]] } });
+        }
+      }
+      expect(await relayServiceToolsOp("conversation_fallback_tools", { op: "list" })).toBeNull();
+      expect(readRunLedger().runs.some(row => row.requestId === `cloud_fallback_tools_${prior}`)).toBe(false);
+    } finally { lookup.mockRestore(); wire.mockRestore(); selection.mockRestore(); repository.close(); }
+  });
+
+for (const tier of ["owner", "member"]) for (const mode of ["disconnect", "crash", "completed", "refused", "acknowledged"])
+  test(`uncertain Cloud custody fences redelivery across process restart: ${tier}, ${mode}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-custody-"));
+    const env = isolatedEnvironment(root, checkEnvironment(process.env));
+    const children: ReturnType<typeof spawn>[] = [];
+    const start = (operation: string) => {
+      const child = spawn(process.execPath, [path.join(import.meta.dir, "cloudCustody.fixture.ts"), operation, tier], {
+        env, stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+      children.push(child);
+      let output = "", errors = "";
+      child.stdout!.on("data", data => { output += data; });
+      child.stderr!.on("data", data => { errors += data; });
+      const exit = new Promise<number | null>(resolve => child.once("close", resolve));
+      return { child, exit, output: () => output, errors: () => errors };
+    };
+    try {
+      const first = start(mode);
+      if (mode === "crash" || mode === "completed") {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(Error("Cloud dispatch seam not reached")), 10000);
+          first.child.once("message", () => { clearTimeout(timer); resolve(); });
+          first.child.once("error", reject);
+        });
+        first.child.kill("SIGKILL"); await first.exit;
+      } else {
+        expect(await first.exit, first.errors()).toBe(0);
+        expect(JSON.parse(first.output().trim().split("\n").at(-1)!)).toMatchObject({ result: mode === "refused" ? { outcome: "answered" } : null, second: null, cloud: 1, local: 0, stops: 0,
+          rows: [{ requestId: "uncertain_custody", cloudExecution: mode === "refused" ? "completed" : "uncertain" }] });
+      }
+      const next = start("redeliver");
+      expect(await next.exit, next.errors()).toBe(0);
+      expect(JSON.parse(next.output().trim().split("\n").at(-1)!)).toEqual({ result: null, second: null, cloud: 0, local: 0, stops: 0,
+        rows: [{ requestId: "uncertain_custody", cloudExecution: mode === "completed" || mode === "refused" ? "completed" : "uncertain" }] });
+    } finally {
+      for (const child of children) if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await new Promise(resolve => child.once("close", resolve)); }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
 
 for (const failure of ["catalogue-refusal", "cancel-during-resolution"] as const)
   test(`Cloud repository resolution stops before execution: ${failure}`, async () => {
@@ -505,7 +633,8 @@ test("a Cloud target continues its local Codex owner conversation with the local
       continuation: { conversationId: "conversation_cloud_local", prompt: "Next task" }, onConversation() {},
       ports: {
         launch: async () => { throw new Error("existing conversation must continue"); },
-        continue: async (_turn, _text, target, authorize) => {
+        continue: async (_turn, _text, target, authorize, repositoryBound) => {
+          expect(repositoryBound).toBe(true);
           authorize(); sends++; expect(target.engine).toBe("codex"); expect(target.project).toBe(repository.project);
           return { ok: true, structured: true, target: "conversation_cloud_local", outcome: "held", operationId: "cloud_local_continue" };
         },
@@ -531,3 +660,95 @@ test("local owner admission verifies the physical repository after a directory i
     expect(() => cloudOwnerDirectory(repository.project, nested)).toThrow("configured project directory");
   } finally { repository.close(); fs.rmSync(foreign, { recursive: true, force: true }); }
 });
+
+for (const state of ["matching", "foreign", "deleted", "reassigned", "missing-cwd", "dispatch-reassigned", "dispatch-generation"] as const)
+  test(`Cloud local continuation validates its active generation repository: ${state}`, async () => {
+    const { sendOwnerContinuation, OwnerContinuationRefused } = await import("./ownerRun");
+    const { prepareAgentRegistry } = await import("@/lib/agent/registry");
+    const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+    const repository = seedRepository();
+    const foreign = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-continuation-"));
+    expect(spawnSync("git", ["init", "-q", foreign], { env: checkEnvironment(process.env) }).status).toBe(0);
+    const transcript = path.join(foreign, "transcript.jsonl"); fs.writeFileSync(transcript, "fixture");
+    const record = { id: "conversation_repo", engine: "codex", generations: [{ id: "generation_repo", path: transcript, accountId: "fixture",
+      launchProfile: { cwd: state === "foreign" ? foreign : state === "missing-cwd" ? undefined : repository.cwd } }] };
+    const registry = await prepareAgentRegistry();
+    const lookup = spyOn(registry, "conversation").mockImplementation(() => record as never);
+    const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: "fixture" } as never });
+    let admitted = 0, effects = 0;
+    const replaceRepository = () => { expect(spawnSync("git", ["-C", repository.cwd, "remote", "add", "origin", "https://example.test/fixture/reassigned.git"], { env: checkEnvironment(process.env) }).status).toBe(0); };
+    const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, deps) => {
+      admitted++;
+      request.admissionGuard?.();
+      expect(await deps?.idleContinuationAllowed?.()).toBe(true);
+      // This seam represents queued admission followed by the transport callback.
+      await Promise.resolve();
+      if (state === "dispatch-reassigned") replaceRepository();
+      if (state === "dispatch-generation") record.generations.push({ ...record.generations[0]!, id: "generation_peer" });
+      if (state.startsWith("dispatch-")) {
+        expect(() => deps?.authorizeDispatch?.()).toThrow(OwnerContinuationRefused);
+        expect(await deps?.idleContinuationAllowed?.()).toBe(false);
+        expect(() => request.recoveryAuthorityGuard?.()).toThrow(OwnerContinuationRefused);
+        return { ok: false, structured: true, outcome: "failed", status: 409, admission: "refused", error: "automatic continuation unavailable" };
+      }
+      await deps?.authorizeDispatch?.(); effects++;
+      return { ok: true, structured: true, target: record.id, outcome: "held", operationId: "repo_continue" };
+    });
+    try {
+      if (state === "deleted") fs.rmSync(repository.cwd, { recursive: true });
+      if (state === "reassigned") replaceRepository();
+      const result = await sendOwnerContinuation({ conversationId: record.id, clientAttemptId: "repo_continue", claimedAt: "2026-10-20T12:00:00Z", continuation: { operationId: "repo_continue" } },
+        "Continue", { id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, engine: "codex", model: "gpt-6.1-sol", effort: null,
+          project: repository.project, concurrency: 1, hardCapMinutes: 1 }, () => {}, true);
+      expect(result).toMatchObject(state === "matching" ? { ok: true } : { ok: false, admission: "refused" });
+      expect(admitted).toBe(state === "matching" || state.startsWith("dispatch-") ? 1 : 0);
+      expect(effects).toBe(state === "matching" ? 1 : 0);
+    } finally { lookup.mockRestore(); selection.mockRestore(); dispatch.mockRestore(); repository.close(); fs.rmSync(foreign, { recursive: true, force: true }); }
+  });
+
+for (const changed of [false, true])
+  test(`Cloud continuation repository guard reaches the runtime journal: changed=${changed}`, async () => {
+    const { migrationDeliveryFixture } = await import("@/test-helpers/migrationDelivery");
+    const registryModule = await import("@/lib/agent/registry");
+    const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+    const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+    const { sendOwnerContinuation } = await import("./ownerRun");
+    const fixture = migrationDeliveryFixture();
+    expect(spawnSync("git", ["init", "-q", fixture.root], { env: checkEnvironment(process.env) }).status).toBe(0);
+    const repository = { cwd: fixture.root, project: projectForCwd(fixture.root) };
+    const prepare = spyOn(registryModule, "prepareAgentRegistry").mockResolvedValue(fixture.registry);
+    const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: "account-a" } as never });
+    const enqueue = delivery.enqueueStructuredMessage;
+    const route = spyOn(delivery, "enqueueStructuredMessage").mockImplementation((request, dependencies) => enqueue(request, {
+      ...dependencies, enabled: () => true, registry: () => fixture.registry, client: () => fixture.client,
+      kick: () => {}, startupFailed: () => false, progress: null,
+    }));
+    let claims = 0, writes = 0;
+    const begin = fixture.registry.beginDeliveryAttemptOffLoop.bind(fixture.registry);
+    const claim = spyOn(fixture.registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
+      const result = await begin(...args);
+      if (result.acquired) {
+        claims++;
+        if (changed) expect(spawnSync("git", ["-C", repository.cwd, "remote", "add", "origin", "https://example.test/fixture/reassigned.git"], { env: checkEnvironment(process.env) }).status).toBe(0);
+      }
+      return result;
+    });
+    fixture.client.readSession = async identity => fixture.journal.snapshot().sessions.find(row => row.conversationId === identity.conversationId) ?? null;
+    fixture.client.command = async command => { writes++; return fixture.journal.executeOperation(command); };
+    try {
+      await bindStructuredDeliveryQueue([{ key: fixture.key, host: fixture.host }], { registry: fixture.registry, client: fixture.client,
+        hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+      const result = await sendOwnerContinuation({ conversationId: fixture.conversation.id, clientAttemptId: "repository-journal",
+        claimedAt: "2026-10-20T12:00:00Z", continuation: { operationId: "repository-journal" } }, "Continue", {
+        id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, engine: "codex",
+        model: "gpt-6.1-sol", effort: null, project: repository.project, concurrency: 1, hardCapMinutes: 1,
+      }, () => {}, true);
+      expect(claims, JSON.stringify(result)).toBe(1);
+      expect(writes).toBe(changed ? 0 : 1);
+      expect(result).toMatchObject({ ok: !changed });
+      if (changed) expect(Object.values(fixture.registry.readOnlySnapshot().heldDeliveries)).toMatchObject([{ state: "failed" }]);
+    } finally {
+      claim.mockRestore(); route.mockRestore(); selection.mockRestore(); prepare.mockRestore();
+      await fixture.cleanup();
+    }
+  });

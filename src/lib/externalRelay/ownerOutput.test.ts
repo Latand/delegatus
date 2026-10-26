@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { scrubOwnerOutput } from "./ownerOutput";
+import { scrubOwnerOutput, scrubOwnerReply } from "./ownerOutput";
 import { ownerTurnDiagnostic } from "./diagnostic";
 
 test("owner diagnostics scrub complete hostile input before clipping and fail closed", () => {
@@ -125,4 +125,24 @@ test("owner output withholds base64 and escaped base64 copies of known credentia
       expect(scrubOwnerOutput(`Value: ${text}`, [credential])).not.toContain(text);
     }
   }
+});
+
+test("configured Cloud credentials are withheld by plain and structured owner egress", () => {
+  const previous = process.env.LLV_CODEX_CLOUD_TOKEN;
+  const credential = ["synthetic", "cloud", "transport", "credential"].join("-");
+  process.env.LLV_CODEX_CLOUD_TOKEN = credential;
+  try {
+    const percent = (text: string) => Array.from(text, c => `%${c.charCodeAt(0).toString(16)}`).join("");
+    for (const value of [credential, percent(credential), Buffer.from(credential).toString("base64"), Buffer.from(credential).toString("base64url"),
+      percent(Buffer.from(credential).toString("base64")), Array.from(credential, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`).join("")]) {
+      const plain = scrubOwnerOutput(`Value: ${value}`);
+      const reply = scrubOwnerReply({ action: "reply", text: value, buttons: [[{ text: value, url: `https://example.test/?value=${value}` }]] });
+      for (const clean of [plain, JSON.stringify(reply)]) {
+        expect(clean).not.toContain(credential); expect(clean).not.toContain(value);
+      }
+    }
+    const decision = { action: "call", calls: [{ tool: "lookup_notes", arguments: JSON.stringify({ query: credential }) }] };
+    expect(scrubOwnerReply(decision)).toBe(decision);
+    expect(scrubOwnerReply({ action: "reply", text: "Ready" })).toEqual({ action: "reply", text: "Ready" });
+  } finally { if (previous === undefined) delete process.env.LLV_CODEX_CLOUD_TOKEN; else process.env.LLV_CODEX_CLOUD_TOKEN = previous; }
 });

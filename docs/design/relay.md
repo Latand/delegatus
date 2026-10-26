@@ -3434,9 +3434,18 @@ Cloud admission does not consult local account capacity. A confirmed Cloud
 refusal or exhausted limit invokes the local path once per request. A lost
 connection after a turn starts does not prove failure and cannot duplicate an
 owner task. An interrupted turn must report terminal status before fallback.
+Before dispatch the runner persists an uncertain Cloud execution fence. A
+confirmed failure clears it for fallback; a completed turn keeps it until the
+service accepts completion. Disconnection, process death and the orphan sweep
+retain it, so identical redelivery starts no Cloud or local turn.
+A service acknowledgement alone cannot settle uncertain Cloud execution.
+Local continuations revalidate the active generation's physical repository at
+admission and dispatch. Cloud and local owner service tools share one request
+loop, preserving recorded actions and unknown outcomes across fallback.
 One execution deadline covers all owner tool rounds and local fallback,
 including waits for service tools. Structured owner replies pass through the
-same output scrubber as transcript answers before history or delivery. If
-scrubbing changes the text, its original mention offsets are discarded.
+same output scrubber as transcript answers before history or delivery. The
+configured Cloud transport credential is withheld in raw and encoded forms.
+If scrubbing changes the text, its original mention offsets are discarded.
 The Cloud transport is isolated in `src/lib/externalRelay/cloud.ts`; tests
 replace it with a fake and never connect to Cloud.
