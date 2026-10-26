@@ -150,12 +150,10 @@ const PULL_REQUEST_LIMIT = 60;
 /** Optional GitHub enrichment must leave most of the check budget for delivery. */
 const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
 /** Finished lanes examined for local commits per check, in bounded Git batches.
-    A persisted check-time seed chooses the window after restart; the source's
-    lane cursor advances subsequent checks without relying on collection order. */
+    The persisted lane cursor advances subsequent checks and survives restarts. */
 const LOCAL_FINISHED_LANE_LIMIT = 60;
 const LOCAL_GIT_BATCH_SIZE = 8;
 const LOCAL_GIT_TIMEOUT_MS = 250;
-const localFinishedLaneCursors = new WeakMap<SeatTickSources, Map<string, string>>();
 /** Bounded pull request title carried into a wake item. */
 const PULL_REQUEST_TITLE_LIMIT = 120;
 /** Liveness rows one project's check asks for. */
@@ -1823,6 +1821,7 @@ interface PullRequestEvidence {
       the row so the next check knows whether this is weather or configuration,
       and so a standing outage is reported once rather than every five minutes. */
   gap: SeatTickSourceGap | null;
+  localScanCursor?: string | null;
 }
 
 const execFileAsync = promisify(execFile);
@@ -1831,7 +1830,7 @@ const execFileAsync = promisify(execFile);
  * forge account, remote, or `gh` response. The lane row and its accepted SHA
  * identify the exact work; the signal version includes that SHA so a later
  * accepted revision is a new item. */
-async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[], sources: SeatTickSources, cursorSeed: string | null): Promise<SeatTickSignalInput[]> {
+async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[], cursor: string | null): Promise<{ signals: SeatTickSignalInput[]; cursor: string | null }> {
   const canonicalProject = seatProjectResolver();
   const finished = [...new Map(pipelines
     .filter((pipeline) => canonicalProject(pipeline.project) === project && !pipeline.hiddenAt && isFinished(pipeline)
@@ -1844,18 +1843,9 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
       };
       return stamp(right) - stamp(left) || left.id.localeCompare(right.id);
     });
-  if (finished.length === 0) return [];
-  const cursors = localFinishedLaneCursors.get(sources) ?? new Map<string, string>();
-  localFinishedLaneCursors.set(sources, cursors);
-  const previous = cursors.get(project);
-  const afterPrevious = previous ? finished.findIndex((pipeline) => pipeline.id === previous) + 1 : 0;
-  const seedTime = cursorSeed ? Date.parse(cursorSeed) : Number.NaN;
-  const bucket = Number.isFinite(seedTime) ? Math.floor(seedTime) : 0;
-  let step = 7_919;
-  const gcd = (left: number, right: number): number => right ? gcd(right, left % right) : left;
-  while (gcd(step, finished.length) !== 1) step--;
-  const start = afterPrevious > 0 ? afterPrevious % finished.length
-    : ((bucket % finished.length) * (step % finished.length)) % finished.length;
+  if (finished.length === 0) return { signals: [], cursor };
+  const afterPrevious = cursor ? finished.findIndex((pipeline) => pipeline.id === cursor) + 1 : 0;
+  const start = afterPrevious > 0 ? afterPrevious % finished.length : 0;
   const scanCount = Math.min(finished.length, LOCAL_FINISHED_LANE_LIMIT);
   const candidates = Array.from({ length: scanCount }, (_, index) => finished[(start + index) % finished.length]!);
   let lastScanned: string | undefined;
@@ -1866,11 +1856,9 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
     localProbeFailures++;
     firstLocalProbeFailure ??= detail;
   };
-  const deadline = Date.now() + LOCAL_GIT_TIMEOUT_MS;
-  for (let offset = 0; offset < candidates.length; offset += LOCAL_GIT_BATCH_SIZE) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    const batch = candidates.slice(offset, offset + LOCAL_GIT_BATCH_SIZE);
+  {
+    const remaining = LOCAL_GIT_TIMEOUT_MS;
+    const batch = candidates.slice(0, LOCAL_GIT_BATCH_SIZE);
     const outcomes = await Promise.all(batch.map(async (pipeline) => {
       const sha = pipeline.lastPassedCommit;
       const base = pipeline.baseBranch;
@@ -1908,13 +1896,12 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
         label: redactBounded(`finished lane ${pipeline.id} has local commits not merged into ${pipeline.baseBranch}; last passed commit ${sha.slice(0, 12)}`, 800),
       });
     }
-    if (Date.now() >= deadline) break;
   }
-  if (lastScanned) cursors.set(project, lastScanned);
+  if (lastScanned) cursor = lastScanned;
   if (localProbeFailures) {
     console.error(`[seat tick] local Git ancestry unavailable for ${localProbeFailures} finished lanes; first ${firstLocalProbeFailure}`);
   }
-  return found;
+  return { signals: found, cursor };
 }
 
 async function readPullRequestsWithinBudget(
@@ -1951,7 +1938,7 @@ async function unmergedPullRequests(context: {
   /* Nothing was asked, so nothing is concluded — and the run of failures is
      left exactly as it stands. A gate is a statement about this check, never
      about whether the source can be read. */
-  const unasked: PullRequestEvidence = { pullRequests: [], localPending: [], observed: false, unavailable: null, gap: context.gap };
+  const unasked: PullRequestEvidence = { pullRequests: [], localPending: [], observed: false, unavailable: null, gap: context.gap, localScanCursor: context.localScanCursor ?? null };
   if (!context.wakeDue || !context.enabled) return unasked;
   /* The other two ways a check can be unable to raise any reason at all: a
      project with nobody to wake ends in `no-seat`, and a seat whose turn is
@@ -1962,12 +1949,14 @@ async function unmergedPullRequests(context: {
   if (!context.seat || seatTurnProgressing(context.seat)) return unasked;
 
   const at = new Date(context.now).toISOString();
+  let localScanCursor = context.localScanCursor ?? null;
   const failed = (kind: SeatTickPullRequestGap, localPending: SeatTickSignalInput[] = []): PullRequestEvidence => ({
     pullRequests: [],
     localPending,
     observed: false,
     unavailable: kind,
     gap: seatTickSourceGapAfterFailure(context.gap, kind, at),
+    localScanCursor,
   });
 
   /* The archive is an evidence source too, and a permanent failure of it has to
@@ -2003,9 +1992,11 @@ async function unmergedPullRequests(context: {
     .filter((pipeline) => canonicalProject(pipeline.project) === context.project && !pipeline.hiddenAt);
   const finished = projectLanes.filter(isFinished);
   if (finished.length === 0) return unasked;
-  const localPending = await localFinishedLaneSignals(context.project, projectLanes, context.sources, context.localScanCursor);
+  const localScan = await localFinishedLaneSignals(context.project, projectLanes, localScanCursor);
+  const localPending = localScan.signals;
+  localScanCursor = localScan.cursor;
   const cwd = repoDirForProject(context.project, context.sources, archived);
-  if (!cwd) return { ...unasked, localPending };
+  if (!cwd) return { ...unasked, localPending, localScanCursor };
 
   /* The same bound for the `gh` read: a source that has been unreadable for
      longer than a whole wake interval is asked at that interval and no faster
@@ -2022,7 +2013,7 @@ async function unmergedPullRequests(context: {
      refuse a quiet the evidence allows. Everything between the gates and here is
      a local read; the subprocess below is the only thing THIS gate saves. */
   if (context.gap && !seatTickSourceRetryDue(context.gap, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], localPending, observed: false, unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap };
+    return { pullRequests: [], localPending, observed: false, unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap, localScanCursor };
   }
 
   let result: OpenPullRequestsResult;
@@ -2083,7 +2074,7 @@ async function unmergedPullRequests(context: {
   /* An answer, so the run of failures is over: the source spoke, whatever it
      said. This is the only thing that clears the row, which is what makes the
      next outage a fresh run with its own report. */
-  return { pullRequests: found.sort((left, right) => left.number - right.number), localPending, observed: true, unavailable: null, gap: null };
+  return { pullRequests: found.sort((left, right) => left.number - right.number), localPending, observed: true, unavailable: null, gap: null, localScanCursor };
 }
 
 
@@ -3090,20 +3081,42 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
   let fresh = await refreshSeatTickInputCooperatively(input, sources);
   const key = await pullRequestEvidenceKey(fresh, sources);
   fresh = await refreshSeatTickInputCooperatively(fresh, sources);
-  if (key === input.pullRequestEvidenceKey) return fresh;
+  const currentlyOwned = () => {
+    const canonicalProject = seatProjectResolver();
+    const currentLanes = [...sources.pipelines(), ...sources.archivedPipelines()]
+      .filter(lane => canonicalProject(lane.project) === fresh.project && !lane.hiddenAt);
+    return new Set(currentLanes.filter((lane) => lane.merge
+      && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing"
+        || (lane.merge.state === "merged" && (lane.merge.reviewedHead === lane.lastPassedCommit
+          || lane.merge.chain.includes(lane.lastPassedCommit) || lane.merge.mergedHead === lane.lastPassedCommit)))).map(lane => lane.id));
+  };
+  const excludeCurrentlyOwned = (value: SeatTickCheckInput): SeatTickCheckInput => {
+    if (!value.pullRequests.length && !value.signals.some(signal => signal.id.startsWith("local-unmerged-lane:"))) return value;
+    const owners = currentlyOwned();
+    return {
+      ...value,
+      pullRequests: value.pullRequests.filter(pr => !owners.has(pr.pipelineId)),
+      signals: value.signals.filter(signal => !signal.id.startsWith("local-unmerged-lane:")
+        || !owners.has(signal.id.slice("local-unmerged-lane:".length))),
+    };
+  };
+  if (key === input.pullRequestEvidenceKey) return excludeCurrentlyOwned(fresh);
   const evidence = await unmergedPullRequests({
     project: fresh.project, seat: fresh.seat,
     wakeDue: seatTickWakeDue(fresh.state.lastWakeAt, fresh.now, fresh.settings.wakeIntervalMs),
     enabled: fresh.settings.enabled, now: fresh.now, wakeIntervalMs: fresh.settings.wakeIntervalMs,
-    gap: fresh.state.pullRequestGap, localScanCursor: fresh.state.lastCheckAt, sources,
+    gap: fresh.state.pullRequestGap, localScanCursor: fresh.state.localFinishedLaneCursor ?? null, sources,
   });
-  fresh = await refreshSeatTickInputCooperatively({ ...fresh, pullRequests: evidence.pullRequests,
+  fresh = await refreshSeatTickInputCooperatively(fresh, sources);
+  fresh = await refreshSeatTickInputCooperatively({ ...fresh,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
     pullRequestsObserved: evidence.observed,
     signals: [...fresh.signals.filter((signal) => !signal.id.startsWith("local-unmerged-lane:")), ...evidence.localPending],
-    state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
+    pullRequests: evidence.pullRequests,
+    state: { ...fresh.state, pullRequestGap: evidence.gap, localFinishedLaneCursor: evidence.localScanCursor } }, sources);
   if (await pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
-  return refreshSeatTickInputCooperatively(fresh, sources);
+  fresh = await refreshSeatTickInputCooperatively(fresh, sources);
+  return excludeCurrentlyOwned(fresh);
 }
 
 /** The opening check needs only a priority hint, without PR, report or
@@ -3276,7 +3289,7 @@ async function gatherSeatTickInputWork(
   const harvestedChildren = state.harvestedChildren;
   await yieldToRuntime();
   const pullRequestEvidenceKeyAtRead = await pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
-  const { pullRequests, localPending, observed: pullRequestsObserved, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
+  const { pullRequests, localPending, localScanCursor, observed: pullRequestsObserved, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,
     /* The same clause the decision applies, asked here because the read behind
@@ -3288,7 +3301,7 @@ async function gatherSeatTickInputWork(
     now,
     wakeIntervalMs: settings.wakeIntervalMs,
     gap: state.pullRequestGap,
-    localScanCursor: state.lastCheckAt,
+    localScanCursor: state.localFinishedLaneCursor ?? null,
     sources,
   });
 
@@ -3328,7 +3341,7 @@ async function gatherSeatTickInputWork(
        is what attempted the read, so the gather is what records what became of
        it, and the decision reads that row to know whether this is the outage
        worth putting on the board. */
-    state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, canonical), "accounting.sources").readState().accounting : undefined },
+    state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, localFinishedLaneCursor: localScanCursor, childrenGap, harvestedChildren, accounting: state.accounting ? guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, canonical), "accounting.sources").readState().accounting : undefined },
     policy,
     settings,
     ...await (async () => {

@@ -593,8 +593,12 @@ test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake und
   ]) {
     const rig = harness({ pipelines: [...FINISHED_LANE], state: { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() } });
     const [finished] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
-    rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip, merge } as never];
-    rig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+    rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip } as never];
+    rig.deps.sources!.openPullRequests = async () => {
+      rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip, merge } as never];
+      return { ok: true, pullRequests: [{ number: 41, title: "completed lane work", headRefName: "finished-lane",
+        createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString() }] };
+    };
     const record = await runSeatTickCheck(PROJECT, rig.deps);
     expect(record).toMatchObject({ verdict: "quiet" });
     expect(rig.sent).toHaveLength(0);
@@ -613,20 +617,38 @@ test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake und
   fairRig.deps.sources!.archivedPipelines = () => [];
   fairRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
   const { gatherSeatTickInput } = await import("./seatTickSources");
-  const first = await gatherSeatTickInput(PROJECT, fairRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, fairRig.deps.sources!);
-  expect(first.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane")).toBe(false);
-  const second = await gatherSeatTickInput(PROJECT, fairRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, fairRig.deps.sources!);
-  expect(second.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane")).toBe(true);
-  let restartAt = NOW + 1;
-  while ((Math.floor(restartAt) % 61 * 50) % 61 === 0) restartAt++;
-  const restartRig = harness({ pipelines: [...FINISHED_LANE], state: {
-    ...OVERDUE, lastCheckAt: new Date(restartAt).toISOString(),
-  } });
+  let scanState = fairRig.deps.readState!(PROJECT);
+  let reached = false;
+  const shim = path.join(SANDBOX, "slow-git");
+  fs.mkdirSync(shim, { recursive: true });
+  fs.writeFileSync(path.join(shim, "git"), "#!/bin/sh\nif [ \"$1\" = merge-base ]; then sleep 0.15; fi\nexec /usr/bin/git \"$@\"\n", { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${shim}${path.delimiter}${originalPath ?? ""}`;
+  try {
+    for (let check = 0; check < 8 && !reached; check++) {
+      const observation = await gatherSeatTickInput(PROJECT, scanState, DEFAULT_SEAT_TICK_POLICY, fairRig.deps.sources!);
+      reached = observation.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane");
+      scanState = observation.state;
+    }
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+  expect(reached).toBe(true);
+  const progressFile = path.join(SANDBOX, "local-scan-progress.json");
+  writeSeatTickState(PROJECT, { ...scanState, accounting: undefined }, progressFile);
+  const restartRig = harness({ pipelines: [...FINISHED_LANE], stateFile: progressFile });
   restartRig.deps.sources!.pipelines = () => [...newerMerged, olderPending] as never;
   restartRig.deps.sources!.archivedPipelines = () => [];
   restartRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
-  const afterRestart = await gatherSeatTickInput(PROJECT, restartRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, restartRig.deps.sources!);
-  expect(afterRestart.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane")).toBe(true);
+  let restartedState = restartRig.deps.readState!(PROJECT);
+  let recovered = false;
+  for (let check = 0; check < 8 && !recovered; check++) {
+    const observation = await gatherSeatTickInput(PROJECT, restartedState, DEFAULT_SEAT_TICK_POLICY, restartRig.deps.sources!);
+    recovered = observation.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane");
+    restartedState = observation.state;
+  }
+  expect(recovered).toBe(true);
 
   const diagnosticRig = harness({ pipelines: [...FINISHED_LANE], state: OVERDUE });
   const [diagnosticLane] = diagnosticRig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;

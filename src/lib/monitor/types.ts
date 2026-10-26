@@ -1156,6 +1156,8 @@ export interface SeatTickProjectState {
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
+  /** Last finished lane examined for local ancestry, persisted across checks. */
+  localFinishedLaneCursor?: string | null;
   lastWakeAt: string | null;
   lastWakeReasons: SeatTickWakeReasonKind[];
   /** Consecutive wakes carrying this reason that changed nothing. */
