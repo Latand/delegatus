@@ -9540,7 +9540,7 @@ const provisioningHost = globalThis as typeof globalThis & { __llvProvisioningRe
  * The indexed read takes no write lease. A pass with no provisioning work
  * reads no pipeline payloads and starts no subprocess.
  */
-async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[]): Promise<Map<string, PipelineProvisionOutcome>> {
+async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[], waitForRepository: (previous: Promise<void>) => Promise<void> = previous => previous): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
@@ -9624,7 +9624,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
         const previous = repositoryTails.get(repository);
         tail = new Promise<void>((resolve) => { releaseRepository = resolve; });
         repositoryTails.set(repository, tail);
-        await previous;
+        if (previous) await waitForRepository(previous);
         const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
@@ -12217,10 +12217,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     const provisioned = scoped ? new Map<string, PipelineProvisionOutcome>()
       : await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
     if (scoped) for (const lane of await selectControllerPipelines("provisioning", provisioningThrough)) {
-      startPipelineControllerJob(lane.id, async () => {
+      startPipelineControllerJob(lane.id, async waitOutsideCapacity => {
         await phaseDone;
         await withControllerPipelineScope([lane.id], async () => {
-          const outcomes = await provisionPendingPipelines(ports, provisioningThrough, []);
+          const outcomes = await provisionPendingPipelines(ports, provisioningThrough, [], waitOutsideCapacity);
           await withPipelineMutation(async (pipelines, persist) => {
             const current = pipelines.find(row => row.id === lane.id);
             if (current && await applyProvisionOutcome(current, outcomes.get(lane.id), ports)) await persist([current]);
