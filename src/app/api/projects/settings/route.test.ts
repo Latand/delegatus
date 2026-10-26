@@ -32,6 +32,43 @@ const put = (body: unknown) => PUT(new NextRequest(`${ORIGIN}/api/projects/setti
   body: JSON.stringify(body),
 }));
 
+test("pipeline stage runtime defaults to local and only an operator can change it", async () => {
+  const project = "repo-cloud-runtime";
+  expect((await (await get(project)).json()).pipelineStageRuntime).toBe("local");
+  for (const pipelineStageRuntime of ["codex-cloud", "local"]) {
+    expect((await put({ project, pipelineStageRuntime })).status).toBe(200);
+    expect((await (await get(project)).json()).pipelineStageRuntime).toBe(pipelineStageRuntime);
+  }
+  for (const pipelineStageRuntime of [null, "other", "constructor", {}, 1]) {
+    expect((await put({ project, pipelineStageRuntime, bridgeReports: false })).status).toBe(400);
+    expect((await (await get(project)).json()).pipelineStageRuntime).toBe("local");
+  }
+  const foreign = await PUT(new NextRequest(`${ORIGIN}/api/projects/settings`, {
+    method: "PUT", headers: { "content-type": "application/json", origin: "https://example.invalid", host: "127.0.0.1:8899" },
+    body: JSON.stringify({ project, pipelineStageRuntime: "codex-cloud" }),
+  }));
+  expect(foreign.status).toBe(403);
+  const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
+  setCallerConversationResolverForTests(() => "conversation_cloud_worker");
+  try {
+    const refused = await PUT(new NextRequest(`${ORIGIN}/api/projects/settings`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: ORIGIN, host: "127.0.0.1:8899",
+        [VIEWER_SPAWN_CAPABILITY_HEADER]: Buffer.alloc(32, 1).toString("base64url") },
+      body: JSON.stringify({ project, pipelineStageRuntime: "codex-cloud", bridgeReports: false }),
+    }));
+    expect(refused.status).toBe(403);
+    expect((await (await get(project)).json()).pipelineStageRuntime).toBe("local");
+  } finally { setCallerConversationResolverForTests(null); }
+});
+
+test.each(["toString", "constructor", "__proto__"])("runtime settings preserve a project named %s", async project => {
+  expect((await (await get(project)).json()).pipelineStageRuntime).toBe("local");
+  expect((await put({ project, pipelineStageRuntime: "codex-cloud" })).status).toBe(200);
+  expect((await (await get(project)).json()).pipelineStageRuntime).toBe("codex-cloud");
+  expect((await put({ project, bridgeReports: false })).status).toBe(200);
+  expect((await (await get(project)).json()).pipelineStageRuntime).toBe("codex-cloud");
+});
+
 test("cloud environment is off by default, persists, clears, and rejects malformed and cross-origin writes", async () => {
   const project = "repo-cloud-setting";
   expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("");
