@@ -165,7 +165,7 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -12080,6 +12080,48 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
     await persist([owner]);
   });
   await drainPendingStaleControllerFlows(ports);
+}
+
+export const PROVIDER_RECOVERY_DEADLINE_MS = 15_000;
+
+/** Terminal provider recovery has no catalog, Git pre-pass or shared tick
+ * dependency. It uses the ordinary stage path and its final authority guards. */
+export async function recoverPipelineProviderTurn(id: string, ports: PipelinePorts, signal?: AbortSignal): Promise<void> {
+  const deadline = performance.now() + PROVIDER_RECOVERY_DEADLINE_MS;
+  const preview = await findControllerPipeline(id);
+  if (preview?.state !== "running" || !preview.cursor) return;
+  const { current: references } = await controllerAttemptWindow(id, 0, preview.cursor.stageId);
+  if (!references.length) return;
+  const selected = new Set(references.map(ref => JSON.stringify([id, ref.stageId, ref.n])));
+  await withControllerPipelineScope([id], () => withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
+    const pipeline = pipelines.find(row => row.id === id);
+    if (!pipeline || pipeline.state !== "running" || pipeline.closedAt || pipeline.hiddenAt || pipelineSurvivorRefusal(pipeline)) return;
+    const stage = currentStage(pipeline), attempt = stage && currentAttempt(pipeline, stage.id);
+    if (stage?.kind !== "run" || !attempt || !controllerAttemptSelected(id, stage.id, attempt.n)
+      || attempt.state !== "running" || !attempt.agentPath
+      || attempt.activation || openRuntimeSwitch(attempt) || attemptStage(stage, attempt).runtime === "codex-cloud") return;
+    const current = () => {
+      if (signal?.aborted || performance.now() >= deadline) throw new StateSnapshotChangedError();
+      assertCurrent(pipeline);
+    };
+    const lanePorts = controllerSnapshotPorts({ ...ports, deferStageGit: true }, current, id);
+    const durable = await lanePorts.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+      attempt.report?.at, attemptEvidenceFloor(attempt), undefined, attempt.providerWait?.turnTs);
+    current();
+    if (!attempt.providerWait && !(durable?.turn === "terminal" && durable.terminalProviderMessage)) return;
+    taskNoteAuthority.set(pipeline, current);
+    let persisted = controllerTickFingerprint(pipeline);
+    const checkpoint = async () => {
+      current();
+      const next = controllerTickFingerprint(pipeline);
+      if (next === persisted) return;
+      await persist([pipeline]);
+      persisted = next;
+      current();
+    };
+    await tickRunStage(pipeline, stage, [], lanePorts, checkpoint, Number.POSITIVE_INFINITY);
+    await checkpoint();
+  }, ports.observeControllerLeaseHold, true), selected, new Map([[id, references]]));
 }
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
