@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { CreatePipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import type { GithubRunner } from "@/lib/monitor/githubEvidence";
 import type { ForgeAppWriter } from "./appWrite";
-import { rollupChecks, type ReadCheck } from "./checkRollup";
+import { rollupChecksWithIdentity, type ReadCheck } from "./checkRollup";
 import { redactBounded } from "@/lib/monitor/redact";
 
 export const RED_MAIN_LIMIT_MS = 60 * 60_000;
@@ -16,7 +16,7 @@ export type MergeRecovery = {
   /** A lost mutation response is reconciled by marker, never blindly repeated. */
   revertSubmittedAt?: string;
 };
-type CommitChecks = { sha: string; required: string[]; checks: Array<ReadCheck & { excerpt?: string }> };
+type CommitChecks = { sha: string; required: string[]; checks: Array<ReadCheck & { excerpt?: string; failedAt?: string }> };
 export interface PostMergePorts {
   now: () => number;
   loadPipelines: () => readonly Pipeline[];
@@ -33,6 +33,38 @@ const green = (view: CommitChecks) => view.required.length > 0 && view.required.
   const checks = view.checks.filter(check => check.name === name);
   return checks.length > 0 && checks.every(check => check.verdict === "green");
 });
+
+/** Both green reads owe the same receipt reconciliation before retiring recovery. */
+async function resolveRecovery(lane: Pipeline, key: string, ports: PostMergePorts): Promise<void> {
+  const current = ports.loadPipelines().find(row => row.id === lane.id);
+  const recovery = current?.merge?.recovery;
+  if (!current || !recovery || recovery.resolvedAt) return;
+  let revertPr = recovery.revertPr;
+  if (!revertPr && recovery.revertSubmittedAt) {
+    revertPr = await ports.revert(current, key, true, async () => false) ?? undefined;
+    if (!revertPr) {
+      ports.log?.(`[post merge] ${lane.id}: green main; revert submission still needs reconciliation`);
+      return;
+    }
+    await ports.mutate(lane.id, live => {
+      if (!live.merge?.recovery || live.merge.recovery.resolvedAt) return false;
+      live.merge.recovery.revertPr = revertPr;
+      return true;
+    });
+  }
+  if (revertPr) {
+    if (!ports.closeRevert) {
+      ports.log?.(`[post merge] ${lane.id}: green main; revert PR #${revertPr} still needs closing`);
+      return;
+    }
+    await ports.closeRevert(current, revertPr);
+  }
+  await ports.mutate(lane.id, live => {
+    if (!live.merge?.recovery || live.merge.recovery.resolvedAt) return false;
+    live.merge.recovery.resolvedAt = new Date(ports.now()).toISOString();
+    return true;
+  });
+}
 
 export function recoveryRequest(lane: Pipeline): CreatePipelineRequest {
   const merge = lane.merge!;
@@ -86,19 +118,7 @@ export async function sweepPostMerge(ports: PostMergePorts): Promise<void> {
     try {
       const main = await ports.read(lane, "main");
       if (green(main) && merge.recovery) {
-        let revertPr = merge.recovery.revertPr;
-        if (!revertPr && merge.recovery.revertSubmittedAt) {
-          revertPr = await ports.revert(lane, key, true, async () => false) ?? undefined;
-          // A late forge response must not leave an untracked revert open.
-          if (!revertPr) continue;
-        }
-        if (revertPr) await ports.closeRevert?.(lane, revertPr);
-        await ports.mutate(lane.id, live => {
-          if (!live.merge?.recovery || live.merge.recovery.resolvedAt) return false;
-          live.merge.recovery.resolvedAt = new Date(ports.now()).toISOString();
-          if (revertPr) live.merge.recovery.revertPr = revertPr;
-          return true;
-        });
+        await resolveRecovery(lane, key, ports);
         continue;
       }
       let recovery = merge.recovery;
@@ -113,10 +133,10 @@ export async function sweepPostMerge(ports: PostMergePorts): Promise<void> {
           continue;
         }
         const parent = await ports.read(lane, `${merge.mergeCommit}^1`);
-        const failures = landed.checks.filter(check => landed.required.includes(check.name) && check.verdict === "red"
+        const introduced = landed.checks.filter(check => landed.required.includes(check.name) && check.verdict === "red"
           && parent.checks.some(previous => previous.name === check.name && previous.verdict === "green")
-          && !parent.checks.some(previous => previous.name === check.name && previous.verdict !== "green"))
-          .map(check => ({ name: redactBounded(check.name, 160), excerpt: redactBounded(check.excerpt ?? "Failed check; log unavailable", 2000) }));
+          && !parent.checks.some(previous => previous.name === check.name && previous.verdict !== "green"));
+        const failures = introduced.map(check => ({ name: redactBounded(check.name, 160), excerpt: redactBounded(check.excerpt ?? "Failed check; log unavailable", 2000) }));
         if (!failures.length) {
           const settled = landed.required.length > 0 && landed.required.every(name => {
             const checks = landed.checks.filter(check => check.name === name);
@@ -131,7 +151,12 @@ export async function sweepPostMerge(ports: PostMergePorts): Promise<void> {
           });
           continue;
         }
-        const reservation: MergeRecovery = { firstRedAt: new Date(ports.now()).toISOString(), failures };
+        const firstRedAt = Math.min(...introduced.map(check => Date.parse(check.failedAt ?? "")).filter(at => Number.isFinite(at) && at <= ports.now()));
+        if (!Number.isFinite(firstRedAt)) {
+          ports.log?.(`[post merge] ${lane.id}: failed check time unavailable; recovery clock cannot be established`);
+          continue;
+        }
+        const reservation: MergeRecovery = { firstRedAt: new Date(firstRedAt).toISOString(), failures };
         await ports.mutate(lane.id, live => {
           if (!live.merge || live.merge.mergeCommit !== merge.mergeCommit || live.merge.recovery) return false;
           live.merge.recovery = reservation;
@@ -158,11 +183,7 @@ export async function sweepPostMerge(ports: PostMergePorts): Promise<void> {
       if (!recovery.revertPr && ports.now() - Date.parse(recovery.firstRedAt) >= RED_MAIN_LIMIT_MS) {
         // Check current main again immediately before the write.
         if (green(await ports.read(lane, "main"))) {
-          await ports.mutate(lane.id, live => {
-            if (!live.merge?.recovery) return false;
-            live.merge.recovery.resolvedAt = new Date(ports.now()).toISOString();
-            return true;
-          });
+          await resolveRecovery(lane, key, ports);
           continue;
         }
         const reconcileOnly = Boolean(recovery.revertSubmittedAt);
@@ -205,10 +226,17 @@ export async function readPostMergeChecks(lane: Pipeline, ref: string, required:
   // Slurp each page's jq records without assuming one-page JSON arrays.
   const parse = (raw: string): Record<string, unknown>[] => raw.split(/\n(?=\{)/).filter(row => row.trim()).map(row => JSON.parse(row));
   const entries = [...parse(runs), ...parse(statuses)];
-  const checks = rollupChecks(entries.map(row => ({ ...row, startedAt: row.started_at ?? row.created_at })));
+  const normalized = entries.map(row => ({ ...row, startedAt: row.started_at ?? row.created_at }));
+  const checks = rollupChecksWithIdentity(normalized);
+  // Retain each winning run's evidence and clock, including separate sources
+  // with the same name. Newer legacy statuses supersede their older rows.
+  const rows = normalized.map(row => ({ row, check: rollupChecksWithIdentity([row])[0] }))
+    .sort((a, b) => (Date.parse(String(b.row.startedAt)) || 0) - (Date.parse(String(a.row.startedAt)) || 0));
   const evidence = [];
   for (const check of checks) {
-    const row = entries.find(row => (row.name ?? row.context) === check.name);
+    const index = rows.findIndex(({ check: candidate }) => candidate?.name === check.name && candidate.verdict === check.verdict
+      && candidate.source === check.source && candidate.appId === check.appId && candidate.workflow === check.workflow);
+    const row: Record<string, unknown> | undefined = index < 0 ? undefined : rows.splice(index, 1)[0]!.row;
     const output = row?.output as { summary?: string; text?: string; title?: string } | undefined;
     let excerpt = output?.text || output?.summary || output?.title || String(row?.description ?? "Log unavailable");
     if (check.verdict === "red" && ref === lane.merge!.mergeCommit && typeof row?.id === "number"
@@ -218,7 +246,9 @@ export async function readPostMergeChecks(lane: Pipeline, ref: string, required:
         if (log.trim()) excerpt = log.slice(-8000);
       } catch { /* Check output remains useful when Actions logs have expired. */ }
     }
-    evidence.push({ ...check, excerpt: redactBounded(excerpt, 2000) });
+    // Completion is when a run becomes red; legacy statuses carry their verdict at creation.
+    const failedAt = row?.completed_at ?? row?.created_at ?? row?.started_at;
+    evidence.push({ ...check, excerpt: redactBounded(excerpt, 2000), ...(typeof failedAt === "string" ? { failedAt } : {}) });
   }
   return { sha: commit.sha, required, checks: evidence };
 }
@@ -242,9 +272,12 @@ export async function openRevertPr(lane: Pipeline, key: string, reconcileOnly: b
 }
 
 export function postMergeSeatSignals(lanes: readonly Pipeline[], project: string, canonical: (key: string) => string = key => key): Array<{ id: string; label: string; actionable: true }> {
-  const signals = lanes.filter(lane => canonical(lane.project) === project && lane.merge?.recovery?.revertSubmittedAt && !lane.merge.recovery.resolvedAt).map(lane => ({
-    id: `${keyOf(lane)}:revert`, actionable: true as const,
-    label: lane.merge!.recovery!.revertPr
+  const signals = lanes.filter(lane => canonical(lane.project) === project && lane.merge?.recovery
+    && (lane.merge.recovery.resolvedAt || lane.merge.recovery.revertSubmittedAt)).map(lane => ({
+    id: `${keyOf(lane)}:${lane.merge!.recovery!.resolvedAt ? "recovered" : "revert"}`, actionable: true as const,
+    label: lane.merge!.recovery!.resolvedAt
+      ? `Main is green after PR #${lane.merge!.prNumber}; the pending revert was cancelled${lane.merge!.recovery!.revertPr ? ` and revert PR #${lane.merge!.recovery!.revertPr} was closed` : ""}.`
+      : lane.merge!.recovery!.revertPr
       ? `Main stayed red for 60 minutes after PR #${lane.merge!.prNumber}; revert PR #${lane.merge!.recovery!.revertPr} is open for normal review and merge.`
       : `Main stayed red for 60 minutes after PR #${lane.merge!.prNumber}; revert submission needs reconciliation.`,
   }));

@@ -17,7 +17,7 @@ function fixture() {
     now: () => now,
     loadPipelines: () => [structuredClone(lane)],
     mutate: async (_id, change) => change(lane),
-    read: async (_lane, ref) => ({ sha: ref, required: ["types"], checks: [{ name: "types", verdict: ref === "abc^1" ? inherited ? "red" : "green" : ref === "main" ? main as "red" | "green" : "red", excerpt: "type mismatch" }] }),
+    read: async (_lane, ref) => ({ sha: ref, required: ["types"], checks: [{ name: "types", verdict: ref === "abc^1" ? inherited ? "red" : "green" : ref === "main" ? main as "red" | "green" : "red", excerpt: "type mismatch", failedAt: new Date(0).toISOString() }] }),
     create: async (_request, receipt, lineage) => { lineages.push(lineage); createCalls++; creates.set(receipt.key, "fix"); return { id: "fix" }; },
     revert: async (_lane, key, reconcileOnly, claim) => {
       if (!reconcileOnly && await claim()) { revertCalls++; reverts.add(key); }
@@ -36,6 +36,118 @@ test("a red auto-merge opens one fix lane across restarts", async () => {
   expect(f.calls().createCalls).toBe(1);
   expect(f.lineages).toEqual([{ srcPath: null, srcConversationId: "conversation_fixture" }]);
   expect(f.lane().merge?.recovery?.failures[0]).toEqual({ name: "types", excerpt: "type mismatch" });
+});
+
+test("regression: the revert deadline uses the failed run's time across delayed observation and restart", async () => {
+  for (const source of ["check", "status"] as const) {
+    const f = fixture();
+    const failedAt = new Date(5 * 60_000).toISOString();
+    const run = async (args: string[]) => {
+      const parent = args[1]?.includes("/parent/");
+      if (args[1]?.includes("check-runs")) return source === "check" ? JSON.stringify({
+        name: "types", status: "completed", conclusion: parent ? "success" : "failure",
+        started_at: new Date(0).toISOString(), completed_at: failedAt,
+      }) : "";
+      if (args[1]?.includes("/status")) return [
+        { context: "types", state: source === "status" ? "failure" : "success", created_at: new Date(60_000).toISOString() },
+        { context: "types", state: parent || source === "check" ? "success" : "failure", created_at: failedAt },
+      ].map(row => JSON.stringify(row)).join("\n");
+      return JSON.stringify({ sha: "abc", parents: [{ sha: "parent" }] });
+    };
+    f.ports.read = (lane, ref) => readPostMergeChecks(lane, ref, ["types"], run);
+    f.clock(64 * 60_000);
+    await sweepPostMerge(f.ports);
+    expect(f.lane().merge?.recovery?.firstRedAt).toBe(failedAt);
+    expect(f.calls().revertCalls).toBe(0);
+    f.restart(); f.clock(65 * 60_000);
+    await sweepPostMerge(f.ports);
+    expect(f.calls().revertCalls).toBe(1);
+    f.restart(); f.clock(66 * 60_000);
+    await sweepPostMerge(f.ports);
+    expect(f.calls().revertCalls).toBe(1);
+  }
+  for (const failedAt of [undefined, "unavailable", new Date(70 * 60_000).toISOString()]) {
+    const f = fixture(); const read = f.ports.read; const logs: string[] = [];
+    f.ports.log = message => { logs.push(message); };
+    f.ports.read = async (lane, ref) => ({ ...await read(lane, ref), checks: [{ name: "types", verdict: ref === "abc^1" ? "green" : "red", failedAt }] });
+    f.clock(64 * 60_000);
+    await sweepPostMerge(f.ports);
+    expect(f.lane().merge?.recovery).toBeUndefined();
+    expect(f.calls()).toEqual({ createCalls: 0, revertCalls: 0 });
+    expect(logs).toHaveLength(1);
+    f.ports.read = read; f.restart(); f.clock(65 * 60_000);
+    await sweepPostMerge(f.ports);
+    expect(f.lane().merge?.recovery?.firstRedAt).toBe(new Date(0).toISOString());
+    expect(f.calls()).toEqual({ createCalls: 1, revertCalls: 1 });
+  }
+});
+
+test("regression: cancelling a pending revert emits one durable seat wake", async () => {
+  const f = fixture();
+  await sweepPostMerge(f.ports);
+  expect(postMergeSeatSignals([f.lane()], "fixture")).toEqual([]);
+  f.green(); f.clock(59 * 60_000);
+  await sweepPostMerge(f.ports);
+  const signals = postMergeSeatSignals([f.lane(), { ...f.lane(), id: "duplicate" }], "fixture");
+  expect(signals).toHaveLength(1);
+  expect(signals[0]).toMatchObject({ actionable: true, label: expect.stringContaining("cancelled") });
+  expect(postMergeSeatSignals([f.lane()], "other")).toEqual([]);
+  f.restart(); f.clock(61 * 60_000);
+  await sweepPostMerge(f.ports);
+  expect(postMergeSeatSignals([f.lane()], "fixture")).toEqual(signals);
+  expect(f.calls().revertCalls).toBe(0);
+});
+
+test("regression: the final green read reconciles a lost revert response before settling recovery", async () => {
+  for (const outcome of ["closed", "missing", "close-refused", "close-unavailable"] as const) {
+    const f = fixture();
+    const closed: number[] = [];
+    const logs: string[] = [];
+    let reconciliations = 0;
+    f.ports.log = message => { logs.push(message); };
+    f.ports.closeRevert = async (_lane, number) => {
+      if (outcome === "close-refused") throw new Error("close refused");
+      closed.push(number);
+    };
+    if (outcome === "close-unavailable") delete f.ports.closeRevert;
+    const revert = f.ports.revert;
+    f.ports.revert = async (lane, key, reconcileOnly, claim) => {
+      if (reconcileOnly) { reconciliations++; return outcome === "missing" ? null : 8; }
+      await revert(lane, key, reconcileOnly, claim);
+      throw new Error("response lost");
+    };
+    await sweepPostMerge(f.ports); f.clock(60 * 60_000); await sweepPostMerge(f.ports);
+    expect(f.calls().revertCalls).toBe(1);
+    expect(f.lane().merge?.recovery?.revertSubmittedAt).toBeDefined();
+    expect(f.lane().merge?.recovery?.revertPr).toBeUndefined();
+    f.restart(); f.clock(61 * 60_000);
+    const read = f.ports.read; let mainReads = 0;
+    f.ports.read = async (lane, ref) => {
+      if (ref === "main" && ++mainReads === 2) f.green();
+      return read(lane, ref);
+    };
+    logs.length = 0;
+    await sweepPostMerge(f.ports);
+    expect(mainReads).toBe(2);
+    expect(reconciliations).toBe(1);
+    expect(f.calls().revertCalls).toBe(1);
+    if (outcome === "closed") {
+      expect(closed).toEqual([8]);
+      expect(f.lane().merge?.recovery).toMatchObject({ revertPr: 8, resolvedAt: new Date(61 * 60_000).toISOString() });
+    } else {
+      expect(closed).toEqual([]);
+      expect(f.lane().merge?.recovery?.resolvedAt).toBeUndefined();
+      expect(postMergeSeatSignals([f.lane()], "fixture")).toHaveLength(1);
+      expect(logs.length).toBeGreaterThan(0);
+      f.ports.revert = revert;
+      f.ports.closeRevert = async (_lane, number) => { closed.push(number); };
+      f.restart(); f.clock(62 * 60_000);
+      await sweepPostMerge(f.ports);
+      expect(closed).toEqual([8]);
+      expect(f.lane().merge?.recovery?.resolvedAt).toBe(new Date(62 * 60_000).toISOString());
+      expect(f.calls().revertCalls).toBe(1);
+    }
+  }
 });
 test("green main before sixty minutes cancels the pending revert permanently", async () => {
   const f = fixture();
@@ -94,13 +206,13 @@ test("missing required checks cannot cancel a pending revert", async () => {
   expect(f.reverts.size).toBe(1);
 });
 
-test("green main closes an opened revert and clears its seat item", async () => {
+test("green main closes an opened revert and replaces its seat item with recovery", async () => {
   const f = fixture(); const closed: number[] = [];
   f.ports.closeRevert = async (_lane, number) => { closed.push(number); };
   await sweepPostMerge(f.ports); f.clock(60 * 60_000); await sweepPostMerge(f.ports);
   f.green(); f.clock(61 * 60_000); await sweepPostMerge(f.ports); f.restart(); await sweepPostMerge(f.ports);
   expect(closed).toEqual([8]);
-  expect(postMergeSeatSignals([f.lane()], "fixture")).toHaveLength(0);
+  expect(postMergeSeatSignals([f.lane()], "fixture")).toMatchObject([{ id: expect.stringContaining(":recovered") }]);
 });
 
 test("revert reconciliation recovers a lost forge response without another mutation", async () => {
