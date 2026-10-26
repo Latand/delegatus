@@ -1,0 +1,180 @@
+{
+  "sourceBase": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+  "sourceAudit": {
+    "pipeline": "3a96a31e",
+    "stage": "audit",
+    "snapshotsObservedBy": "2026-10-26T16:33:00Z"
+  },
+  "candidateSourceBlobs": {
+    "src/lib/mcp/compactAnswers.ts": "043ff69b8da88fcb373e6d1bd16dd5bf310750b7",
+    "src/lib/mcp/compactAnswers.test.ts": "cac4f647a6cd891008d2f85fdf33edeba3d42437"
+  },
+  "scope": "Additive stage metadata and compatible bounded result only; full and default compact projections retain their original bytes.",
+  "method": [
+    "Recover the six frozen scrubbed JSON-once specimens retained by the completed audit; do not resample live records.",
+    "For each original stage and attempt, run pipelineStageRead against its frozen scrubbed full record. Keep existing audited field values in the final projection key order, and derive only the additive metadata from that same record.",
+    "Apply existing shortIdsInAnswer to the stage projection and JSON.stringify once. Prompt metadata hashes the UTF-8 scrubbed prompt; its length is UTF-16 units. Full and compact specimen text is copied byte for byte.",
+    "Count each serialized specimen three times with tiktoken 0.14.0 o200k_base and require identical counts."
+  ],
+  "tokenInterpretation": "Payload-token estimates for the frozen JSON projections. Excludes outer MCP framing, billing, cache accounting, and Claude-native tokenization.",
+  "tokenizer": {
+    "package": "tiktoken",
+    "version": "0.14.0",
+    "encoding": "o200k_base",
+    "identicalRepetitions": 3
+  },
+  "samples": [
+    {
+      "record": "143e8c1b",
+      "stage": "backend",
+      "snapshotRevisionPrefix": "a0ad44ed",
+      "before": {
+        "full": {
+          "unicodeCharacters": 235322,
+          "utf16Units": 235322,
+          "utf8Bytes": 241488,
+          "estimatedPayloadTokens": 56209,
+          "jsonSha256": "82dd096f2351fe6381542a3bf817141a6456c75d9f5b3f9aae9a4b1d3cbcac89"
+        },
+        "compact": {
+          "unicodeCharacters": 1664,
+          "utf16Units": 1664,
+          "utf8Bytes": 1673,
+          "estimatedPayloadTokens": 536,
+          "jsonSha256": "79c0612819c5af198fb583ebc63a69f9b2a6fa7a10b5bf6daed39e6a0eaeb2a1"
+        },
+        "stage": {
+          "unicodeCharacters": 2335,
+          "utf16Units": 2335,
+          "utf8Bytes": 2853,
+          "estimatedPayloadTokens": 735,
+          "jsonSha256": "dd2b0eb9e2ae63b20bac80070556b1327a10bafb6a2212f67da75110c30a1124"
+        }
+      },
+      "after": {
+        "full": {
+          "unicodeCharacters": 235322,
+          "utf16Units": 235322,
+          "utf8Bytes": 241488,
+          "estimatedPayloadTokens": 56209,
+          "jsonSha256": "82dd096f2351fe6381542a3bf817141a6456c75d9f5b3f9aae9a4b1d3cbcac89"
+        },
+        "compact": {
+          "unicodeCharacters": 1664,
+          "utf16Units": 1664,
+          "utf8Bytes": 1673,
+          "estimatedPayloadTokens": 536,
+          "jsonSha256": "79c0612819c5af198fb583ebc63a69f9b2a6fa7a10b5bf6daed39e6a0eaeb2a1"
+        },
+        "stage": {
+          "unicodeCharacters": 2788,
+          "utf16Units": 2788,
+          "utf8Bytes": 3306,
+          "estimatedPayloadTokens": 860,
+          "jsonSha256": "5334ebd475aeec2208668539d8336f63b1591647ce1214bfd2f35085d50546e7"
+        }
+      }
+    },
+    {
+      "record": "ee9a179c",
+      "stage": "eval",
+      "snapshotRevisionPrefix": "6c53ce85",
+      "before": {
+        "full": {
+          "unicodeCharacters": 48866,
+          "utf16Units": 48866,
+          "utf8Bytes": 49151,
+          "estimatedPayloadTokens": 13019,
+          "jsonSha256": "0fe69874d9057e871e70cf486e073f9f6c0c0df3d32ca23ad09f6a0fe702efc3"
+        },
+        "compact": {
+          "unicodeCharacters": 896,
+          "utf16Units": 896,
+          "utf8Bytes": 898,
+          "estimatedPayloadTokens": 276,
+          "jsonSha256": "9addb377564ebe08a044e01337f7287ac0e35060dc3ad96511101fc7ca926e54"
+        },
+        "stage": {
+          "unicodeCharacters": 2663,
+          "utf16Units": 2663,
+          "utf8Bytes": 2669,
+          "estimatedPayloadTokens": 784,
+          "jsonSha256": "e541a12e77cdb5aae8159e4ce9a3e2e04217636df398029961aded42f2a562a7"
+        }
+      },
+      "after": {
+        "full": {
+          "unicodeCharacters": 48866,
+          "utf16Units": 48866,
+          "utf8Bytes": 49151,
+          "estimatedPayloadTokens": 13019,
+          "jsonSha256": "0fe69874d9057e871e70cf486e073f9f6c0c0df3d32ca23ad09f6a0fe702efc3"
+        },
+        "compact": {
+          "unicodeCharacters": 896,
+          "utf16Units": 896,
+          "utf8Bytes": 898,
+          "estimatedPayloadTokens": 276,
+          "jsonSha256": "9addb377564ebe08a044e01337f7287ac0e35060dc3ad96511101fc7ca926e54"
+        },
+        "stage": {
+          "unicodeCharacters": 3128,
+          "utf16Units": 3128,
+          "utf8Bytes": 3134,
+          "estimatedPayloadTokens": 909,
+          "jsonSha256": "845957d4151e2ad5828660eb2d55dd7503c2dae43edafb5bbfd58937272114ce"
+        }
+      }
+    }
+  ],
+  "verification": {
+    "dependencyInstall": "bun install --frozen-lockfile --ignore-scripts, private export only",
+    "installedVersions": {
+      "@modelcontextprotocol/sdk": "1.32.0",
+      "@sigstore/bundle": "3.1.0",
+      "@sigstore/tuf": "3.1.1",
+      "@sigstore/verify": "2.1.1",
+      "typescript": "5.9.3"
+    },
+    "isolation": "checkEnvironment then isolatedEnvironment; private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; closed Viewer control port; serial gate-slot",
+    "commands": [
+      "bun run test src/lib/mcp/compactAnswers.test.ts",
+      "bun run test src/lib/mcp/answerSizes.test.ts",
+      "node node_modules/typescript/bin/tsc --noEmit --incremental false"
+    ],
+    "wholeFileObservations": [
+      {
+        "side": "base",
+        "repetitions": 3,
+        "passedPerRun": 11,
+        "failedPerRun": 1
+      },
+      {
+        "side": "head",
+        "repetitions": 3,
+        "passedPerRun": 18,
+        "failedPerRun": 1
+      }
+    ],
+    "preExistingFailure": {
+      "test": "create_pipeline answers an acknowledgement, and get_pipeline still reads the whole record (#1845)",
+      "assertion": "1959 bytes against an unchanged limit of less than 1600 bytes",
+      "unchangedOnBaseAndHead": true
+    },
+    "newBehaviorCasesPassedPerHeadRun": 7,
+    "consumerSuite": {
+      "file": "src/lib/mcp/answerSizes.test.ts",
+      "passed": 8,
+      "failed": 0
+    },
+    "negativeControl": {
+      "change": "Replace only compactAnswers.ts with the captured base source; retain candidate tests",
+      "selectedCases": 6,
+      "failed": 6,
+      "expected": true
+    },
+    "types": "pass",
+    "selectedCompletedSerialChecks": 12,
+    "finalRedactionFixture": "pass; short neutral marker; same sensitive-key assertions"
+  }
+}

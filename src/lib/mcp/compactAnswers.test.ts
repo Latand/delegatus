@@ -1,8 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Pipeline } from "@/lib/pipelines/types";
 
 /* A throwaway state directory: the pipelines this suite writes live inside the
    sandbox, never in the operator's runtime state. */
@@ -23,11 +25,12 @@ afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-const { viewerMcpBindings } = await import("./bindings");
-const { compactLiveness, stageReportAcknowledgement } = await import("./compactAnswers");
+const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { compactLiveness, pipelineStageRead, stageReportAcknowledgement } = await import("./compactAnswers");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { CORPUS_BODY_MARKERS, pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { savePipelines } = await import("@/lib/pipelines/store");
+const { MAX_SCAFFOLD_LENGTH } = await import("@/lib/roles/store");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 let requestedTicks = 0;
 // Bind all controller signals in this suite to its own in-process controller.
@@ -186,13 +189,14 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
 
 test("get_pipeline with stageId answers one stage's conclusion without prompts or transcripts (#1845)", async () => {
   const pipeline = reviewedPipeline();
+  Object.assign(pipeline.runs[0]!.attempts.at(-1)!.report!, { result: "Review found two regressions." });
   savePipelines([pipeline]);
   const bindings = viewerMcpBindings();
 
   const whole = await bindings.get_pipeline({ clientRequestId: "stage-whole", full: true, pipelineId: pipeline.id });
   const stage = await bindings.get_pipeline({ clientRequestId: "stage-read", pipelineId: pipeline.id, stageId: "build" });
   expectNoBodies(stage);
-  expect(bytes(stage)).toBeLessThan(1_500);
+  expect(bytes(stage)).toBeLessThan(2_400);
   /* The by-id read without options is unchanged: the whole record. */
   expect(JSON.stringify(whole)).toContain(CORPUS_BODY_MARKERS.attemptOutput);
   expect(bytes(whole)).toBeGreaterThan(50 * bytes(stage));
@@ -206,6 +210,7 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
       verdict: "fail",
       findings: ["P0 — the route permits an unsafe write", "P1 — the route ignores the project filter"],
       summary: "One finding left.",
+      result: "Review found two regressions.",
     },
   });
 
@@ -221,6 +226,176 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
   // The voice detail contract retains stage kind and role alongside state.
   expect(bytes(compact)).toBeLessThan(800);
   expect(compact).toMatchObject({ pipelineId: pipeline.id, stages: [{ id: "build", kind: "run", roleId: "builder", latestAttempt: { n: 6, state: "failed", verdict: "fail" } }, { id: "review", kind: "review-loop", roleId: "reviewer" }] });
+});
+
+function metadataPipeline() {
+  const pipeline = reviewedPipeline();
+  const at = "2026-10-26T10:00:00.000Z";
+  pipeline.createdAt = at;
+  for (const run of pipeline.runs) for (const attempt of run.attempts) {
+    attempt.startedAt = at;
+    attempt.completedAt = at;
+    attempt.effectiveRole = { ...attempt.effectiveRole };
+  }
+  const stage = pipeline.stages[0]!;
+  stage.account = "account-A";
+  stage.role = { roleId: "builder", params: { mode: "plain", rounds: 2 } };
+  Object.assign(stage.effectiveRole, { serviceTier: "priority", serviceTierSource: "explicit", preferredServiceTier: "priority" });
+  const attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.accountId = "account-B";
+  attempt.effectiveRole = { ...stage.effectiveRole, model: "gpt-6.1-sol", effort: "high", access: "read-only", serviceTier: "standard", serviceTierSource: "role-default" };
+  attempt.definition = {
+    boundAt: at, stageDigest: "a".repeat(64), prompt: "Bound 🧭", account: "account-C",
+    role: { roleId: "builder", params: { mode: "plan" } }, sandbox: null, outputs: null,
+  };
+  return { pipeline, stage, attempt };
+}
+
+test("stage metadata separates configured policy from the selected attempt's persisted runtime", () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  const before = structuredClone(pipeline);
+  const answer = pipelineStageRead(pipeline, stage.id);
+  expect(answer.stage).toMatchObject({
+    engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write",
+    configured: { account: "account-A", serviceTier: "priority", serviceTierSource: "explicit", preferredServiceTier: "priority" },
+    roleParams: { mode: "plain", rounds: 2 },
+    promptMetadata: { length: stage.prompt.length, sha256: createHash("sha256").update(stage.prompt).digest("hex") },
+  });
+  expect(answer.attempt).toMatchObject({
+    runtime: { engine: "codex", model: "gpt-6.1-sol", effort: "high", accountId: "account-B", serviceTier: "standard", serviceTierSource: "role-default" },
+    accountPin: "account-C", roleParams: { mode: "plan" }, access: "read-only",
+    promptMetadata: { length: 8, sha256: createHash("sha256").update("Bound 🧭").digest("hex") },
+  });
+  expect(pipeline).toEqual(before);
+  const earlier = pipelineStageRead(pipeline, stage.id, 2);
+  expect(earlier.attempt).toMatchObject({ n: 2, runtime: { engine: "codex", accountId: null, serviceTier: null, serviceTierSource: null }, promptMetadata: null });
+  expect(answer.attempt!.n).toBe(attempt.n);
+  Object.assign(attempt.effectiveRole, { engine: "claude", model: "opus" });
+  delete attempt.effectiveRole.serviceTier;
+  delete attempt.effectiveRole.serviceTierSource;
+  delete attempt.effectiveRole.preferredServiceTier;
+  expect(pipelineStageRead(pipeline, stage.id)).toMatchObject({ stage: { engine: "codex" }, attempt: { runtime: { engine: "claude", model: "opus", serviceTier: null, serviceTierSource: null } } });
+});
+
+test("stage metadata follows account pin precedence without treating a requested switch as observed", () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  const runtimeSwitch: NonNullable<typeof attempt.runtimeSwitches>[number] = {
+    id: "switch-1", seq: 1, requestedAt: "2026-10-26T10:01:00.000Z", actor: { kind: "operator" }, mode: "fork", phase: "requested",
+    from: { engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "standard", accountId: "account-B", conversationId: "conversation-1", launchId: null, sessionId: null, agentPath: null },
+    to: { engine: "codex", model: "gpt-5.6-sol", effort: "medium", serviceTier: "priority", accountId: "account-D", accountPinned: true },
+  };
+  attempt.runtimeSwitches = [runtimeSwitch];
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ accountPin: "account-C", runtime: { model: "gpt-6.1-sol", serviceTier: "standard", accountId: "account-B" } });
+  runtimeSwitch.phase = "committed";
+  Object.assign(attempt.effectiveRole, { model: "gpt-5.6-sol", effort: "medium", serviceTier: "priority" });
+  delete attempt.effectiveRole.serviceTierSource;
+  attempt.accountId = "account-D";
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ accountPin: "account-D", runtime: { engine: "codex", model: "gpt-5.6-sol", accountId: "account-D", serviceTier: "priority", serviceTierSource: null } });
+  runtimeSwitch.to.accountPinned = false;
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.accountPin).toBeNull();
+  attempt.runtimeAccountPin = "account-E";
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.accountPin).toBe("account-E");
+  attempt.runtimeAccountPin = null;
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.accountPin).toBeNull();
+});
+
+test("legacy metadata stays unknown and unstarted stages have no observed attempt", () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  delete stage.account;
+  delete stage.role;
+  delete stage.effectiveRole.serviceTier;
+  delete stage.effectiveRole.serviceTierSource;
+  delete stage.effectiveRole.preferredServiceTier;
+  delete attempt.definition;
+  delete attempt.accountId;
+  delete attempt.effectiveRole.serviceTier;
+  delete attempt.effectiveRole.serviceTierSource;
+  const answer = pipelineStageRead(pipeline, stage.id);
+  expect(answer.stage).toMatchObject({ configured: { account: null, serviceTier: null, serviceTierSource: null, preferredServiceTier: null }, roleParams: null });
+  expect(answer.attempt).toMatchObject({ accountPin: null, roleParams: null, promptMetadata: null, result: null, runtime: { accountId: null, serviceTier: null, serviceTierSource: null } });
+  pipeline.runs = [];
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toBeNull();
+  stage.prompt = "";
+  expect(pipelineStageRead(pipeline, stage.id).stage.promptMetadata).toEqual({ length: 0, sha256: createHash("sha256").update("").digest("hex") });
+});
+
+test("stage metadata passes through trusted text and sensitive-key redaction", async () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  stage.role!.params = { mode: "private-param-value", password: "demo-x" };
+  attempt.definition!.role!.params = { authorization: "demo-x" };
+  savePipelines([pipeline]);
+  const bindings = viewerMcpBindings();
+  const answer = await bindings.get_pipeline({ pipelineId: pipeline.id, stageId: stage.id }, {
+    redactText: value => value.replace(/account-[A-Z]|private-param-value/g, "[redacted]"),
+  });
+  expect(answer).toMatchObject({
+    stage: { configured: { account: "[redacted]" }, roleParams: { mode: "[redacted]", password: "[redacted]" } },
+    attempt: { accountPin: "[redacted]", runtime: { accountId: "[redacted]" }, roleParams: { authorization: "[redacted]" } },
+  });
+  expect(JSON.stringify(answer)).not.toContain("demo-x");
+  // The same sensitive-key protection still covers the explicit full path.
+  const full = await bindings.get_pipeline({ pipelineId: pipeline.id, full: true });
+  expect(JSON.stringify(full)).not.toContain("demo-x");
+  expect(stage.role!.params.password).toBe("demo-x");
+});
+
+test("health-probe authorization still refuses every pipeline read before its binding runs", async () => {
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+  const bindings = viewerMcpBindings();
+  let reads = 0;
+  const service = createMcpToolService({ ...bindings, get_pipeline: async (args, context) => {
+    reads += 1;
+    return bindings.get_pipeline(args, context);
+  } }, new MemoryMcpReceiptStore(), viewerMcpToolPolicy(undefined, true));
+  for (const options of [{}, { compact: true }, { stageId: "build" }, { full: true }]) {
+    const answer = await service.callTool("get_pipeline", { pipelineId: "p0000001", ...options });
+    expect(answer.ok).toBe(false);
+  }
+  expect(reads).toBe(0);
+});
+
+test("stage result remains compatible with short results and bounded for legacy oversized values", () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  Object.assign(attempt.report!, { result: "r".repeat(160) });
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.result).toBe("r".repeat(160));
+  Object.assign(attempt.report!, { result: "r".repeat(1_000) });
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.result!.length).toBeLessThanOrEqual(160);
+  Object.assign(attempt.report!, { result: { privatePayload: "demo-x" } });
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.result).toBeNull();
+});
+
+test("metadata size is independent of prompt bodies, scaffolds and retained history; explicit full reads stay exact", async () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  const small = pipelineStageRead(pipeline, stage.id);
+  stage.prompt = "🧭".repeat(500_000);
+  stage.effectiveRole.promptScaffold = "s".repeat(1_000_000);
+  attempt.definition!.prompt = "b".repeat(1_000_000);
+  attempt.input = "i".repeat(1_000_000);
+  attempt.output = "o".repeat(1_000_000);
+  pipeline.runs[0]!.attempts.unshift(...Array.from({ length: 200 }, (_, i) => ({ ...attempt, n: -i - 1 })));
+  const large = pipelineStageRead(pipeline, stage.id);
+  expect(bytes(large) - bytes(small)).toBeLessThan(30);
+  expect(bytes(large)).toBeLessThan(3_000);
+  expect(large.stage.promptMetadata!.length).toBe(1_000_000);
+  expect(large.attempt!.promptMetadata!.length).toBe(1_000_000);
+  // Persist valid history and the schema's maximum scaffold; the real full
+  // binding must retain the large prompt and transcript bodies byte for byte.
+  pipeline.runs[0]!.attempts.splice(0, 200);
+  stage.effectiveRole.promptScaffold = "s".repeat(MAX_SCAFFOLD_LENGTH);
+  savePipelines([pipeline]);
+  const bindings = viewerMcpBindings();
+  const before = await bindings.get_pipeline({ pipelineId: pipeline.id, full: true });
+  const detail = await bindings.get_pipeline({ pipelineId: pipeline.id, stageId: stage.id });
+  const after = await bindings.get_pipeline({ pipelineId: pipeline.id, full: true });
+  expect(after).toEqual(before);
+  const stored = after.pipeline as Pipeline;
+  expect(stored.stages[0]!.prompt).toBe(stage.prompt);
+  expect(stored.stages[0]!.effectiveRole.promptScaffold).toBe(stage.effectiveRole.promptScaffold);
+  const storedAttempt = stored.runs[0]!.attempts.find(row => row.n === attempt.n)!;
+  expect(storedAttempt.input).toBe(attempt.input);
+  expect(storedAttempt.output).toBe(attempt.output);
+  expect(storedAttempt.definition!.prompt).toBe(attempt.definition!.prompt);
+  expect(detail).toMatchObject({ stage: { stageDigest: (before.stageDigests as Record<string, string>)[stage.id] }, revision: before.revision });
 });
 
 test("get_pipeline reads an accepted report before settlement, after replacement, reopen, explicit selection, and settlement (#1919)", async () => {
