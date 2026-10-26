@@ -69,6 +69,10 @@ class RecordingRegistry {
     }
   }
 
+  deliveryWriteBatchOrBusy<T>(correlation: { label: string }, write: () => T): Promise<T> {
+    return this.deliveryWriteOrBusy(correlation, write);
+  }
+
   readonly writes: Array<{ columns: StructuredHostColumns; status: string; releaseClaim: boolean }> = [];
   readonly releases: number[] = [];
   acceptWrites = true;
@@ -348,6 +352,7 @@ for (const [engine, bind] of binders) {
         const registry = new RecordingRegistry();
         const host = new RecordingHost();
         const options = { cursorDebounceMs: 1, checkpointRetryMs: 20 };
+        const clock = checkpointClock();
         let stop: StructuredHostPersistenceStop | undefined;
         try {
           if (trigger === "initial") registry.checkpointError = error;
@@ -359,18 +364,17 @@ for (const [engine, bind] of binders) {
               : trigger === "material" ? { eventCursor: 1, status: "active", activeTurnRef: "turn-live" }
               : { eventCursor: 1, status: "unhosted", pid: null, processStartIdentity: null });
           }
-          await registry.waitForCheckpoint(prior + 1);
-          await drainCheckpoints();
+          await clock.advance(trigger === "cursor" ? 1 : 0);
+          expect(registry.checkpointTimes).toHaveLength(prior + 1);
           expect(host.releaseCalls).toBe(0);
           expect(registry.releases).toEqual([]);
-          await registry.waitForCheckpoint(prior + 2);
-          await drainCheckpoints();
+          await clock.advance(20);
+          expect(registry.checkpointTimes).toHaveLength(prior + 2);
           expect(host.releaseCalls).toBe(0);
           expect(registry.releases).toEqual([]);
-          expect(registry.checkpointTimes[prior + 1]! - registry.checkpointTimes[prior]!).toBeGreaterThanOrEqual(18);
           registry.checkpointError = null;
-          await registry.waitForCheckpoint(prior + 3);
-          await drainCheckpoints();
+          await clock.advance(20);
+          expect(registry.checkpointTimes).toHaveLength(prior + 3);
           expect(registry.writes.at(-1)).toMatchObject({
             columns: { eventCursor: trigger === "initial" ? 0 : 1 },
             releaseClaim: trigger === "terminal",
@@ -379,6 +383,7 @@ for (const [engine, bind] of binders) {
         } finally {
           registry.checkpointError = null;
           await stop?.();
+          clock.restore();
         }
       });
     }

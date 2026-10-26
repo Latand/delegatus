@@ -12,7 +12,9 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, spyOn, test } from "bun:test";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
+import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
+import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { captureProcessIdentity } from "@/lib/processIdentity";
@@ -50,6 +52,7 @@ import {
   startClaudeStructuredHost,
   stopTerminalStructuredOrphan,
   structuredHostsEnabled,
+  type StructuredHostPersistenceOptions,
 } from "./registry";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
@@ -3289,12 +3292,13 @@ describe("ClaudeStreamBrokerHost", () => {
      gone; only then may a successor claim the session. */
   async function streamHostOverWriterTree(
     treeOptions: { engineIgnoresTerm?: boolean; toolIgnoresTerm?: boolean },
-    persistence: { terminationStop?: typeof incompleteCleanup; terminationRetryMs?: number } = {},
+    persistence: StructuredHostPersistenceOptions = {},
     hostOptions: (tree: Awaited<ReturnType<typeof orphanWriterTree>>) => Partial<ClaudeStreamBrokerHostOptions> = () => ({}),
-    prepareRegistry: (registry: AgentRegistry) => void = () => {},
+    prepareRegistry: (registry: AgentRegistry) => void | Promise<void> = () => {},
+    fixtureOptions: { storage?: AgentRegistryStorageOptions; sessionId?: string; pending?: boolean } = {},
   ) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-stream-tree-"));
-    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, fixtureOptions.storage);
     const tree = await orphanWriterTree({ ...treeOptions, stream: true });
     const viewer = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
     let host: ClaudeStreamBrokerHost | null = null;
@@ -3305,7 +3309,7 @@ describe("ClaudeStreamBrokerHost", () => {
     };
     try {
       const ledger = new RecordingDeliveryLedger();
-      host = await ClaudeStreamBrokerHost.adopt(crypto.randomUUID(), {
+      host = await ClaudeStreamBrokerHost.adopt(fixtureOptions.sessionId ?? crypto.randomUUID(), {
         cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(), readTranscript: () => [],
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
         shutdownGraceMs: 50,
@@ -3314,12 +3318,16 @@ describe("ClaudeStreamBrokerHost", () => {
       });
       const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
       registry.upsert({
-        key, artifactPath: `/sessions/${key.sessionId}.jsonl`, cwd: "/repo", accountId: null, status: "idle", host: null,
-        structuredHost: claudeHostColumns(await host.health(), 1), claimEpoch: 1, claimOwner: viewer, pendingAction: null,
+        key, artifactPath: `/sessions/${key.sessionId}.jsonl`, cwd: "/repo", accountId: null,
+        status: fixtureOptions.pending ? "unhosted" : "idle", host: null,
+        structuredHost: { ...claudeHostColumns(await host.health(), 1),
+          ...(fixtureOptions.pending ? { endpoint: "stdio:pending", process: null } : {}) },
+        claimEpoch: 1, claimOwner: viewer, pendingAction: fixtureOptions.pending ? "spawn" : null,
       });
-      expect(registry.snapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process).toEqual(tree.engine);
-      prepareRegistry(registry);
-      await bindClaudeHostPersistence(registry, key, host, viewer, 1, "unhosted", persistence);
+      expect(registry.snapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process)
+        .toEqual(fixtureOptions.pending ? null : tree.engine);
+      await prepareRegistry(registry);
+      const binding = await bindClaudeHostPersistence(registry, key, host, viewer, 1, "unhosted", persistence);
       const row = () => registry.snapshot().entries[`claude:${key.sessionId}`]!;
       /* Claims the session for a successor the moment the registry allows it
          and reads the detached writer at that moment. */
@@ -3333,7 +3341,7 @@ describe("ClaudeStreamBrokerHost", () => {
         }
         return null;
       };
-      return { host, tree, key, row, viewer, successorClaim, stop };
+      return { host, tree, key, row, viewer, registry, binding, successorClaim, stop };
     } catch (error) {
       await stop();
       throw error;
@@ -3374,6 +3382,73 @@ describe("ClaudeStreamBrokerHost", () => {
       await fixture.stop();
     }
   }, 20_000);
+
+  for (const stopKind of ["release", "stream fault"] as const) {
+    test(`a deferred first checkpoint retains the pending host's detached writer through ${stopKind}`, async () => {
+      let holder: RegistryLockHolder | undefined;
+      let fixture: Awaited<ReturnType<typeof streamHostOverWriterTree>> | undefined;
+      let unsubscribe = () => {};
+      try {
+        fixture = await streamHostOverWriterTree({ toolIgnoresTerm: true },
+          { checkpointRetryMs: 30_000, terminationStop: incompleteCleanup, terminationRetryMs: 50 },
+          () => ({}), async (registry) => {
+            holder = registryLockHolder(defaultRegistrySqliteFilename(registry.filename));
+            await holder.hold();
+          }, { pending: true, sessionId: stopKind === "release" ? "pending-checkpoint-release" : "pending-checkpoint-fault",
+            storage: { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 20 } });
+        const { host, tree, registry, binding, key, viewer } = fixture;
+        expect(tree.engineAlive()).toBe(true);
+        expect(await tree.stillWriting()).toBe(true);
+        expect(fixture.row()).toMatchObject({ claimOwner: viewer, structuredHost: { process: null } });
+        // With the writer still held, capture must refuse before any signal.
+        await expect(host.release()).rejects.toThrow(CLAUDE_TREE_UNCAPTURED);
+        expect(tree.engineAlive()).toBe(true);
+        expect(tree.toolAlive()).toBe(true);
+        expect(fixture.row().claimOwner).toBe(viewer);
+        const reaped = new Promise<void>(resolve => {
+          unsubscribe = host.onStateChange(state => { if (state.pid === null) resolve(); });
+        });
+        if (stopKind === "stream fault") {
+          const send = host.send({ id: "pending-checkpoint-fault-turn", text: "run the build" });
+          const rejection = send.then(() => null, (error: Error) => error.message);
+          await waitForStatus(host, "dead");
+          expect(await rejection).toContain("Claude emitted malformed stream JSON");
+          // Keep the fault checkpoint deferred too; it must not seed custody.
+          await expect(binding.flush()).rejects.toThrow("write lock");
+        }
+        await holder!.release();
+        if (stopKind === "release") {
+          const refused = spyOn(registry, "setStructuredHostClaimed").mockReturnValue(null);
+          try { await expect(host.release()).rejects.toThrow(CLAUDE_TREE_UNCAPTURED); }
+          finally { refused.mockRestore(); }
+          expect(tree.engineAlive()).toBe(true);
+          expect(fixture.row().structuredHost?.process).toBeNull();
+          await host.release();
+        }
+        await reaped;
+        await binding.flush();
+        expect(tree.engineAlive()).toBe(false);
+        expect(await tree.stillWriting()).toBe(true);
+        // Read through a fresh store: the root, tree and writer are durable.
+        const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+        try {
+          const retained = reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]!;
+          expect(retained).toMatchObject({ claimOwner: viewer, claimEpoch: 1, structuredHost: { process: tree.engine } });
+          expect(retained.structuredTerminationSurvivors).toContainEqual(tree.tool);
+          expect(reopened.claimStructuredHost(key, successor(), { allowUnhosted: true })).toBeNull();
+        } finally { reopened.close(); }
+        await stopFixtureIdentity(tree.tool);
+        expect(await fixture.successorClaim()).toEqual({ toolAlive: false, stillWriting: false });
+        expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+      } finally {
+        unsubscribe();
+        await holder?.close();
+        await fixture?.stop();
+        await fixture?.binding();
+        fixture?.registry.close();
+      }
+    }, 20_000);
+  }
 
   test("a detached tool that outlives the host's stop keeps the row, its claim and its identity until it is gone", async () => {
     const fixture = await streamHostOverWriterTree({ toolIgnoresTerm: true },

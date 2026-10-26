@@ -295,9 +295,23 @@ async function bindStructuredHostPersistence(
      row that records another process has no place for it, and there the stop
      goes ahead as it always did. A capture the registry refused answers
      false, so the child keeps running and keeps its own fence. */
-  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteOrBusy({ label: "registry.host-stop-capture" }, () => {
-    const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
-    const root = entry?.structuredHost?.process ?? null;
+  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
+    let entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+    let root = entry?.structuredHost?.process ?? null;
+    /* The first checkpoint may still be deferred over the spawn's pending
+       row. Retain the process we bound, even if newer health is terminal.
+       Install it only under this binding's live claim, then capture the tree
+       in the same admitted batch before allowing the host's first signal. */
+    if (entry?.structuredHost && !root && entry.claimOwner === claimOwner
+      && entry.claimEpoch === writerClaimEpoch && entry.structuredHost.writerClaimEpoch === writerClaimEpoch) {
+      const columns = columnsFromState(initialState, writerClaimEpoch);
+      const pendingRoot = columns.process;
+      if (!pendingRoot || pendingRoot.pid !== rootPid || !pendingRoot.startIdentity || !pendingRoot.bootEpoch) return false;
+      const bound = registry.setStructuredHostClaimed(key, columns, registryStatus(initialState), claimOwner, writerClaimEpoch);
+      if (!bound) return false;
+      entry = bound;
+      root = bound.structuredHost?.process ?? null;
+    }
     if (!entry || !root || root.pid !== rootPid) return true;
     if (entry.claimOwner !== claimOwner || entry.claimEpoch !== writerClaimEpoch
       || entry.structuredHost?.writerClaimEpoch !== writerClaimEpoch
