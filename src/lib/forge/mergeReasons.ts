@@ -24,6 +24,11 @@ export const MERGE_REASONS = {
 
 export type MergeReasonKey = keyof typeof MERGE_REASONS;
 
+/** Older stored reasons remain readable after their wording changes. */
+export const LEGACY_MERGE_REASONS: Partial<Record<MergeReasonKey, readonly string[]>> = {
+  refreshClosed: ["the refresh was closed before the PR merged"],
+};
+
 /** A reason with a part of its own: a named red check, or GitHub's words. */
 export const MERGE_REASON_PATTERNS = {
   check: /^check "(.+)" failed$/,

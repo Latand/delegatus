@@ -818,7 +818,11 @@ test("the refreshing card stays visible without Needs you and new stopped reason
   expect(mergeNeedsYou(h.pipeline("finished"))).toBe(false);
   for (const lang of ["en", "uk"] as const) {
     const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
-    for (const [reason, key] of [[MERGE_REASONS.refreshClosed, "refreshClosed"], [MERGE_REASONS.refreshSameBase, "refreshSameBase"]] as const) {
+    for (const [reason, key] of [
+      [MERGE_REASONS.refreshClosed, "refreshClosed"],
+      ["the refresh was closed before the PR merged", "refreshClosed"],
+      [MERGE_REASONS.refreshSameBase, "refreshSameBase"],
+    ] as const) {
       expect(mergeReasonText(t, reason)).toBe(t(`pipelineBlock.mergeReason.${key}`));
       expect(t(`pipelineBlock.mergeReason.${key}`)).not.toContain("pipelineBlock.");
     }

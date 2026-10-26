@@ -1,6 +1,6 @@
 import type { TFunction } from "@/lib/i18n";
 import { failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed, pipelineReviewSummary, terminalReviewContinuationAvailable } from "@/lib/pipelines/failEdgeBudget";
-import { MERGE_REASON_PATTERNS, MERGE_REASONS, type MergeReasonKey } from "@/lib/forge/mergeReasons";
+import { LEGACY_MERGE_REASONS, MERGE_REASON_PATTERNS, MERGE_REASONS, type MergeReasonKey } from "@/lib/forge/mergeReasons";
 import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/types";
 
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
@@ -404,7 +404,9 @@ export function laneMergeUnsettled(pipeline: Pick<Pipeline, "state" | "merge" | 
     writes has its key, and GitHub's own words travel as they are. */
 export function mergeReasonText(t: TFunction, reason: string | null): string {
   if (!reason) return "";
-  const key = (Object.keys(MERGE_REASONS) as MergeReasonKey[]).find((candidate) => MERGE_REASONS[candidate] === reason);
+  const key = (Object.keys(MERGE_REASONS) as MergeReasonKey[]).find((candidate) =>
+    MERGE_REASONS[candidate] === reason
+      || LEGACY_MERGE_REASONS[candidate]?.includes(reason));
   if (key) return t(`pipelineBlock.mergeReason.${key}`);
   const check = MERGE_REASON_PATTERNS.check.exec(reason);
   if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! });
