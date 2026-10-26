@@ -148,6 +148,7 @@ import { VoiceFloatButton } from "./voice/VoiceFloatButton";
 import { isCachedDesignatedManagerConversation, isDesignatedManagerConversation } from "./voice/managerIdentity";
 import { viewerContextPrelude } from "./voice/viewerContextPrelude";
 import { useSeatParallelBusy } from "./orchestrator/useSeatParallelBusy";
+import { useRetiredOrchestrator } from "./orchestrator/RetiredOrchestratorBanner";
 import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
 import { parseSeatDeputyView } from "@/lib/orchestrator/deputyView";
 import {
@@ -1995,6 +1996,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   // scanner-shaped subagent, a shell task) means this surface exposes no message
   // path at all, so the whole composer stands down below (finding 2).
   const agentCapabilities = runtimeDependencies.useAgentCapabilities(file);
+  const retiredOrchestrator = useRetiredOrchestrator(file, viewActive && !pollPaused);
+  // A pending retry can outlive its render; read retirement again at the wire.
+  const isRetiredRecipient = Boolean(retiredOrchestrator);
+  const retiredRecipient = useRef(isRetiredRecipient);
+  useLayoutEffect(() => { retiredRecipient.current = isRetiredRecipient; }, [isRetiredRecipient]);
   const { caps, structuredSession, runtime } = agentCapabilities;
   /* The agent's own controls ride this composer's bottom row (operator,
      2026-10-11): Interrupt while a turn runs and «⋯ More actions». They act
@@ -3425,9 +3431,21 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* The dead row's Send cell is no longer a blanket refusal, so its verdict is
      read like every other surface's: enabled for a conversation the send path
      can raise, and disabled with the reason for one it cannot. */
-  const effectiveSendBlockedReason = sendBlockedReason
+  const effectiveSendBlockedReason = (retiredOrchestrator ? t("retiredOrchestrator.sendBlocked") : null)
+    ?? sendBlockedReason
     ?? (caps.controls.send.state === "disabled" ? t(caps.controls.send.reason) : null)
     ?? (unresolvedOwnership ? t("strip.resolving") : null);
+  /** A claimed queue entry is settled `failed` with the reason, so it never
+      sits in `delivering` for a recipient that cannot answer. */
+  const rejectRetiredSend = (outboxId?: string): boolean => {
+    if (!retiredRecipient.current) return false;
+    const reason = t("retiredOrchestrator.sendBlocked");
+    setStatus({ kind: "err", text: reason });
+    if (outboxId && readOutbox(cardId).find(entry => entry.id === outboxId)?.state !== "delivered") {
+      updateOutbox(cardId, outboxId, { state: "failed", settledAt: nowMs(), error: reason });
+    }
+    return true;
+  };
   const spawnMode = target === null && !deliveryRoute && !unresolvedOwnership;
   const relayMode = spawnMode && file.root === "claude-projects" && file.kind === "subagent";
 
@@ -3660,6 +3678,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
             ? claimOutboxDispatch(cardId, clientMessageId) : null;
           if (claimed) {
             const retained = await composerSubmissionPayloads.restore(ref);
+            if (rejectRetiredSend(clientMessageId)) return;
             if (!retained?.envelope || !composerSubmissionPayloads.consumeAttempt(ref)) throw new Error("Original fallback envelope unavailable");
             const envelope = retained.envelope;
             updateOutbox(cardId, clientMessageId, { dispatchedAt: nowMs() });
@@ -3730,6 +3749,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       one from the recorded request so every original byte travels, and
       answers a repeated request with the leaf it already started. */
   const retryAdmittedPayload = async (row: RestoredComposerSubmission, outboxId?: string): Promise<void> => {
+    if (rejectRetiredSend(outboxId)) return;
     if (!row.operationId || row.retry !== "operation") {
       // Its fate belongs to the operation; the receipt stream keeps projecting it.
       if (outboxId) updateOutbox(cardId, outboxId, { originalOperationOnly: true });
@@ -3769,6 +3789,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   };
 
   const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string }, outboxId?: string) => {
+    if (rejectRetiredSend(outboxId)) return;
     const originalKey = deliveryAttemptKey(idempotencyKey.current, retry?.clientMessageId);
     const knownPayload = payloadRows.find(row => row.ref.key === originalKey);
     let durable: RestoredComposerSubmission | null = null;
@@ -4159,10 +4180,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          used to be waived for the unknown-outcome recovery, which was the one
          caller that needed the fence most: that recovery is a lookup today and
          never reaches here, so nothing is left to waive it for. */
+      if (rejectRetiredSend(outboxId)) return;
       if (durable && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
         // The queue bubble's Retry also enters through this dispatcher. Nothing
         // was admitted here, so only a recorded refusal re-opens the envelope.
         const retryClaim = durable.retry === "resend" && await composerSubmissionPayloads.beginAttempt(durable.ref);
+        if (retryClaim && rejectRetiredSend(outboxId)) return;
         if (!retryClaim || !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
           if (outboxId) updateOutbox(cardId, outboxId, { state: "failed", originalOperationOnly: true, deliveryUncertain: true });
           setStatus({ kind: "err", text: t("composer.payloadUnknown") });
@@ -4460,6 +4483,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        waits for payload hydration, so it can claim that entry before the
        level-triggered release sees it. The claim is this hold cycle's one
        replay; the release must not requeue the attempt already in flight. */
+    if (retiredRecipient.current) return;
     if (entry.heldForSwitch) releasedHolds.current.ids.add(entry.id);
     const claimed = claimOutboxDispatch(cardId, entry.id);
     if (!claimed) return;
@@ -4634,6 +4658,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
 
   /** One retry on the wire; true when the server accepted it. */
   const postRuntimeRetry = async (receipt: RuntimeReceipt, mode?: "uncertain"): Promise<boolean> => {
+    if (rejectRetiredSend()) return false;
     if (mode !== "uncertain" && !receiptHasAbsorbingOutcome(receipt)) {
       // Starting an authorized later attempt consumes the old safe proof before
       // dispatch. A lost response must survive remount as unknown.
@@ -5700,20 +5725,25 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           onRecheck: () => void recheckPayloadRow(row),
           actions: <>
             {retryable ? <button type="button" data-payload-retry aria-label={t("composer.payloadRetry")} title={t("composer.payloadRetry")}
-              disabled={busy || voiceSending} className={`${noticeActionClass} hover:text-accent`}
-              onClick={() => void withComposerSubmission(cardId, async () => {
-                if (row.retry === "operation") {
-                  const fresh = await composerSubmissionPayloads.restore(row.ref);
-                  if (fresh) await retryAdmittedPayload(fresh);
-                  return;
-                }
-                const live = readOutbox(cardId).find(entry => entry.id === row.ref.key);
-                if (!await composerSubmissionPayloads.beginAttempt(row.ref)) return;
-                if (!live && !enqueueOutbox(cardId, { id: row.ref.key, text: row.submission.text, images: row.submission.images.length, files: row.submission.files.length, at: row.ref.savedAt })) return;
-                updateOutbox(cardId, row.ref.key, { state: "failed", needsReattach: undefined, originalOperationOnly: undefined, deliveryUncertain: undefined });
-                retryOutbox(cardId, row.ref.key);
-                await refreshPayloads();
-              }).catch(() => setPayloadStorageError(t("composer.payloadCorrupt")))}>
+              disabled={busy || voiceSending || Boolean(retiredOrchestrator)} className={`${noticeActionClass} hover:text-accent`}
+              onClick={() => {
+                if (rejectRetiredSend()) return;
+                void withComposerSubmission(cardId, async () => {
+                  if (rejectRetiredSend()) return;
+                  if (row.retry === "operation") {
+                    const fresh = await composerSubmissionPayloads.restore(row.ref);
+                    if (fresh) await retryAdmittedPayload(fresh);
+                    return;
+                  }
+                  const live = readOutbox(cardId).find(entry => entry.id === row.ref.key);
+                  if (!await composerSubmissionPayloads.beginAttempt(row.ref)) return;
+                  if (rejectRetiredSend()) return;
+                  if (!live && !enqueueOutbox(cardId, { id: row.ref.key, text: row.submission.text, images: row.submission.images.length, files: row.submission.files.length, at: row.ref.savedAt })) return;
+                  updateOutbox(cardId, row.ref.key, { state: "failed", needsReattach: undefined, originalOperationOnly: undefined, deliveryUncertain: undefined });
+                  retryOutbox(cardId, row.ref.key);
+                  await refreshPayloads();
+                }).catch(() => setPayloadStorageError(t("composer.payloadCorrupt")));
+              }}>
               <RotateCcw className="h-3 w-3" aria-hidden />
             </button> : null}
             {!row.envelope || row.retry === "resend" ? <button type="button" data-payload-discard aria-label={t("composer.payloadDiscardPreparation")}
@@ -5974,7 +6004,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       /* Every blocked state keeps one recovery route (issue #499): Re-check
          forces a fresh runtime snapshot, which resolves an unresolved host,
          surfaces a recovered one, and reconciles a timed-out admission. */
-      onSendBlockedRecover={() => void runtimeDependencies.refreshRuntime()}
+      onSendBlockedRecover={retiredOrchestrator ? undefined : () => void runtimeDependencies.refreshRuntime()}
       receiptsHidden={!switchHeld && !payloadRecovery && !receiptsInRegion}
       receipts={switchHeld || payloadRecovery || unownedRuntimeReceipts.length ? <>{switchHeld}{payloadRecovery}{
         unownedRuntimeReceipts.length
@@ -5991,7 +6021,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                 }
                 void runtimeDependencies.refreshRuntime().then(() => refreshPayloads());
               }}
-              actionsDisabled={busy || voiceSending || deadHostBlocksSend}
+              actionsDisabled={busy || voiceSending || deadHostBlocksSend || Boolean(retiredOrchestrator)}
               dismissed={dismissedReceipts}
               session={structuredSession
                 ? { host: structuredSession.session.host, turn: structuredSession.session.turn }
@@ -6152,7 +6182,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      remains outside the dormant presentation boundary. */
   const view = <DormantView active={viewActive}>{body}</DormantView>;
   return <>
-    <OutboxDispatcher entries={outbox} ready={payloadHydrated && !busy && !voiceSending && !reconcilingSend} onDispatch={dispatchQueued} />
+    <OutboxDispatcher entries={outbox} ready={payloadHydrated && !busy && !voiceSending && !reconcilingSend && !isRetiredRecipient} onDispatch={dispatchQueued} />
     {dockNode === undefined ? view : dockNode ? createPortal(view, dockNode) : <div hidden data-testid="voice-composer-parked">{view}</div>}
   </>;
 });
