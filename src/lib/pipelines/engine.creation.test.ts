@@ -2707,3 +2707,20 @@ test("transient structured spawn handshakes retry twice before parking (#1056)",
   expect(parked.stateDetail).toContain("runtime host request timed out");
   expect(parked.stateDetail).toContain("2 retries");
 });
+
+test("automatic recovery preserves a structured creator without a transcript path", async () => {
+  const h = harness();
+  savePipelines([]);
+  const request = { task: "Recover red main", repoDir: path.join(path.sep, "repo"), autoStart: false, stages: [] };
+  const receipt = { key: "red-main-fixture", digest: "recovery-fixture" };
+  const result = await rawCreatePipelineFromRequest(request, h.ports, {
+    creationRequest: receipt,
+    creatorLineage: { srcPath: null, srcConversationId: "conversation_recovery" },
+  });
+  expect(result.pipeline?.srcConversationId).toBe("conversation_recovery");
+  expect(result.pipeline?.srcPath).toBeNull();
+  expect(result.pipeline?.refreshOf).toBeUndefined();
+  const replay = await rawCreatePipelineFromRequest(request, h.ports, { creationRequest: receipt });
+  expect(replay.pipeline?.id).toBe(result.pipeline!.id);
+  expect(loadPipelines()).toHaveLength(1);
+});

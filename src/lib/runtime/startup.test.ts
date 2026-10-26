@@ -11,7 +11,8 @@ setDefaultTimeout(60_000);
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import {
   activeOrchestratorSeats,
   beginOrchestratorSeatIntent,
@@ -4184,6 +4185,57 @@ test("startup transcript refresh skips historical structured hosts", async () =>
   // Seeding and reconciling 65 durable rows takes over five seconds under the
   // gate's CPU quota. This bounds the workload without ending its caller early.
 }, 60_000);
+
+test("startup refreshes a reused idle selection after a peer makes its host live", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-peer-live-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const sqliteFilename = path.join(directory, "registry.sqlite");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const sessionId = "22222222-2222-0222-0222-222222222222";
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId,
+    status: "idle",
+    turn: "busy",
+  });
+  const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" } } });
+  const expectedHost = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost;
+  const peer = new SqliteAgentRegistryStore(sqliteFilename, {
+    initialSnapshot: () => { throw new Error("startup fixture is already imported"); },
+    normalize: normalizeRegistry,
+  });
+  const open = fs.promises.open.bind(fs.promises);
+  const transcriptReads: string[] = [];
+  const observedReads = spyOn(fs.promises, "open").mockImplementation((...args) => {
+    if (args[0] === artifactPath) transcriptReads.push(artifactPath);
+    return open(...args);
+  });
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let peerUpdated = false;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async (...args) => {
+    const snapshot = await prepare(...args);
+    if (!peerUpdated) {
+      peerUpdated = true;
+      peer.mutate((file) => { file.entries[`codex:${sessionId}`]!.status = "live"; }, false);
+      fs.unlinkSync(artifactPath);
+    }
+    return snapshot;
+  });
+  try {
+    expect(await startupAdoptionAttempts(registry)).toEqual([]);
+    const current = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+    expect(peerUpdated).toBe(true);
+    expect(transcriptReads).toEqual([artifactPath]);
+    expect(current.status).toBe("live");
+    expect(current.structuredHost).toEqual(expectedHost);
+  } finally {
+    observedReads.mockRestore();
+    observed.mockRestore();
+    peer.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test.each(["codex", "claude"] as const)(
   "startup adopts a persisted terminal %s conversation whose transcript starts a new turn before restart",

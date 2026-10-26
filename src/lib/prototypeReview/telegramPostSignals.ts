@@ -13,6 +13,10 @@ const destinationConfigurationReasons = {
   no_relay: true, paused: true, no_target: true, not_configured: true, invalid_owner: true,
 } satisfies Record<OwnerDestinationReason, true>;
 
+export function isTelegramDestinationConfigurationReason(reason: string | undefined): boolean {
+  return Object.hasOwn(destinationConfigurationReasons, reason ?? "");
+}
+
 /** Failure obligations join the seat's existing wake agenda as durable items. */
 export function telegramPostSignals(project: string, tasks: readonly BoardTask[], seatRounds: readonly PrototypeReviewRound[]): SeatTickSignalInput[] {
   const context = linkedContext();
@@ -24,7 +28,7 @@ export function telegramPostSignals(project: string, tasks: readonly BoardTask[]
     .map(round => ({ id: `prototype-answer:${round.id}:${round.decision!.delivery.clientMessageId}`, actionable: true,
       label: `Saved operator answer needs delivery verification; reviewId ${round.id}${round.taskId ? `; taskId ${round.taskId}` : ""}. The operator already answered. Verify operation ${round.decision!.delivery.operationId ?? "not admitted"} before acting; never resend an uncertain execution. Read read_prototype_review${round.taskId ? ` with taskId ${round.taskId}` : " without taskId"} for the full record. Saved answer follows:\n${round.decision!.delivery.text}` })), ...rounds
     .filter(r => canonicalProject(r.project) === canonicalProject(project) && r.telegramPost && ["failed", "uncertain"].includes(r.telegramPost.state)
-      && !Object.hasOwn(destinationConfigurationReasons, r.telegramPost.reason ?? ""))
+      && !isTelegramDestinationConfigurationReason(r.telegramPost.reason))
     .map(r => ({ id: `prototype-telegram:${r.id}:${r.telegramPost!.key}`, actionable: true,
       label: `Prototype Telegram post ${r.telegramPost!.state}: ${r.telegramPost!.reason ?? "unavailable"}; reviewId ${r.id}. Read the review and resend with resend_prototype_review_telegram and a fresh clientRequestId.` })),
     ...rounds.filter(r => r.telegramPolls?.questions.some(q => q.state === "failed" || q.state === "uncertain"))

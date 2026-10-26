@@ -1,4 +1,5 @@
 import { assertProactiveTaskExecution, proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
@@ -273,6 +274,7 @@ export function resetAutoMergeForTests(): void {
   admissionReasons.clear();
   laneReasons.clear();
   scheduleHost.__llvAutoMergeRunning = null;
+  scheduleHost.__llvPostMergeRunning = null;
   scheduleHost.__llvAutoMergeStartedAt = undefined;
 }
 
@@ -610,6 +612,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
       bookkeeping(live);
       live.state = "merged";
       live.by = step.by;
+      if (step.by === "auto-merge") live.postMergeWatch = true;
       live.mergedHead = view!.headRefOid;
       live.mergeCommit = view!.mergeCommit;
       live.mergedAt = view!.mergedAt ?? iso(now);
@@ -679,6 +682,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
     if (after?.state === "MERGED") {
       live.state = "merged";
       live.by = "auto-merge";
+      live.postMergeWatch = true;
       live.mergedHead = after?.headRefOid ?? view!.headRefOid;
       live.mergeCommit = after?.mergeCommit ?? null;
       live.mergedAt = after?.mergedAt ?? iso(ports.now());
@@ -1235,7 +1239,7 @@ export function finishBoardTask(taskId: string): TaskFinishOutcome {
 
 /* ── Scheduling from the controller cycle ───────────────────────────────── */
 
-const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvAutoMergeStartedAt?: number };
+const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null; __llvAutoMergeStartedAt?: number };
 
 export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): AutoMergePorts {
   const run = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS);
@@ -1274,14 +1278,39 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
   };
 }
 
-/** Fire-and-forget, one run at a time, errors logged and never thrown: the
-    controller calls this at the end of every cycle, beside the forge sweep. */
+/** Fire-and-forget: one ordinary merge sweep, with recovery owned per merge.
+ * The controller calls this beside the forge sweep; failures are logged. */
 export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): void {
+  const ports = productionAutoMergePorts(overrides);
+  // Recovery has per-merge ownership and durable polling reservations. Start
+  // it on every tick, even while ordinary merge reads or task finishes wait.
+  const recovery = sweepPostMerge({
+    ...ports,
+    read: async (lane, ref) => readPostMergeChecks(lane, ref, await requiredContexts(lane.merge!.repository, "main", ports), ports.run),
+    create: async (request, creationRequest, lineage) => {
+      const project = ports.loadPipelines().find(lane => lane.repoDir === request.repoDir)?.project;
+      const creatorLineage = (project ? await ports.activeSeat?.(project) : null) ?? lineage;
+      const result = await (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, { creationRequest, creatorLineage });
+      if (!result.pipeline) throw new Error(result.error ?? "Recovery pipeline creation failed");
+      return { id: result.pipeline.id };
+    },
+    revert: (lane, key, reconcileOnly, claim) => openRevertPr(lane, key, reconcileOnly, ports.run, ports.write, claim),
+    resolveMergeCommit: async lane => {
+      const sha = (await ports.run(["pr", "view", String(lane.merge!.prNumber), "--repo", lane.merge!.repository, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"])).trim();
+      return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
+    },
+    closeRevert: async (lane, number) => {
+      const state = await ports.run(["pr", "view", String(number), "--repo", lane.merge!.repository, "--json", "state", "--jq", ".state"]);
+      if (state.trim() === "OPEN") await ports.write(["pr", "close", String(number), "--repo", lane.merge!.repository], lane.merge!.repository);
+    },
+  })
+    .catch((error) => ports.log?.("[post merge] sweep failed", error))
+    .finally(() => { if (scheduleHost.__llvPostMergeRunning === recovery) scheduleHost.__llvPostMergeRunning = null; });
+  scheduleHost.__llvPostMergeRunning = recovery;
   if (scheduleHost.__llvAutoMergeRunning) return;
-  const now = (overrides.now ?? Date.now)();
+  const now = ports.now();
   if (now - (scheduleHost.__llvAutoMergeStartedAt ?? -Infinity) < MERGE_SCHEDULE_DEBOUNCE_MS) return;
   scheduleHost.__llvAutoMergeStartedAt = now;
-  const ports = productionAutoMergePorts(overrides);
   /* The finish sweep runs after the merge step, so a merge this pass made
      finishes its task in the same pass. */
   const run = sweepAutoMerge(ports)
