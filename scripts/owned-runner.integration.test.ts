@@ -148,7 +148,7 @@ function portableFixture(manager: "missing" | "unreachable") {
   Object.assign(env, { NODE_ENV: "test", LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_LOCK_DIR: path.join(root, "locks"), LLV_OWNED_RUN_TIMEOUT_MS: "12000" });
   if (manager === "missing") {
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
-    for (const name of ["bash", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
+    for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
     fs.symlinkSync(process.execPath, path.join(bin, "bun"));
     env.PATH = bin;
   } else {
