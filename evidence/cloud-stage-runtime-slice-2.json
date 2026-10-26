@@ -2224,5 +2224,192 @@
       "Fresh preselected and recovery-selected accounts check the environment catalog.",
       "A separate process holds settings while a heartbeat and stage settlement proceed; durable account rotation resumes after release."
     ]
+  },
+  "terminalStatusAndRejectedVerdictFix": {
+    "recordedAt": "2026-10-26T21:15:27.094455+00:00",
+    "validationCompletedAt": "2026-10-26T21:13:51.059995+00:00",
+    "sourceBase": "44fd86b3806ed9d90cf37a83e18a9e90aa088261",
+    "comparisonMain": "0788555f1fa350ea3480943213cd31325774a725",
+    "sourceSha256": {
+      "src/lib/pipelines/cloudHostedClient.ts": "ce48450ac90c6a13864f7b8f3dd8e63af48c5cc616684a4400bbae8977dd1c3c",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "5bc15513e08e05802df04a5c32faadd4fbb5821d1600e55b2320968c2194d001",
+      "src/lib/pipelines/engine.ts": "32d8b5ea7aa43c23203b543d23a4c333cbd069a02dc1596b96cfc28e3b6e768f",
+      "src/lib/pipelines/engine.cloud.test.ts": "746aadd32ffff2d084454f26c166bb3e78cf90c6a14baffcc789284906425ccb",
+      "docs/design/cloud-stage-runtime.md": "efef313af2d6fc4a58aefdc57c1a5f89e3392d17b969ffc9b22a3face1b7d02b"
+    },
+    "isolation": "Detached Git clone; pinned main reference; private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR via checkEnvironment then isolatedEnvironment; closed Viewer control port; fake provider sockets; no live Cloud work.",
+    "gateWrapperRevision": "0788555f1fa350ea3480943213cd31325774a725",
+    "execution": "Captured gate-slot wrapper, serialized checks using setsid --wait and closed stdin. Original-source samples retain identical test files from the preceding batch; the final batch runs five guard controls, eight full test files and typecheck once.",
+    "commands": {
+      "suite": "bash scripts/gate-slot.sh bun test --timeout=60000 <explicit path>",
+      "typecheck": "bash scripts/gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit"
+    },
+    "preFixAdapter": {
+      "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+      "status": 1,
+      "pass": 67,
+      "fail": 11,
+      "skip": 0,
+      "filteredOut": 0
+    },
+    "checks": [
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "status": 1,
+        "phase": "red-adapter",
+        "pass": 67,
+        "fail": 11,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "status": 1,
+        "phase": "red-engine",
+        "pass": 1,
+        "fail": 10,
+        "skip": 0,
+        "filteredOut": 85,
+        "testNamePattern": "hosted .*grants fallback|terminal rejected Cloud verdict"
+      },
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "status": 1,
+        "phase": "mutant-terminal-status",
+        "pass": 0,
+        "fail": 3,
+        "skip": 0,
+        "filteredOut": 75,
+        "testNamePattern": "with a valid error never confirms"
+      },
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "status": 1,
+        "phase": "mutant-error-shape",
+        "pass": 0,
+        "fail": 8,
+        "skip": 0,
+        "filteredOut": 70,
+        "testNamePattern": "malformed turn errors never confirm"
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "status": 1,
+        "phase": "mutant-fresh-retry",
+        "pass": 0,
+        "fail": 4,
+        "skip": 0,
+        "filteredOut": 92,
+        "testNamePattern": "terminal rejected Cloud verdict"
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "status": 1,
+        "phase": "mutant-account-recovery",
+        "pass": 0,
+        "fail": 4,
+        "skip": 0,
+        "filteredOut": 92,
+        "testNamePattern": "terminal rejected Cloud verdict"
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "status": 1,
+        "phase": "mutant-controller-account-recovery",
+        "pass": 0,
+        "fail": 4,
+        "skip": 0,
+        "filteredOut": 92,
+        "testNamePattern": "terminal rejected Cloud verdict"
+      },
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 78,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 96,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/cloudStage.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/cloudStagePatch.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 13,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/verdict.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 41,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/store.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 57,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 19,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "src/lib/mcp/schemaParity.test.ts",
+        "status": 0,
+        "phase": "green",
+        "pass": 59,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      },
+      {
+        "path": "types",
+        "status": 0,
+        "phase": "green",
+        "pass": 0,
+        "fail": 0,
+        "skip": 0,
+        "filteredOut": 0
+      }
+    ],
+    "guardRemovalControls": {
+      "terminal-status": "Allow an error to bypass the failed/interrupted status guard.",
+      "error-shape": "Remove terminal error message shape validation.",
+      "fresh-retry": "Remove the completed rejected-result exception from receipt reconciliation.",
+      "account-recovery": "Send a known terminal rejected result through recovery of its removed account.",
+      "controller-account-recovery": "Re-enable account recovery for a rejected terminal result before the pending cursor allocates its next attempt."
+    }
   }
 }

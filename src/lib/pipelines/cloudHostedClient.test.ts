@@ -165,9 +165,6 @@ test.each([
     diagnostic: "Codex Cloud turn failed (httpConnectionFailed): Provider connection failed" },
   { error: { message: "Quota exhausted", codexErrorInfo: "usageLimitExceeded" }, diagnostic: "Codex Cloud turn failed (usageLimitExceeded): Quota exhausted" },
   { error: { message: "Setup unavailable", code: "fixture-auth", payload: "fixture-auth" }, diagnostic: "Codex Cloud turn failed: Setup unavailable" },
-  { error: { message: { headers: "fixture-auth" }, code: { payload: "fixture-auth" } }, diagnostic: "Codex Cloud turn failed" },
-  { error: ["fixture-auth"], diagnostic: "Codex Cloud turn failed" },
-  { error: "fixture-auth", diagnostic: "Codex Cloud turn failed" },
   { error: { message: JSON.stringify({ headers: "fixture-auth" }) }, diagnostic: "Codex Cloud turn failed" },
 ])("failed turns retain only sanitized messages and recognized cause codes: $diagnostic", async ({ error, diagnostic }) => {
   const f = fixture();
@@ -198,12 +195,20 @@ test("cloud failure messages redact credentials and raw payload fields before bo
   for (const secret of [...secrets, "escaped-tail", "raw-payload"]) expect(result.error).not.toContain(secret);
 });
 
-test.each([false, 0, ""])("a completed turn with a non-null malformed error fails safely: %j", async error => {
+test.each([false, 0, "", [], "fixture-auth", {}, { message: "" }, { message: { headers: "fixture-auth" } }].map(error => ({ error })))("malformed turn errors never confirm failure: $error", async ({ error }) => {
   const f = fixture();
-  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, error }] } : f.original(frame, socket));
-  expect(await f.client.poll(f.access)).toEqual({ state: "failed", error: "Codex Cloud turn failed", model });
+  for (const status of ["inProgress", "completed", "failed", "interrupted", "unknown"]) {
+    f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status, error }] } : f.original(frame, socket));
+    await expect(f.client.poll(f.access)).rejects.toThrow("Codex Cloud");
+  }
   await expect(f.client.readFinalMessage(f.access)).rejects.toThrow("turn is not completed");
   await expect(f.client.readDiff(f.access)).rejects.toThrow("turn is not completed");
+});
+
+test.each(["inProgress", "completed", "unknown"])("%s with a valid error never confirms terminal failure", async status => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status, error: { message: "Provider failure" } }] } : f.original(frame, socket));
+  await expect(f.client.poll(f.access)).rejects.toThrow("Codex Cloud");
 });
 
 test.each(["readFinalMessage", "readDiff"] as const)("%s refuses a failed turn without emitting its credential-bearing payload", async method => {

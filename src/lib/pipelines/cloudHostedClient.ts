@@ -439,9 +439,15 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const { turn, model } = await status(client, input);
       const hasError = turn.error != null;
       if (turn.status === "completed" && !hasError) return { state: "completed", model };
-      if (hasError || ["failed", "interrupted"].includes(String(turn.status))) return { state: "failed",
-        error: hasError ? turnFailure(turn.error, auth) : `Codex Cloud turn ${turn.status}`, model };
+      if (turn.status === "failed" || turn.status === "interrupted") {
+        // This observation releases execution custody to local fallback. An
+        // error payload alone cannot prove the provider stopped its turn.
+        const message = row(turn.error).message;
+        requireCloud(!hasError || typeof message === "string" && message.trim().length > 0, "turn error malformed");
+        return { state: "failed", error: hasError ? turnFailure(turn.error, auth) : `Codex Cloud turn ${turn.status}`, model };
+      }
       requireCloud(turn.status === "inProgress", "turn status unknown");
+      requireCloud(!hasError, "nonterminal turn has an error");
       return { state: "pending", model };
     }),
     readFinalMessage: input => using(input, async (client, auth) => {

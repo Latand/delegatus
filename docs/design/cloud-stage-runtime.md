@@ -191,10 +191,15 @@ availability retries before execution fall back to the same stage locally once.
 Transport reads retry at two and four seconds, retaining the task receipt and a
 durable limit of three failures. Exhausted reads and an expired observation
 budget park with the original receipt; they never authorize local execution.
-A confirmed failed poll stores `failureConfirmed`; a legacy eligibility flag
-without that proof cannot release a known task. An explicit retry reconciles
-that receipt under a fresh observation budget,
-without submitting another turn. Expiry before submission can fall back safely. The persisted
+A poll confirms failure only for a provider turn marked failed or interrupted,
+with an absent error or an error object containing a nonempty message. An error
+on another status or a malformed error parks with the receipt. A confirmed failed
+poll stores `failureConfirmed`; a legacy eligibility flag without that proof
+cannot release a known task. An explicit retry reconciles an unresolved receipt
+under a fresh observation budget without submitting another turn. A completed
+result rejected for its missing or contradictory verdict permits a fresh attempt
+using the current stage definition and an eligible account, including a local runtime override; the old
+attempt retains its receipt. Expiry before submission can fall back safely. The persisted
 fallback marker prevents a restarted controller from resubmitting to Cloud.
 Model, receipt, authority, patch and custody failures retain their refusal. Interrupted
 submission with no receipt refuses automatic resubmission because its outcome is

@@ -5,7 +5,9 @@ import { tickPipelinesController } from "./controllerPass";
 import { codexCloudEnvironmentId, setCodexCloudEnvironmentId, resetProjectSettingsForTests, setPipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, type CloudStageClient } from "./cloudStage";
 import { HostedCloudError } from "./cloudHostedErrors";
-import { CloudSubmissionNotStartedError } from "./cloudHostedClient";
+import { CloudSubmissionNotStartedError, createHostedCloudStageClient } from "./cloudHostedClient";
+import { EventEmitter } from "node:events";
+import type WebSocket from "ws";
 import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
 import { stageDigest } from "./stageDigest";
 import { renderStagePrompt } from "./prompts";
@@ -160,6 +162,70 @@ test("confirmed Cloud failure releases account custody for an allowed local fall
   expect(attempt().accountId).toBe("replacement-account");
 });
 
+test.each([
+  { status: "inProgress", error: false, confirmed: false },
+  { status: "inProgress", error: 0, confirmed: false },
+  { status: "inProgress", error: "", confirmed: false },
+  { status: "inProgress", error: { message: "Provider failure" }, confirmed: false },
+  { status: "completed", error: false, confirmed: false },
+  { status: "failed", error: false, confirmed: false },
+  { status: "interrupted", error: false, confirmed: false },
+  { status: "unknown", error: { message: "Provider failure" }, confirmed: false },
+  { status: "failed", error: { message: "Provider failure" }, confirmed: true },
+  { status: "interrupted", error: null, confirmed: true },
+])("hosted $status with error $error grants fallback only with terminal proof ($confirmed)", async ({ status, error, confirmed }) => {
+  const { h, submits } = await fixture();
+  const threadId = "00000000-0000-0000-0000-000000000000", turnId = "turn-fixture";
+  const hosted = { environmentId: "ccarenv_fixture", cwd: "/workspace/project", model: stage.model! };
+  const sockets: FakeSocket[] = [];
+  class FakeSocket extends EventEmitter {
+    readyState = 1;
+    send(value: string, done?: (error?: Error) => void) {
+      const frame = JSON.parse(value);
+      done?.();
+      if (frame.id === undefined) return;
+      const result = frame.method === "thread/read"
+        ? { model: stage.model, thread: { id: threadId, ephemeral: false, environments: [hosted] } }
+        : frame.method === "thread/turns/list" ? { data: [{ id: turnId, status, error, model: stage.model }] } : {};
+      queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify({ id: frame.id, result }))));
+    }
+    terminate() { this.readyState = 3; this.emit("close"); }
+  }
+  const hostedClient = createHostedCloudStageClient({
+    authenticate: async () => ({ token: "fixture-auth" }),
+    socket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket as unknown as WebSocket; },
+    fetch: async () => { throw new Error("polling must not fetch the catalog"); },
+    uuid: () => "command-fixture",
+  });
+  h.ports.cloudClient!.submit = async input => {
+    submits.push(input);
+    return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`, thread: { threadId, turnId, hosted } };
+  };
+  h.ports.cloudClient!.poll = hostedClient.poll;
+  await submitted(h, threadId);
+  const receipt = structuredClone(attempt().cloud);
+  await step(h); await step(h); await step(h); await step(h);
+  expect(attempt().cloud?.taskId).toBe(receipt!.taskId);
+  expect(attempt().cloud?.thread).toEqual(receipt!.thread);
+  expect(attempt().cloud?.failureConfirmed === true).toBe(confirmed);
+  expect(h.spawnInputs).toHaveLength(confirmed ? 1 : 0);
+  expect(submits).toHaveLength(1);
+  expect(sockets.length).toBeGreaterThan(0);
+  expect(sockets.every(socket => socket.readyState === 3)).toBe(true);
+  if (!confirmed) {
+    expect(lane().state).toBe("needs_decision");
+    expect(attempt().cloud?.fallback).toBeUndefined();
+    expect((await patchPipeline(lane().id, { action: "override-stage", stageId: stage.id, runtime: "local" }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    await step(h); await step(h);
+    expect(attempt().n).toBe(1);
+    expect(attempt().definition?.runtime).toBe("codex-cloud");
+    expect(attempt().cloud?.taskId).toBe(threadId);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(submits).toHaveLength(1);
+  }
+});
+
 test("cloud verifier findings use the same normalization, severity ranking and failure routing", async () => {
   const { h } = await fixture();
   const record = lane();
@@ -262,6 +328,55 @@ test.each(["submission", "read", "final-read", "oversized-message", "invalid-rec
   expect(attempt().error).toContain(reasons[kind as keyof typeof reasons]);
   expect(h.spawnInputs).toHaveLength(0);
   expect(submits.length).toBeLessThanOrEqual(1);
+});
+
+for (const runtime of ["local", "codex-cloud"] as const) for (const [kind, message] of [
+  ["missing", "No verdict"], ["contradictory", '```json\n{"status":"pass","findings":["P1 — broken"]}\n```'],
+] as const)
+  test(`a terminal rejected Cloud verdict permits a fresh ${runtime} retry with a new account (${kind})`, async () => {
+  const { h, submits } = await fixture();
+  h.ports.cloudClient!.readFinalMessage = async () => ({ model: stage.model!, message });
+  await submitted(h); await step(h); await step(h);
+  expect(lane().state).toBe("needs_decision");
+  expect(attempt().verdict).toBeNull();
+  expect(attempt().cloud?.phase).toBe("completed");
+  expect(attempt().cloud?.result).toHaveProperty("failureReason");
+  const rejected = structuredClone(attempt().cloud);
+  // A fresh reader must recognize the terminal rejection and keep its receipt.
+  const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
+    env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
+  expect({ status: child.status, error: child.stderr }).toMatchObject({ status: 0 });
+  expect(JSON.parse(child.stdout)).toEqual(rejected);
+  const submit = h.ports.cloudClient!.submit;
+  h.ports.cloudClient!.submit = async input => ({ ...await submit(input), taskId: `${taskId}-retry`, taskUrl: `${taskUrl}-retry` });
+  h.ports.allowedAccountIds = () => ["retry-account"];
+  const resolve = h.ports.resolveProjectSpawn!;
+  h.ports.resolveProjectSpawn = (engine, request) => resolve(engine, { ...request, requestedId: request.requestedId ?? "retry-account" });
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved) => spawn({ ...input, requestedAccountId: input.requestedAccountId ?? "retry-account" }, reserved);
+  expect((await patchPipeline(lane().id, { action: "override-stage", stageId: stage.id, runtime }, h.ports)).error).toBeUndefined();
+  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  h.ports.cloudClient!.readFinalMessage = async () => ({ model: stage.model!, message: pass });
+  await step(h); await step(h);
+  expect(attempt().n).toBe(2);
+  expect(attempt().definition?.runtime).toBe(runtime);
+  expect(attempt().accountId).toBe("retry-account");
+  if (runtime === "local") {
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(submits).toHaveLength(1);
+    const pathname = attempt().agentPath!;
+    const finished = h.finish(pathname, "pass");
+    h.messages.get(pathname)!.ts = Date.parse(h.ports.now()) + 1;
+    h.durableTurns.set(pathname, { turn: "terminal", message: h.messages.get(pathname)! });
+    await tickPipelines([finished], h.ports);
+  } else {
+    await step(h); await step(h);
+    expect(submits).toHaveLength(2);
+    expect(attempt().cloud?.taskId).toBe(`${taskId}-retry`);
+    expect(h.spawnInputs).toHaveLength(0);
+  }
+  expect(attempt().state).toBe("passed");
+  expect(lane().runs[0]!.attempts[0]!.cloud).toEqual(rejected);
 });
 
 for (const expired of [false, true]) for (const legacy of [false, true])

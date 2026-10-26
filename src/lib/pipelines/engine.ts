@@ -7943,9 +7943,14 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
   return true;
 }
 
+function terminalCloudResultRejected(attempt: PipelineStageAttempt): boolean {
+  const cloud = attempt.cloud;
+  return cloud?.phase === "completed" && !cloud.fallback && cloud.result !== undefined && "failureReason" in cloud.result;
+}
+
 async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
-  if (stage.kind !== "run" || attempt.report || attempt.verdict || openRuntimeSwitch(attempt)
+  if (stage.kind !== "run" || attempt.report || attempt.verdict || terminalCloudResultRejected(attempt) || openRuntimeSwitch(attempt)
     || !["running", "needs_decision"].includes(attempt.state)) return false;
   // Cloud custody is reconciled through its original subscription receipt.
   // A local host stop cannot authorize changing that account or its work.
@@ -15371,11 +15376,14 @@ export async function patchPipeline(
       }
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
+      const terminalCloudRejection = attempt ? terminalCloudResultRejected(attempt) : false;
       // A failed read or expired observation budget never releases Cloud
       // execution custody. Retry the original receipt, without a new attempt,
-      // worktree reset, account rotation or paid submission.
+      // worktree reset, account rotation or paid submission. A completed result
+      // rejected for its verdict is terminal and permits an explicit new attempt.
       if (stage && attempt?.cloud && !attempt.cloud.fallback && !attempt.verdict
         && pipeline.state === "needs_decision"
+        && !terminalCloudRejection
         && !(attempt.cloud.fallbackEligible && (!attempt.cloud.taskId || attempt.cloud.failureConfirmed))) {
         const cloud = attempt.cloud;
         if (!cloud.taskId && cloud.phase !== "reserved" && (cloud.phase === "submitting" || cloud.submissionUnresolved === true
@@ -15405,7 +15413,7 @@ export async function patchPipeline(
         await persist(); requestPipelineTick();
         return { pipeline };
       }
-      if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
+      if (stage?.kind === "run" && attempt && !terminalCloudRejection && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
         if (attempt.suspension?.operatorStoppedAt) {
           attempt.suspension.requestedAt = ports.now();
