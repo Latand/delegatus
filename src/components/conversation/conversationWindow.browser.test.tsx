@@ -2472,6 +2472,97 @@ describe("delivery check card", () => {
   }, 300_000);
 });
 
+describe("the runtime pill names the model the conversation runs on", () => {
+  /*
+   * The production pill over the production composer, for a Codex stage launched
+   * on Luna before the board scanned it, a conversation with no known model, a
+   * model the catalogue does not list and three Claude cases, at the desktop and
+   * the phone width, both languages, both schemes. `LLV_MODEL_FACE_SIDE=before`
+   * runs the same case over a checkout that still falls back to the engine
+   * default and records what it drew under `before`; the default records
+   * `after` and gates it. Frames go to `.artifacts/runtime-model-face/`, which
+   * is not committed.
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const FILES = {
+    luna: { face: "6-Luna", never: ["Sol"] },
+    unknown: { face: null, never: ["Sol", "Opus"] },
+    unlisted: { face: "gpt-5.5", never: ["Sol"] },
+    sonnet: { face: "Sonnet 5.5", never: ["Opus"] },
+    "claude-unreported": { face: null, never: ["Opus", "Sonnet"] },
+    "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
+  } as const;
+
+  browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(FILES)) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face&lang=${lang}&file=${name}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = `${name}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const pill = page.locator("[data-runtime-pill]");
+          await pill.waitFor();
+          const reading = await pill.evaluate((element) => {
+            const range = document.createRange();
+            const text = element.querySelector("span.truncate") ?? element;
+            range.selectNodeContents(text);
+            const drawn = range.getBoundingClientRect();
+            const box = element.getBoundingClientRect();
+            return {
+              text: element.textContent?.trim() ?? "",
+              label: element.getAttribute("aria-label") ?? "",
+              whole: (text as HTMLElement).scrollWidth <= (text as HTMLElement).clientWidth + 1,
+              inView: box.left >= 0 && box.right <= innerWidth,
+              drawnWithinBox: drawn.right <= box.right + 0.5,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-${key}.png`) });
+          await pill.click();
+          await page.locator("[data-runtime-popover], [data-runtime-sheet]").first().waitFor();
+          const opened = await page.evaluate(() => ({
+            disabledTiers: [...document.querySelectorAll('[data-runtime-row="tier"], [data-runtime-sheet] button[disabled]')].filter((row) => row.hasAttribute("disabled")).length,
+          }));
+          readings[`${key}-open`] = opened;
+          await page.screenshot({ path: path.join(out, `${side}-${key}-open.png`) });
+          expect(pageErrors).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+          expect(reading.inView).toBe(true);
+          expect(reading.whole).toBe(true);
+          if (side === "after") {
+            for (const never of expected.never) expect(reading.text + reading.label).not.toContain(never);
+            if (expected.face) expect(reading.text).toContain(expected.face);
+            else expect(reading.text).toContain(translate(lang, "composer.modelGroup"));
+            if (name === "unknown") expect(opened.disabledTiers).toBeGreaterThan(0);
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/face.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model face: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 600_000);
+});
+
 describe("retained message notice over the composer", () => {
   /*
    * The operator's report of 2026-10-07: a boxed «Автоматичну перевірку

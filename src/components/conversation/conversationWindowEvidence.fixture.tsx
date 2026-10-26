@@ -38,6 +38,7 @@ import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
 import { BranchPane } from "@/components/BranchPane";
+import { RuntimePill } from "@/components/RuntimePill";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
 import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
@@ -117,6 +118,7 @@ export type ConversationWindowCase =
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
+  | "runtime-model-face"
   | "lifecycle"
   | "long-history"
   | "codex-history"
@@ -1437,10 +1439,63 @@ function DeliveryCheckCardFixture() {
   );
 }
 
+/** What the transcript and the launch have told the pill, per fixture file. */
+const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
+  /* A stage launched on Luna that the board has not scanned yet: no observed model, the launch's own. */
+  luna: { engine: "codex", model: null, launchModel: "gpt-6-luna" },
+  /* Neither is known yet. */
+  unknown: { engine: "codex", model: null, launchModel: null },
+  /* The transcript reports a model the catalogue does not list. */
+  unlisted: { engine: "codex", model: "gpt-5.5", launchModel: "gpt-6-luna" },
+  /* A Claude stage launched on the Opus alias whose transcript reports Sonnet. */
+  sonnet: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-sonnet-5-5", launchModel: "opus" },
+  /* A Claude stage launched with no model whose transcript has not reported one. */
+  "claude-unreported": { engine: "claude", fmt: "claude", root: "claude-projects", model: null, launchModel: null },
+  /* An older Opus release than the alias row names. */
+  "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
+};
+
+function RuntimeModelFaceFixture() {
+  const { t } = useLocale();
+  const which = params.get("file") ?? "luna";
+  const file = {
+    ...DEAD_FILE, proc: "running", pid: 10, effort: "high", fast: false, mtime: 1, size: 1, activity: "idle",
+    conversationId: `conversation_model_face_${which}`, path: `/model-face-${which}.jsonl`, name: `model-face-${which}.jsonl`,
+    ...MODEL_FACE_FILES[which],
+  } as FileEntry;
+  const composer = useComposer({
+    initialText: () => "",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  return (
+    <div data-evidence-case="runtime-model-face" className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={<RuntimePill file={file} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+      />
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
+  if (id === "runtime-model-face") return <RuntimeModelFaceFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;

@@ -160,7 +160,7 @@ test("a Codex stage the transcript has not named yet shows the model its launch 
 
 test("with no observed and no requested model the draft names none, for every engine", () => {
   expect(defaults({ ...file, model: null, launchModel: null }).model).toBe("");
-  expect(defaults({ ...file, model: undefined, launchModel: undefined }).model).toBe("");
+  expect(defaults({ ...file, model: null, launchModel: undefined }).model).toBe("");
   expect(defaults({ ...claudeFile, model: null, launchModel: null }).model).toBe("");
   expect(defaults({ ...claudeFile, model: "  ", launchModel: "" }).model).toBe("");
   expect(defaults({ ...file, engine: "copilot", model: null }).model).toBe("");
