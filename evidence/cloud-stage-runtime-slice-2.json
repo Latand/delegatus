@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-26T11:32:57.520322+00:00",
+  "recordedAt": "2026-10-26T11:36:24.208447+00:00",
   "base": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
   "implementationCommit": "44f93dd5842405d7ab6609985b5a3cb6cfd94aaf",
   "design": "docs/design/cloud-stage-runtime.md",
@@ -54,7 +54,8 @@
       "skipped": 267,
       "failed": 0,
       "mode": "Normal opt-in gating; no rendered assertions."
-    }
+    },
+    "unresolvedBaselineRunnerDiagnostics": 10
   },
   "remoteActionsFollowup": {
     "path": "src/lib/pipelines/remoteActions.test.ts",
@@ -1265,5 +1266,73 @@
     "src/runtime-host/mcpRuntimeCompatibility.test.ts",
     "src/runtime-host/mcpRuntimeProbe.test.ts"
   ],
-  "selection": "Touched tests and direct importers of the changed source modules, including type imports, child fixtures and eval strings."
+  "selection": "Touched tests and direct importers of the changed source modules, including type imports, child fixtures and eval strings.",
+  "initialRunnerDiagnostics": [
+    {
+      "path": "src/lib/mcp/maintainerGuard.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskBoardVisibility.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskColor.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskColorGroupHide.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskDetails.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskIcon.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskLineEdits.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskPosition.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/mcp/taskPriority.integration.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    },
+    {
+      "path": "src/lib/pipelines/remoteActions.test.ts",
+      "diagnostic": "Five-minute deadline on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": true
+    },
+    {
+      "path": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "diagnostic": "Missing JUnit report on both initial runs.",
+      "classification": "PRE-EXISTING",
+      "resolvedByLongerFollowup": false
+    }
+  ]
 }
