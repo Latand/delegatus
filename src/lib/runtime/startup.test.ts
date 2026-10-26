@@ -31,6 +31,7 @@ import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
   bindStructuredDeliveryQueue,
   hasStructuredDeliveryHost,
+  hasStructuredDeliveryController,
   publishStructuredDeliveryHost,
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
@@ -6638,5 +6639,73 @@ test("a membership moved while waiting for the registry writer refuses the start
     await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
     if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
     fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("startup publishes fresh launch admission before a held registry census", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-early-bind-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  const census = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return prepare(...args);
+  });
+  let startup: Promise<unknown> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], { client: null });
+    startup = adoptStructuredHostsAtStartup({ registry, client: runtimeClient(journal),
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async () => [], adoptClaude: async () => [],
+    });
+    await entered.promise;
+    expect(hasStructuredDeliveryController(registry)).toBe(true);
+  } finally {
+    release.resolve();
+    try { await startup; }
+    finally {
+      census.mockRestore();
+      await bindStructuredDeliveryQueue([], { client: null });
+      journal.close(); registry.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test.each(["cancel", "retire"] as const)("startup %s during generation lookup cannot publish launch admission", async change => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-bind-fence-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const abort = new AbortController();
+  let active = true, startup: Promise<unknown> | undefined;
+  const client = runtimeClient(journal);
+  client.startupGeneration = async () => { entered.resolve(); await release.promise; return "fixture-generation"; };
+  try {
+    await bindStructuredDeliveryQueue([], { client: null });
+    startup = adoptStructuredHostsAtStartup({ registry, client, signal: abort.signal,
+      assertActive: () => { if (!active) throw new Error("fixture release retired"); },
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async () => [], adoptClaude: async () => [],
+    });
+    const refused = startup.then(() => null, error => error as Error);
+    await entered.promise;
+    if (change === "cancel") abort.abort(new Error("fixture startup cancelled"));
+    else active = false;
+    release.resolve();
+    const reason = await refused;
+    expect(reason).toBeInstanceOf(Error);
+    expect(reason?.message).toBe(change === "cancel" ? "fixture startup cancelled" : "fixture release retired");
+    expect(hasStructuredDeliveryController(registry)).toBe(false);
+  } finally {
+    release.resolve();
+    await startup?.catch(() => {});
+    await bindStructuredDeliveryQueue([], { client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

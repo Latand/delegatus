@@ -1070,3 +1070,191 @@ test("shared compact authority observations keep each job's own lane out of its 
   expect(await owner.read()).toBe(originalOwner);
   expect(await other.read()).not.toBe(originalOther);
 });
+
+test("provisioning yields the controller phase and has capacity while all publishers wait", async () => {
+  const h = harness();
+  const lane = await create(h.ports, BUILD_ONLY as never, { repoDir: "/repo-a" });
+  const peer = structuredClone(lane);
+  peer.id = "fast-provision-peer";
+  peer.repoDir = "/repo-b";
+  peer.delivery = undefined;
+  Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+  savePipelines([lane, peer]);
+  const entered = latch(), release = latch(), peerReady = latch();
+  const unregister = registerPipelineTick(async () => {
+    if ((await findControllerPipeline(peer.id))?.state === "running") peerReady.resolve();
+  });
+  const exec = h.ports.exec;
+  h.ports.exec = (command, args, cwd, env, options) => {
+    if (cwd === peer.worktreeDir && args[0] === "branch" && args[1] === "--show-current")
+      return { code: 0, stdout: peer.branch + "\n", stderr: "" };
+    if (cwd === peer.worktreeDir && args[0] === "symbolic-ref")
+      return { code: 0, stdout: `refs/heads/${peer.branch}\n`, stderr: "" };
+    return exec(command, args, cwd, env, options);
+  };
+  h.ports.provisionExec = async (command, args, cwd, signal) => {
+    if (args.includes("--git-common-dir")) {
+      if (cwd === lane.repoDir) { entered.resolve(); await release.promise; }
+      return { code: 0, stdout: cwd + "/.git", stderr: "" };
+    }
+    if (signal?.aborted) return { code: null, stdout: "", stderr: "cancelled" };
+    return exec(command, args, cwd);
+  };
+  let tick: Promise<unknown> | undefined;
+  try {
+    for (let i = 0; i < 4; i++) expect(startPipelineControllerJob(
+      `waiting-publisher-${i}`, () => release.promise, async () => "unchanged")).toBe(true);
+    tick = tickPipelinesController([], h.ports);
+    await until(tick);
+    await until(entered.promise);
+    await until(peerReady.promise);
+    expect((await findControllerPipeline(lane.id))?.state).toBe("provisioning");
+    expect((await findControllerPipeline(peer.id))?.state).toBe("running");
+    await until(tickPipelinesController([], h.ports));
+    // The first running pass creates the attempt; its new activation enters
+    // the bounded attempt window on the following pass.
+    await until(tickPipelinesController([], h.ports));
+    expect(h.spawnInputs.some(input => input.cwd === peer.worktreeDir)).toBe(true);
+  } finally { release.resolve(); await tick; await settlePipelineControllerJobs(); unregister(); }
+  expect((await findControllerPipeline(lane.id))?.state).toBe("running");
+});
+
+test.each(["failure", "pause", "remove", "branch", "owner"] as const)("a detached provisioning %s settles against the current lane", async change => {
+  const h = harness();
+  const lane = await create(h.ports, BUILD_ONLY as never);
+  const entered = latch(), release = latch();
+  const exec = h.ports.exec;
+  h.ports.provisionExec = async (command, args, cwd, signal) => {
+    if (args.includes("--git-common-dir")) {
+      entered.resolve(); await release.promise;
+      if (change === "failure") return { code: 1, stdout: "", stderr: "fixture common directory refused" };
+    }
+    if (signal?.aborted) return { code: null, stdout: "", stderr: "cancelled" };
+    return exec(command, args, cwd);
+  };
+  let tick: Promise<unknown> | undefined;
+  try {
+    tick = tickPipelinesController([], h.ports);
+    await until(tick);
+    await until(entered.promise);
+    if (change === "remove") savePipelines([]);
+    if (["pause", "branch", "owner"].includes(change)) {
+      const current = loadPipelines()[0]!;
+      if (change === "pause") { current.state = "paused"; current.pausedState = "provisioning"; }
+      if (change === "branch") {
+        current.task += " edited";
+        Object.assign(current, pipelineIdentity(current.id, current.task, current.repoDir));
+      }
+      if (change === "owner") current.delivery!.epoch++;
+      savePipelines([current]);
+    }
+  } finally { release.resolve(); await tick; await settlePipelineControllerJobs(); }
+  const current = await findControllerPipeline(lane.id);
+  if (change === "remove") expect(current).toBeNull();
+  else if (change === "pause") expect(current?.state).toBe("paused");
+  else if (change === "branch" || change === "owner") expect(current?.state).toBe("provisioning");
+  else {
+    expect(current?.state).toBe("needs_decision");
+    expect(current?.stateDetail).toContain("fixture common directory refused");
+  }
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(pipelineControllerJobLanes()).toEqual([]);
+});
+
+test("a new controller process resumes a provisioning row after its job owner exits", async () => {
+  const h = harness();
+  const lane = await create(h.ports, BUILD_ONLY as never);
+  lane.baseBranch = "main"; lane.baseRef = "1".repeat(40);
+  lane.baseRefPinned = true; lane.lastPassedCommit = lane.baseRef;
+  savePipelines([lane]);
+  const source = `
+    const { defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    const { tickPipelinesController } = await import("./src/lib/pipelines/controllerPass.ts");
+    const { settlePipelineControllerJobs } = await import("./src/lib/pipelines/controllerJobs.ts");
+    const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+    registerPipelineTick(async () => {});
+    const ports = defaultPipelinePorts();
+    ports.structuredDeliveryPublication = () => "unbound";
+    ports.cpuAdmissionReconcile = async () => {};
+    ports.worktreeDiskWait = () => null;
+    ports.scheduleTick = () => {};
+    ports.provisionExec = async (command, args) => {
+      if (args.includes("--git-common-dir"))
+        return { code: 0, stdout: "/fixture/common.git", stderr: "" };
+      if (args[0] === "worktree" && args[1] === "add" && process.argv[1] === "hold") {
+        console.log("provision-entered");
+        await new Promise(() => {});
+      }
+      if (args[0] === "show-ref" || args.some(arg => arg.startsWith("refs/heads/")))
+        return { code: 1, stdout: "", stderr: "" };
+      return { code: 0, stdout: args[0] === "rev-parse" ? "1".repeat(40) : "", stderr: "" };
+    };
+    await tickPipelinesController([], ports);
+    await settlePipelineControllerJobs();
+  `;
+  const child = spawn(process.execPath, ["-e", source, "hold"], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  const entered = latch();
+  child.stdout!.on("data", data => { if (String(data).includes("provision-entered")) entered.resolve(); });
+  try {
+    await until(entered.promise);
+    expect((await findControllerPipeline(lane.id))?.state).toBe("provisioning");
+  } finally { await stopFixtureProcess(child); }
+  const resumed = Bun.spawn([process.execPath, "-e", source, "resume"],
+    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, stderr] = await Promise.all([resumed.exited, new Response(resumed.stderr).text()]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  expect((await findControllerPipeline(lane.id))?.state).toBe("running");
+});
+
+test("provisioning job admission is bounded separately and returns capacity after settlement", async () => {
+  const release = latch();
+  try {
+    for (let i = 0; i < 4; i++) expect(startPipelineControllerJob(
+      `bounded-provision-${i}`, () => release.promise, async () => "unchanged", "provisioning")).toBe(true);
+    expect(startPipelineControllerJob("fifth-provision", async () => {}, async () => "unchanged", "provisioning")).toBe(false);
+    expect(startPipelineControllerJob("independent-settlement", () => release.promise, async () => "unchanged")).toBe(true);
+    expect(startPipelineControllerJob("bounded-provision-0", async () => {}, async () => "unchanged", "provisioning")).toBe(false);
+  } finally { release.resolve(); await settlePipelineControllerJobs(); }
+  expect(startPipelineControllerJob("next-provision", async () => {}, async () => "unchanged", "provisioning")).toBe(true);
+  await settlePipelineControllerJobs();
+  expect(pipelineControllerJobLanes()).toEqual([]);
+});
+
+test("detached provisioning serializes linked checkouts while another repository completes", async () => {
+  const h = harness();
+  const lane = await create(h.ports, BUILD_ONLY as never, { repoDir: "/linked-a" });
+  const peer = structuredClone(lane), unrelated = structuredClone(lane);
+  for (const [row, id, repo] of [[peer, "linked-peer", "/linked-b"], [unrelated, "unrelated-peer", "/other-repo"]] as const) {
+    row.id = id; row.repoDir = repo; row.delivery = undefined;
+    Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
+  }
+  savePipelines([lane, peer, unrelated]);
+  const entered = latch(), release = latch(), otherReady = latch();
+  const unregister = registerPipelineTick(async () => {
+    if ((await findControllerPipeline(unrelated.id))?.state === "running") otherReady.resolve();
+  });
+  const exec = h.ports.exec;
+  let peerLookups = 0, peerCommands = 0, holding = false;
+  h.ports.provisionExec = async (command, args, cwd) => {
+    if (args.includes("--git-common-dir")) {
+      if (cwd === peer.repoDir) peerLookups++;
+      return { code: 0, stdout: cwd === unrelated.repoDir ? "/other-common.git" : "/linked-common.git", stderr: "" };
+    }
+    if (cwd === peer.repoDir || cwd === peer.worktreeDir) peerCommands++;
+    if (!holding && (cwd === lane.repoDir || cwd === lane.worktreeDir)) {
+      holding = true; entered.resolve(); await release.promise;
+    }
+    return exec(command, args, cwd);
+  };
+  try {
+    await until(tickPipelinesController([], h.ports));
+    await until(entered.promise);
+    await until(otherReady.promise);
+    expect(peerLookups).toBe(1);
+    expect(peerCommands).toBe(0);
+    expect((await findControllerPipeline(peer.id))?.state).toBe("provisioning");
+    expect((await findControllerPipeline(unrelated.id))?.state).toBe("running");
+  } finally { release.resolve(); await settlePipelineControllerJobs(); unregister(); }
+  expect(peerCommands).toBeGreaterThan(0);
+  expect((await findControllerPipeline(peer.id))?.state).toBe("running");
+});
