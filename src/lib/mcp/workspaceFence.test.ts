@@ -156,7 +156,8 @@ test("full result identities refuse colliding foreign and Unassigned projects be
   for (const workspace of [null, W2]) {
     placeProject(store, owner, foreign, workspace);
     for (const resolved of [own, foreign]) for (const full of [false, true]) {
-      searchReply = { items: [{ project: local, snippet: "Our message" }, { project: foreign, snippet: "Foreign secret" }],
+      const items = resolved === own ? [{ project: local, snippet: "Our message" }, { project: foreign, snippet: "Foreign secret" }] : [];
+      searchReply = { items,
         total: 2, strongTotal: 2, nextCursor: null, projectScope: { resolved },
         stats: { conversationsIndexed: 2, messagesIndexed: 2, fieldsSearched: [], tokenizer: "unicode" } };
       const answer = await call("search_transcripts", { query: "message", full, clientRequestId: `collision-${workspace}-${resolved}-${full}` });
