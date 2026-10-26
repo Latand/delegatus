@@ -1407,5 +1407,266 @@
     "setupObservation": "The initial adapter full-file run lacked dist/mcp-server.mjs in the fresh clone. The MCP bundle was built in scratch and the entire adapter file rerun; only the completed rerun contributes to totals.",
     "admissionNotes": "Two initial 30-second cumulative queue-lock budgets expired before any test started. The completed batch used a 120-second lock budget. These refusals were excluded from assertion results.",
     "safety": "Only test-owned processes and private fixture state were used. No production process or live state was changed. No performance gain is claimed."
+  },
+  "reviewFixExternalConfiguration": {
+    "recordedAt": "2026-10-26T21:34:11.009288+00:00",
+    "parentCommit": "46767e1e49e4779da13fb8d2d8605a3d64f5eb55",
+    "baseCommit": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+    "finding": "Preserve writable host tmux binds for explicit external installations without a migration completion marker.",
+    "implementation": "Resolve the existing host endpoint for either a completed migration or LLV_LEGACY_TMUX_EXTERNAL=1. Marker-absent configurations retain TMUX_TMPDIR and its former /tmp default. Refuse redirected and read-only endpoint mounts, including duplicate conflicts. Never create a marker or control the tmux server.",
+    "sourceSha256": {
+      "src/runtime-host/candidateContainer.ts": "3ee9cadbcafdc261465ee2b381f441d04dd25b7b4a7030244a1a82afa2a4f4dc",
+      "src/runtime-host/candidateContainer.test.ts": "c195d6ac77d9247553a3e86d6cd394aac1e4f052d2c7d626ace3de31410c54c5",
+      "scripts/deploy-staging.ts": "63fbfd9444b8d3116875994d37d4259ea5ac962db8b49ae157cc87dfb7684b5b",
+      "scripts/deploy-staging.test.ts": "97749142465c57ce413969fc8a11fe540d1305b92c4d5c12d988cd16ccce3ba2",
+      "scripts/runtime-host-viewer-adapter.test.ts": "4e4de88af719b8b95a55ef0a7dd41420fc594a82d7c2694fbdced51c8995ab84"
+    },
+    "procedure": [
+      "Clone the captured head and pinned base in scratch; pin main and origin/main to the specification base; keep the publication remote.",
+      "Copy matching dependencies into the owned scratch tree; confirm base manifest and lockfile equality.",
+      "Run checks through gate-slot, serially. Each explicit test file starts with setsid --wait and stdin closed, using checkEnvironment then isolatedEnvironment for private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.",
+      "Revert the resolver alone to the parent implementation for red controls. Restore the final resolver before full-file checks.",
+      "Run the real candidate adapter twice in fresh processes against one fixture state; verify a writable host bind on both starts, no new marker, unchanged Compose snapshot, and no server-control commands.",
+      "Repeat both complete failing base files twice with fresh isolation; compare exact failing test names."
+    ],
+    "redControls": [
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/candidateContainer.test.ts -t 'explicit external'",
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "explicit external tmux retains its configured host bind without a migration marker"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 scripts/deploy-staging.test.ts -t 'explicit external'",
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "staging starts retain prod's explicit external tmux endpoint and mount across repeated starts"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 scripts/runtime-host-viewer-adapter.test.ts -t 'explicit external'",
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "candidate starts retain the explicit external tmux endpoint and mount across adapter restarts"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 scripts/runtime-host-viewer-adapter.test.ts -t 'candidate start refuses'",
+        "exit": 1,
+        "pass": 0,
+        "fail": 2,
+        "skip": 0,
+        "failedTests": [
+          "candidate start refuses a read-only explicit external tmux mount before Docker run",
+          "candidate start refuses a redirected explicit external tmux mount before Docker run"
+        ]
+      }
+    ],
+    "headTests": [
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/candidateContainer.test.ts",
+        "exit": 0,
+        "pass": 21,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 scripts/deploy-staging.test.ts",
+        "exit": 0,
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 scripts/runtime-host-viewer-adapter.test.ts",
+        "exit": 0,
+        "pass": 50,
+        "fail": 0,
+        "skip": 2,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/stagingContainer.test.ts",
+        "exit": 0,
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 src/lib/tmux.test.ts",
+        "exit": 0,
+        "pass": 38,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 src/lib/stateOwnership.entryPoints.test.ts",
+        "exit": 0,
+        "pass": 32,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 src/app/api/files/route.test.ts",
+        "exit": 1,
+        "pass": 144,
+        "fail": 8,
+        "skip": 0,
+        "failedTests": [
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "project query changes reuse one global scan snapshot",
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/deployment.test.ts",
+        "exit": 1,
+        "pass": 35,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/deploymentAdapter.test.ts",
+        "exit": 0,
+        "pass": 25,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      },
+      {
+        "command": "bun test --timeout=60000 src/lib/tmux.proactive.test.ts",
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0,
+        "failedTests": []
+      }
+    ],
+    "baselineComparisons": [
+      {
+        "command": "bun test --timeout=60000 src/app/api/files/route.test.ts",
+        "exit": 1,
+        "pass": 145,
+        "fail": 8,
+        "skip": 0,
+        "failedTests": [
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "project query changes reuse one global scan snapshot",
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/deployment.test.ts",
+        "exit": 1,
+        "pass": 35,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 src/app/api/files/route.test.ts",
+        "exit": 1,
+        "pass": 145,
+        "fail": 8,
+        "skip": 0,
+        "failedTests": [
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "project query changes reuse one global scan snapshot",
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior"
+        ]
+      },
+      {
+        "command": "bun test --timeout=60000 src/runtime-host/deployment.test.ts",
+        "exit": 1,
+        "pass": 35,
+        "fail": 1,
+        "skip": 0,
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ]
+      }
+    ],
+    "newFailingTests": [],
+    "headTotals": {
+      "pass": 375,
+      "fail": 9,
+      "skip": 2
+    },
+    "checks": {
+      "build-mcp": {
+        "command": "bun run build:mcp",
+        "exit": 0
+      },
+      "types": {
+        "command": "node node_modules/typescript/bin/tsc --noEmit",
+        "exit": 0
+      },
+      "eslint": {
+        "command": "bun node_modules/eslint/bin/eslint.js scripts/deploy-staging.test.ts scripts/deploy-staging.ts scripts/runtime-host-viewer-adapter.test.ts scripts/runtime-host-viewer-adapter.ts src/app/api/files/route.test.ts src/lib/stateOwnership.entryPoints.test.ts src/lib/tmux.test.ts src/lib/tmux.ts src/runtime-host/candidateContainer.test.ts src/runtime-host/candidateContainer.ts src/runtime-host/deployment.test.ts src/runtime-host/stagingContainer.test.ts src/runtime-host/stagingContainer.ts",
+        "exit": 0
+      }
+    },
+    "runtimeHost": {
+      "command": "bun scripts/verify-runtime-host.ts --runtime bun",
+      "exit": 0,
+      "ok": true,
+      "runtime": "bun 1.4.0",
+      "succession": {
+        "predecessorReadyMs": 1023,
+        "successorTookOverMs": 1012,
+        "completed": true
+      },
+      "listener": {
+        "windowMs": 15000,
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "socket": {
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      }
+    },
+    "notes": [
+      "The first TypeScript run used Bun, approached the gate memory limit and was stopped by its recorded identity (exit 143); a subsequent Node check caught an optional-value matcher typing error in the new test. The assertion was corrected, its complete file rerun, and the final Node typecheck uses the gate heap budget.",
+      "Two optional Docker cases are skipped; ESLint retains two existing warnings. Existing API and deployment failures reproduce on the pinned base."
+    ],
+    "safety": "All fixtures, processes and rehearsal state were private. No production state or production process was changed. No performance gain is claimed."
   }
 }

@@ -759,7 +759,7 @@ async function runAction(options: {
   };
 }
 
-test("candidate starts retain the migrated tmux endpoint and mount across adapter restarts", async () => {
+test.each(["migrated", "explicit external"])("candidate starts retain the %s tmux endpoint and mount across adapter restarts", async (mode) => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-existing-tmux-"));
   const state = path.join(sandbox, "state");
   const marker = path.join(state, "legacy-tmux-migration-complete");
@@ -768,7 +768,8 @@ test("candidate starts retain the migrated tmux endpoint and mount across adapte
   await listener.stop(true);
   const candidate = { image: "viewer:test", container: "viewer-existing-tmux", endpoint, revision: "a".repeat(40) };
   const snapshot = JSON.parse(composeSnapshot());
-  snapshot.services.viewer.environment.TMUX_TMPDIR = "/tmp";
+  snapshot.services.viewer.environment.TMUX_TMPDIR = mode === "migrated" ? "/tmp" : "/run/user/1000/agent-log-viewer";
+  if (mode === "explicit external") snapshot.services.viewer.environment.LLV_LEGACY_TMUX_EXTERNAL = "1";
   const dockerScript = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "container inspect" ]; then echo 'No such container' >&2; exit 1; fi
@@ -780,7 +781,7 @@ exit 1
       const result = await runAction({
         action: "start-candidate", input: { candidate }, dockerScript, sandbox, preserveSandbox: true,
         setupState: start === 0 ? (directory) => {
-          fs.writeFileSync(marker, "completed\n");
+          if (mode === "migrated") fs.writeFileSync(marker, "completed\n");
           fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot));
         } : undefined,
       });
@@ -793,8 +794,40 @@ exit 1
       }
       expect(result.dockerCalls.filter(call => !call.startsWith("run ")))
         .toEqual(Array(start + 1).fill(`container inspect ${candidate.container}`));
-      expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+      if (mode === "migrated") expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+      else expect(fs.existsSync(marker)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(path.join(state, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), "utf8")))
+        .toEqual(snapshot);
     }
+  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
+});
+
+test.each(["redirected", "read-only"])("candidate start refuses a %s explicit external tmux mount before Docker run", async (kind) => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-conflicting-tmux-"));
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const endpoint = `http://127.0.0.1:${listener.port}`;
+  await listener.stop(true);
+  const candidate = { image: "viewer:test", container: "viewer-conflicting-tmux", endpoint, revision: "a".repeat(40) };
+  const snapshot = JSON.parse(composeSnapshot());
+  Object.assign(snapshot.services.viewer.environment, { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "/run/user/1000/agent-log-viewer" });
+  snapshot.services.viewer.volumes.push({
+    type: "bind", source: kind === "redirected" ? "/elsewhere" : "/run/user/1000/agent-log-viewer",
+    target: "/run/user/1000/agent-log-viewer", read_only: kind === "read-only", bind: {},
+  });
+  try {
+    const result = await runAction({
+      action: "start-candidate", input: { candidate }, sandbox, preserveSandbox: true,
+      dockerScript: `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+echo 'No such container' >&2
+exit 1
+`,
+      setupState: directory => fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot)),
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("writable host directory");
+    expect(result.dockerCalls).toEqual([`container inspect ${candidate.container}`]);
+    expect(fs.existsSync(path.join(result.state, "legacy-tmux-migration-complete"))).toBe(false);
   } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
 });
 

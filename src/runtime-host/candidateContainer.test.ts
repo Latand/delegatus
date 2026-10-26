@@ -89,6 +89,45 @@ test("existing tmux endpoints survive repeated Compose resolution without changi
   } finally { fs.rmSync(state, { recursive: true, force: true }); }
 });
 
+test("explicit external tmux retains its configured host bind without a migration marker", () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-explicit-endpoint-"));
+  try {
+    for (const configuredEndpoint of ["/run/user/1000/agent-log-viewer", "/configured/tmux", "", undefined]) {
+      const configured: ViewerComposeService = {
+        ...composeService,
+        environment: { LLV_LEGACY_TMUX_EXTERNAL: "1", ...(configuredEndpoint === undefined ? {} : { TMUX_TMPDIR: configuredEndpoint }) },
+      };
+      const endpoint = configuredEndpoint || "/tmp";
+      const volume = { type: "bind" as const, source: endpoint, target: endpoint, bind: {} };
+      const originalEnvironment = { ...configured.environment };
+      const resolved = viewerComposeServiceWithExistingTmux(state, configured);
+      expect(resolved.environment.TMUX_TMPDIR).toBe(endpoint);
+      expect(resolved.volumes).toEqual([...configured.volumes, volume]);
+      expect(viewerComposeServiceWithExistingTmux(state, resolved)).toEqual(resolved);
+      expect(viewerComposeServiceWithExistingTmux(state, configured)).toEqual(resolved);
+      const args = viewerCandidateDockerArgs(candidate, resolved, { runtimeSocket: "/runtime.sock", tmuxTmpdir: endpoint });
+      expect(environmentFromArgs(args).TMUX_TMPDIR).toBe(endpoint);
+      expect(valuesAfter(args, "--mount")).toContain(`type=bind,source=${endpoint},target=${endpoint}`);
+      for (const conflict of [{ ...volume, source: "/elsewhere" }, { ...volume, read_only: true }]) {
+        for (const volumes of [[conflict], [volume, conflict]]) {
+          expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, volumes }))
+            .toThrow("writable host directory");
+        }
+      }
+      expect(configured.volumes).toHaveLength(2);
+      expect(configured.environment).toEqual(originalEnvironment);
+    }
+    expect(() => viewerComposeServiceWithExistingTmux(state, {
+      ...composeService, environment: { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "relative/path" },
+    })).toThrow("must be absolute");
+    for (const flag of [undefined, "0"]) {
+      const configured = { ...composeService, environment: { ...(flag === undefined ? {} : { LLV_LEGACY_TMUX_EXTERNAL: flag }), TMUX_TMPDIR: "/configured/tmux" } };
+      expect(viewerComposeServiceWithExistingTmux(state, configured)).toBe(configured);
+    }
+    expect(fs.readdirSync(state)).toEqual([]);
+  } finally { fs.rmSync(state, { recursive: true, force: true }); }
+});
+
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) => value === flag ? [args[index + 1]!] : []);
 }

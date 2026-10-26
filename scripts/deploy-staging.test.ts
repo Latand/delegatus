@@ -105,7 +105,7 @@ function stagingFixture(): { home: string; context: Parameters<typeof stagingAge
   return { home, context, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
 
-test("staging starts retain prod's migrated tmux endpoint and mount across repeated starts", () => {
+test.each(["migrated", "explicit external"])("staging starts retain prod's %s tmux endpoint and mount across repeated starts", (mode) => {
   const { home, context, cleanup } = stagingFixture();
   const prodState = path.join(home, "prod-state");
   const marker = path.join(prodState, "legacy-tmux-migration-complete");
@@ -113,8 +113,10 @@ test("staging starts retain prod's migrated tmux endpoint and mount across repea
   try {
     fs.mkdirSync(prodState);
     expect(stagingContainerContext(context, prodState).tmux.tmuxTmpdir).toBe("/tmp");
-    fs.writeFileSync(marker, "completed\n");
-    const before = fs.statSync(marker);
+    if (mode === "migrated") fs.writeFileSync(marker, "completed\n");
+    else Object.assign(context.service.environment, { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "/run/user/1000/agent-log-viewer" });
+    const before = fs.existsSync(marker) ? fs.statSync(marker) : null;
+    const configured = structuredClone(context.service);
     for (let start = 0; start < 2; start++) {
       const resolved = stagingContainerContext(context, prodState);
       for (const args of [stagingViewerDockerArgs(resolved), stagingRuntimeHostDockerArgs(resolved)]) {
@@ -122,10 +124,19 @@ test("staging starts retain prod's migrated tmux endpoint and mount across repea
         expect(args).toContain("type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer");
         expect(args).toContain(`LLV_STATE_DIR=${context.paths.stateDir}`);
       }
-      expect(context.service.environment.TMUX_TMPDIR).toBe("/tmp");
-      expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
-      expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
-      expect(fs.readdirSync(prodState)).toEqual(["legacy-tmux-migration-complete"]);
+      expect(context.service).toEqual(configured);
+      if (before) {
+        expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+        expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
+      }
+      expect(fs.readdirSync(prodState)).toEqual(mode === "migrated" ? ["legacy-tmux-migration-complete"] : []);
+    }
+    for (const volume of [
+      { type: "bind" as const, source: "/elsewhere", target: "/run/user/1000/agent-log-viewer", bind: {} },
+      { type: "bind" as const, source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", read_only: true, bind: {} },
+    ]) {
+      expect(() => stagingContainerContext({ ...context, service: { ...context.service, volumes: [volume] } }, prodState))
+        .toThrow("writable host directory");
     }
   } finally { cleanup(); }
 });

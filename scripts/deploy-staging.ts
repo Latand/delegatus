@@ -57,7 +57,7 @@ import {
   type StagingContainerContext,
 } from "../src/runtime-host/stagingContainer";
 
-/** Staging reads prod's endpoint marker without changing prod's state. */
+/** Staging preserves prod's existing host tmux endpoint without changing prod's state. */
 export function stagingContainerContext(input: Omit<StagingContainerContext, "tmux">, prodStateDir: string): StagingContainerContext {
   const service = viewerComposeServiceWithExistingTmux(prodStateDir, input.service);
   return { ...input, service, tmux: { tmuxTmpdir: service.environment.TMUX_TMPDIR || "/tmp" } };
