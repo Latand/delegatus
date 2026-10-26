@@ -4,7 +4,7 @@ import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { byteShort, captionHead, matchRounds, reviewAnswer, selectFrames } from "./prototypeRead";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
-import { READ_SCHEMAS, validToolValue } from "./readSchemas";
+import { READ_SCHEMAS, validToolValue, withoutUnlistedNulls } from "./readSchemas";
 import { normalizedBoardQuery } from "@/lib/mcp/pullRequestQuery";
 import { voiceProjectRows } from "./projectNames";
 import type { SeatMessages } from "./seatTranscript";
@@ -79,6 +79,7 @@ export class CompanionBoardReads {
   }
   normalize(project: string, name: string, args: Record<string, unknown>): Record<string, unknown> {
     const schema = READ_SCHEMAS[name]; if (!schema) throw new Error("TOOL_NOT_ALLOWED");
+    args = withoutUnlistedNulls(schema, args);
     if (Object.keys(args).some(key => !Object.hasOwn(schema,key)) || Object.entries(schema).some(([key,property]) => !validToolValue(property,args[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
     const values = Object.fromEntries(Object.entries(args).filter(([key,value]) => key !== "project" && key !== "refresh" && value !== null && value !== undefined));
     if ((name === "list_tasks" || name === "list_pipelines") && typeof values.query === "string") values.query = normalizedBoardQuery(values.query);

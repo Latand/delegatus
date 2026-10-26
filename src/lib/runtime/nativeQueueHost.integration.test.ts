@@ -13,6 +13,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import type { NativeQueueSnapshot } from "./nativeCodexQueue";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { parseRuntimeCommand } from "./commands";
 import { driveRuntimeSwitch, switchOperationKey } from "@/lib/pipelines/runtimeSwitch";
@@ -76,6 +77,8 @@ plugins = false
   const diagnostics: string[] = [];
   let liveChildren = 0;
   let dropAdd = false;
+  let holdQueueChanges = false;
+  const heldQueueChanges: string[] = [];
   let hideCanonicalClient: string | null = null;
   let coalescedNativeStarts = 0;
   let retainedIdleResumes = 0;
@@ -132,6 +135,10 @@ plugins = false
           if (Array.isArray(turn.items)) turn.items = turn.items.filter((item: {clientId?: string}) => item.clientId !== hideCanonicalClient);
         }
       }
+      if (holdQueueChanges && message.method === "thread/queue/changed") {
+        heldQueueChanges.push(JSON.stringify(message) + "\n");
+        return;
+      }
       const frame = JSON.stringify(message) + "\n";
       if (message.method === "turn/started") resumeStartObserved = true;
       if (method === "thread/resume" && scenario === "large") {
@@ -151,6 +158,11 @@ plugins = false
           releaseResume();
         }
         return;
+      }
+      // Deliver real mutation notifications after each complete queue read,
+      // forcing both bounded passes to observe the notification race.
+      if (method === "thread/queue/list" && message.result?.nextCursor === null && heldQueueChanges.length) {
+        output.write(heldQueueChanges.shift()!);
       }
       output.write(frame);
     });
@@ -229,6 +241,22 @@ plugins = false
       clearTimeout(expire);
       poll.catch(() => { /* a poll abandoned at the deadline reports through it */ });
     }
+  }
+  // Mutation notifications can trail their acknowledgements and invalidate
+  // both bounded refresh passes. Poll reads within the fixture deadline; keep
+  // every other read failure decisive and never repeat a mutation.
+  async function stableQueueSnapshot() {
+    let snapshot: NativeQueueSnapshot | undefined;
+    await until(async () => {
+      try {
+        snapshot = await host!.nativeQueue!.queue.refresh();
+        return true;
+      } catch (error) {
+        if (error instanceof Error && error.message === "Native queue changed during every bounded refresh pass") return false;
+        throw error;
+      }
+    });
+    return snapshot!;
   }
   try {
     host = await CodexAppServerHost.start(options);
@@ -326,7 +354,7 @@ plugins = false
       expect(requests.find(r => r.method === "thread/start")?.params.serviceTier).toBe("priority");
       expect(requests.filter(r => r.method === "thread/queue/add" && r.params.clientUserMessageId === key)).toHaveLength(0);
       expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === other.entryId)).toEqual(other);
-      expect((await host.nativeQueue!.queue.refresh()).items?.map(item => item.id)).toEqual([other.nativeSubmissionId!]);
+      expect((await stableQueueSnapshot()).items?.map(item => item.id)).toEqual([other.nativeSubmissionId!]);
       await until(() => responses.length === (runningAtAdmission ? 3 : 2));
       expect(responses).toHaveLength(runningAtAdmission ? 3 : 2);
       return;
@@ -356,19 +384,26 @@ plugins = false
     await until(() => responses.length === 1);
     await until(async () => { await executor.reconcile(conversationId); return journal.nativeQueueRead(conversationId)[0]?.state === "delivered"; });
     expect(active.proof).toBeNull(); // The mutation acknowledgement itself proves no delivery.
+    holdQueueChanges = scenario === "large";
     const a = await admit("queued-native", { images: imageRefs });
     expect(a.reason).toBeNull();
     expect(a.nativeSubmissionId).toBeTruthy();
     if (largeImages) {
+      if (scenario === "large") await until(() => heldQueueChanges.length >= 1);
       await admit("second-large-native", {images: imageRefs});
-      const inventory = await host.nativeQueue!.queue.refresh();
+      if (scenario === "large") {
+        await until(() => heldQueueChanges.length >= 2);
+        holdQueueChanges = false;
+      }
+      const inventory = await stableQueueSnapshot();
       expect(inventory.items).toHaveLength(2);
+      expect(heldQueueChanges).toHaveLength(0);
       expect((await host.health()).status).toBe("active");
       await admit("remove-second-large", {action: "delete", entryId: "second-large-native", expectedRevision: 1});
     }
     const edited = await admit("edit-native", { action: "update", entryId: a.entryId, expectedRevision: 1, text: "edited Привіт 🌍", images: imageRefs });
     expect(edited.versions.map(v => v.text)).toEqual(["queued native input", "edited Привіт 🌍"]);
-    expect((await host.nativeQueue!.queue.refresh()).items?.find(i => i.id === a.nativeSubmissionId)?.input).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("edited Привіт") })]));
+    expect((await stableQueueSnapshot()).items?.find(i => i.id === a.nativeSubmissionId)?.input).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("edited Привіт") })]));
     const turn = (await host.health()).activeTurnRef!;
     await host.interrupt(turn); await until(async () => (await host!.health()).activeTurnRef === null);
     hideCanonicalClient = a.clientUserMessageId;

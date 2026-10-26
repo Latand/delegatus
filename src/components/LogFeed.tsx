@@ -1,4 +1,5 @@
 "use client";
+import { AgentMemoryCapNote } from "./AgentMemoryCapNote";
 import { splitInboxBatchFeed } from "./feed/parse";
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
@@ -1897,6 +1898,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     <ImageGalleryProvider value={gallery}>
     <MandateConversationContext.Provider value={memoryKey}>
     <div className="flex min-h-0 flex-1 flex-col">
+    <AgentMemoryCapNote cap={file?.memoryCap ?? launch?.memoryCap} />
     {/* The live-tail pill anchors to the scroller wrapper — NOT the pane
         column — so the pinned status bar below is structurally outside its
         overlay area. It shows only at the tail, where the feed's bottom

@@ -1,15 +1,8 @@
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
-import { BulkActionBar } from "@/components/scheme/BulkActionBar";
-import { SchemeBoard } from "@/components/scheme/SchemeBoard";
-import type { SchemeNode } from "@/components/scheme/layout";
-import { deckDisclosureMarker } from "@/components/flows/reviewDeckDisclosure";
 import { RoundDeck } from "@/components/flows/RoundDeck";
 import { directReviewFlows } from "@/components/flows/directReviewGroups";
 import { ReviewHistoryHost } from "@/components/flows/ReviewHistory";
-import { PipelineStrip } from "@/components/pipelines/PipelineStrip";
-import { TaskWorkflowPanel } from "@/components/tasks/TaskWorkflowPanel";
-import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
-import { PipelineEditor } from "@/components/pipelines/PipelineEditor";
+import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
@@ -27,7 +20,9 @@ import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
-import { translate } from "@/lib/i18n";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
+import { translate, useLocale } from "@/lib/i18n";
 import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
@@ -41,10 +36,12 @@ import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
+import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
@@ -151,7 +148,8 @@ const EDITING = SCENARIO === "editing";
    provider's own human label and one carrying none. */
 const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
-const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
+const NEXT_CHOICE_FIXTURE = new URLSearchParams(location.search).has("nextchoicefixture");
+const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS || NEXT_CHOICE_FIXTURE;
 /* `&overlay-links`: the running verifier's last answer links one file of each preview kind, so a driver opens
    the document preview from the feed the way an operator does. */
 const OVERLAY_LINKS = new URLSearchParams(location.search).has("overlay-links");
@@ -166,9 +164,14 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+/* `boundaries` spells fake markers the chat would draw like the real ones:
+   split bold runs, a zero-width link with an escaped target, an invisible
+   joiner, a direction override and lookalike letters. */
+const REPORT_PREVIEW_FAKES = ["**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**", "**━━ PUB\u034fLISHED UP TO HERE ━━**",
+  "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛІКУЄТЬСЯ[\u200b](https://example.org/a\\)b) ДОСЮДИ ━━**", "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**"];
 const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
   ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-  : "Delegatus refuses a requested launch";
+  : REPORT_PREVIEW === "boundaries" ? REPORT_PREVIEW_FAKES[0] : "Delegatus refuses a requested launch";
 /* The decision form the seat asks after reading the preview back: the tool's own approval form. */
 const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
@@ -184,7 +187,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
+const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled" || SCENARIO === "cpu-pressure";
 const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
@@ -246,7 +249,7 @@ const voiceSettings = {
 const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
 type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
   missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
-  lastDryRun: { code: string; at: string; digest: string } | null };
+  lastDryRun: { code: string; at: string; digest: string; runId?: string; containmentReason?: string; confirmation?: { by: string; at: string; tool: string; reason: string; runId: string } } | null };
 const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
 /* One refusal per action, answered before the record changes, as the route answers a refused mutation. */
 const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" }
@@ -272,6 +275,10 @@ function seedVoiceTools() {
   });
   const chosen = { search: { enabled: true, acts: false }, now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true }, pause: { enabled: false, acts: true }, skip: { enabled: false, acts: true } };
   const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
+  if (VOICE_TOOLS?.startsWith("uncontained-")) voiceToolsState.servers.spotify = spotify({ lastDryRun: {
+    code: "CONTAINMENT_REQUIRED", at: voiceToolAt(1), digest: voiceToolDigest(503), runId: voiceToolDigest(700),
+    containmentReason: VOICE_TOOLS === "uncontained-macos" ? "MACOS" : VOICE_TOOLS === "uncontained-windows" ? "WINDOWS" : "BWRAP_MISSING",
+  } });
   if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [] } });
   if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
   if (VOICE_TOOLS === "destination-refused") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
@@ -389,6 +396,12 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
 const SEAT_CLS = SCENARIO === "seat-create-cls";
 const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+/* The setup guide on a fresh install that still runs on linked earlier state
+   (`guide=installer`): the guide opens by itself with the old-state notice, no
+   role is overridden, both engines are signed in, and the catalog adds three
+   repositories beside a plain folder and a checkout under a temporary
+   directory, which the project picker leaves out. */
+const INSTALLER_GUIDE = ORCH_FIRST && new URLSearchParams(location.search).get("guide") === "installer";
 /* The seat case opens as the create draft and leaves it when Confirm is pressed. */
 const FM_SEAT = FIRST_MESSAGE && FM_CASE === "s";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW || FM_SEAT;
@@ -482,6 +495,7 @@ const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge
    report log beside the seat's chat, empty with `?reports=empty`. */
 const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
+const REPORT_AUTHOR_LONG_ROLE = new URLSearchParams(location.search).get("report-author") === "long-role";
 /* "Asks you" (docs/research/attention-classifier.md §7): the switch on, the
    export explorer ended its turn asking the operator, and the seat's report
    log carries that ask and an older one. Every other scene answers the switch
@@ -583,6 +597,15 @@ const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
+const INSTALLER_PROJECTS = INSTALLER_GUIDE ? [
+  { project: `repo-${"1".repeat(32)}`, displayName: "atlas-api", projectRoot: "/repo/atlas-api", conversations: 4, smt: now - 30 * MIN },
+  { project: `repo-${"2".repeat(32)}`, displayName: "harbor-docs", projectRoot: "/repo/harbor-docs", conversations: 2, smt: now - 2 * 60 * MIN },
+  { project: `repo-${"3".repeat(32)}`, displayName: "ledger-export", projectRoot: "/repo/ledger-export", conversations: 1, smt: now - 26 * 60 * MIN },
+  { project: `dir-${"4".repeat(32)}`, displayName: "notes", projectRoot: "/repo/notes", conversations: 1, smt: now - 40 * MIN },
+  { project: `repo-${"5".repeat(32)}`, displayName: "scratch-checkout", projectRoot: "/tmp/scratch-checkout", conversations: 1, smt: now - 10 * MIN },
+] : [];
+/* The guide preselects no project and lists repositories only, so the Telegram step's case picks this one first. */
+const TELEGRAM_REPOSITORY = { project: `repo-${"6".repeat(32)}`, displayName: "atlas", projectRoot: "/repo/atlas", conversations: 1, smt: now - MIN };
 const REV = (n: number) => `task-v1:00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 function conversation(id: string, title: string, over: Record<string, unknown> = {}): FileEntry {
@@ -1756,7 +1779,16 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   ];
 })() : [];
 
+/* `?scenario=cloud-checks`: one running lane on its task's card, whose stage
+   carries its own checks choice; `checks=` frames the read and write failures. */
+const CLOUD_CHECKS = SCENARIO === "cloud-checks";
+const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-cloud-checks": "local" }, stages: { "lane-cloud-checks implement": "cloud" } });
+/* The cloud-checks scenario's lane: it stands on «implement», whose own choice differs from the lane's. */
+const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
+  [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
+  { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
@@ -1830,7 +1862,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : SCENARIO === "cpu-pressure" ? "1st · held by CPU pressure · waited 4 min" : "2nd · waited 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -1887,20 +1919,20 @@ const tierLimits = {
   ],
   plan: "max", capturedAt: now,
 };
-const accountRow = (id: string, label: string, plan: string, usedPercent: number, resetsInMinutes: number) => ({
+const accountRow = (id: string, label: string, plan: string, usedPercent: number, resetsInMinutes: number, weekly: { usedPercent: number; resetsAt: number; windowMinutes: number } | null = null) => ({
   id, label, kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null,
   auth: { state: "authenticated", plan },
-  limits: { state: "fresh", session: { usedPercent, resetsAt: resetIn(resetsInMinutes), windowMinutes: 300 }, weekly: null },
+  limits: { state: "fresh", session: { usedPercent, resetsAt: resetIn(resetsInMinutes), windowMinutes: 300 }, weekly },
 });
 const accountsBody = {
   claude: {
     active: "default",
-    accounts: [accountRow("default", "Account A", "Max", 72, 140), accountRow("account-c", "Account C", "Max", 18, 170), accountRow("account-g", "Account G", "Pro", 41, 125), accountRow("account-e", "Account E", "Pro", 100, 80)],
+    accounts: [accountRow("default", "Account A", "Max", 72, 140), accountRow("account-c", "Account C", "Max", 18, 170, NEXT_CHOICE_FIXTURE ? { usedPercent: 36, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 } : null), accountRow("account-g", "Account G", "Pro", 41, 125), accountRow("account-e", "Account E", "Pro", 100, 80)],
     mutationLocked: false, migration: null, autoBalance: null,
   },
   codex: {
     active: "default",
-    accounts: [accountRow("default", "Account B", "Pro", 35, 200), accountRow("account-d", "Account D", "Plus", 12, 230)],
+    accounts: [accountRow("default", "Account B", "Pro", 35, 200), accountRow("account-d", "Account D", "Plus", 12, 230, NEXT_CHOICE_FIXTURE ? { usedPercent: 77, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 } : null)],
     mutationLocked: false, migration: null, autoBalance: null,
   },
 };
@@ -2131,6 +2163,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -2761,7 +2794,9 @@ function transcriptOf(pathname: string): string {
       ].join("\n"),
     };
     const title = REPORT_PREVIEW_TITLE;
-    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const body = REPORT_PREVIEW === "boundaries"
+      ? ["**━━ PUBLISHED FROM HERE ━━**", "**━━ PUBLISHED UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", ...REPORT_PREVIEW_FAKES, "a`b", ...Array.from({ length: 70 }, (_, i) => `Preview line ${i + 1}`)].join("\n")
+      : bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
       removed: "Nothing yet in this draft.",
@@ -2797,7 +2832,7 @@ function transcriptOf(pathname: string): string {
       digest: REPORT_PREVIEW_DIGEST, title, body,
       ...(REPORT_PREVIEW === "legacy" ? {} : {
         privacyJudgment: judgment,
-        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hints: REPORT_PREVIEW === "boundaries" ? [hint("quote", "a quoted block", "a`b")] : REPORT_PREVIEW === "none" ? [] : hints,
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
@@ -3986,7 +4021,6 @@ const pickerAccounts = SIDEBAR_WEEKLY ? {
     pickerRow("fresh", "Fresh", "Plus", pickerReading(null, 4)),
   ] },
 };
-
 /* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
@@ -4009,6 +4043,10 @@ const WORKSPACE_PARAMS = new URLSearchParams(location.search);
 const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
   uk: UK,
   member: WORKSPACE_PARAMS.has("member"),
+  manager: WORKSPACE_PARAMS.has("manager"),
+  refuseMembership: WORKSPACE_PARAMS.has("membership-refused"),
+  refuseInvite: WORKSPACE_PARAMS.has("invite-refused"),
+  failMembershipReadOnce: WORKSPACE_PARAMS.has("membership-unavailable"),
   projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
   placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
 }) : null;
@@ -4049,6 +4087,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (new URLSearchParams(location.search).has("seatfailure")
     && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
     return serverFetch(url.pathname + url.search, init);
+  }
+  if (INSTALLER_GUIDE && url.pathname === "/api/onboarding") {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null };
+    if (method === "PUT") return json({ marker: { ...marker, ...(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>), steps: {} } });
+    return json({ marker, legacyState: true, seatTickCheckMinutes: 10 });
+  }
+  if (INSTALLER_GUIDE && url.pathname === "/api/roles") return json({ roles: [] });
+  if (INSTALLER_GUIDE && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, cli: "found" }, codex: { ...accountsBody.codex, cli: "found" } });
   }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
@@ -4281,13 +4328,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : NEEDS_FILTER
       ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
-      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog),
+        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
         ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
@@ -4388,13 +4435,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
     /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
-    return json(reportLogFixturePage(url, {
+    const page = reportLogFixturePage(url, {
       project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK,
       asks: ASKS_YOU ? asksYouFixtureLines(now * 1_000, [
         { conversationId: exportExplore.conversationId!, path: exportExplore.path, role: "architect", title: exportExplore.title, gist: EXPORT_ASK_GIST, minutesAgo: 7 },
         { conversationId: searchImpl1.conversationId!, path: searchImpl1.path, role: "builder", title: searchImpl1.title, gist: "Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?", minutesAgo: 170 },
       ]) : [],
-    }));
+    });
+    if (REPORT_AUTHOR_LONG_ROLE && page.entries[0]) {
+      page.entries[0].author = { kind: "agent", conversationId: searchImpl1.conversationId!, role: "LongCustomRole".repeat(12) };
+    }
+    return json(page);
   }
   /* "Asks you": the installation's switch and this month's spend. */
   if (url.pathname === "/api/asks-you") {
@@ -4530,6 +4581,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     tasks[index] = next;
     return json({ ok: true, task: next });
   }
+  if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
+    const answer = await cloudChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
+    return json(answer.body, answer.status);
+  }
   if (url.pathname.startsWith("/api/pipelines/")) {
     const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
     const index = pipelines.findIndex((entry) => entry.id === id);
@@ -4651,7 +4706,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { ...row, limits: { ...tierLimits, state: "fresh", checkedAt: iso(0) } } : row) },
   } : accountsBody);
   if (ACCOUNTS && url.pathname === "/api/account-project-bindings" && method === "GET") {
-    return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(bindingsBody);
+    const params = new URLSearchParams(location.search);
+    const nextClaude = params.get("nextchoice");
+    const nextCodex = params.get("codexnextchoice");
+    const view = nextClaude || nextCodex ? { ...bindingsBody, engines: {
+      ...bindingsBody.engines,
+      claude: { ...bindingsBody.engines.claude, ...(nextClaude ? { nextChosenAccountId: nextClaude } : {}) },
+      codex: { ...bindingsBody.engines.codex, ...(nextCodex ? { nextChosenAccountId: nextCodex } : {}) },
+    } } : bindingsBody;
+    return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(view);
   }
   const migrationRoute = ACCOUNTS && method === "POST" ? /^\/api\/conversations\/([^/]+)\/migration$/.exec(url.pathname) : null;
   if (migrationRoute) {
@@ -4747,7 +4810,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (VOICE && url.pathname === "/api/voice-tools") {
     if (VOICE_TOOLS === "sign-in-required" && method === "GET") return json({ code: "OPERATOR_REQUIRED" }, 401);
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, { value?: string; destinations: string[] }> };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; confirmUncontained?: { reason: string; runId: string }; secrets?: Record<string, { value?: string; destinations: string[] }> };
       const server = body.name ? voiceToolsState.servers[body.name] : undefined;
       const refused = voiceToolsRefuse[body.action];
       if (refused) { delete voiceToolsRefuse[body.action]; return json({ code: refused }, 409); }
@@ -4761,8 +4824,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } else if (!server) return json({ code: "SERVER_NOT_FOUND" }, 409);
       else if (server.digest !== body.digest) return json({ code: "STALE_APPROVAL" }, 409);
       else if (body.action === "dry-run") {
+        if (VOICE_TOOLS?.startsWith("uncontained-")) {
+          const reason = VOICE_TOOLS === "uncontained-macos" ? "MACOS" : VOICE_TOOLS === "uncontained-windows" ? "WINDOWS" : "BWRAP_MISSING";
+          if (body.confirmUncontained?.reason !== reason || body.confirmUncontained.runId !== server.lastDryRun?.runId) {
+            server.lastDryRun = { code: "CONTAINMENT_REQUIRED", at: voiceToolAt(0), digest: voiceToolDigest(504), runId: next, containmentReason: reason };
+            return json({ version: 1, revision: voiceToolsState.revision, servers: voiceToolsState.servers });
+          }
+        }
         server.lastDryRun = { code: body.name === "notes" ? "TIMEOUT" : "OK", at: voiceToolAt(0), digest: voiceToolDigest(504) };
         if (body.name !== "notes") { server.catalog = spotifyCatalog(); server.tools = Object.fromEntries(server.catalog.tools.map(tool => [tool.name, server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true }])); }
+        if (body.confirmUncontained && server.lastDryRun) server.lastDryRun.confirmation = { by: "operator", at: voiceToolAt(0), tool: body.name!, ...body.confirmUncontained };
         server.digest = next;
       } else if (body.action === "configure") {
         if (body.reapprove && server.state !== "enabled") return json({ code: "STALE_APPROVAL" }, 409);
@@ -4877,7 +4948,48 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
-  if (url.pathname.startsWith("/api/resources")) {
+  if (url.pathname === "/api/resources/worktrees") {
+    const state = new URLSearchParams(location.search).get("worktree-state");
+    if (state === "loading") return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (state === "offline") throw new TypeError("Fixture connection unavailable");
+    if (state === "unavailable" || state === "denied" || state === "changed")
+      return Response.json({ error: state }, { status: state === "denied" ? 403 : state === "changed" ? 409 : 503 });
+    const at = "2026-10-23T10:00:00.000Z";
+    const respond = () => {
+      const start = Number(url.searchParams.get("cursor") ?? 0);
+      /* `variant`: a dry-run report holding the strings the ordinary rows do not reach (a pipeline id instead of a task, a checkout with no repository, an unrecorded size and time, a twelve-digit size, the longest reasons). */
+      if (state === "variant") {
+        const rows = [
+          { task: null, pipelineId: "lane-7f3a2c91", repository: "atlas", checkout: "worktrees/export-1", reason: "not-created-by-delegatus", bytes: 987654321098, observedAt: at },
+          { task: L("Keep the unpublished export and its source evidence for the audit", "Зберегти неопублікований експорт і його докази для аудиту"), pipelineId: "lane-2", repository: null, checkout: "~/.agents/tools/atlas-feature-with-a-very-long-sibling-checkout-name", reason: "changed-during-inspection", bytes: 3145728, observedAt: "2026-10-22T09:00:00.000Z" },
+          { task: null, pipelineId: null, repository: "atlas", checkout: "worktrees/export-3", reason: "ignored-files", bytes: null, observedAt: null },
+          { task: L("Preserve checkout 4", "Зберегти робоче дерево 4"), pipelineId: "lane-4", repository: "atlas", checkout: "worktrees/export-4", reason: "holds-worktree", bytes: 12 * 1073741824, observedAt: at },
+        ];
+        return json({ at, mode: "dry-run", total: rows.length, start: 0, rows, previousCursor: null, nextCursor: null });
+      }
+      const rows = state === "empty" ? [] : Array.from({ length: 10 }, (_, index) => ({
+        task: index === 1 ? null : L(`Preserve checkout ${index + 1}`, `Зберегти робоче дерево ${index + 1}`),
+        pipelineId: index === 1 ? null : `lane-${index + 1}`,
+        repository: "atlas",
+        checkout: index === 2 ? "../checkouts/retain-the-unpublished-export-and-its-source-evidence" : `worktrees/export-${index + 1}`,
+        reason: (["open-pipeline", "not-created-by-delegatus", "local-only-commits", "ignored-files", "retention"] as const)[index % 5],
+        bytes: index === 4 ? null : (index + 1) * 1048576,
+        // Fresh sweep decisions follow the report clock by milliseconds or seconds.
+        observedAt: index === 4 ? null : index === 2 ? "2026-10-23T09:59:59.999Z" : `2026-10-23T10:00:0${index % 2}.${String(index + 1).padStart(3, "0")}Z`,
+      }));
+      return json({ at, mode: "on", total: rows.length, start, rows: rows.slice(start, start + 4),
+        previousCursor: start ? String(Math.max(0, start - 4)) : null, nextCursor: start + 4 < rows.length ? String(start + 4) : null });
+    };
+    /* `hold`: the page request stays pending until the driver calls `__releaseWorktreePage`, so a frame can be taken while the next page loads. */
+    if (state === "hold") return new Promise<Response>((resolve, reject) => {
+      (window as unknown as { __releaseWorktreePage: () => void }).__releaseWorktreePage = () => resolve(respond());
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    return respond();
+  }
+  if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
@@ -4885,6 +4997,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(new URLSearchParams(location.search).has("worktree-state") ? { worktreeSweep: {
+        at: "2026-10-23T10:00:00.000Z", mode: "on", summary: "", removed: 0, removedBytes: 0, trimmedBytes: 0,
+        keptCounts: { "local-only-commits": 10 }, keptBytes: { "local-only-commits": 78 * 1048576 }, waitsForDecision: 10, waitsForDecisionBytes: 78 * 1048576,
+      } } : {}),
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
         /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */
@@ -4965,6 +5081,30 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* The consumed entry is gone from Codex's queue and has no proof yet; a second entry with the same words is still held there.
+   The panel's view is the production projection of journal-shaped records, so the acknowledgement hint is the real one. */
+const proofAfter = new URLSearchParams(location.search).get("proof") === "after";
+const proofRecord = (id: string, overrides: Partial<NativeQueueRecord> = {}): NativeQueueRecord => ({
+  entryId: `entry-${id}`, conversationId: "conversation_proof_queue", binding: { threadId: "thread-proof", accountId: "account-a" },
+  clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1,
+  versions: [{ revision: 1, operationId: `entry-${id}`, text: "Check the memory profile", images: [], contentDigest: `digest-${id}` }],
+  profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null, dispatchedRevision: null, dispatchedTurnId: null,
+  proof: null, reason: null, ...overrides });
+const proofView = projectNativeQueue({
+  turn: "running", activeTurnId: "turn-proof",
+  entries: [
+    proofAfter ? proofRecord("a", { state: "delivered", dispatchedRevision: 1, dispatchedTurnId: "turn-proof",
+      proof: { threadId: "thread-proof", clientUserMessageId: "client-a", revision: 1, turnId: "turn-proof", itemId: "item-a", input: [{ type: "text", text: "Check the memory profile" }] } })
+      : proofRecord("a"),
+    proofRecord("b"),
+  ],
+  native: { threadId: "thread-proof", stale: false, items: [{ id: "native-b", clientUserMessageId: "client-b", input: [{ type: "text", text: "Check the memory profile" }] }] },
+});
+const queueProofPreview = <div className="p-3"><NativeQueuePanel
+  view={proofView}
+  unresolved={[]} error={null} thread={{ model: null, effort: null }} cardId="conversation_proof_queue" mintKey={() => "proof-queue-edit"}
+  submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
+/></div>;
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
@@ -5015,8 +5155,17 @@ function voiceCompanionScene() {
   });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
+  /* `&dev=<state>` (docs/design/voice-device-picker.md): the driver stubs `navigator.mediaDevices`, and a start opens the
+     microphone through the product's own `openVoiceMicrophone` and gives an audio element to `attachVoiceOutput`, as a real
+     call does, so the status block names the microphone and the chosen speakers are looked for. */
+  let microphone: VoiceMicrophone | null = null;
+  let detachOutput: (() => void) | null = null;
+  const withDevices = params.has("dev");
   const shown: VoiceCompanionAdapter = {
-    mode: adapter.mode, start: options => adapter.start(options), subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); }, close: () => adapter.close(),
+    mode: adapter.mode,
+    start: async options => { if (withDevices) { microphone = await openVoiceMicrophone({}); detachOutput = attachVoiceOutput(new Audio()); } return adapter.start(options); },
+    subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); },
+    close: () => { microphone?.release(); microphone = null; detachOutput?.(); detachOutput = null; return adapter.close(); },
     command: async command => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
@@ -5104,7 +5253,6 @@ function CodexCallbacksScene() {
 const retainedBuilder = { ...searchImpl2, projectRoot: "/repo", cwd: "/repo", renamable: true };
 const retainedArchive = reviewFlow("retained-review", retainedBuilder, searchRev, ["REQUEST_CHANGES", "APPROVE"], 60 * MIN) as unknown as ArchivedReview;
 retainedArchive.state = "paused";
-const retainedFlows = flows as unknown as ArchivedReview[];
 const directBuilder = { ...searchImpl1, conversationId: "direct-subject", path: "/direct-subject.jsonl" };
 const directFiles = [directBuilder, ...[1, 2].map(n => ({ ...searchRev, path: `/direct-review-${n}.jsonl`,
   conversationId: `direct-review-${n}`, mtime: now - (3 - n) * 60,
@@ -5118,41 +5266,10 @@ if (SCENARIO === "retired-review" && params.get("surface") === "direct-board") {
   board.prefs.manual = [directBuilder.path];
   board.prefs.expanded = [directBuilder.path];
   board.prefs.favorites = [directBuilder.conversationId!];
-  board.prefs.desktopBoard = "scheme";
-}
-if (SCENARIO === "retired-review" && params.get("surface") === "direct-layout") {
-  localStorage.setItem(`llvReviewDeckCollapsed:${directGroup.id}`, JSON.stringify({ v: "expanded", at: deckDisclosureMarker(directGroup) }));
+  board.prefs.desktopBoard = "kanban";
 }
 function RetiredReviewScene() {
   const mode = new URLSearchParams(location.search).get("surface");
-  if (mode === "bulk") return <div className="relative h-full"><Viewer />
-    <BulkActionBar project={PROJECT} nodes={[retainedBuilder, directBuilder].map(file => ({ file }) as SchemeNode)}
-      flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} /></div>;
-  if (mode === "single" || mode === "direct-layout") {
-    const root = mode === "single" ? retainedBuilder : directBuilder;
-    const groups = mode === "single" ? [] : [directGroup];
-    return <div className="flex h-full"><SchemeBoard project={PROJECT} files={mode === "single" ? [root] : directFiles} groups={[]}
-      manual={[root]} isolatedManualPaths={new Set([root.path])} favorites={new Set([root.conversationId!])}
-      flows={[]} reviewGroups={groups} tasks={[]} drafts={[]} now={now} focus={mode === "single" ? root.path : `deck::${directGroup.id}`} onSelect={() => {}} onClose={() => {}}
-      onDraftClose={() => {}} onDraftSpawned={() => {}} /><ReviewHistoryHost /></div>;
-  }
-  if (mode === "verdict") {
-    const pipeline = pipelines.find(p => p.id === "p-upload")!;
-    const recorded = { ...pipeline, runs: pipeline.runs.map(run => run.stageId === "review-api" ? { ...run,
-      attempts: run.attempts.map(attempt => ({ ...attempt, reviewHeadSha: "a".repeat(40), verdict: { status: "pass" as const, confidence: 0.93,
-        findings: Array.from({ length: 12 }, (_, n) => `${n + 1}. ${L("Recorded finding with a long explanation about retained evidence.", "Збережене зауваження з довгим поясненням щодо матеріалів рев’ю.")}`) } })) } : run) };
-    return <div className="h-full bg-canvas p-2 pt-16 text-primary">
-    <ReviewHistoryHost />
-    <PipelineStrip pipeline={recorded} flows={retainedFlows} files={files}
-      mobile={innerWidth < 640 || innerHeight < 600} />
-  </div>;
-  }
-  if (mode === "task-history") return <div className="relative h-full bg-canvas text-primary">
-    <ReviewHistoryHost />
-    <TaskWorkflowPanel model={projectTaskWorkflows(tasks, pipelines, retainedFlows, files, PROJECT)} initialTaskId="t-upload"
-      onOpen={() => {}} onClose={() => {}} />
-  </div>;
-  if (mode === "conversion") return <PipelineEditor pipeline={{ ...pipelines.find(p => p.id === "p-search")!, state: "draft" }} label="Retained draft" onClose={() => {}} />;
   if (mode === "decks") return <div className="h-full overflow-auto bg-canvas p-2 text-primary">
     <ReviewHistoryHost files={[searchRev, ...directFiles]} />
     {[retainedArchive, directGroup].map((flow, index) => <div key={flow.id} data-retained-deck={index === 0 ? "archive" : "direct"}
@@ -5171,21 +5288,40 @@ const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
 const dockWidth = new URLSearchParams(location.search).get("dockWidth");
 if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
+/* `?scenario=voice-panel&mic=<name>&panelWidth=<px>`: the composer's live voice call panel with a microphone track of that name,
+   at the width of the picture-in-picture window (380) or the phone (390). */
+function VoicePanelScene() {
+  const { t } = useLocale();
+  const query = new URLSearchParams(location.search);
+  const [startedAt] = useState(() => Date.now() - 83_000);
+  const mic = query.get("mic") ?? "";
+  const [stream] = useState(() => {
+    const context = new AudioContext();
+    const stream = context.createMediaStreamDestination().stream;
+    Object.defineProperty(stream.getAudioTracks()[0]!, "label", { value: mic });
+    return stream;
+  });
+  return (
+    <div className="p-4" style={{ width: Number(query.get("panelWidth") ?? 380), boxSizing: "content-box" }}>
+      <VoiceConversationPanel phase="live" error={null} startedAt={startedAt} stream={stream} lines={[]} t={t} onToggleMic={() => {}} onToggleOutput={() => {}} />
+    </div>
+  );
+}
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

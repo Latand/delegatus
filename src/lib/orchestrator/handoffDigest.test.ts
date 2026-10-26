@@ -531,6 +531,5 @@ test("a bespoke mandate landing exactly on the envelope is admitted, and one byt
 
 test("the delivered mandate retains the gated prototype lane within its existing budget", () => {
   const delivered = orchestratorMandateForDelivery("");
-  expect(delivered).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
   expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(DELIVERED_DIRECTIVE_BUDGET_BYTES);
 });

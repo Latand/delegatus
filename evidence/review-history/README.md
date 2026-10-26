@@ -2,6 +2,8 @@
 
 This slice implements `docs/design/retire-flows.md` §6 and S6. S7–S9 remain separate work.
 
+The implementation and verification below describe the reviewed S6 head. [Main refresh and supported-board coverage](#main-refresh-and-supported-board-coverage) records the adaptations made while merging main.
+
 New work enters the existing pipeline draft editor. Built-in review templates use native reviewer and fixer run stages with a finite fail edge. Historical conversations require explicit task selection in the draft.
 
 Recorded reviews open through `src/components/flows/ReviewHistory.tsx`. Project menus, legacy stage links, verdict details, task history and archive decks share that reader. Legacy flow-round open requests reach the reader independently of board placement and camera support. It follows the archive cursor, exposes every round, resolves reviewer aliases and generations, and reads findings or reports missing artifacts. Recorded approval retains its reviewed commit; an unavailable current commit is labelled unknown. Uncertain delivery remains visibly unresolved.
@@ -56,3 +58,18 @@ The S6 integration case reveals the parent card, scrolls to the defining state, 
 Fresh review, unfinished budget, answered question and conversion captures name their defining text. Archive-deck, verdict and task-history captures show their history opener. Each legacy round has a separate source frame before mouse or keyboard activation, plus a frame of the selected archive round.
 
 The regenerated `integration.json` and `rendered.json` describe 436 integration frames and 40 archive-reader frames across English and Ukrainian, light and dark, at 320, 390, 640, 1280 and 1440 pixels. The 640-pixel viewport is 320 pixels high. `short-viewport-review.json` records visual inspection of all 220 defining-state and navigation crops, plus 16 complete short-viewport frames, with their hashes and crop bounds. `short-viewport-checks.json` records the final commands and results for this correction. Earlier check and inspection records retain their original campaigns.
+
+## Main refresh and supported-board coverage
+
+The merge retains main's retirement of SchemeBoard, FlowDialog, FlowHub, FlowStrip, PipelineStrip, VerdictPopover, TaskWorkflowPanel and the scheme selection/editor closure. `retiredSchemeBoard.test.ts` remains the retirement check.
+
+The S6 fixture and browser checks now use these supported surfaces:
+
+- Bulk and single-node creation checks move to the phone's New pipeline menu and template picker. Desktop checks require the supported kanban board to omit the old creation entry.
+- The direct-layout scenario moves to the real kanban board for reviewer-card suppression and the existing shared RoundDeck scene for two-round selection and fold controls. Subject aliases and superseded reviewer generations remain in the fixture.
+- VerdictPopover and TaskWorkflowPanel archive-open checks move to the desktop StagesSheet and phone pipeline past-round controls. They exercise an unavailable archive, preserve the source sheet and restore focus. The existing exact-round cases still exercise click and keyboard navigation with an available archive.
+- The retired PipelineEditor conversion fixture and its browser check are removed with main's editor retirement. The supported legacy-stage cases continue to cover retained round navigation.
+- The taskless/shared-task direct-review deck regressions move from the deleted `scheme/taskBands.test.ts` to `kanban/kanbanModel.test.ts`, including the absent-subject case and a check that the supported board has one primary subject card.
+- `ReviewHistory.dom.test.tsx` opens the archive through the supported RoundDeck control in place of mounting FlowStrip and FlowHub. Its read-only, all-rounds, locale, request and state-preservation assertions remain.
+
+Earlier evidence files describe their original source digests and retired surfaces. [Refresh renders](refresh-rendered.json) record the supported-board campaign, its source and frame digests, and visual inspection. [Refresh checks](refresh-checks.json) record the explicit test paths and their base comparisons. These records keep the historical captures separate from the refresh verification.

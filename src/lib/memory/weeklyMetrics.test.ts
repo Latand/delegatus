@@ -379,15 +379,15 @@ test("§6.5: restoring, re-archiving or evicting a rule after a closed week leav
       state: "archived", reason: "stale", changedAt: at(TRIAL, 4), curatedAt, departures: [{ at: at(TRIAL, 4), reason: "stale", curated: true }] }) as never);
     tx.put({ kind: "scope", scope: "role:A:builder", revision: 1, active: ["r_00000000000000c1", "r_00000000000000c2"], history: [] } as never);
   });
-  // Inside the week the operator returns c3, and the full scope evicts the curated c1 for budget.
+  // Returning c3 inside the week uses headroom without evicting curated guidance.
   restoreRule("r_00000000000000c3", at(TRIAL, 2));
   const memory = () => roleMemoryCollection()!.snapshot() as unknown as Record<string, unknown>[];
   const read = () => windowReport(input(trialSet(), { memory: memory() }), TRIAL);
   const before = read();
-  expect(before.evictions).toEqual({ neverCurated: 1, curated: 1 });
+  expect(before.evictions).toEqual({ neverCurated: 1, curated: 0 });
   expect(before.imports.adoptedArchived).toBe(1);
   expect(before).toMatchObject({ valid: false, invalidBecause: ["never-curated-eviction"], unverified: [] });
-  // After the week: every archived rule comes back, one is removed again, and a restore evicts another.
+  // After the week: archived rules come back and one is removed and returned again.
   for (const id of ["r_00000000000000c4", "r_00000000000000c5", "r_00000000000000c1"]) restoreRule(id, at(TRIAL, 200));
   deleteRule("r_00000000000000c5", at(TRIAL, 201));
   restoreRule("r_00000000000000c5", at(TRIAL, 202));

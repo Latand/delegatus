@@ -563,6 +563,13 @@ describe("every current stage keeps a full real card under production compaction
     expect(slotByStage.get("future")?.presentation).toBe("placeholder");
     expect(slotByStage.get("future")?.collapsedRow).toBeUndefined();
     expect(slotByStage.get("future")?.h).toBe(SLOT_H);
+    const withCap = structuredClone(p);
+    withCap.runs.find(run => run.stageId === "builder")!.attempts.at(-1)!.memoryCap = {
+      limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage", clamped: true, enforced: true,
+    };
+    const capLayout = buildSchemeLayout(groups, [], sceneFiles, layoutFlows, [], [withCap], [withCap]);
+    expect(capLayout.slots.find(slot => slot.stage.id === "builder")?.h).toBeGreaterThan(SLOT_ROW_H);
+
 
     const builderSlot = stageSlotKey("p", "builder");
     const futureSlot = stageSlotKey("p", "future");

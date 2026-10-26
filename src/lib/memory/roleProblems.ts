@@ -74,8 +74,14 @@ export function readMemoryProblem(project: string, id: string): ProblemInput | n
 }
 
 /** Prepare the same read view without a synchronous first-use collection fill. */
+let preparingMemoryProblemRead: Promise<void> | undefined;
 export async function prepareMemoryProblemRead(): Promise<void> {
-  await roleMemoryCollection()?.loadReadonlyAsync();
+  if (!preparingMemoryProblemRead) {
+    preparingMemoryProblemRead = Promise.resolve().then(async () => {
+      await roleMemoryCollection()?.loadReadonlyAsync();
+    }).finally(() => { preparingMemoryProblemRead = undefined; });
+  }
+  await preparingMemoryProblemRead;
 }
 
 /** The existing seat agenda supplies delivery proofs, never attempts. Credit

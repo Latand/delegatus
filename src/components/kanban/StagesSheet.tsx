@@ -1,5 +1,6 @@
 "use client";
 
+import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { openReviewHistory } from "@/components/flows/ReviewHistory";
@@ -504,6 +505,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
+      <AgentMemoryCapNote cap={shown?.memoryCap} />
       {body}
     </section>
   );

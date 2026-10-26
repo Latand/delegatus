@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -84,7 +85,7 @@ test("the deputy's own lines skip the fork prefix, and its work is read from its
   const deputy = liveDeputy();
   appendOwn(deputy, [
     { type: "user", message: { content: "file a task" } },
-    { type: "assistant", message: { content: [{ type: "tool_use", id: "call_1", name: "mcp__viewer__create_task", input: { text: "Reviewer for #2244", project: "proj" } }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "call_1", name: "mcp__viewer__create_task", input: withTaskDue({ text: "Reviewer for #2244", project: "proj" }) }] } },
     { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call_1", content: [{ type: "text", text: JSON.stringify({ taskId: "task_318" }) }] }] } },
     { type: "assistant", message: { content: [{ type: "tool_use", id: "call_2", name: "Bash", input: { command: "ls" } }] } },
     { type: "assistant", message: { content: [{ type: "text", text: "Created task «Reviewer for #2244».\nLinked it to the lane." }] } },

@@ -234,10 +234,7 @@ test("a binding record that cannot be read refuses both automatic seams", () => 
     .toThrow(AccountProjectBindingsUnreadableError);
 });
 
-test("a project with no binding keeps the answer it always had", () => {
-  /* No record at all: the pipeline seam takes the engine's routing with no
-     capacity arithmetic, and the capacity-aware seam selects across every
-     account. Both are byte for byte the pre-#1279 behaviour. */
+test("a project with no binding uses capacity on both launch paths", () => {
   registryWith(spare, [observation(spare, 5)]);
 
   const project = accountManager.resolveProjectSpawn("codex", { project: ATLAS });
@@ -579,13 +576,10 @@ test("a damaged binding record refuses a resume-spec pick before any spec is bui
   expect(resolveResumeAccountId("codex", spare, ATLAS)).toBe(spare);
 });
 
-test("an unbound project keeps the resume-spec builder's own fallback, offered nothing (#1279)", () => {
-  /* No record at all. Answering with the routing account here would REPLACE
-     the builder's fallback on a project that opted into nothing, so the answer
-     is null and the path below this one is byte for byte what it was. */
+test("an unbound resume with no recorded account uses the shared capacity choice", () => {
   registryWith(spare, [observation(spare, 5)]);
 
-  expect(resolveResumeAccountId("codex", null, ATLAS)).toBeNull();
+  expect(resolveResumeAccountId("codex", null, ATLAS)).toBe(spare);
 });
 
 /* Task 8feee404: after a redeemed reset the Viewer kept a transcript's 100%
@@ -706,12 +700,12 @@ function tierCatalogs() {
   for (const account of accounts) { fs.mkdirSync(account.home, { recursive: true }); fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(account.id === spare ? [{ id: "ultrafast" }] : [])] }] })); }
 }
 
-test("a tier every account offers preserves the unbound engine default", async () => {
+test("a tier every account offers keeps the unbound pick capacity-aware", async () => {
   tierCatalogs();
   registryWith(reserved, [observation(reserved, 80), observation(spare, 0)]);
   const tier = { id: "priority", model: "gpt-6-astra", required: true };
   expect(await resolveHealthySpawnAccount("codex", undefined, ATLAS, tier.model, tier))
-    .toMatchObject({ accountId: reserved, serviceTier: "priority" });
+    .toMatchObject({ accountId: spare, serviceTier: "priority" });
 });
 
 test("headless tier eligibility removes lacking accounts even after every offering account was attempted", () => {
@@ -729,7 +723,7 @@ test("required tier narrows an unbound pick and refuses a named account without 
   registryWith(reserved, [observation(reserved, 0), observation(spare, 20)]);
   const tier = { id: "ultrafast", model: "gpt-6-astra", required: true };
   expect(await resolveHealthySpawnAccount("codex", undefined, ATLAS, tier.model, tier)).toMatchObject({ accountId: spare, serviceTier: "ultrafast" });
-  await expect(resolveHealthySpawnAccount("codex", reserved, ATLAS, tier.model, tier)).rejects.toThrow("offered: priority");
+  await expect(resolveHealthySpawnAccount("codex", reserved, ATLAS, tier.model, tier)).rejects.toThrow(`serviceTier ultrafast for model gpt-6-astra; evaluated pinned account "${reserved}"`);
   expect(await resolveHealthySpawnAccount("codex", reserved, ATLAS, tier.model, { ...tier, required: false })).toMatchObject({ accountId: reserved, serviceTier: null });
 });
 
@@ -751,7 +745,7 @@ test("a missing named account clears a preferred tier on its automatic fallback"
 
 test("a required tier never widens a bound pool to its offering account", async () => {
   tierCatalogs(); registryWith(spare, [observation(reserved, 0), observation(spare, 0)]); bind(reserved);
-  await expect(resolveHealthySpawnAccount("codex", undefined, ATLAS, "gpt-6-astra", { id: "ultrafast", model: "gpt-6-astra", required: true })).rejects.toThrow("no account in this project's pool offers");
+  await expect(resolveHealthySpawnAccount("codex", undefined, ATLAS, "gpt-6-astra", { id: "ultrafast", model: "gpt-6-astra", required: true })).rejects.toThrow(`evaluated allowed accounts: account "Reserved carrier" (${reserved}): gpt-6-astra offered: priority`);
 });
 
 

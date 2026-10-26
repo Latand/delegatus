@@ -18,17 +18,26 @@ export const summarizeCall: CallSummarizer = async (input, project) => (await pr
   schema: callSummarySchema, prompt: summaryPrompt(input), maxTokens: 2048, deadlineMs: 20_000,
 });
 
+/** A private read: a Telegram group read, or a private added server's call that is running or answered (`privateTool`
+ * marks the call, `privateResult` an answer whose content reached the model, an error's text included). An added
+ * server's call recorded under its own name would otherwise read as an ordinary tool. */
+const privateRead = (row: TranscriptEntry) => row.kind === "tool" && (row.data.status === "running" && (row.data.name === "relay_owner_history" || row.data.privateTool === true)
+  || row.data.status === "done" && row.data.name === "relay_owner_history" || row.data.privateResult === true);
+/** The delegation an operator turn handed `row` to: the same delegation id, or on Codex (whose tool rows carry the
+ * turn's id) the same operator turn. */
+const delegationOf = (rows: readonly TranscriptEntry[], at: number) => rows.findIndex(row => row.kind === "delegation" && (row.data.delegationId === rows[at].data.delegationId
+  || Number.isSafeInteger(rows[at].data.sourceTurn) && row.data.sourceTurn === rows[at].data.sourceTurn));
+
 /** A successful private read taints the rest of the call, including later speech.
  * Cut back through its delegation to the start of the operator's triggering turn.
  * Missing correlation is unknown: keep none of the journal. `rows` is the journal
  * in order without its summary; nothing at or after `cut` may leave the call. */
 export function privateCut(entries: readonly TranscriptEntry[]): { rows: TranscriptEntry[]; cut: number; history: number } {
   const rows = [...entries].filter(entry => entry.kind !== "summary").sort((a,b) => (a.order ?? 0) - (b.order ?? 0));
-  const history = rows.findIndex(row => row.kind === "tool" && row.data.name === "relay_owner_history" && ["done", "running"].includes(String(row.data.status)));
+  const history = rows.findIndex(privateRead);
   let cut = rows.length;
   if (history >= 0) {
-    const delegation = rows.findIndex(row => row.kind === "delegation" && (row.data.delegationId === rows[history].data.delegationId
-      || Number.isSafeInteger(rows[history].data.sourceTurn) && row.data.sourceTurn === rows[history].data.sourceTurn));
+    const delegation = delegationOf(rows, history);
     cut = 0;
     if (delegation >= 0 && delegation < history) {
       let last = delegation - 1;
@@ -44,6 +53,21 @@ export function privateCut(entries: readonly TranscriptEntry[]): { rows: Transcr
   }
   return { rows, cut, history };
 }
+/** Whether a call's journal carries an added tool's answer: one answered in the call, or a start that held the
+ * added-result gates because its earlier-call notes or the part it resumes carried one (`addedResult` on its start). */
+export const carriesAddedResult = (entries: readonly TranscriptEntry[]) =>
+  entries.some(row => (row.kind === "tool" || row.kind === "session_start") && row.data.addedResult === true);
+/** Where an added tool's answer could first shape the voice's words: the start of a call that started with one, the
+ * delegation that led to the first added result, or that result's row when no delegation names it. Infinity when no
+ * added tool answered. */
+export function addedResultFrom(rows: readonly TranscriptEntry[]): number {
+  const start = rows.find(row => row.kind === "session_start" && row.data.addedResult === true);
+  if (start) return start.order ?? 0;
+  const added = rows.findIndex(row => row.kind === "tool" && row.data.addedResult === true);
+  if (added < 0) return Infinity;
+  const delegation = delegationOf(rows, added);
+  return rows[delegation >= 0 && delegation < added ? delegation : added].order ?? 0;
+}
 export function summaryInput(entries: readonly TranscriptEntry[], previous: CallSummary | null = null): SummaryInput {
   const { rows, cut, history } = privateCut(entries);
   const prefix = rows.slice(0, cut);
@@ -55,7 +79,12 @@ export function summaryInput(entries: readonly TranscriptEntry[], previous: Call
   const cutOrder = history < 0 ? Infinity : rows[cut]?.order ?? 0;
   const kept = previous && ["checkpoint", "final"].includes(previous.state) && previous.through < cutOrder ? previous : null;
   const after = safe.filter(row => (row.order ?? 0) > (kept?.through ?? -1));
+  // The voice's words from an added tool's answer on could carry its text, which must never reach a later call: the
+  // operator's own words, the requests and the reports stay. A reply begun before the handoff and still growing when
+  // the answer arrived keeps its earlier order, so it is known by the mark it got when written after the answer.
+  const shaped = addedResultFrom(rows);
   const text = after.flatMap(row => {
+    if (row.kind === "reply" && ((row.order ?? 0) >= shaped || row.data.afterAddedResult === true)) return [];
     if (["utterance", "reply"].includes(row.kind) && row.data.final === true && typeof row.data.text === "string") return [`${row.kind}: ${row.data.text}`];
     if (row.kind === "request") return [`request (${String(row.data.status)}): ${String(row.data.instruction ?? "")}`];
     if (row.kind === "report") return [`report (${String(row.data.status)}): ${String(row.data.text ?? "").slice(0,300)}`];
@@ -134,9 +163,16 @@ export class CallMemory {
     return rows.filter(row => selected.has(row.sessionId) || failures.has(row.sessionId));
   }
   /** `exclude` leaves out the calls a reconnect already carries whole; `budget` is what they left of the call-memory budget. */
-  block(starter: SessionStarter | undefined, options: { exclude?: ReadonlySet<string>; budget?: number } = {}): string {
-    try { return this.storage.settings().callMemory ? selectMemory(this.rows(starter).filter(row => !options.exclude?.has(row.sessionId)), this.now(), options.budget).block : ""; }
-    catch { return ""; } // Unavailable notes never prevent a voice call starting.
+  block(starter: SessionStarter | undefined, options: { exclude?: ReadonlySet<string>; budget?: number } = {}): string { return this.notes(starter, options).block; }
+  /** The earlier-call notes a start carries, and whether one of those calls carried an added tool answer, its own or one
+   * its start was gated by: its request and report text could carry that answer, so the call they start holds the
+   * added-result gates and records that it did, which keeps the gates for the calls after it too. */
+  notes(starter: SessionStarter | undefined, options: { exclude?: ReadonlySet<string>; budget?: number } = {}): { block: string; addedResult: boolean } {
+    try {
+      if (!this.storage.settings().callMemory) return { block: "", addedResult: false };
+      const { block, calls } = selectMemory(this.rows(starter).filter(row => !options.exclude?.has(row.sessionId)), this.now(), options.budget);
+      return { block, addedResult: calls.some(row => carriesAddedResult(this.records.read(row.sessionId).entries)) };
+    } catch { return { block: "", addedResult: false }; } // Unavailable notes never prevent a voice call starting.
   }
   /** The stored summary of one call, when it may be read into a later start: the same checks as the earlier-call notes. */
   readable(starter: SessionStarter | undefined, id: string): CallSummary | null {

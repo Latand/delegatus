@@ -241,11 +241,14 @@ export interface EventQuery {
   memberId?: string | null;
   project?: string | null;
   subjectId?: string | null;
+  visibleProjects?: readonly string[];
+  ownUnscopedMember?: string;
   actions?: readonly TeamEventAction[] | null;
   limit: number;
 }
 
 const teamIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS workspace_members_member ON workspace_members(member_id, workspace_id)`,
   `CREATE INDEX IF NOT EXISTS sessions_member ON sessions(member_id)`,
   `CREATE INDEX IF NOT EXISTS passkeys_member ON passkeys(member_id)`,
   `CREATE INDEX IF NOT EXISTS events_member ON events(actor_member_id, id)`,
@@ -358,6 +361,14 @@ export class TeamStore {
           created_at TEXT NOT NULL,
           created_by TEXT NOT NULL,
           updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workspace_members (
+          workspace_id TEXT NOT NULL,
+          member_id TEXT NOT NULL,
+          role TEXT NOT NULL CHECK(role IN ('manager', 'member')),
+          added_at TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          PRIMARY KEY(workspace_id, member_id)
         );
         CREATE TABLE IF NOT EXISTS workspace_projects (
           project TEXT PRIMARY KEY,
@@ -648,6 +659,10 @@ export class TeamStore {
     if (query.before) { where.push("id < ?"); params.push(query.before); }
     if (query.memberId) { where.push("actor_member_id = ?"); params.push(query.memberId); }
     if (query.project) { where.push("project = ?"); params.push(query.project); }
+    if (query.visibleProjects) {
+      where.push(`(project IN (SELECT value FROM json_each(?)) OR (project IS NULL AND actor_member_id = ?))`);
+      params.push(JSON.stringify(query.visibleProjects), query.ownUnscopedMember ?? "");
+    }
     if (query.subjectId) { where.push("subject_id = ?"); params.push(query.subjectId); }
     if (query.actions?.length) {
       where.push(`action IN (${query.actions.map(() => "?").join(", ")})`);
@@ -673,6 +688,22 @@ export class TeamStore {
   }
 
   /* ---- workspaces ------------------------------------------------------- */
+
+  workspaceMemberships(memberId: string): { workspaceId: string; role: "manager" | "member" }[] {
+    return this.db.query<{ workspaceId: string; role: "manager" | "member" }, [string]>(
+      "SELECT workspace_id AS workspaceId, role FROM workspace_members WHERE member_id = ? ORDER BY workspace_id",
+    ).all(memberId);
+  }
+
+  putWorkspaceMember(workspaceId: string, memberId: string, role: "manager" | "member", addedBy: string, at: string): void {
+    this.db.query(`INSERT INTO workspace_members(workspace_id, member_id, role, added_at, added_by)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(workspace_id, member_id) DO UPDATE SET role = excluded.role`)
+      .run(workspaceId, memberId, role, at, addedBy);
+  }
+
+  removeWorkspaceMember(workspaceId: string, memberId: string): void {
+    this.db.query("DELETE FROM workspace_members WHERE workspace_id = ? AND member_id = ?").run(workspaceId, memberId);
+  }
 
   workspaceRows(): StoredWorkspace[] {
     return this.db.query<Row, []>("SELECT * FROM workspaces ORDER BY created_at, id").all().map((row) => ({
@@ -708,6 +739,7 @@ export class TeamStore {
   /** Also drops rows that still name it after an alias gave their project to
       another workspace's row, so a deleted workspace leaves nothing behind. */
   deleteWorkspace(id: string): boolean {
+    this.db.query("DELETE FROM workspace_members WHERE workspace_id = ?").run(id);
     this.db.query("DELETE FROM workspace_projects WHERE workspace_id = ?").run(id);
     return this.db.query("DELETE FROM workspaces WHERE id = ?").run(id).changes > 0;
   }

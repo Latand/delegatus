@@ -99,7 +99,9 @@ const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), liveSt
 
 await bindStructuredDeliveryQueue([], { registry, client });
 await publishStructuredDeliveryHost({ key, host });
-fs.writeFileSync(readyPath, JSON.stringify({ viewer: viewerIdentity, engine: engineIdentity }));
+/* The parent polls for this file and parses it at once: publish it whole. */
+fs.writeFileSync(`${readyPath}.partial`, JSON.stringify({ viewer: viewerIdentity, engine: engineIdentity }));
+fs.renameSync(`${readyPath}.partial`, readyPath);
 
 const isCurrent = () => {
   if (!fs.existsSync(demotionGate)) return true;

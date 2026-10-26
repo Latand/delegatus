@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { X } from "@/components/icons";
 import { fmtAge } from "@/components/utils";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useTaskDraft } from "@/hooks/useTaskDraft";
 import { projectDisplayName } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
@@ -33,6 +34,7 @@ function NewTaskView({
   onCreated: (task: BoardTask) => void;
 }) {
   const { t } = useLocale();
+  const isMobile = useIsMobile();
   const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set());
   /* The composer needs its `submit` at construction, before `save` exists; a
      ref (updated in an effect) bridges the two without a forward reference. */
@@ -100,15 +102,20 @@ function NewTaskView({
           draft={draft}
           placeholder={t("tasks.newPlaceholder")}
           createLabel={t("tasks.sheetCreate")}
-          leftSlot={
+          /* The phone's tools row has no room for the count beside the date
+              chip, so it moves to the checklist heading there. */
+          leftSlot={isMobile ? undefined : (
             <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-sunken px-1.5 py-1 text-[9.5px] font-semibold text-secondary">
-              {t("tasks.sheetTargets", { count: checked.size })}
+              <span className="truncate whitespace-nowrap">{t("tasks.sheetTargets", { count: checked.size })}</span>
             </span>
-          }
+          )}
         />
       </div>
       <div className="flex flex-col gap-1 rounded-[10px] border border-border bg-card p-1.5">
-        <div className="px-1 text-[10.5px] font-bold text-muted">{t("tasks.pickerTitle")}</div>
+        <div className="flex items-center justify-between gap-2 px-1 text-[10.5px] font-bold text-muted">
+          <span>{t("tasks.pickerTitle")}</span>
+          {isMobile ? <span className="whitespace-nowrap">{t("tasks.sheetTargets", { count: checked.size })}</span> : null}
+        </div>
         <TargetChecklist files={files} project={project} checked={checked} onChange={setChecked} maxHeight={9999} />
       </div>
     </form>

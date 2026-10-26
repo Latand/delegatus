@@ -3,8 +3,7 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { ReviewHistoryDialog, ReviewHistoryHost, openReviewHistory, openProjectReviewHistory } from "./ReviewHistory";
-import { FlowStrip } from "./FlowStrip";
-import { FlowHub } from "./FlowHub";
+import { RoundDeck } from "./RoundDeck";
 import { flowPresentation, patchFlow } from "./flowModel";
 import { useEffectiveFlows } from "./useEffectiveFlows";
 import type { FileEntry } from "@/lib/types";
@@ -37,8 +36,9 @@ test.each(["en", "uk"] as const)("archive controls and all rounds are read-only 
   const calls: { url: string; method: string }[] = [];
   globalThis.fetch = (async (url: string, init?: RequestInit) => { calls.push({ url, method: init?.method ?? "GET" }); return Response.json(detail()); }) as unknown as typeof fetch;
   const flow = recorded(); const before = JSON.stringify(flow);
-  mount(<><ReviewHistoryHost /><FlowStrip flow={flow} /><FlowHub flow={flow} x={0} y={0} interactive moveTransition="" /></>);
-  flushSync(() => openReviewHistory(flow.id, 1));
+  const { host } = mount(<><ReviewHistoryHost /><RoundDeck flow={flow} focusRound={1}
+    rounds={flow.rounds.map(round => ({ key: `r${round.n}`, round, file: null }))} /></>);
+  flushSync(() => [...host.querySelectorAll("button")].find(button => button.textContent === translate(locale, "reviewHistory.open"))!.click());
   await until(() => document.body.textContent!.includes("Recorded finding"));
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).toContain(translate(locale, "reviewHistory.unresolved"));

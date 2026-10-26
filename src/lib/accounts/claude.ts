@@ -507,12 +507,51 @@ export function syncClaudeCapabilitySnapshot(): string {
 
 export function claudeSettingsPath(): string | null { const file = path.join(claudeCapabilitiesRoot(), "settings.json"); return fs.existsSync(file) ? file : null; }
 
-export function createManagedClaudeAccount(label: string, provider?: { config: ClaudeProviderConfig; token: string; headers?: Record<string, string> }): ClaudeAccount {
+/** An install transfer's reservation (docs/design/install-memory-transfer.md
+    §4.7): an id the import commits its bindings to before the account exists,
+    held by an empty home directory, which every id choice above skips. The
+    account is made later by `createManagedClaudeAccount(label, undefined, { id })`. */
+export function reserveManagedClaudeAccountId(label: string, taken: ReadonlySet<string> = new Set()): { id: string; home: string } {
+  const clean = label.trim(); if (!clean || clean.length > 80 || /[\u0000-\u001f\u007f]/.test(clean)) throw new InvalidClaudeAccountLabelError();
+  return withRegistryLock(() => {
+    const registry = mutable();
+    const id = nextId(clean, new Set([...listClaudeAccounts().map((item) => item.id), ...registry.retired.map((item) => item.id), ...taken]));
+    const home = managedHome(id);
+    fs.mkdirSync(path.dirname(home), { recursive: true, mode: 0o700 }); fs.mkdirSync(home, { mode: 0o700 }); fs.chmodSync(home, 0o700);
+    return { id, home };
+  }, false);
+}
+
+/** Gives back a reservation no account took: its home goes only while it is still empty. */
+export function releaseManagedClaudeAccountReservation(id: string): void {
+  if (!ACCOUNT_ID.test(id) || id === DEFAULT_ID) return;
+  withRegistryLock(() => {
+    if (mutable().accounts.some((item) => item.id === id)) return;
+    try { fs.rmdirSync(managedHome(id)); } catch { /* gone, or no longer empty: kept */ }
+  }, false);
+}
+
+export function createManagedClaudeAccount(label: string, provider?: { config: ClaudeProviderConfig; token: string; headers?: Record<string, string> }, options: { id?: string } = {}): ClaudeAccount {
   const clean = label.trim(); if (!clean || clean.length > 80 || /[\u0000-\u001f\u007f]/.test(clean)) throw new InvalidClaudeAccountLabelError();
   const config = provider ? validateProviderConfig({ ...provider.config, customHeaderNames: Object.keys(validateClaudeProviderHeaders(provider.headers ?? {})) }) : undefined;
   if (config) validateClaudeProviderModelRoute(config);
   return withRegistryLock(() => {
-    const registry = mutable(); const id = nextId(clean, new Set([...listClaudeAccounts().map((item) => item.id), ...registry.retired.map((item) => item.id)])); const home = managedHome(id); let made = false;
+    const registry = mutable();
+    if (options.id !== undefined) {
+      /* A reserved id: made once. A second call (a recovery after a stop)
+         answers with the account the first made, and an empty home the first
+         left behind is taken over; anything else in it refuses. */
+      const reserved = options.id;
+      if (!ACCOUNT_ID.test(reserved) || reserved === DEFAULT_ID || registry.retired.some((item) => item.id === reserved)) throw new UnsafeClaudeHomeError();
+      const made = registry.accounts.find((item) => item.id === reserved);
+      if (made) { if (made.label !== clean || Boolean(made.provider) !== Boolean(config)) throw new UnsafeClaudeHomeError(); return account(made); }
+      const home = managedHome(reserved);
+      if (fs.existsSync(home)) {
+        if (fs.readdirSync(home).length === 0) fs.rmdirSync(home);
+        else if (!removeHistoryFreeAccountHome("claude", reserved, home)) throw new UnsafeClaudeHomeError();
+      }
+    }
+    const id = options.id ?? nextId(clean, new Set([...listClaudeAccounts().map((item) => item.id), ...registry.retired.map((item) => item.id)])); const home = managedHome(id); let made = false;
     // A removed directory does not prove its platform credential is gone.
     // Refuse adoption of a previous account's store under a reused label.
     if (readClaudeCredentials(home).state !== "absent") throw new UnsafeClaudeHomeError();
@@ -542,6 +581,8 @@ export function createManagedClaudeAccount(label: string, provider?: { config: C
           console.warn("[claude accounts] preserving failed-account home after history cleanup refusal");
           if (cleanupError instanceof AccountHistoryInventoryBlockedError) throw cleanupError;
         }
+        /* A reserved id stays reserved: bindings already name it. */
+        if (options.id !== undefined) { try { fs.mkdirSync(home, { mode: 0o700 }); } catch { /* still there */ } }
       }
       throw error;
     }

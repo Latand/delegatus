@@ -15,6 +15,8 @@ export async function completeRelayRequest(
   let wait = 1000;
   let attempted = false;
   let downgraded = false;
+  let unresolved = false;
+  const refused = () => ({ body, delivery: unresolved ? "unconfirmed" as const : "refused" as const });
   while (true) {
     if (attempted && Date.now() >= until()) return { body, delivery: "unconfirmed" };
     attempted = true;
@@ -30,10 +32,12 @@ export async function completeRelayRequest(
     } catch (error) {
       if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
+        if (allowOwnerReply && error.status === 409 && error.code === "already_completed") return { body, delivery: "unconfirmed" };
+        if (unresolved && error.status >= 400 && error.status < 500) return refused();
         const v2 = body.outcome === "answered" && body.answer.format !== undefined;
         if (v2 && body.outcome === "answered" && (error.status === 400 && error.code === "malformed" && body.answer.mentions?.length
-          || error.status === 422 && (body.answer.attachments?.some(file => file.kind === "photo") || /!\[/.test(body.answer.text)))) return { body, delivery: "refused" };
-        if (v2 && error.status === 409 && error.code === "already_completed") return { body: { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }, delivery: "refused" };
+          || error.status === 422 && (body.answer.attachments?.some(file => file.kind === "photo") || /!\[/.test(body.answer.text)))) return refused();
+        if (v2 && error.status === 409 && error.code === "already_completed") return unresolved ? refused() : { body: { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }, delivery: "refused" };
         if (v2 && !downgraded && (error.status === 422 && ["invalid_format", "attachment_not_ready"].includes(error.code) || error.status === 415 || error.status === 400 && error.code === "malformed")) {
           downgraded = true;
           if (body.outcome === "answered" && body.answer.text.trim() && error.status === 422 && error.code === "attachment_not_ready") {
@@ -46,13 +50,14 @@ export async function completeRelayRequest(
           } else body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null };
           continue;
         }
-        if (v2 && [415, 422].includes(error.status)) return { body, delivery: "refused" };
+        if (v2 && [415, 422].includes(error.status)) return refused();
         if (error.status === 413 && body.outcome === "answered") { body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }; continue; }
         if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
           body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }; continue;
         }
-        if ([400, 401, 404, 409, 413, 426].includes(error.status)) return { body, delivery: "refused" };
+        if ([400, 401, 404, 409, 413, 426].includes(error.status)) return refused();
       }
+      unresolved = !!allowOwnerReply;
       if (Date.now() >= until()) return { body, delivery: "unconfirmed" };
       if (body.outcome === "answered" && body.answer.format !== undefined && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
       await new Promise(resolve => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
