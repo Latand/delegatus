@@ -110,6 +110,9 @@ export type PipelineStageInput = {
   model?: string | null;
   effort?: string | null;
   serviceTier?: string | null;
+  /** Preferred tier for automatic selection. Unlike serviceTier, this can
+      fall back through the allowed pool's currently available catalog tiers. */
+  preferredServiceTier?: string;
   agentMemoryMaxBytes?: number | null;
   /** Repository mutation policy, enforced when the stage settles. It does not
       select the engine's tool/network sandbox. */

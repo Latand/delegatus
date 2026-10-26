@@ -697,3 +697,23 @@ test("preview carries the agent's judgment even with no detector hints", async (
   expect(await h.call(SEAT_CALLER, { action: "show", digest: answer.digest })).toMatchObject({ privacyJudgment: JUDGMENT });
   expect(await h.call(REPORTER, { action: "preview", ...REPORT, privacyJudgment: undefined })).toMatchObject({ ok: false, code: "issue_report_invalid", details: { field: "privacyJudgment" } });
 });
+
+test("a draft is prepared without consent and a plain decline ends the report", async () => {
+  const h = harness();
+  expect(loadSeatRounds(PROJECT)).toEqual([]);
+  const prepared = await h.call(REPORTER, { action: "preview", ...REPORT });
+  expect(prepared).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, privacyJudgment: JUDGMENT });
+  expect(loadSeatRounds(PROJECT)).toEqual([]);
+  expect(h.published).toEqual([]);
+
+  const digest = issueReportDigest(REPORT);
+  const reviewId = await h.asks(digest);
+  await h.decides(reviewId, NO);
+  // Even a fresh MCP service cannot turn this decline into a publication.
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+  expect(h.published).toEqual([]);
+  expect(loadSeatRounds(PROJECT)).toHaveLength(1);
+  expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview", title: REPORT.title, body: REPORT.body });
+  expect(fs.readdirSync(sandbox).filter(name => /^[a-f0-9]{64}\.json$/.test(name))).toEqual([`${digest}.json`]);
+});
