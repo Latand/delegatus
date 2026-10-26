@@ -1,4 +1,8 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
 
 import { NextRequest, NextResponse } from "next/server";
 
@@ -45,7 +49,7 @@ async function derivePid(pathname: string): Promise<number | null | "invalid" | 
   return "invalid";
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<KillResponse | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<KillResponse | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -69,10 +73,24 @@ export async function POST(req: NextRequest): Promise<NextResponse<KillResponse 
     return NextResponse.json({ error: "process is no longer running" }, { status: 409 });
   }
 
+  let withdraw: (() => void) | undefined;
   try {
-    process.kill(pid, body.force ? "SIGKILL" : "SIGTERM");
+    const identity = captureProcessIdentity(pid);
+    const signal = body.force ? "SIGKILL" : "SIGTERM";
+    withdraw = withHostStopOrigin({ path: "/api/proc", operationId: randomUUID() }, () => recordHostStop(identity, signal, "/api/proc"));
+    const stillAttributed = transcriptEngine(pathname) !== null
+      ? verifyTranscriptPid(claudeSubagentOwnerPath(pathname) ?? pathname, pid)
+      : pidHoldsPath(pid, pathname);
+    if (!stillAttributed || processIdentityStatus(identity) !== "alive") {
+      withdraw?.();
+      return NextResponse.json({ error: "process is no longer running" }, { status: 409 });
+    }
+    process.kill(pid, signal);
     return NextResponse.json({ ok: true, pid });
   } catch (error) {
+    withdraw?.();
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+export const POST = workspaceRoute("/api/proc", workspacePOST);

@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { modelDisplayName } from "@/lib/agent/models";
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale } from "@/lib/i18n";
 import { isCrossProjectRoleScope } from "@/lib/memory/roleScopes";
 import type { RoleMemoryProjectView, ScopeView } from "@/lib/memory/roleTypes";
 import type { ProfilePartView } from "@/lib/memory/profileTypes";
+import { RoleMark } from "./RoleMark";
 import { useMemoryProfile } from "./useMemoryProfile";
 
 const BUTTON = "min-h-8 rounded-lg px-3 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11";
-const TONE = { role: "border-t-accent", project: "border-t-info", machine: "border-t-warning" };
+const TONE = { role: "border-t-accent", swarm: "border-t-info", project: "border-t-info", machine: "border-t-warning" };
 
 const SOLID = "bg-accent text-white disabled:opacity-60";
 const OUTLINE = "border border-border text-accent hover:bg-sunken disabled:opacity-60";
@@ -27,13 +28,15 @@ function stamp(createdAt: string, locale: string, today: string): string {
   return at.toDateString() === now.toDateString() ? `${today} ${time}` : `${at.toLocaleDateString(tag, { day: "numeric", month: "short" })}, ${time}`;
 }
 
-export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemoryProjectView; renderRules: (scope: ScopeView, ids?: string[], heading?: { title: string; subtitle: string }) => ReactNode; onDrill?: (open: boolean) => void }) {
+export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemoryProjectView; renderRules: (scope: ScopeView, ids?: string[], heading?: { title: string; subtitle: ReactNode }) => ReactNode; onDrill?: (open: boolean) => void }) {
   const { t, locale } = useLocale();
-  const { view, error, running, summarize } = useMemoryProfile(rules.project, locale, rules);
+  /* Only a change to the rules themselves asks for a new profile; a re-read of the same rules does not. */
+  const revision = useMemo(() => rules.scopes.map(scope => `${scope.scope}:${scope.active.map(rule => `${rule.id}@${rule.changedAt}`).join(",")}`).join("|"), [rules]);
+  const { view, error, loaded, running, summarize } = useMemoryProfile(rules.project, locale, revision);
   const [selection, setSelection] = useState<{ scopes: ScopeView[]; ids?: string[]; topic?: string } | null>(null);
-  const label = (scope: ScopeView) => scope.kind === "role"
-    ? `${roleNameById(t, scope.roleId ?? "")} · ${t(isCrossProjectRoleScope(scope.scope) ? "memoryProfile.everyProject" : "memoryProfile.thisProject")}`
-    : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection");
+  const label = (scope: ScopeView): ReactNode => scope.kind === "role"
+    ? <><RoleMark role={scope.roleId} />{roleNameById(t, scope.roleId ?? "")} · {t(isCrossProjectRoleScope(scope.scope) ? "memoryProfile.everyProject" : "memoryProfile.thisProject")}</>
+    : scope.kind === "swarm" ? <><RoleMark role={scope.roleId} />{t("roleMemory.swarm", { role: roleNameById(t, scope.roleId ?? "") })}</> : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection");
   const drilled = selection !== null;
   useEffect(() => {
     onDrill?.(drilled);
@@ -41,7 +44,7 @@ export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemo
   }, [drilled, onDrill]);
   /* The level cards follow the All rules page: each role's own project first, then its every-project rules, then project and machine. */
   const ordered = (() => {
-    const kinds = { role: 0, project: 1, machine: 2 };
+    const kinds = { role: 0, swarm: 1, project: 2, machine: 3 };
     const first = (scope: ScopeView) => rules.scopes.findIndex(candidate => candidate.kind === scope.kind && candidate.roleId === scope.roleId);
     const cross = (scope: ScopeView) => scope.kind === "role" && isCrossProjectRoleScope(scope.scope) ? 1 : 0;
     return rules.scopes.map((scope, index) => ({ scope, index })).sort((a, b) => kinds[a.scope.kind] - kinds[b.scope.kind] || first(a.scope) - first(b.scope) || cross(a.scope) - cross(b.scope) || a.index - b.index).map(item => item.scope);
@@ -76,18 +79,20 @@ export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemo
   const hasParts = !!view?.overall || !!view?.slices.some(slice => slice.summary);
   const code = count ? error ?? view?.run?.errors[0]?.code : null;
   const overall = count ? view?.overall : null;
+  /* Until the first answer the card says it is reading; "no summary yet" and the paid Summarize press would be a guess. */
+  const reading = count > 0 && !loaded;
   const pending = count > 0 && running && !overall;
   const quiet = !!overall && !code && !view?.stale && !running;
-  return <div data-memory-profile="" className="min-h-0 flex-1 overflow-y-auto p-3" aria-busy={running}>
+  return <div data-memory-profile="" className="min-h-0 flex-1 overflow-y-auto p-3" aria-busy={running || reading}>
     <section data-profile-ready={overall ? "" : undefined} className="rounded-xl border border-border bg-card p-4">
       {count > 0 && rules.enabled || overall ? <div className="mb-2 flex items-center justify-between gap-3">
         {overall && view ? <p className="m-0 min-w-0 text-[11px] text-muted [overflow-wrap:anywhere]">{modelDisplayName("claude", overall.model)} · {stamp(overall.createdAt, locale, t("memoryProfile.today"))} · {t(locale === "uk" ? "memoryProfile.uk" : "memoryProfile.en")}</p> : <span />}
-        {count > 0 && rules.enabled ? <button data-profile-summarize="" type="button" disabled={running} onClick={() => void summarize()} className={`${BUTTON} shrink-0 ${quiet ? OUTLINE : SOLID}`}>
+        {count > 0 && rules.enabled && !reading ? <button data-profile-summarize="" type="button" disabled={running} onClick={() => void summarize()} className={`${BUTTON} shrink-0 ${quiet ? OUTLINE : SOLID}`}>
           {t(running ? "memoryProfile.summarizing" : code ? "memoryProfile.retry" : hasParts ? "memoryProfile.refresh" : "memoryProfile.summarize")}
         </button> : null}
       </div> : null}
-      <h3 className="m-0 text-[16px] font-semibold [overflow-wrap:anywhere]">{overall?.answer.headline ?? t(!count ? "memoryProfile.emptyTitle" : pending ? "memoryProfile.runningTitle" : "memoryProfile.noneTitle")}</h3>
-      {pending ? <><p className="mb-0 mt-2 text-[13px] leading-5 text-secondary [overflow-wrap:anywhere]">{t("memoryProfile.runningText")}</p><Placeholder lines={3} /></> : <p className="mb-0 mt-2 text-[13px] leading-5 text-secondary [overflow-wrap:anywhere]">{overall?.answer.text ?? t(count ? "memoryProfile.noneText" : "memoryProfile.emptyText")}</p>}
+      <h3 role={reading ? "status" : undefined} className="m-0 text-[16px] font-semibold [overflow-wrap:anywhere]">{overall?.answer.headline ?? t(!count ? "memoryProfile.emptyTitle" : reading ? "memoryProfile.reading" : pending ? "memoryProfile.runningTitle" : "memoryProfile.noneTitle")}</h3>
+      {reading ? <Placeholder lines={3} /> : pending ? <><p className="mb-0 mt-2 text-[13px] leading-5 text-secondary [overflow-wrap:anywhere]">{t("memoryProfile.runningText")}</p><Placeholder lines={3} /></> : <p className="mb-0 mt-2 text-[13px] leading-5 text-secondary [overflow-wrap:anywhere]">{overall?.answer.text ?? t(count ? "memoryProfile.noneText" : "memoryProfile.emptyText")}</p>}
       {running ? <p role="status" className="mb-0 mt-3 text-[12px] text-muted">{t("memoryProfile.loading")}</p> : null}
       {code ? <p role="alert" className="mb-0 mt-3 text-[12px] text-danger">{t(code === "account" ? "memoryProfile.errorAccount" : code === "size" ? "memoryProfile.errorSize" : "memoryProfile.error")}</p> : null}
       {count > 0 && view?.stale ? <p data-profile-stale="" className="mb-0 mt-3 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning">{t("memoryProfile.stale", view.changes)}</p> : null}
@@ -105,7 +110,7 @@ export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemo
               <p className="mb-0 mt-1 text-[12.5px] leading-[19px] text-secondary [overflow-wrap:anywhere]">{summary.answer.text}</p>{topics(summary)}
             </> : <>
               <h4 className="m-0 text-[14px] font-semibold [overflow-wrap:anywhere]">{label(scope)}</h4>
-              {running ? <Placeholder lines={2} /> : <p className="mb-0 mt-2 text-[12px] text-muted">{t("memoryProfile.sliceEmpty")}</p>}
+              {running || reading ? <Placeholder lines={2} /> : <p className="mb-0 mt-2 text-[12px] text-muted">{t("memoryProfile.sliceEmpty")}</p>}
             </>}
             <button type="button" onClick={() => setSelection({ scopes: [scope] })} className={`${BUTTON} mt-3 border border-border text-accent hover:bg-sunken`}>{t("memoryProfile.rules", { count: scope.active.length })} →</button>
           </section>;

@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -27,8 +28,8 @@ import type { MessageOrigin } from "./messageOrigin";
 import { humanReceiptReasonKey } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
 
-/** A Viewer page's request: a browser stamps `sec-fetch-site` on every fetch. */
-function request(body: unknown, headers: Record<string, string> = { host: "127.0.0.1", "sec-fetch-site": "same-origin" }): NextRequest {
+/** A Viewer page's request: the page holds the session cookie its navigation opened. */
+function request(body: unknown, headers: Record<string, string> = { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" }): NextRequest {
   return new NextRequest("http://127.0.0.1/api/runtime/send", {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
@@ -2193,7 +2194,7 @@ test.each([true, false].flatMap(browser => ["interrupt", "kill"].map(control => 
   const response = await handleRuntimeCommand(request({ conversationId: "conversation_interrupt_authorship", operationId: "interrupt-authorship",
     origin: browser ? { kind: "agent", role: "pipeline" } : { kind: "operator" },
     ...(control === "kill" ? { sessionKey: { engine: "codex", sessionId: "stage-control" } } : {}) },
-    browser ? { host: "127.0.0.1", "sec-fetch-site": "same-origin" } : { host: "127.0.0.1" }), control as "interrupt" | "kill", {
+    browser ? { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } : { host: "127.0.0.1" }), control as "interrupt" | "kill", {
     enabled: () => true, structuredEnabled: () => true, client: () => client,
   });
   expect(response.status).toBe(202);

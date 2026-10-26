@@ -1,3 +1,4 @@
+import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
@@ -351,6 +352,7 @@ export type StructuredHostTerminationOutcome =
     };
 
 export interface StructuredHostTerminationDependencies {
+  stopOrigin?: HostStopOrigin;
   processIdentity?(pid: number): string | null;
   bootEpoch?(): string | null;
   pidAlive?(pid: number): boolean;
@@ -510,7 +512,7 @@ export async function terminateStructuredHostTree(
      group reaches reparented members that a descendant walk cannot see. Add
      every observed member to the identity snapshot before granting that wider
      signal; any observed member without a verifiable identity refuses the kill. */
-  const groupLeader = rootAlive && groupOf(pid) === pid ? pid : null;
+  let groupLeader = rootAlive && groupOf(pid) === pid ? pid : null;
   if (groupLeader !== null) {
     const known = new Set(tree);
     for (const candidate of processParents.keys()) {
@@ -636,7 +638,7 @@ export async function terminateStructuredHostTree(
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       try {
-        if (await terminateOwned(key, expected)) {
+        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected))) {
           via = "runtime";
           markStarted();
         }
@@ -662,11 +664,15 @@ export async function terminateStructuredHostTree(
     const signalOnce = (target: number, value: NodeJS.Signals) => {
       markStarted();
       try {
+        const changed = identityRefusal();
+        if (changed) throw new Error(changed.error);
         signal(target, value);
+        return true;
       } catch (error) {
         const code = signalErrorCode(error);
         /* ESRCH is the process exiting between the check and the signal. */
         if (code !== "ESRCH") refusals.push(`${value} on ${target < 0 ? `group ${-target}` : target}: ${code ?? "failed"}`);
+        return false;
       }
     };
     /* Exactly one signal per process: the group signal already reaches every
@@ -677,19 +683,55 @@ export async function terminateStructuredHostTree(
       if (refused) return refused;
       const changed = identityRefusal();
       if (changed) return changed;
-      const standing = survivors();
-      if (groupLeader !== null && standing.some((candidate) => groupOf(candidate) === groupLeader)) {
-        signalOnce(-groupLeader, value);
+      const withdraw = withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: ref.sessionId ?? String(pid) },
+        () => processIdentityStatus(expected, identityProbe) === "alive" ? recordHostStop(expected, value, "structured-host-kill") : undefined);
+      let hostSignalled = false;
+      try {
+        // A freshly spawned detached child can still be between fork and
+        // setsid during the first census. Receipt I/O and writer admission let
+        // it finish that transition. Ask again before choosing the signal's
+        // scope, while the recorded root still proves ownership of its group.
+        if (groupLeader === null && processIdentityStatus(expected, identityProbe) === "alive" && groupOf(pid) === pid) {
+          groupLeader = pid;
+          let added = false;
+          for (const candidate of ppids().keys()) {
+            if (identities.has(candidate) || groupOf(candidate) !== groupLeader) continue;
+            const identity = identityOf(candidate);
+            if (identity === null) {
+              if (alive(candidate)) return { ok: false, status: 409, error: `process ${candidate} identity is unknown before signalling`, remaining: survivors(), ...partialEvidence() };
+              continue;
+            }
+            identities.set(candidate, captureProcessIdentity(candidate, identityProbe, identity));
+            tree.push(candidate);
+            added = true;
+          }
+          if (added && dependencies.persistCapturedTree && !await dependencies.persistCapturedTree([...identities.values()])) {
+            return { ok: false, status: 409, error: "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
+          }
+          const refused = await readAuthority() ?? authorityRefusal();
+          if (refused) return refused;
+          const changed = identityRefusal();
+          if (changed) return changed;
+        }
+        const standing = survivors();
+        if (groupLeader !== null && standing.some((candidate) => groupOf(candidate) === groupLeader)) {
+          const includesRoot = standing.includes(pid) && groupOf(pid) === groupLeader;
+          const sent = signalOnce(-groupLeader, value);
+          if (includesRoot && sent) hostSignalled = true;
+        }
+        for (const candidate of standing) {
+          if (groupLeader !== null && groupOf(candidate) === groupLeader) continue;
+          const refused = await readAuthority() ?? authorityRefusal();
+          if (refused) return refused;
+          const changed = identityRefusal();
+          if (changed) return changed;
+          const sent = signalOnce(candidate, value);
+          if (candidate === pid && sent) hostSignalled = true;
+        }
+        return null;
+      } finally {
+        if (!hostSignalled) withdraw?.();
       }
-      for (const candidate of standing) {
-        if (groupLeader !== null && groupOf(candidate) === groupLeader) continue;
-        const refused = await readAuthority() ?? authorityRefusal();
-        if (refused) return refused;
-        const changed = identityRefusal();
-        if (changed) return changed;
-        signalOnce(candidate, value);
-      }
-      return null;
     };
 
     const changedBeforeTerm = await sweep("SIGTERM");

@@ -1,3 +1,4 @@
+import { readHostExit, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
@@ -905,6 +906,34 @@ test("a pending permission request reads as waiting on permission_request, never
   }));
   expect(answered.conversations[0]).toMatchObject({ lifecycle: "running", reason: "host_alive_turn_active" });
   expect(answered.conversations[0]!.permission).toBeUndefined();
+});
+
+test("a structured AskUserQuestion reads as waiting on question with its choices and age (#2357)", async () => {
+  const agentPath = path.join(sandbox(), "question-wedge.jsonl");
+  fs.writeFileSync(agentPath, "{}\n", "utf8");
+  const base = structuredEntry(agentPath, 4242);
+  const question = {
+    id: "question-one", tool: "AskUserQuestion",
+    questions: [{ prompt: "Which scope?", options: ["Small", "All"], multiSelect: false }],
+    since: new Date(NOW - 13 * 60_000).toISOString(),
+  };
+  const entry = { ...base, structuredHost: { ...base.structuredHost!, kind: "claude-broker" as const,
+    activeTurnRef: "turn-one", pendingAttention: [question.id], pendingQuestions: [question] } };
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    listFiles: async () => [fileEntry({ path: agentPath })],
+    registrySnapshot: () => ({ entries: { "claude:question-wedge": entry }, conversations: {} }) as unknown as RegistryFile,
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 13 * 60_000 }),
+  }));
+  expect(snapshot.stalledCount).toBe(0);
+  expect(snapshot.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "question", question });
+  expect(evaluateLiveness({ host: { state: "gone" }, turnState: "busy", silentForMs: 13 * 60_000,
+    stallAfterMs: 10 * 60_000, providerRetryAt: null, pendingQuestion: question }))
+    .toEqual({ lifecycle: "stalled", reason: "host_gone_turn_open" });
+  expect(evaluateLiveness({ host: { state: "alive" }, turnState: "busy", silentForMs: 1_000,
+    stallAfterMs: 10 * 60_000, providerRetryAt: null, pendingQuestion: null }))
+    .toEqual({ lifecycle: "running", reason: "host_alive_turn_active" });
 });
 
 test("the decision table puts a pending permission ahead of silence and the provider", () => {
@@ -2385,4 +2414,24 @@ test("strict transcript evidence keeps I/O errors visible while verifying the na
   expect(await readLivenessTranscriptEvidence("claude", transcript)).toBeNull();
   await expect(readLivenessTranscriptEvidence("claude", transcript, { strict: true })).rejects.toMatchObject({ code: "ELOOP" });
   expect(await readLivenessTranscriptEvidence("claude", path.join(dir, "missing.jsonl"), { strict: true })).toBeNull();
+});
+
+test("full activity evidence retains the exit and stop source of a gone structured host", async () => {
+  const transcript = path.join(sandbox(), "exit-evidence.jsonl");
+  const entry = structuredEntry(transcript, 2147482998);
+  entry.structuredHost!.process!.startIdentity = "fixture-activity-host-exit";
+  entry.hostExitProcess = entry.structuredHost!.process!;
+  withHostStopOrigin({ path: "idle-retirement-sweep", operationId: "sweep-fixture-operation" }, () => recordHostStop(entry.hostExitProcess, "SIGTERM", "fallback"));
+  recordHostExit(entry.hostExitProcess, null, "SIGTERM");
+  entry.previousHostExit = { process: { pid: 2147482997, startIdentity: "fixture-previous-activity-exit", bootEpoch: "fixture-boot" },
+    stop: null, exit: { code: 137, signal: null, at: new Date(FROZEN_AT).toISOString() } };
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript })],
+    registrySnapshot: () => ({ entries: { host: entry }, conversations: {} }),
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ lastRecordTs: FROZEN_AT, turn: "busy" }),
+  }));
+  expect(snapshot.conversations[0]!.hostExit).toEqual(readHostExit(entry.hostExitProcess));
+  expect(snapshot.conversations[0]!.hostExit).toMatchObject({ stop: { path: "idle-retirement-sweep", operationId: "sweep-fixture-operation" }, exit: { code: null, signal: "SIGTERM" } });
+  expect(snapshot.conversations[0]!.previousHostExit).toEqual(entry.previousHostExit);
 });

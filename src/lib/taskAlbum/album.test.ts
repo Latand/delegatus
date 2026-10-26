@@ -16,6 +16,7 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwA
 const OTHER_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-album-"));
+const savedState = process.env.LLV_STATE_DIR;
 const saved = { home: process.env.HOME, roots: process.env.LLV_EVIDENCE_ROOTS };
 let home = "";
 let evidence = "";
@@ -31,9 +32,14 @@ beforeEach(() => {
   transcripts = path.join(home, ".claude", "projects", "p");
   for (const dir of [home, evidence, elsewhere, transcripts]) fs.mkdirSync(dir, { recursive: true });
   process.env.HOME = home;
+  process.env.LLV_STATE_DIR = path.join(home, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const project = path.join(home, "project"); fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: project, projectRoot: project } } }));
   process.env.LLV_EVIDENCE_ROOTS = evidence;
 });
 afterEach(() => {
+  if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = saved.home;
   if (saved.roots === undefined) delete process.env.LLV_EVIDENCE_ROOTS;
   else process.env.LLV_EVIDENCE_ROOTS = saved.roots;
@@ -41,7 +47,7 @@ afterEach(() => {
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 function png(dir: string, name: string): string {
-  const file = path.join(dir, name);
+  const file = path.join(dir === home ? path.join(home, "project") : dir, name);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, Buffer.from(PNG, "base64"));
   return file;

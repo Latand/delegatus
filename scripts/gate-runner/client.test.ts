@@ -104,6 +104,7 @@ test("only classified variables travel; credentials and local paths never do", (
   const out = scratch();
   const result = remoteEnvironment({
     GH_TOKEN: "t", LLV_TOKEN: "t", OPENROUTER_API_KEY: "k", LLV_PRIVACY_KNOWN_VALUES_FILE: "/secret", HOME: "/srv/x", SOME_UNKNOWN: "1",
+    LLV_GATE_STATE_DIR: "/fixture/installation-state",
     LLV_KANBAN_BROWSER_TEST: "1", NODE_OPTIONS: "--max-old-space-size=6144", PD_OUT: out, LLV_REPORTS_OUT: ".artifacts/r",
     BOARD_POLL_BASE_FILE: path.join(REPO, "fixtures", "x.json"),
   }, REPO, REPO);
@@ -114,6 +115,19 @@ test("only classified variables travel; credentials and local paths never do", (
   expect(remoteEnvironment({ OVERVIEW_BASELINE_BUNDLE: "/var/tmp/bundle.js" }, REPO, REPO)).toHaveProperty("reason");
   expect(remoteEnvironment({ KANBAN_PROTOTYPE_URL: "http://127.0.0.1:3000" }, REPO, REPO)).toHaveProperty("reason");
   expect(remoteEnvironment({ LLV_HISTORY_BASE: "/abs/outside" }, REPO, REPO)).toHaveProperty("reason");
+});
+
+// The conversation-open motion case: its label travels and its frames come back.
+test("a remote conversation-open run keeps its label and returns its frame directory", () => {
+  const root = scratch(), frames = scratch();
+  const result = remoteEnvironment({ LLV_KANBAN_BROWSER_TEST: "1", LLV_OPEN_MOTION_LABEL: "after", LLV_OPEN_MOTION_FRAMES: frames }, root, root);
+  expect(result).toEqual({ env: { LLV_KANBAN_BROWSER_TEST: "1", LLV_OPEN_MOTION_LABEL: "after" }, outputs: { LLV_OPEN_MOTION_FRAMES: frames } });
+  if (!("outputs" in result)) throw new Error("refused");
+  const entry = (name: string) => ustarEntry(name, Buffer.from(name));
+  const archive = Buffer.concat([entry("out/LLV_OPEN_MOTION_FRAMES/390-no-preference-en-light-short/000.png"), entry("tree/evidence/conversation-open/open-motion.json"), Buffer.alloc(1024)]);
+  applyReturn(returnPlan(readUstar(archive), root, result.outputs));
+  expect(fs.readFileSync(path.join(frames, "390-no-preference-en-light-short/000.png"), "utf8")).toBe("out/LLV_OPEN_MOTION_FRAMES/390-no-preference-en-light-short/000.png");
+  expect(fs.existsSync(path.join(root, "evidence/conversation-open/open-motion.json"))).toBe(true);
 });
 
 // T13: every variable the drivers and the local gate read has a class.
@@ -127,6 +141,18 @@ test("every environment variable the four drivers and scripts/local-gate*.ts rea
   for (const file of sources) for (const match of fs.readFileSync(path.join(REPO, file), "utf8").matchAll(/process\.env(?:\.([A-Z_][A-Z0-9_]*)|\["([A-Z_][A-Z0-9_]*)"\])/g)) names.add(match[1] ?? match[2]!);
   expect(names.size).toBeGreaterThan(100);
   expect([...names].filter(name => !envClass(name)).sort()).toEqual([]);
+});
+
+// The kanban driver's frame directories travel as outputs, and their frames come back.
+test("the kanban driver's frame directories are remapped and their frames return to the requested roots", () => {
+  const root = scratch();
+  const names = ["PIPELINE_RETURN_PNG_DIR", "NARROW_SHELF_PNG_DIR", "MCP_LANGUAGE_PNG_DIR", "LLV_SOUND_CAPTIONS_OUT"];
+  const requested = Object.fromEntries(names.map(name => [name, path.join(scratch(), "evidence")]));
+  for (const name of names) expect(envClass(name)).toBe("output-dir");
+  expect(remoteEnvironment(requested, root, root)).toEqual({ env: {}, outputs: requested });
+  const archive = Buffer.concat([...names.map(name => ustarEntry(`out/${name}/frame-en-light.png`, Buffer.from(name))), Buffer.alloc(1024)]);
+  applyReturn(returnPlan(readUstar(archive), root, requested));
+  for (const name of names) expect(fs.readFileSync(path.join(requested[name]!, "frame-en-light.png"), "utf8")).toBe(name);
 });
 
 // T18: the runner gives every key the local gate isolates a fresh or a persistent directory.

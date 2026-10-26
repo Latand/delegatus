@@ -308,6 +308,41 @@ const CALLBACK_EXIT = "Codex callback listener failed before dispatch: exited wi
 const CALLBACK_SIGNAL = "Codex callback listener failed before dispatch: exited on signal SIGTERM; stderr: EADDRINUSE: callback bind refused";
 const CALLBACK_TIMEOUT = "Codex callback listener failed before dispatch: timed out after 10000ms; stderr: callback bind pending";
 
+test("issue 3066: a repeated diagnosed callback startup failure remains an automatic launch retry", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  let launches = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    launches++;
+    await onReserved({ launchId: `launch-callback-${launches}`, conversationId: `conversation_callback_${launches}` });
+    throw new Error(CALLBACK_EXIT);
+  };
+  h.ports.spawnReceipt = launchId => failedReceipt(launchId,
+    launchId.replace("launch-callback-", "conversation_callback_"), CALLBACK_EXIT);
+  h.ports.claimSpawnRetry = () => "claimed";
+  h.ports.scheduleTick = delayMs => { scheduled.push(delayMs); };
+  h.ports.sleep = forbiddenSleep;
+
+  await tickPipelines([], h.ports);
+  expect(scheduled).toEqual([1_000]);
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+
+  const pipeline = loadPipelines()[0]!;
+  expect(launches).toBe(2);
+  expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "pending" } });
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]!.retiredLaunches).toEqual([
+    expect.objectContaining({ launchId: "launch-callback-1", error: CALLBACK_EXIT }),
+    expect.objectContaining({ launchId: "launch-callback-2", error: CALLBACK_EXIT }),
+  ]);
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
+  expect(scheduled).toEqual([1_000, 2_000]);
+});
+
 test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget checkpoint", async () => {
   const checkpoint = JSON.parse(fs.readFileSync(process.env.LLV_CALLBACK_REPLAY_FILE!, "utf8"));
   const h = harness();
@@ -321,9 +356,10 @@ test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget ch
   };
   h.ports.spawnReceipt = () => failedReceipt("launch-after-restart", "conversation_after_restart", CALLBACK_EXIT);
   await tickPipelines([], h.ports);
-  expect(calls).toBe(1);
+  expect(calls).toBe(0);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision",
     stateDetail: `stage spawn failed after 1 retries over 600s: ${CALLBACK_EXIT}` });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ launchId: null, conversationId: null });
 });
 
 test("callback retry budget survives a real controller process restart", async () => {
@@ -521,9 +557,11 @@ test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
   const scheduled: number[] = [];
+  const dispatchTimes: number[] = [];
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
+    dispatchTimes.push(Date.parse(h.ports.now()));
     await onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
     throw new Error(failure);
   };
@@ -543,20 +581,22 @@ test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries
   }
 
   const parked = loadPipelines()[0]!;
-  expect(spawnCalls).toBe(16);
+  expect(spawnCalls).toBe(scheduled.length);
   expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 57_000]);
+  const deadline = Date.parse(parked.runs[0]!.attempts[0]!.controllerWait!.startedAt) + 600_000;
+  expect(dispatchTimes.every(at => at < deadline)).toBe(true);
   expect(parked).toMatchObject({
     state: "needs_decision",
     stateDetail: `stage spawn failed after 15 retries over 600s: ${failure}`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
-  /* The last launch stays on the attempt: its receipt is what retry-stage claims. */
+  /* Failed launches are retired; the exhausted cutoff reserves no new host. */
   expect(parked.runs[0]!.attempts[0]).toMatchObject({
     n: 1,
     state: "needs_decision",
-    launchId: "launch-host-16",
-    conversationId: "conversation_host_16",
+    launchId: null,
+    conversationId: null,
     error: parked.stateDetail,
   });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(15);

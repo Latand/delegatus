@@ -23,7 +23,7 @@ import { pinnedIdentityEntries } from "@/lib/scanner/pinRideAlong";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { conversationLineageMarkers } from "@/lib/agent/lineageMarkers";
 import {
-  agentRegistry,
+  prepareAgentRegistry,
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistryEntry,
   type RegistryFile,
@@ -74,7 +74,7 @@ interface FilesRouteDependencies {
 
 function projectedProjectCatalog(
   fallback: ProjectCatalogEntry[],
-  snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>,
+  snapshot: RegistryFile,
 ): ProjectCatalogEntry[] {
   const source = conversationCatalogSnapshot();
   if (!source.length) return fallback;
@@ -313,11 +313,12 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;
   const { files, projectCatalog, pinOverlayPaths } = await dependencies.listFilesWithProjectCatalog(selectedProject, pinnedPath);
   markTiming("files-source");
+  // A projection worker opens its own connection before its first response.
+  const registry = await prepareAgentRegistry(request.signal);
   const responsePinOverlayPaths = new Set(pinOverlayPaths ?? []);
   const visibilityPinnedPaths = new Set([...pinnedPathsFor(pinnedPath), ...responsePinOverlayPaths]);
   // A scan is a read model. Runtime reconciliation and notifications belong to
   // the external scheduler, keeping repeated GETs byte-stable for state files.
-  const registry = agentRegistry();
   const registrySnapshot = registry.readOnlySnapshot();
   traceStep("registry-snapshot");
   /* Ride-along identity for an explicit pin (#950). The scheme window is
@@ -514,6 +515,12 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       if (permission) file.pendingPermission = permission;
       const memoryKill = !conversation.supersededBy ? registryEntry?.structuredHost?.memory?.lastKill : null;
       if (memoryKill) file.memoryKill = { at: memoryKill.at, limitBytes: memoryKill.limitBytes, limit: memoryKill.limit, fatal: memoryKill.fatal };
+      if (!conversation.supersededBy && registryEntry?.structuredHost) {
+        const memory = registryEntry.structuredHost.memory;
+        file.memoryCap = memory?.cap ?? (memory
+          ? { limitBytes: memory.limitBytes, requestedBytes: null, source: "automatic", clamped: false, enforced: true }
+          : { limitBytes: null, requestedBytes: null, source: "automatic", clamped: false, enforced: false });
+      }
       if (registryEntry?.status === "dead" && file.pid === null) {
         file.activity = Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle";
         file.activityReason = "registry_terminal";

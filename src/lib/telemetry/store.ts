@@ -13,17 +13,18 @@ function write(name: string, value: unknown): void {
     fs.renameSync(tmp, file);
   } finally { fs.rmSync(tmp, { force: true }); }
 }
-export function preferences(): { enabled: boolean; noticeDismissed: boolean } {
+export function preferences(): { enabled: boolean; noticeDismissed: boolean; swarmRules: boolean } {
   const file = telemetryFile("preferences.json");
-  let data: { enabled: boolean; noticeDismissed: boolean } = { enabled: true, noticeDismissed: false };
+  let data = { enabled: true, noticeDismissed: false, swarmRules: false };
   if (fs.existsSync(file)) {
     const saved = JSON.parse(fs.readFileSync(file, "utf8"));
     if (typeof saved.enabled !== "boolean" || typeof saved.noticeDismissed !== "boolean") throw new Error("Invalid telemetry preferences");
-    data = saved;
+    if (saved.swarmRules !== undefined && typeof saved.swarmRules !== "boolean") throw new Error("Invalid swarm preference");
+    data = { ...data, ...saved };
   }
   // Keep independently updated preferences in separate files so overlapping
   // Viewer processes cannot overwrite one field with a stale copy of another.
-  for (const key of ["enabled", "noticeDismissed"] as const) {
+  for (const key of ["enabled", "noticeDismissed", "swarmRules"] as const) {
     const field = telemetryFile(`preferences/${key}`);
     if (!fs.existsSync(field)) continue;
     const value = fs.readFileSync(field, "utf8");
@@ -32,15 +33,15 @@ export function preferences(): { enabled: boolean; noticeDismissed: boolean } {
   }
   return data;
 }
-export function updatePreferences(update: { enabled?: boolean; noticeDismissed?: boolean }): void {
-  for (const key of ["enabled", "noticeDismissed"] as const) {
+export function updatePreferences(update: { enabled?: boolean; noticeDismissed?: boolean; swarmRules?: boolean }): void {
+  for (const key of ["enabled", "noticeDismissed", "swarmRules"] as const) {
     if (update[key] !== undefined) write(`preferences/${key}`, update[key]);
   }
 }
 export function environmentOff(env: Readonly<Record<string, string | undefined>>): boolean {
-  const telemetry = env.LLV_TELEMETRY_OVERRIDE || env.DELEGATUS_TELEMETRY || env.LLV_TELEMETRY;
+  const telemetry = env.DELEGATUS_TELEMETRY_OVERRIDE || env.LLV_TELEMETRY_OVERRIDE || env.DELEGATUS_TELEMETRY || env.LLV_TELEMETRY;
   const doNotTrack = env.DO_NOT_TRACK_OVERRIDE || env.DO_NOT_TRACK;
-  return telemetry === "0" || doNotTrack === "1";
+  return ["0", "false", "off", "no"].includes(telemetry?.trim().toLowerCase() ?? "") || doNotTrack === "1";
 }
 export function telemetryStatus(env: Readonly<Record<string, string | undefined>> = process.env) {
   const p = preferences();

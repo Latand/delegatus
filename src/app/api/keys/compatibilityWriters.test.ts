@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,7 +73,7 @@ afterEach(() => {
 function put(url: string, body: unknown, headers: Record<string, string>): NextRequest {
   return new NextRequest(`${ORIGIN}${url}`, {
     method: "PUT",
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", ...(headers === PAGE ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -84,7 +85,7 @@ const WRITERS: [string, (headers: Record<string, string>) => Promise<Response>][
   ["PUT /api/voice-companion/key", (headers) => voiceCompanionKey(put("/api/voice-companion/key", { key: FIXTURE_VALUE }, headers))],
   ["POST /api/telegram/bot connect", (headers) => telegramBot(new NextRequest(`${ORIGIN}/api/telegram/bot`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", ...(headers === PAGE ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers },
     body: JSON.stringify({ action: "connect", token: TELEGRAM_VALUE }),
   }))],
 ];

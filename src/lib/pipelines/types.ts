@@ -103,11 +103,17 @@ export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: Pi
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
+  /** Omitted stages keep their local runtime. Slice 1 supports read-only Codex reviews. */
+  runtime?: "codex-cloud";
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
   effort?: string | null;
   serviceTier?: string | null;
+  /** Preferred tier for automatic selection. Unlike serviceTier, this can
+      fall back through the allowed pool's currently available catalog tiers. */
+  preferredServiceTier?: string;
+  agentMemoryMaxBytes?: number | null;
   /** Repository mutation policy, enforced when the stage settles. It does not
       select the engine's tool/network sandbox. */
   access?: PipelineAccess;
@@ -249,7 +255,9 @@ export type PipelineBoundedWait = {
     re-cloned at the same instant, it is everything the attempt reads about its
     stage: an edit accepted after it is bound applies from the next attempt. */
 export type PipelineAttemptDefinition = {
+  agentMemoryMaxBytes?: number | null;
   boundAt: string;
+  runtime?: "codex-cloud";
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -398,7 +406,9 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
+  cloud?: import("./cloudStage").CloudStageAttempt;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
     hold?: PipelineAccountHold };
@@ -679,6 +689,10 @@ export type PipelineStageAttempt = {
         first line). Every park after the repair starts with that line. */
     parkDetail?: string;
   };
+  /** A parked publication released an idle, missing or expired producer turn.
+      Also covers legacy/replacement attempts with no repair request record.
+      Retained for audit; current affirmative activity still fences recovery. */
+  publicationRepairAbandonment?: { at: string; reason: string };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -1422,6 +1436,7 @@ export type PatchPipelineRequest = {
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */
   overwrite?: boolean;
+  agentMemoryMaxBytes?: number | null;
   /** for override-stage: the not-yet-started stage to re-configure (issue #118
       on-canvas stage controls). Only fields present are changed; a stage that
       already ran an attempt is rejected so the override always targets the future.

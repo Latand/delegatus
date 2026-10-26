@@ -516,8 +516,8 @@ async function viewerMain(): Promise<void> {
     const bootLoop = lagWindow();
     bootLoop.enable();
     const openStarted = performance.now();
-    const { agentRegistry, normalizeRegistry } = await import("@/lib/agent/registry");
-    const registry = agentRegistry();
+    const { prepareAgentRegistry, normalizeRegistry } = await import("@/lib/agent/registry");
+    const registry = await prepareAgentRegistry();
     registry.storageDiagnostics();
     report.registryOpenMs = performance.now() - openStarted;
     const snapshotStarted = performance.now();

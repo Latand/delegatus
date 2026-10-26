@@ -423,6 +423,11 @@ const sessionArtifactIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`,
 ]);
 
+const operationRetryIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS operations_retry_parent
+        ON operations(json_extract(receipt_json, '$.retryOfOperationId'), event_seq DESC)`,
+]);
+
 export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
@@ -489,6 +494,7 @@ export class RuntimeJournal {
          peer's lock must not be replaced by a later statement's outcome. */
       journalDeploymentIndexes.assertRepairAuthority(this.db, dirname(filename));
       journalEventIndexes.assertRepairAuthority(this.db, dirname(filename));
+      operationRetryIndexes.assertRepairAuthority(this.db, dirname(filename));
       if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='deployment_list_recent'").get()) {
         const version = this.db.query<{ version: string }, []>("SELECT sqlite_version() AS version").get()!.version.split(".").map(Number);
         if (version[0] === 3 && version[1]! < 42) {
@@ -549,8 +555,7 @@ export class RuntimeJournal {
       this.migrateOperationIdempotencyScope();
       this.migrateOperationOrphanedSince();
       this.migrateOperationProjectionPending();
-      this.db.exec(`CREATE INDEX IF NOT EXISTS operations_retry_parent
-        ON operations(json_extract(receipt_json, '$.retryOfOperationId'), event_seq DESC)`);
+      operationRetryIndexes.install(this.db, dirname(filename));
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
       this.retainLegacyStopAdmissions();
@@ -873,6 +878,7 @@ export class RuntimeJournal {
   nativeQueueTransition(operationId: string, transition: NativeQueueTransition): RuntimeOperationResult {
     const original = this.operationResult(operationId);
     const status = transition.phase === "prepared" || transition.phase === "withdrawn" ? "delivering"
+      : transition.phase === "deferred" ? "queued"
       : transition.phase === "seat-withdrawal" ? "failed"
       : (transition.phase === "acknowledged" || transition.phase === "observed-queued") ? original?.receipt.kind === "send" ? "queued" : "applied"
       : transition.phase === "proven" ? "delivered"
@@ -1260,6 +1266,18 @@ export class RuntimeJournal {
         producer: { kind: "runtime-effect", eventKey: `operation:${operationId}:receipt:${previous.revision + 1}:${status}`, hostEpoch: Number(this.meta("host_epoch")) },
         payload: next as unknown as Record<string, unknown>,
       }));
+      /* The panel refetches its queue only on a session-scoped event, and the
+         operation-scoped receipt above never reaches it. A proof that settles
+         an entry through its operation tells the session once, keyed by the
+         entry and its revision, so a replayed proof appends nothing. */
+      if (nativeEntry && nativeTransition?.phase === "proven") {
+        this.appendInTransaction(normalizeRuntimeEventInput({
+          scope: { type: "session", id: nativeEntry.conversationId },
+          kind: "native-queue-changed",
+          producer: { kind: "runtime-effect", eventKey: `native-queue:${nativeEntry.entryId}:proven:${nativeEntry.revision}`, hostEpoch: Number(this.meta("host_epoch")) },
+          payload: { conversationId: nativeEntry.conversationId, threadId: nativeEntry.binding.threadId, entryId: nativeEntry.entryId, settledBy: "canonical-proof" },
+        }));
+      }
       const committed = { ...next, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committed, event.seq);
       if (completing) this.appendCompletionConsequences(command, committed, operationId);

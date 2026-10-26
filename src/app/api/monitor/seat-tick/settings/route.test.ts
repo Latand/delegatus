@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -35,11 +36,13 @@ const RESTORE = {
   LLV_SEAT_TICK_STATE_FILE: process.env.LLV_SEAT_TICK_STATE_FILE,
   LLV_SEAT_TICK_AUDIT_FILE: process.env.LLV_SEAT_TICK_AUDIT_FILE,
   LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET,
+  LLV_CODEX_HOME: process.env.LLV_CODEX_HOME,
 };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
 process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
+process.env.LLV_CODEX_HOME = path.join(SANDBOX, "codex");
 /* A Viewer-spawned session inherits the live runtime host's socket; nothing
    here may reach outside this process. */
 delete process.env.LLV_RUNTIME_HOST_SOCKET;
@@ -80,7 +83,9 @@ beforeEach(() => {
   /* Its own directory: the settings live in the `state.sqlite` beside it. */
   settingsFile = path.join(SANDBOX, "settings", id, "seat-tick-settings.json");
   process.env.LLV_SEAT_TICK_SETTINGS_FILE = settingsFile;
-  process.env.LLV_SEAT_TICK_STATE_FILE = path.join(SANDBOX, "state", `tick-${id}.json`);
+  /* The active tick file uses its directory's state.sqlite, regardless of
+     its basename. A distinct filename alone shares the previous case's row. */
+  process.env.LLV_SEAT_TICK_STATE_FILE = path.join(SANDBOX, "state", id, "tick.json");
   process.env.LLV_SEAT_TICK_AUDIT_FILE = path.join(SANDBOX, "journal", `${id}.ndjson`);
   fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
 });
@@ -100,7 +105,7 @@ const browser = { host: "127.0.0.1:8898", origin: "http://127.0.0.1:8898", "sec-
 const get = (query: string, headers: Record<string, string> = { host: "127.0.0.1:8898" }) =>
   GET(new NextRequest(`${URL_BASE}${query}`, { headers }));
 const put = (body: unknown, headers: Record<string, string> = browser) =>
-  PUT(new NextRequest(URL_BASE, { method: "PUT", headers, body: JSON.stringify(body) }));
+  PUT(new NextRequest(URL_BASE, { method: "PUT", headers: { ...(headers === browser ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers }, body: JSON.stringify(body) }));
 
 test("Turbo paid credits require the separate operator-browser approval; script, worker and seat claims cannot grant it", async () => {
   const body = { project: PROJECT, turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["default"] } };
@@ -199,9 +204,10 @@ test("HTTP and seat_tick_settings report maintenance paused while wakes are off"
   expect(written.status).toBe(200);
   const http = await written.json() as SeatTickSettingsAnswer;
   expect(http.maintenance).toMatchObject({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", nextRunAt: null, nextEligibleAt: null });
+  // Compare HTTP's complete shape with the full MCP projection.
   const tool = await viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [],
-  } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT });
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT, verbose: true });
   expect(tool.maintenance).toMatchObject(http.maintenance);
 });
 
@@ -479,7 +485,7 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   const body = await (await get(`?project=${PROJECT}`)).json() as SeatTickSettingsAnswer;
   const bindings = viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "gateway", conversationId: null }),
-    authorizedSeats: () => [],
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
     callerProject: () => PROJECT,
     readTickSettings: (project: string) => readSeatTickSettings(project, settingsFile),
   } as never);
@@ -510,10 +516,11 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
 
 test("maintenance-only write needs no reason and exposes the same run records through HTTP and MCP", async () => {
   const project = "fixture-maintenance-route";
-  const written = await put({ project, maintenance: { enabled: true, intervalHours: "200" } });
+  const window = { timeZone: "Europe/Paris", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  const written = await put({ project, maintenance: { enabled: true, intervalHours: "200", window } });
   expect(written.status).toBe(200);
   const answer = await written.json();
-  expect(answer.maintenance).toMatchObject({ enabled: true, intervalHours: 168, lastRun: null, runsError: null });
+  expect(answer.maintenance).toMatchObject({ enabled: true, intervalHours: 168, window, missedWindowPolicy: "skip-and-coalesce", lastRun: null, runsError: null });
   const { claimMaintenanceRun, patchMaintenanceRun } = await import("@/lib/boardMaintenance/store");
   const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 168, seat: { seatEpoch: 1, conversationId: "fixture-seat" }, repoDir: "/fixtures/repository" });
   if (!result.claimed) throw new Error(result.reason);
@@ -521,11 +528,33 @@ test("maintenance-only write needs no reason and exposes the same run records th
   const http = await (await get(`?project=${project}`)).json();
   expect(http.maintenance.lastRun).toMatchObject({ taskId: "fixture-card", state: "failed", failure: { kind: "no-account" } });
   const tool = await viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [],
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [{ project, conversationId: SEAT_CONVERSATION, path: null }],
   } as never).seat_tick_settings({ clientRequestId: "fixture-maintenance-read", project, verbose: true });
   const same = { ...http.maintenance };
   delete same.nextRunAt;
   expect(tool.maintenance).toMatchObject({ ...same, lastRunLog: { leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
+});
+
+test("HTTP and MCP refuse invalid maintenance windows without changing durable settings", async () => {
+  const project = "fixture-window-validation";
+  const window = { timeZone: "Europe/Paris", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  expect((await put({ project, maintenance: { enabled: true, window } })).status).toBe(200);
+  const api = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project,
+    authorizedSeats: () => [{ project, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  const before = readSeatTickSettings(project);
+  const revision = settingsRevision();
+  const invalid = [{ timeZone: "Invalid/Zone" }, { timeZone: "+02:00" }, { weekdays: [] }, { weekdays: [0] }, { startHour: 9.5 }, { startHour: 17 }, { endHour: 25 }];
+  for (const [i, patch] of invalid.entries()) {
+    const maintenance = { enabled: false, window: { ...window, ...patch } };
+    const response = await put({ project, maintenance });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("maintenance.window");
+    await expect(api.seat_tick_settings({ clientRequestId: `window-invalid-${i}`, project, maintenance })).rejects.toThrow("maintenance.window");
+    expect(readSeatTickSettings(project)).toEqual(before);
+    expect(settingsRevision()).toBe(revision);
+  }
 });
 
 test("the browser can enable automatic rotation without a why and records gateway attribution", async () => {

@@ -36,6 +36,8 @@ export interface LogTailStreamOptions {
   catchUpDelayMs?: number;
   readTailChunk?: ReadTail;
   watchFile?: WatchFile;
+  /** Recheck authority once after a batch's awaited reads, before any bytes escape. */
+  authorizeBatch?: () => (pathname: string) => boolean;
   onEvent: (event: LogTailStreamEvent) => void;
   onComment?: (comment: string) => void;
 }
@@ -77,6 +79,7 @@ export class LogTailStreamSession {
   private readonly pending = new Set<TailState>();
   private readonly readTailChunk: ReadTail;
   private readonly watchFile: WatchFile;
+  private readonly authorizeBatch?: () => (pathname: string) => boolean;
   private readonly onEvent: (event: LogTailStreamEvent) => void;
   private readonly onComment?: (comment: string) => void;
   private readonly batchBudget: number;
@@ -105,6 +108,7 @@ export class LogTailStreamSession {
     this.readTailChunk = options.readTailChunk ?? defaultReadTailChunk;
     this.watchFile = options.watchFile ?? defaultWatchFile;
     this.onEvent = options.onEvent;
+    this.authorizeBatch = options.authorizeBatch;
     this.onComment = options.onComment;
     this.batchBudget = options.batchBudget ?? STREAM_BATCH_BUDGET;
     this.restatMs = options.restatMs ?? DEFAULT_RESTAT_MS;
@@ -165,13 +169,23 @@ export class LogTailStreamSession {
     if (this.closed || this.pumping) return;
     this.pumping = true;
     let budget = this.batchBudget;
+    const events: { path: string; event: LogTailStreamEvent }[] = [];
     const cycle = [...this.pending];
     this.pending.clear();
     try {
       for (const state of cycle) {
         if (this.closed) return;
-        const spent = await this.readState(state, budget);
+        const spent = await this.readState(state, budget, event => events.push({ path: state.path, event }));
         budget = Math.max(0, budget - spent);
+      }
+      if (this.closed) return;
+      let allowed: ((pathname: string) => boolean) | undefined;
+      try { allowed = this.authorizeBatch?.(); }
+      catch { allowed = () => false; }
+      for (const { path, event } of events) {
+        let admitted = true;
+        try { admitted = !allowed || allowed(path); } catch { admitted = false; }
+        this.onEvent(admitted ? event : { id: event.id, chunk: { error: "path not allowed" } });
       }
     } finally {
       this.pumping = false;
@@ -179,7 +193,7 @@ export class LogTailStreamSession {
     }
   }
 
-  private async readState(state: TailState, budget: number): Promise<number> {
+  private async readState(state: TailState, budget: number, emit: (event: LogTailStreamEvent) => void): Promise<number> {
     const previousOffset = state.offset;
     let chunk: LogChunk | null;
     try {
@@ -187,14 +201,14 @@ export class LogTailStreamSession {
     } catch {
       if (!this.closed) {
         state.initial = false;
-        this.onEvent({ id: state.id, chunk: { error: "failed to read log" } });
+        emit({ id: state.id, chunk: { error: "failed to read log" } });
       }
       return 0;
     }
     if (this.closed) return 0;
     if (!chunk) {
       state.initial = false;
-      this.onEvent({ id: state.id, chunk: { error: "path not allowed" } });
+      emit({ id: state.id, chunk: { error: "path not allowed" } });
       return 0;
     }
 
@@ -205,7 +219,7 @@ export class LogTailStreamSession {
     const spent = Math.max(0, chunk.offset - chunk.start);
     if (state.initial || chunk.data.length > 0 || previousOffset > chunk.size) {
       state.initial = false;
-      this.onEvent({ id: state.id, chunk });
+      emit({ id: state.id, chunk });
     } else {
       state.initial = false;
     }
@@ -251,7 +265,7 @@ function encodeComment(comment: string): Uint8Array {
 }
 
 /** `allowed` is the request's own admission of paths beyond the scanner's roots (see `readTailChunk`). */
-export function createLogTailEventStream(subs: LogStreamSub[], signal?: AbortSignal, allowed?: (pathname: string) => boolean): ReadableStream<Uint8Array> {
+export function createLogTailEventStream(subs: LogStreamSub[], signal?: AbortSignal, allowed?: (pathname: string) => boolean, authorizeBatch?: () => (pathname: string) => boolean): ReadableStream<Uint8Array> {
   let session: LogTailStreamSession | null = null;
   let stopped = false;
   return new ReadableStream<Uint8Array>({
@@ -277,6 +291,7 @@ export function createLogTailEventStream(subs: LogStreamSub[], signal?: AbortSig
       };
       session = new LogTailStreamSession(subs, {
         signal,
+        authorizeBatch,
         ...(allowed ? { readTailChunk: (pathname, offset, budget) => defaultReadTailChunk(pathname, offset, budget, allowed) } : {}),
         onEvent: (event) => enqueue(encodeChunk(event)),
         onComment: (comment) => enqueue(encodeComment(comment)),

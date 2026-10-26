@@ -25,6 +25,8 @@ export const AGENT_SLICE = "delegatus-agents.slice";
 export const WORK_SLICE = "delegatus-agents-work.slice";
 export const OPERATOR_CPU_WEIGHT = 1000;
 export const WORK_CPU_WEIGHT = 100;
+export const GATE_CPU_WEIGHT = 10;
+export const GATE_IO_WEIGHT = 10;
 /** Three CPU-equivalents per work scope. */
 export const WORK_SCOPE_CPU_QUOTA = 300;
 export const CPU_QUOTA_PERIOD_MS = 20;
@@ -119,6 +121,13 @@ export function cpuScopeProperties(plan: Pick<AgentCpuPlan, "weight" | "quotaPer
 /** `systemctl set-property` assignments for the aggregate work slice. */
 export function workSliceProperties(aggregateQuotaPercent: number): string[] {
   return [`CPUWeight=${WORK_CPU_WEIGHT}`, `CPUQuota=${aggregateQuotaPercent}%`, `CPUQuotaPeriodSec=${CPU_QUOTA_PERIOD_MS}ms`];
+}
+
+/** Every check service stays subordinate, including without CPU placement. */
+export function gateServiceProperties(env: Readonly<Record<string, string | undefined>> = process.env): string[] {
+  return ["-p", `CPUWeight=${GATE_CPU_WEIGHT}`, "-p", `IOWeight=${GATE_IO_WEIGHT}`,
+    ...(env.LLV_OWNED_RUN_CPU_SLICE ? [`--slice=${env.LLV_OWNED_RUN_CPU_SLICE}`,
+      "-p", `CPUQuota=${env.LLV_OWNED_RUN_CPU_QUOTA}%`, "-p", `CPUQuotaPeriodSec=${CPU_QUOTA_PERIOD_MS}ms`] : [])];
 }
 
 function firstLine(error: unknown): string {

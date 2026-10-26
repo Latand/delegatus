@@ -315,7 +315,7 @@ test("notice acknowledgement in another process preserves a confirmed opt-out", 
   expect(disable?.exitCode, disable?.stderr.toString()).toBe(0);
   expect(childExit, childError).toBe(0);
   expect(await (await GET()).json()).toMatchObject({ enabled: false, noticeDismissed: true });
-  expect(preferences()).toEqual({ enabled: false, noticeDismissed: true });
+  expect(preferences()).toEqual({ enabled: false, noticeDismissed: true, swarmRules: false });
   expect(telemetryStatus()).toMatchObject({ enabled: false, noticeDismissed: true });
   const fixture = harness(); await sendInstallPing(fixture.ports);
   expect(fixture.requests).toHaveLength(0);
@@ -345,3 +345,25 @@ test("request aborts at the five-second timeout", async () => {
   })) as unknown as typeof fetch;
   await expect(sendInstallPing(fixture.ports)).rejects.toThrow();
 }, 7000);
+
+for (const value of ["false", "off", "no", " FALSE ", "Off", "NO"]) test(`text opt-out ${value} suppresses the ping and locks status`, async () => {
+  const fixture = harness();
+  fixture.ports.env = { ...fixture.ports.env, DELEGATUS_TELEMETRY: value };
+  await sendInstallPing(fixture.ports);
+  expect(fixture.requests).toHaveLength(0);
+  expect(telemetryStatus(fixture.ports.env)).toMatchObject({ enabled: false, locked: true });
+  expect(fs.existsSync(telemetryFile("id"))).toBe(false);
+});
+
+test("a locked-off production Viewer prints no notice and leaves the notice eligible after re-enable", async () => {
+  for (const setting of [{ DELEGATUS_TELEMETRY: "0" }, { DELEGATUS_TELEMETRY: "off" }, { DO_NOT_TRACK: "1" }]) {
+    const env = { ...process.env };
+    for (const key of ["CI", "BUN_TEST", "JEST_WORKER_ID", "NEXT_PHASE", "DELEGATUS_TELEMETRY", "LLV_TELEMETRY", "DELEGATUS_TELEMETRY_OVERRIDE", "LLV_TELEMETRY_OVERRIDE", "DO_NOT_TRACK", "DO_NOT_TRACK_OVERRIDE"]) delete env[key];
+    const state = fs.mkdtempSync(path.join(root, "notice-"));
+    const source = `import { startInstallPing } from "./src/lib/telemetry/sender"; startInstallPing({env:{},readRecord:()=>null,alive:()=>true,deploymentsEnabled:async()=>true});`;
+    const child = Bun.spawn([process.execPath, "-e", source], { env: { ...env, ...setting, NODE_ENV: "production", LLV_STATE_OWNER: "viewer", LLV_STATE_DIR: state }, stdout: "pipe", stderr: "pipe" });
+    const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code).toBe(0); expect(error).toBe(""); expect(out).toBe("");
+    expect(fs.existsSync(path.join(state, "telemetry", "notice-output"))).toBe(false);
+  }
+});

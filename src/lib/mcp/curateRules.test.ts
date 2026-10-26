@@ -1,9 +1,11 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { POST as roleMemoryPost } from "@/app/api/role-memory/route";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { importCandidate, seedImport, IMPORT_AT, IMPORT_ID } from "@/lib/memory/fixtures/import";
 import { lessonKnownValuesFile } from "@/lib/memory/roleStore";
@@ -36,7 +38,7 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
   const resolveCaller = dependencies.callerAttribution!;
   dependencies.callerAttribution = () => { resolutions++; return resolveCaller(); };
   const policy = viewerMcpToolPolicy(dependencies, false, () => ({ registrySnapshot: () => snapshot } as never));
-  expect(policy.permit("create_task", {})).toHaveProperty("allowed", false);
+  expect(policy.permit("create_task", withTaskDue({}))).toHaveProperty("allowed", false);
   expect(policy.permit("curate_rules", { action: "apply" })).toHaveProperty("allowed", true);
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), new MemoryMcpReceiptStore(), policy);
   const call = async (args: Parameters<typeof service.callTool>[1]) => {
@@ -108,7 +110,7 @@ test("the real import binding refreshes known values through the worker and oper
     const result = await service.callTool("curate_rules", { clientRequestId: "import-adopt", action: "apply", scopes: [{ scope: candidate.suggestedScope, revision: 0, order: [`adopt:${candidate.id}:0`] }], adopt: [{ candidate: candidate.id, occurrences: candidate.occurrences.map(o => o.id), parts: [{ to: candidate.suggestedScope, rule, why: "An imported note records a recurring ownership check." }], note: "Retain this check with its project readers." }] });
     expect(result.ok).toBe(true);
     expect(fs.readFileSync(lessonKnownValuesFile(), "utf8")).toContain(rule);
-    const request = (origin = "http://localhost") => new NextRequest("http://localhost/api/role-memory", { method: "POST", headers: { Origin: origin, host: "localhost", "Content-Type": "application/json" }, body: JSON.stringify({ project, action: "revert-pass", ruleId: pass.id }) });
+    const request = (origin = "http://localhost") => new NextRequest("http://localhost/api/role-memory", { method: "POST", headers: { Cookie: `llv_operator=${soloBrowserSession()}`, Origin: origin, host: "localhost", "Content-Type": "application/json" }, body: JSON.stringify({ project, action: "revert-pass", ruleId: pass.id }) });
     const live = await roleMemoryPost(request());
     expect(live.status).toBe(409); expect(await live.json()).toEqual({ error: "CURATE_LIVE" });
     patchPass(pass.id, { state: "succeeded", endedAt: "2026-10-19T00:00:01.000Z" });

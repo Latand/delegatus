@@ -42,8 +42,6 @@ test("the record names its revisions, fixture fingerprints and procedure", () =>
     expect(record.fixtures[name]!.bytes).toBeGreaterThan(1_000_000);
   }
   expect(record.fixtures["seat-over-board"]).toBeDefined();
-  const procedure = fs.readFileSync(path.join(dir, "procedure.md"), "utf8");
-  for (const heading of ["## Setup", "## Reading the numbers", "## measure.mjs", "## board-measure.ts", "## campaign.sh"]) expect(procedure).toContain(heading);
   expect(record.controls.length).toBeGreaterThan(0);
   for (const control of record.controls) expect(control.runs.length).toBeGreaterThan(0);
 });

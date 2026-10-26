@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { FakeLiveProvider } from "@/lib/voiceCompanion/fakeProvider";
 import { fixtureBoardReads } from "@/lib/voiceCompanion/boardReads.fixture";
 
@@ -18,16 +19,16 @@ const session = await import("../session/route");
 const { GET } = await import("./route");
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 afterAll(() => { setCompanionSessionsForTests(undefined); fs.rmSync(root, { recursive: true, force: true }); });
-function fixture() {
-  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+function fixture(now = Date.now) {
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
-  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => [] });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => [] }, now);
   const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
-    provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+    provider, { key: () => "synthetic-credential", now, timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(service);
   return { service, admission, provider };
 }
-const headers = (extra: Record<string, string> = {}) => ({ host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra });
+const headers = (extra: Record<string, string> = {}) => ({ cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra });
 const list = (extra: Record<string, string> = {}) => GET(new NextRequest("http://127.0.0.1/api/voice-companion/calls", { headers: headers(extra) }));
 const start = (requestId: string, extra: Record<string, string> = {}) => session.POST(new NextRequest("http://127.0.0.1/api/voice-companion/session",
   { method: "POST", headers: headers(extra), body: JSON.stringify({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId }) }));
@@ -51,6 +52,27 @@ test("the operator lists their retained calls without knowing an id, and each li
   /* Only a browser in Delegatus reads it. */
   expect((await list({ "sec-fetch-site": "cross-site" })).status).toBe(403);
   expect((await list({ "x-llv-spawn-capability": "invalid-agent" })).status).toBe(403);
+});
+
+test("after a restart the owner can verify a failed voice send, its target and its reason", async () => {
+  const now = () => Date.parse("2026-10-11T12:00:00Z");
+  const first = fixture(now);
+  const minted = await (await start("history-failed-send")).json();
+  first.admission.record(minted.sessionId, { id: "request-failed", kind: "request", atMs: 750, data: {
+    callId: "send-failed", status: "failed", code: "conversation_busy",
+    reason: "The message was not delivered because the conversation was busy.",
+    recipient: { project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" },
+  } });
+  await first.service.close(minted.sessionId);
+
+  /* Recreate the service so the listing reads the failed request from disk. */
+  fixture(now);
+  const { calls } = await (await list()).json();
+  expect(calls).toEqual([expect.objectContaining({ sessionId: minted.sessionId, live: false, actions: [expect.objectContaining({
+    kind: "request", at: now() + 750, status: "failed", code: "conversation_busy",
+    reason: "The message was not delivered because the conversation was busy.",
+    project: expect.any(String), conversationId: "conversation_fixture",
+  })] })]);
 });
 
 test("a listed call whose state row is gone still opens through the session route, to its owner only", async () => {

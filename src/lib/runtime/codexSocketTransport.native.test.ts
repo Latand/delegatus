@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { hostExitText } from "./hostExit";
 import { test, expect } from "bun:test";
 import { CodexSocketTransport, verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
@@ -9,7 +10,44 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
 const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000 }).stdout?.trim();
 
-for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty", "managedexit", "shimexit", "managedsecret", "throwkey", "throwclipped"] as const) {
+test.skipIf(process.platform !== "linux")("a replacement Viewer receives native SIGKILL evidence after the launching Viewer exited", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-replace-"));
+  const directory = fs.openSync(root, "r");
+  let owner: { process: ReturnType<typeof captureProcessIdentity> } | undefined;
+  const run = async (mode: string) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
+      env: { ...process.env, HOST_EXIT_TEST_HOME: `/proc/${process.pid}/fd/${directory}` }, stdout: "pipe", stderr: "pipe",
+    });
+    const output = new Response(child.stdout).text();
+    const errors = new Response(child.stderr).text();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([child.exited, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("replacement fixture did not finish")), 10_000);
+      })]);
+      expect(child.exitCode, await errors).toBe(0);
+      return JSON.parse(await output);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
+  };
+  try {
+    owner = await run("replacement-launch");
+    expect(processIdentityStatus(owner!.process)).toBe("alive");
+    const evidence = await run("replacement-read");
+    expect(evidence.exit).toMatchObject({ code: null, signal: "SIGKILL" });
+    expect(Number.isFinite(Date.parse(evidence.exit.at))).toBeTrue();
+    expect(hostExitText(evidence)).toBe("exit: signal SIGKILL; no Delegatus stop recorded");
+  } finally {
+    if (owner && processIdentityStatus(owner.process) === "alive") process.kill(owner.process.pid, "SIGKILL");
+    fs.closeSync(directory);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 25_000);
+
+for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty", "managedexit", "shimexit", "managedsecret", "throwkey", "throwclipped", "observedexit", "observedsignal", "observedreclaimed", "observedmemory"] as const) {
   test.skipIf(process.platform !== "linux")(`callback startup ${mode} preserves a bounded redacted cause on repeated launches`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-"));
     try {
@@ -27,7 +65,25 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
             timer = setTimeout(() => reject(new Error("owned callback fixture exceeded its parent deadline")), 15_000);
           })]);
           expect(child.exitCode, await stderr).toBe(0);
-          const message = JSON.parse(await output).error as string;
+          const result = JSON.parse(await output);
+          const message = result.error as string;
+          if (!mode.startsWith("observed") && mode !== "success" && mode !== "chatty") expect(result.orphanReceipts).toBe(0);
+          if (mode === "observedreclaimed") {
+            const { before, evidence } = JSON.parse(message);
+            expect(before.exit).toMatchObject({ code: null, signal: "SIGKILL" });
+            expect(evidence.exit).toBeNull();
+            expect(evidence.stop).toBeNull();
+            continue;
+          }
+          if (mode === "observedexit" || mode === "observedsignal" || mode === "observedmemory") {
+            const { observed, evidence } = JSON.parse(message);
+            const expected = mode === "observedexit" ? { code: 23, signal: null } : { code: null, signal: "SIGKILL" };
+            expect(observed).toEqual(expected);
+            expect(evidence.exit).toMatchObject(expected);
+            if (mode === "observedmemory") expect(evidence.stop).toMatchObject({ path: "agent-memory-enforcement", signal: "SIGKILL" });
+            else expect(evidence.stop).toBeNull();
+            continue;
+          }
           if (mode === "success") {
             expect(message).toBe("connected: probe");
             continue;
@@ -50,6 +106,8 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
             // A refusing wrapper keeps its structural detail beside the redacted cause.
             expect(message).toStartWith("agent signal sandbox unavailable: ");
             expect(message).toContain("EADDRINUSE: callback bind refused");
+            expect(message).toContain("; exit: code 9; no Delegatus stop recorded at ");
+            expect(message).not.toContain("setup cleanup did not settle");
             expect(message).not.toContain("private".repeat(8));
             expect(message).not.toContain(root);
             expect(message).not.toContain("KEYPAYLOAD");

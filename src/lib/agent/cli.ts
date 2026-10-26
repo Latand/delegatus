@@ -1,3 +1,4 @@
+import { OPERATOR_CREDENTIAL_ENV, withoutOperatorCredentials } from "./operatorCredentials";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { codexOperatorQuestionPolicy } from "./operatorQuestionPolicy";
@@ -13,6 +14,7 @@ import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, 
 import { homeDirectory } from "@/lib/platformHome";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_ENV } from "@/lib/mcp/httpAccess";
 import { codexMemoryHookArgs, installCodexMemoryHook } from "@/lib/memory/hook";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
@@ -25,7 +27,7 @@ import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
 import {
   applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
-  viewerMcpServerEntry, viewerMcpTransportForLaunch, VIEWER_SPAWN_CAPABILITY_ENV,
+  viewerMcpServerEntry, viewerMcpTransportForLaunch, viewerMcpHttpUrl, VIEWER_SPAWN_CAPABILITY_ENV,
 } from "./spawnPolicy";
 import { explicitLaunchProfileSandbox, launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
@@ -163,7 +165,7 @@ export interface ResumeSpec {
 export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<ResumeSpec> {
   const input = spec.codexPublication;
   if (!input) return spec;
-  const source = { ...process.env, CODEX_HOME: input.home };
+  const source = withoutOperatorCredentials({ ...process.env, CODEX_HOME: input.home });
   const policy = await readCodexShellPolicy(resolveCodexBinary(), spec.cwd, source);
   const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
   return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
@@ -175,6 +177,7 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
     .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
   const publicationEnv = { ...source, LLV_SPAWN_CAPABILITY: capability };
   let command = spec.command;
+  let mcpAccess = "";
   try {
     if (spec.claudeTerminalPolicy) {
       const policy = spec.claudeTerminalPolicy;
@@ -197,11 +200,14 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
     const requested = source.DELEGATUS_MCP_TRANSPORT ?? source.LLV_MCP_TRANSPORT;
     const flag = { ...source, LLV_MCP_TRANSPORT: requested?.trim() || "stdio" };
     const transport = viewerMcpTransportForLaunch(publicationEnv, flag);
-    if (transport === "http") command = command.replace(spec.codexPublication.viewerMcpArgs, codexViewerMcpArgs(transport, flag));
+    if (transport === "http") {
+      command = command.replace(spec.codexPublication.viewerMcpArgs, codexViewerMcpArgs(transport, flag));
+      mcpAccess = terminalMcpAccess(spec.codexPublication.home, flag);
+    }
   }
   return {
     ...spec,
-    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${command} )`,
+    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${mcpAccess}${command} )`,
   };
 }
 
@@ -231,7 +237,7 @@ export interface FreshSpecOptions {
   deferClaudeSpawnPolicy?: boolean;
 }
 
-const CLAUDE_SHADOWED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "LLV_TOKEN"];
+const CLAUDE_SHADOWED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", ...OPERATOR_CREDENTIAL_ENV];
 
 function telegramTokenAssignment(mcpServers: readonly string[]): string {
   if (!mcpServers.includes("telegram")) return "";
@@ -268,8 +274,8 @@ function providerLaunchModel(home: string, requested: string | null | undefined)
 }
 
 function codexEnvPrefix(home: string, mcpServers: readonly string[]): string {
-  const tokenUnset = mcpServers.includes("telegram") ? "" : ` -u ${TELEGRAM_CONNECTOR_TOKEN_ENV}`;
-  return `env -u LLV_TOKEN${tokenUnset} CODEX_HOME=${shellQuote(home)}`;
+  const unsets = [OPERATOR_CREDENTIAL_ENV[0], ...(mcpServers.includes("telegram") ? [] : [TELEGRAM_CONNECTOR_TOKEN_ENV]), ...OPERATOR_CREDENTIAL_ENV.slice(1)];
+  return `env ${unsets.map(name => `-u ${name}`).join(" ")} CODEX_HOME=${shellQuote(home)}`;
 }
 
 export interface ResumeSpecOptions {
@@ -318,8 +324,7 @@ function normalizedMcpServers(value: readonly string[] | undefined): string[] {
 }
 
 function configuredCodexMcpServers(home: string, cwd: string): string[] {
-  const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: home };
-  delete env.LLV_TOKEN;
+  const env = withoutOperatorCredentials({ ...process.env, CODEX_HOME: home });
   // eslint-disable-next-line no-restricted-syntax -- Legacy terminal-launch MCP discovery invoked by serving launch controls.
   const listed = spawnSync(resolveCodexBinary(), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
     cwd,
@@ -339,8 +344,28 @@ function configuredCodexMcpServers(home: string, cwd: string): string[] {
   throw new Error("Codex MCP configuration could not be enumerated safely");
 }
 
+/** Terminal commands are persisted and become shell argv. Read the credential
+ * from an owner-only file at execution instead. One file per account/endpoint
+ * is replaced atomically on key rotation; concurrent pending launches can read
+ * it independently and no account config.toml is changed.
+ */
+function terminalMcpAccess(home: string, source: NodeJS.ProcessEnv): string {
+  const access = mcpHttpAccessToken(source);
+  if (!access) return "";
+  const directory = path.join(home, ".llv", "spawn-mcp");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const endpoint = crypto.createHash("sha256").update(viewerMcpHttpUrl(source)).digest("hex");
+  const filename = path.join(directory, `http-access-${endpoint}`);
+  const temporary = `${filename}.${crypto.randomUUID()}`;
+  try {
+    fs.writeFileSync(temporary, `${access}\n`, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, filename);
+  } finally { fs.rmSync(temporary, { force: true }); }
+  return `unset ${MCP_HTTP_ACCESS_ENV}; if IFS= read -r ${MCP_HTTP_ACCESS_ENV} < ${shellQuote(filename)}; then export ${MCP_HTTP_ACCESS_ENV}; else exit 1; fi; `;
+}
+
 function codexViewerMcpArgs(transport: "stdio" | "http", source: NodeJS.ProcessEnv = process.env): string {
-  const entry = transport === "http" ? viewerMcpHttpCodexEntry(source)
+  const entry = transport === "http" ? viewerMcpHttpCodexEntry(source, true)
     : { ...viewerMcpServerEntry(process.cwd(), source), env_vars: [VIEWER_SPAWN_CAPABILITY_ENV] };
   // Codex's -c parser accepts TOML leaves. Header and environment keys may
   // contain punctuation, so quote them rather than treating them as paths.

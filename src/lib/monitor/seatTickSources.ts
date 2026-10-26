@@ -1,7 +1,8 @@
 import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
+import { forEachCooperatively as forEachSharedRow } from "@/lib/cooperative";
+import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort } from "./seatTickWork";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -21,6 +22,8 @@ import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
@@ -144,6 +147,13 @@ const EVENT_PAGE = 200;
 /** Open pull requests one check reads. Bounds the `gh` answer, not the lanes:
     a project with more open pull requests than this has other problems. */
 const PULL_REQUEST_LIMIT = 60;
+/** Optional GitHub enrichment must leave most of the check budget for delivery. */
+const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
+/** Finished lanes examined for local commits per check, in bounded Git batches.
+    The persisted lane cursor advances subsequent checks and survives restarts. */
+const LOCAL_FINISHED_LANE_LIMIT = 60;
+const LOCAL_GIT_BATCH_SIZE = 8;
+const LOCAL_GIT_TIMEOUT_MS = 250;
 /** Bounded pull request title carried into a wake item. */
 const PULL_REQUEST_TITLE_LIMIT = 120;
 /** Liveness rows one project's check asks for. */
@@ -476,6 +486,8 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 
 export interface SeatTickSources {
   prepareRead?: () => Promise<void>;
+  /** Warm problem credit without preparing general history for a deploy wake. */
+  prepareMemoryProblems?: () => Promise<void>;
   memoryProblems?: (project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null) => SeatTickSignalInput[];
   recordRuleReports?: (project: string, at: string) => void | Promise<void>;
   /** The waits «Waiting for you» routes to this project's seat
@@ -665,18 +677,17 @@ function seatProjectResolver(): (project: string) => string {
 
 export function defaultSeatTickSources(): SeatTickSources {
   const admission = defaultSeatTickAdmissionSources();
+  let preparing: Promise<void> | undefined;
+  let preparingMemoryProblems: Promise<void> | undefined;
+  const prepareMemoryProblems = () => preparingMemoryProblems ??= prepareMemoryProblemRead().finally(() => { preparingMemoryProblems = undefined; });
   return {
     ...admission,
-    prepareRead: () => withViewerOperation("seat-tick.prepare", () => performanceSpans.wait("seat-tick.prepare", async () => {
-      const rows = await loadPipelinesForListAsync();
-      const prepared = evidenceHashHost.__llvSeatTickPreparedRows ??= new WeakSet<readonly Pipeline[]>();
-      if (!prepared.has(rows)) {
-        await forEachCooperatively(rows, row => { laneEvidenceHash(row); }, { batchSize: 4, timeBudgetMs: 8 });
-        prepared.add(rows);
-      }
+    prepareMemoryProblems,
+    prepareRead: () => preparing ??= withViewerOperation("seat-tick.prepare", () => performanceSpans.wait("seat-tick.prepare", async () => {
+      await loadPipelinesForListAsync();
       await loadTasksForListAsync();
-      await prepareMemoryProblemRead();
-    })),
+      await prepareMemoryProblems();
+    })).finally(() => { preparing = undefined; }),
     liveness: query => query.project ? withViewerOperation("seat-tick.liveness", () => performanceSpans.wait("seat-tick.liveness", async () => {
       const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
       const { completedFileScan, completedFileScanDescriptor } = await import("@/lib/scanner/scanCache");
@@ -849,6 +860,24 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
     /* An unreadable log keeps no ledger this check: nothing is discharged or
        recorded from evidence that could not be read. */
     return undefined;
+  }
+}
+
+/* Report history is useful on a deploy wake, but its production reader shares
+   a serial worker with unrelated projects. Give an already-fast read a chance
+   to enrich the message; a queued or slow read must never hold the deploy
+   obligation behind that worker. The worker owns its own eventual timeout. */
+const DEPLOY_WAKE_REPORTS_BUDGET_MS = 50;
+
+async function deployWakeReportsInput(project: string, sources: SeatTickSources): Promise<SeatTickReportsInput | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reportsInput(project, sources),
+      new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), DEPLOY_WAKE_REPORTS_BUDGET_MS); }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -1077,17 +1106,16 @@ const SEAT_DEPLOY_LIMIT = 5;
  * cannot be read for one deployment leaves it out of this check only; the
  * next check asks again, and nothing is announced that was not seen.
  */
-async function settledSeatDeploys(
+function recordedSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   context: { now: number; backlogAfterMs: number; catchUp?: boolean },
   sources: SeatTickSources,
-): Promise<SeatTickDeployInput[]> {
+): SeatTickDeployInput[] {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
   const settled: SeatTickDeployInput[] = [];
   let records: readonly SeatDeploymentRecord[];
   try {
-    if (sources.deploymentByKey) await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey);
     records = sources.seatDeployments(seat.conversationId);
   } catch {
     return [];
@@ -1113,6 +1141,22 @@ async function settledSeatDeploys(
     });
   }
   return context.catchUp ? settled : settled.slice(-SEAT_DEPLOY_LIMIT);
+}
+
+async function settledSeatDeploys(
+  seat: SeatTickSeatInput | null,
+  announced: readonly string[],
+  context: { now: number; backlogAfterMs: number; catchUp?: boolean },
+  sources: SeatTickSources,
+): Promise<SeatTickDeployInput[]> {
+  const settled = recordedSeatDeploys(seat, announced, context, sources);
+  // A pending request's remote lookup can outlast this project's deadline.
+  // Deliver recorded settlements first on every gather, including the opening
+  // priority hint. Unresolved attribution stays durable for a later check.
+  if (settled.length || !seat || !sources.seatDeployments || !sources.deployment || !sources.deploymentByKey) return settled;
+  try { await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey); }
+  catch { return []; }
+  return recordedSeatDeploys(seat, announced, context, sources);
 }
 
 /**
@@ -1768,6 +1812,7 @@ function eventsSince(
  */
 interface PullRequestEvidence {
   pullRequests: SeatTickPullRequestInput[];
+  localPending: SeatTickSignalInput[];
   observed: boolean;
   /** Null means the question was answered — including answered with nothing
       open, which is what the tick is entitled to go quiet on. */
@@ -1776,6 +1821,105 @@ interface PullRequestEvidence {
       the row so the next check knows whether this is weather or configuration,
       and so a standing outage is reported once rather than every five minutes. */
   gap: SeatTickSourceGap | null;
+  localScanCursor?: string | null;
+}
+
+const execFileAsync = promisify(execFile);
+
+/** A local lane tip outside its recorded local base is actionable without any
+ * forge account, remote, or `gh` response. The lane row and its accepted SHA
+ * identify the exact work; the signal version includes that SHA so a later
+ * accepted revision is a new item. */
+async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[], cursor: string | null): Promise<{ signals: SeatTickSignalInput[]; cursor: string | null }> {
+  const canonicalProject = seatProjectResolver();
+  const finished = [...new Map(pipelines
+    .filter((pipeline) => canonicalProject(pipeline.project) === project && !pipeline.hiddenAt && isFinished(pipeline)
+      && !(pipeline.merge && (PIPELINE_MERGE_LIVE_STATES.has(pipeline.merge.state) || pipeline.merge.state === "refreshing")))
+    .map((pipeline) => [pipeline.id, pipeline] as const)).values()]
+    .sort((left, right) => {
+      const stamp = (pipeline: Pipeline) => {
+        const value = Date.parse(pipeline.closedAt ?? pipeline.createdAt);
+        return Number.isFinite(value) ? value : 0;
+      };
+      return stamp(right) - stamp(left) || left.id.localeCompare(right.id);
+    });
+  if (finished.length === 0) return { signals: [], cursor };
+  const afterPrevious = cursor ? finished.findIndex((pipeline) => pipeline.id === cursor) + 1 : 0;
+  const start = afterPrevious > 0 ? afterPrevious % finished.length : 0;
+  const scanCount = Math.min(finished.length, LOCAL_FINISHED_LANE_LIMIT);
+  const candidates = Array.from({ length: scanCount }, (_, index) => finished[(start + index) % finished.length]!);
+  let lastScanned: string | undefined;
+  const found: SeatTickSignalInput[] = [];
+  let localProbeFailures = 0;
+  let firstLocalProbeFailure: string | null = null;
+  const noteLocalProbeFailure = (detail: string) => {
+    localProbeFailures++;
+    firstLocalProbeFailure ??= detail;
+  };
+  {
+    const remaining = LOCAL_GIT_TIMEOUT_MS;
+    const batch = candidates.slice(0, LOCAL_GIT_BATCH_SIZE);
+    const outcomes = await Promise.all(batch.map(async (pipeline) => {
+      const sha = pipeline.lastPassedCommit;
+      const base = pipeline.baseBranch;
+      if (!pipeline.repoDir || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)
+        || !base || !/^[A-Za-z0-9._/-]+$/.test(base) || base.includes("..") || base.startsWith("/")) return null;
+      if (pipeline.merge?.state === "merged"
+        && (pipeline.merge.reviewedHead === sha || pipeline.merge.chain.includes(sha) || pipeline.merge.mergedHead === sha)) return null;
+      const refs = [`refs/remotes/origin/${base}`, `refs/heads/${base}`];
+      for (const ref of refs) {
+        try {
+          await execFileAsync("git", ["merge-base", "--is-ancestor", `${sha}^{commit}`, `${ref}^{commit}`], {
+            cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 16 * 1024,
+          });
+          return null;
+        } catch (error) {
+          const code = String((error as NodeJS.ErrnoException).code);
+          if (code === "1") return { pipeline, sha };
+          if (code !== "128") {
+            noteLocalProbeFailure(`${pipeline.id}: ${code}`);
+            return null;
+          }
+        }
+      }
+      noteLocalProbeFailure(`${pipeline.id}: ${base}`);
+      return null;
+    }));
+    lastScanned = batch.at(-1)!.id;
+    for (const outcome of outcomes) {
+      if (!outcome) continue;
+      const { pipeline, sha } = outcome;
+      found.push({
+        id: `local-unmerged-lane:${pipeline.id}`,
+        actionable: true,
+        episode: `${pipeline.baseBranch}:${sha}`,
+        label: redactBounded(`finished lane ${pipeline.id} has local commits not merged into ${pipeline.baseBranch}; last passed commit ${sha.slice(0, 12)}`, 800),
+      });
+    }
+  }
+  if (lastScanned) cursor = lastScanned;
+  if (localProbeFailures) {
+    console.error(`[seat tick] local Git ancestry unavailable for ${localProbeFailures} finished lanes; first ${firstLocalProbeFailure}`);
+  }
+  return { signals: found, cursor };
+}
+
+async function readPullRequestsWithinBudget(
+  source: () => Promise<OpenPullRequestsResult>,
+): Promise<OpenPullRequestsResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      source(),
+      new Promise<OpenPullRequestsResult>((resolve) => {
+        timer = setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), PULL_REQUEST_ENRICHMENT_BUDGET_MS);
+      }),
+    ]);
+  } catch {
+    return { ok: false, unavailable: "command-failed" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function unmergedPullRequests(context: {
@@ -1787,13 +1931,14 @@ async function unmergedPullRequests(context: {
   wakeIntervalMs: number;
   /** What the previous checks made of this source. */
   gap: SeatTickSourceGap | null;
+  localScanCursor: string | null;
   sources: SeatTickSources;
 }): Promise<PullRequestEvidence> {
   let canonicalProject = seatProjectResolver();
   /* Nothing was asked, so nothing is concluded — and the run of failures is
      left exactly as it stands. A gate is a statement about this check, never
      about whether the source can be read. */
-  const unasked: PullRequestEvidence = { pullRequests: [], observed: false, unavailable: null, gap: context.gap };
+  const unasked: PullRequestEvidence = { pullRequests: [], localPending: [], observed: false, unavailable: null, gap: context.gap, localScanCursor: context.localScanCursor ?? null };
   if (!context.wakeDue || !context.enabled) return unasked;
   /* The other two ways a check can be unable to raise any reason at all: a
      project with nobody to wake ends in `no-seat`, and a seat whose turn is
@@ -1804,11 +1949,14 @@ async function unmergedPullRequests(context: {
   if (!context.seat || seatTurnProgressing(context.seat)) return unasked;
 
   const at = new Date(context.now).toISOString();
-  const failed = (kind: SeatTickPullRequestGap): PullRequestEvidence => ({
+  let localScanCursor = context.localScanCursor ?? null;
+  const failed = (kind: SeatTickPullRequestGap, localPending: SeatTickSignalInput[] = []): PullRequestEvidence => ({
     pullRequests: [],
+    localPending,
     observed: false,
     unavailable: kind,
     gap: seatTickSourceGapAfterFailure(context.gap, kind, at),
+    localScanCursor,
   });
 
   /* The archive is an evidence source too, and a permanent failure of it has to
@@ -1828,7 +1976,7 @@ async function unmergedPullRequests(context: {
      a gap outliving its question. */
   const standing = context.gap;
   if (standing?.gap === "lanes-unreadable" && !seatTickSourceRetryDue(standing, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], observed: false, unavailable: standing.gap as SeatTickPullRequestGap, gap: standing };
+    return { pullRequests: [], localPending: [], observed: false, unavailable: standing.gap as SeatTickPullRequestGap, gap: standing };
   }
 
   let archived: readonly Pipeline[];
@@ -1844,8 +1992,11 @@ async function unmergedPullRequests(context: {
     .filter((pipeline) => canonicalProject(pipeline.project) === context.project && !pipeline.hiddenAt);
   const finished = projectLanes.filter(isFinished);
   if (finished.length === 0) return unasked;
+  const localScan = await localFinishedLaneSignals(context.project, projectLanes, localScanCursor);
+  const localPending = localScan.signals;
+  localScanCursor = localScan.cursor;
   const cwd = repoDirForProject(context.project, context.sources, archived);
-  if (!cwd) return unasked;
+  if (!cwd) return { ...unasked, localPending, localScanCursor };
 
   /* The same bound for the `gh` read: a source that has been unreadable for
      longer than a whole wake interval is asked at that interval and no faster
@@ -1862,18 +2013,18 @@ async function unmergedPullRequests(context: {
      refuse a quiet the evidence allows. Everything between the gates and here is
      a local read; the subprocess below is the only thing THIS gate saves. */
   if (context.gap && !seatTickSourceRetryDue(context.gap, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], observed: false, unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap };
+    return { pullRequests: [], localPending, observed: false, unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap, localScanCursor };
   }
 
   let result: OpenPullRequestsResult;
   try {
     /* The seam answers with a result; a seam that throws instead is the same
        fact arriving by exception, and neither is an empty list. */
-    result = await context.sources.openPullRequests({ cwd, limit: PULL_REQUEST_LIMIT });
+    result = await readPullRequestsWithinBudget(() => context.sources.openPullRequests({ cwd, limit: PULL_REQUEST_LIMIT }));
   } catch {
     result = { ok: false, unavailable: "command-failed" };
   }
-  if (!result.ok) return failed(result.unavailable);
+  if (!result.ok) return failed(result.unavailable, localPending);
   const open = result.pullRequests;
   canonicalProject = seatProjectResolver();
   const byBranch = new Map<string, Pipeline[]>();
@@ -1923,7 +2074,7 @@ async function unmergedPullRequests(context: {
   /* An answer, so the run of failures is over: the source spoke, whatever it
      said. This is the only thing that clears the row, which is what makes the
      next outage a fresh run with its own report. */
-  return { pullRequests: found.sort((left, right) => left.number - right.number), observed: true, unavailable: null, gap: null };
+  return { pullRequests: found.sort((left, right) => left.number - right.number), localPending, observed: true, unavailable: null, gap: null, localScanCursor };
 }
 
 
@@ -2183,7 +2334,8 @@ async function childWork(
 ): Promise<ChildEvidence> {
   if (!seat) return { children: [], unavailable: null, catchUpPending: false };
   if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false };
-  const accounting = new SeatTickAccounting(state.accounting.filename, project);
+  assertSeatTickWork();
+  const accounting = guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, project), "accounting.children");
   const registry = sources.registry();
   const now = sources.now();
   const catchingUp = !!seatTickCatchUp({ state, now, settings: effectiveSeatTickSettings(sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS), seat });
@@ -2513,13 +2665,13 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     && cache.pipelinesSource === hotLanes && cache.tasksSource === sourceTasks
     && cache.project === input.project && cache.seatKey === seatInputKey(input.seat)
     && cache.announcedKey === announcedKey
-    && cache.aliasesKey === JSON.stringify(projectAliasSnapshot().aliases)
+    && cache.aliasesKey === `${projectRowsAliasKey(hotLanes)}\0${projectRowsAliasKey(sourceTasks)}`
     && cache.linkedKey === (cache.linkedKey === null ? null : JSON.stringify(linkedContext()))) {
     return reuseSeatTickProjection(input, sources, cache, now, settings);
   }
   const canonicalProject = seatProjectResolver();
   const { lanes: openLanes, tasks: openTasks } = performanceSpans.sync("seat-tick.project",
-    () => openTickLanes(hotLanes, input.project, canonicalProject), hotLanes.length);
+    () => openTickLanes(projectRows(hotLanes, input.project), input.project, canonicalProject), hotLanes.length);
   const evidence = performanceSpans.sync("seat-tick.project", () => openLanes.map(pipelineEvidence), openLanes.length);
   const previous = new Map(input.pipelines.map((lane) => [lane.id, lane]));
   const pauses = pauseInputs(openLanes, input.seat, sources, now);
@@ -2535,9 +2687,8 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
       ? previous.get(lane.id)?.stageActivity ?? null : null,
     ...pauses.get(lane.id),
   }));
-  const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(sourceTasks.map(task => [task.id, task] as const)), sourceTasks.length);
-  const board = performanceSpans.sync("seat-tick.project", () => projectTaskPipelineIds(
-    sourceTasks.filter(task => canonicalProject(task.project) === input.project), [...hotLanes]));
+  const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(projectRows(sourceTasks, input.project).map(task => [task.id, task] as const)), sourceTasks.length);
+  const board = performanceSpans.sync("seat-tick.project", () => seatTaskPipelineIds(projectRows(sourceTasks, input.project), hotLanes));
   const taskEvidence = performanceSpans.sync("seat-tick.project", () => board.map(task => taskEvidenceFor(sourceById.get(task.id) ?? task, task.pipelineIds)), board.length);
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -2547,8 +2698,8 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
   const ownLanes = performanceSpans.sync("seat-tick.project", () => ownSettledLanes(
-    input.project, input.seat, input.state.announcedLanes ?? [], hotLanes, !!seatTickCatchUp({ ...input, now, settings })), hotLanes.length);
-  const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
+    input.project, input.seat, input.state.announcedLanes ?? [], projectRows(hotLanes, input.project), !!seatTickCatchUp({ ...input, now, settings })), hotLanes.length);
+  const openIds = openSeatPipelineIds(hotLanes);
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks, ownLanes,
     overdueTasks: overdueTaskInputs(sources, input.project, now, openTasks, input.state.itemsShown ?? []),
@@ -2563,7 +2714,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     seatTickRefreshCache.set(refreshed, {
       pipelinesSource: hotLanes, tasksSource: sourceTasks, project: input.project,
       seatKey: seatInputKey(input.seat), announcedKey,
-      aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
+      aliasesKey: `${projectRowsAliasKey(hotLanes)}\0${projectRowsAliasKey(sourceTasks)}`, pipelines, tasks, ownLanes,
       linkedKey: linked ? JSON.stringify(linked) : null,
       openIds, openTasks, pausedLanes: hotLanes.filter(lane => lane.state === "paused" && canonicalProject(lane.project) === input.project),
       pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),
@@ -2605,7 +2756,8 @@ function sameTaskSource(current: readonly BoardTask[], prepared: readonly BoardT
   if (current === prepared || (current.length === 0 && prepared.length === 0)) return true;
   if (current.length !== prepared.length) return false;
   for (let index = 0; index < current.length; index++) {
-    if (current[index] !== prepared[index] || !deeplyFrozen(current[index])) return false;
+    if (current[index] === prepared[index] && deeplyFrozen(current[index])) continue;
+    if (JSON.stringify(current[index]) !== JSON.stringify(prepared[index])) return false;
   }
   return true;
 }
@@ -2613,7 +2765,8 @@ function samePipelineSource(current: readonly Pipeline[], prepared: readonly Pip
   if (current === prepared) return true;
   if (current.length !== prepared.length) return false;
   for (let index = 0; index < current.length; index++) {
-    if (current[index] !== prepared[index] || !deeplyFrozen(current[index])) return false;
+    if (current[index] === prepared[index] && deeplyFrozen(current[index])) continue;
+    if (laneEvidenceHash(current[index]!) !== laneEvidenceHash(prepared[index]!)) return false;
   }
   return true;
 }
@@ -2665,19 +2818,18 @@ async function refreshSeatTickInputCooperatively(
 ): Promise<SeatTickCheckInput> {
   return withViewerOperation("seat-tick.check", async () => {
     let pipelines = sources.pipelines(), tasks = sources.tasks();
-    const cached = seatTickRefreshCache.get(input);
-    if (cached && Object.isFrozen(pipelines) && Object.isFrozen(tasks)
-      && cached.pipelinesSource === pipelines && cached.tasksSource === tasks) {
-      return performanceSpans.sync("seat-tick.project", () => refreshSeatTickInput(input, sources));
-    }
+    /* Even a projection cache hit crosses preparation once so durable alias
+       changes invalidate its in-memory grouping before the rows are reused. */
     for (let attempt = 0; ; attempt++) {
       pipelines = sources.pipelines();
       tasks = sources.tasks();
       await performanceSpans.wait("seat-tick.project", () => prepareSeatTickProjection(sources, input.project, pipelines, tasks));
-      // Never use metadata prepared for a prior publication. Re-capture and
-      // warm the replacement after the await; sustained churn defers this tick.
-      if (samePipelineSource(sources.pipelines(), pipelines) && sameTaskSource(sources.tasks(), tasks)) break;
-      if (attempt >= 2) throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
+      // Prefer the replacement, but bound preparation under continuous churn.
+      // The captured rows already have their metadata prepared; projecting
+      // that snapshot keeps the alarm progressing without claiming later rows.
+      if ((sources.pipelines() === pipelines || samePipelineSource(projectRows(sources.pipelines(), input.project), projectRows(pipelines, input.project)))
+        && (sources.tasks() === tasks || sameTaskSource(projectRows(sources.tasks(), input.project), projectRows(tasks, input.project)))) break;
+      if (attempt >= 2) break;
     }
     const preparedSources = Object.create(sources) as SeatTickSources;
     preparedSources.pipelines = () => pipelines;
@@ -2764,21 +2916,94 @@ function taskEvidenceFor(task: BoardTask, pipelineIds: readonly string[] = []): 
   return pipelineIds[0] ? { ...evidence, owner: `pipeline ${pipelineIds[0]}` } : evidence;
 }
 
+type ProjectRow = { project: string };
+// Weak keys release old publications. Only the current alias generation is
+// retained per publication; mutable adapters never reuse a projection.
+const projectRowsCache = new WeakMap<readonly ProjectRow[], {
+  aliases: string; byProject: Map<string, readonly ProjectRow[]>; ready: Promise<void>; complete: boolean; taskLanes: Map<string, Pipeline[]>; openIds: Set<string>; order: Map<Pipeline, number>;
+}>();
+async function prepareProjectRows(rows: readonly ProjectRow[], snapshot = projectAliasSnapshot()): Promise<void> {
+  if (!Object.isFrozen(rows)) return;
+  const aliases = JSON.stringify(snapshot.aliases);
+  const held = projectRowsCache.get(rows);
+  if (held?.aliases === aliases) return held.ready;
+  const canonical = projectAliasResolver(snapshot);
+  const byProject = new Map<string, ProjectRow[]>();
+  const entry = { aliases, byProject, ready: Promise.resolve(), complete: false,
+    taskLanes: new Map<string, Pipeline[]>(), openIds: new Set<string>(), order: new Map<Pipeline, number>() };
+  let reusable = true;
+  entry.ready = forEachSharedRow(rows, (row, index) => {
+    if (!Object.isFrozen(row)) reusable = false;
+    const project = canonical(row.project);
+    const group = byProject.get(project) ?? [];
+    if (!byProject.has(project)) byProject.set(project, group);
+    group.push(row);
+    if ("taskIds" in row && Array.isArray(row.taskIds)) {
+      const pipeline = row as Pipeline;
+      if (!Object.isFrozen(pipeline.taskIds)) reusable = false;
+      entry.order.set(pipeline, index);
+      if (isOpen(pipeline)) entry.openIds.add(pipeline.id);
+      for (const id of new Set(pipeline.taskIds)) {
+        const lanes = entry.taskLanes.get(id) ?? [];
+        if (!entry.taskLanes.has(id)) entry.taskLanes.set(id, lanes);
+        lanes.push(pipeline);
+      }
+    }
+  }, { batchSize: 256, timeBudgetMs: 8 }).then(() => {
+    entry.complete = true;
+    if (!reusable && projectRowsCache.get(rows) === entry) projectRowsCache.delete(rows);
+  }).catch(error => {
+    if (projectRowsCache.get(rows) === entry) projectRowsCache.delete(rows);
+    throw error;
+  });
+  projectRowsCache.set(rows, entry);
+  await entry.ready;
+}
+function projectRows<T extends ProjectRow>(rows: readonly T[], project: string): readonly T[] {
+  const held = Object.isFrozen(rows) ? projectRowsCache.get(rows) : undefined;
+  // Alias freshness is sampled at the async preparation boundary. Every
+  // projection lookup after that boundary is an in-memory map access.
+  if (held?.complete) return (held.byProject.get(project) ?? []) as readonly T[];
+  const canonical = seatProjectResolver();
+  const selected = rows.filter(row => canonical(row.project) === project);
+  return selected.length === rows.length ? rows : selected;
+}
+function projectRowsAliasKey(rows: readonly ProjectRow[]): string | null {
+  return Object.isFrozen(rows) ? projectRowsCache.get(rows)?.aliases ?? null : null;
+}
+
+function seatTaskPipelineIds(tasks: readonly BoardTask[], pipelines: readonly Pipeline[]) {
+  const held = Object.isFrozen(pipelines) ? projectRowsCache.get(pipelines) : undefined;
+  if (!held?.complete) return projectTaskPipelineIds(tasks, pipelines);
+  const linked = new Map<string, Pipeline>();
+  for (const task of tasks) for (const lane of held.taskLanes.get(task.id) ?? []) linked.set(lane.id, lane);
+  return projectTaskPipelineIds(tasks, [...linked.values()].sort((left, right) => held.order.get(left)! - held.order.get(right)!));
+}
+function openSeatPipelineIds(pipelines: readonly Pipeline[]): Set<string> {
+  const held = Object.isFrozen(pipelines) ? projectRowsCache.get(pipelines) : undefined;
+  return held?.complete ? held.openIds : new Set(pipelines.filter(isOpen).map(lane => lane.id));
+}
+
 async function prepareSeatTickProjection(
   sources: SeatTickSources,
   project: string,
   pipelines: readonly Pipeline[] = sources.pipelines(),
   tasks: readonly BoardTask[] = sources.tasks(),
 ): Promise<void> {
-  const canonical = seatProjectResolver();
-  await forEachCooperatively(pipelines, async pipeline => {
-    if (canonical(pipeline.project) !== project) return;
+  const aliases = projectAliasSnapshot();
+  const aliasesKey = JSON.stringify(aliases.aliases);
+  await prepareProjectRows(pipelines, aliases);
+  await prepareProjectRows(tasks, aliases);
+  await forEachCooperatively(projectRows(pipelines, project), async pipeline => {
     await preparePipelineMetadata(pipeline);
     if (isOpen(pipeline)) await preparePipelineEvidence(pipeline);
   }, { batchSize: 4, timeBudgetMs: 8 });
-  await forEachCooperatively(tasks, task => {
-    if (canonical(task.project) === project && deeplyFrozen(task)) taskEvidenceFor(task);
+  await forEachCooperatively(projectRows(tasks, project), task => {
+    if (deeplyFrozen(task)) taskEvidenceFor(task);
   }, { batchSize: 4, timeBudgetMs: 8 });
+  if (JSON.stringify(projectAliasSnapshot().aliases) !== aliasesKey) {
+    throw new Error("seat project aliases changed while preparing the project projection");
+  }
 }
 
 /** The source read completed, but its evidence key moved again before the
@@ -2791,14 +3016,10 @@ export class SeatTickEvidenceRefreshCanceledError extends Error {
   }
 }
 
-/** The local gates and lane associations under which PR evidence was read.
- * A note edit needs no subprocess; eligibility or lane changes do.
- */
 // Weak keys retain only source versions while the shared frozen row is alive.
 // Mutable test/adaptor rows are still hashed from their current contents.
 const evidenceHashHost = globalThis as typeof globalThis & {
   __llvSeatTickEvidenceHashes?: WeakMap<Pipeline, string>;
-  __llvSeatTickPreparedRows?: WeakSet<readonly Pipeline[]>;
   __llvSeatTickDeepFrozen?: WeakSet<object>;
   __llvSeatTickEvidenceVersion?: number;
 };
@@ -2830,23 +3051,13 @@ function laneEvidenceHash(lane: Pipeline): string {
 
 async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): Promise<string> {
   return withViewerOperation("seat-tick.check", async () => {
-    const canonicalProject = seatProjectResolver();
-    const aliases = JSON.stringify(projectAliasSnapshot().aliases);
     const seatIdentity = () => {
       const seat = sources.seatFor(input.project).active;
       return JSON.stringify([seat?.conversationId, seat?.seatEpoch]);
     };
     const seat = seatIdentity();
-    const lanes = sources.pipelines();
-    const hashes: string[] = [];
-    await forEachCooperatively(lanes, lane => {
-      if (canonicalProject(lane.project) === input.project) {
-        hashes.push(performanceSpans.sync("seat-tick.hash", () => laneEvidenceHash(lane)));
-      }
-    }, { batchSize: 4, timeBudgetMs: 8 });
     const now = sources.now(), settings = effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS);
-    if (Object.isFrozen(lanes) && sources.pipelines() !== lanes || JSON.stringify(projectAliasSnapshot().aliases) !== aliases
-      || seatIdentity() !== seat || settings.enabled !== input.settings.enabled || settings.wakeIntervalMs !== input.settings.wakeIntervalMs
+    if (seatIdentity() !== seat || settings.enabled !== input.settings.enabled || settings.wakeIntervalMs !== input.settings.wakeIntervalMs
       || seatTickWakeDue(input.state.lastWakeAt, now, settings.wakeIntervalMs) !== seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs)) {
       throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
     }
@@ -2855,31 +3066,109 @@ async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" 
       seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
       input.settings.wakeIntervalMs,
       input.seat ? seatTurnProgressing(input.seat) : null,
-      hashes,
+      seat,
     ])).digest("hex");
   });
 }
 
-/** Revalidate gated evidence too when fresh state changes its question. A
- * second concurrent change leaves this check unsent for the next tick.
+/** PR evidence is one observation per eligible check, with lane associations
+ * captured by that read. Local agenda refreshes must not invalidate it as lanes
+ * advance. Changed eligibility still asks the newly enabled question, and a
+ * second eligibility change keeps the alarm unsent. The next check reads PRs
+ * again; delivery credits only the outcomes its frozen payload actually names.
  */
 export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
   let fresh = await refreshSeatTickInputCooperatively(input, sources);
   const key = await pullRequestEvidenceKey(fresh, sources);
   fresh = await refreshSeatTickInputCooperatively(fresh, sources);
-  if (key === input.pullRequestEvidenceKey) return fresh;
+  const currentlyOwned = () => {
+    const canonicalProject = seatProjectResolver();
+    const currentLanes = [...sources.pipelines(), ...sources.archivedPipelines()]
+      .filter(lane => canonicalProject(lane.project) === fresh.project && !lane.hiddenAt);
+    return new Set(currentLanes.filter((lane) => lane.merge
+      && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing"
+        || (lane.merge.state === "merged" && (lane.merge.reviewedHead === lane.lastPassedCommit
+          || lane.merge.chain.includes(lane.lastPassedCommit) || lane.merge.mergedHead === lane.lastPassedCommit)))).map(lane => lane.id));
+  };
+  const excludeCurrentlyOwned = (value: SeatTickCheckInput): SeatTickCheckInput => {
+    if (!value.pullRequests.length && !value.signals.some(signal => signal.id.startsWith("local-unmerged-lane:"))) return value;
+    const owners = currentlyOwned();
+    return {
+      ...value,
+      pullRequests: value.pullRequests.filter(pr => !owners.has(pr.pipelineId)),
+      signals: value.signals.filter(signal => !signal.id.startsWith("local-unmerged-lane:")
+        || !owners.has(signal.id.slice("local-unmerged-lane:".length))),
+    };
+  };
+  if (key === input.pullRequestEvidenceKey) return excludeCurrentlyOwned(fresh);
   const evidence = await unmergedPullRequests({
     project: fresh.project, seat: fresh.seat,
     wakeDue: seatTickWakeDue(fresh.state.lastWakeAt, fresh.now, fresh.settings.wakeIntervalMs),
     enabled: fresh.settings.enabled, now: fresh.now, wakeIntervalMs: fresh.settings.wakeIntervalMs,
-    gap: fresh.state.pullRequestGap, sources,
+    gap: fresh.state.pullRequestGap, localScanCursor: fresh.state.localFinishedLaneCursor ?? null, sources,
   });
-  fresh = await refreshSeatTickInputCooperatively({ ...fresh, pullRequests: evidence.pullRequests,
+  fresh = await refreshSeatTickInputCooperatively(fresh, sources);
+  fresh = await refreshSeatTickInputCooperatively({ ...fresh,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
     pullRequestsObserved: evidence.observed,
-    state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
+    signals: [...fresh.signals.filter((signal) => !signal.id.startsWith("local-unmerged-lane:")), ...evidence.localPending],
+    pullRequests: evidence.pullRequests,
+    state: { ...fresh.state, pullRequestGap: evidence.gap, localFinishedLaneCursor: evidence.localScanCursor } }, sources);
   if (await pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
-  return refreshSeatTickInputCooperatively(fresh, sources);
+  fresh = await refreshSeatTickInputCooperatively(fresh, sources);
+  return excludeCurrentlyOwned(fresh);
+}
+
+/** The opening check needs only a priority hint, without PR, report or
+ * pipeline preparation. The full observation is made after wake settlement. */
+export async function seatTickDeployPending(project: string, state: SeatTickProjectState,
+  policy: SeatTickPolicy, sources: SeatTickSources): Promise<boolean> {
+  const active = sources.seatFor(project).active;
+  if (!active?.conversationId) return false;
+  const seat: SeatTickSeatInput = { ...active, conversationId: active.conversationId,
+    turn: "unknown", activity: null, mandateCarriesTickContract: orchestratorMandateCarriesTickContract(active) };
+  return (await settledSeatDeploys(seat, state.announcedDeploys ?? [],
+    { now: sources.now(), backlogAfterMs: policy.backlogAfterMs }, sources)).length > 0;
+}
+
+/** A deployment is a durable obligation independent of PR/history evidence.
+ * Keep its delivery on the normal authority, admission and accounting path. */
+export async function gatherSeatTickDeployInput(project: string, state: SeatTickProjectState,
+  policy: SeatTickPolicy, sources: SeatTickSources, reports?: SeatTickReportsInput | null): Promise<SeatTickCheckInput | null> {
+  const active = sources.seatFor(project).active;
+  if (!active?.conversationId) return null;
+  const now = sources.now();
+  const identity: SeatTickSeatInput = { ...active, conversationId: active.conversationId,
+    turn: "unknown", activity: null, mandateCarriesTickContract: orchestratorMandateCarriesTickContract(active) };
+  const settledDeploys = await settledSeatDeploys(identity, state.announcedDeploys ?? [],
+    { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  if (!settledDeploys.length) return null;
+  const seat = await seatInput(project, policy, sources);
+  if (!seat || seat.conversationId !== identity.conversationId || seat.seatEpoch !== identity.seatEpoch) return null;
+  /* Reports enrich a deploy wake, but they share a serial worker with unrelated
+     projects. Accept a fast read and fall back immediately when that worker is
+     occupied, so optional evidence cannot consume the settlement deadline. */
+  const observedReports = reports === undefined ? await deployWakeReportsInput(project, sources) : reports ?? undefined;
+  assertSeatTickWork();
+  const current = sources.seatFor(project).active;
+  if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
+  const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
+  const pauses = pauseInputs(paused, seat, sources, sources.now());
+  const pipelines: SeatTickPipelineInput[] = [];
+  await forEachCooperatively(paused, lane => {
+    const evidence = evidenceFromPipelines([{ id: lane.id, task: lane.task, project: lane.project,
+      state: lane.state, createdAt: lane.createdAt, closedAt: lane.closedAt, activityAt: [] }])[0]!;
+    pipelines.push({ id: lane.id, title: evidence.title, state: evidence.state, updatedAt: lane.pausedAt ?? lane.createdAt,
+      stageActivity: null, stageId: lane.cursor?.stageId ?? null, ...pauses.get(lane.id) });
+  }, { batchSize: 4, timeBudgetMs: 8 });
+  return { project, now: sources.now(), seat, state, policy, settings,
+    pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
+    ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
+    signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
+    changeFingerprint: seatTickFingerprint(pipelines, [], [], [], null, [], settledDeploys, []),
+    digestFingerprint: state.checkFingerprint ?? undefined,
+  };
 }
 
 export async function gatherSeatTickInput(
@@ -2910,18 +3199,9 @@ async function gatherSeatTickInputWork(
   canonicalProject = seatProjectResolver();
   const hotLanes = performanceSpans.sync("seat-tick.project", sources.pipelines);
   const hotTasks = sources.tasks();
-  await forEachCooperatively(hotLanes, async lane => {
-    if (canonicalProject(lane.project) !== canonical) return;
-    await performanceSpans.wait("seat-tick.project", () => preparePipelineMetadata(lane));
-    if (isOpen(lane)) await performanceSpans.wait("seat-tick.project", () => preparePipelineEvidence(lane));
-  }, { batchSize: 4, timeBudgetMs: 8 });
-  await forEachCooperatively(hotTasks, task => {
-    if (canonicalProject(task.project) === canonical && deeplyFrozen(task)) {
-      performanceSpans.sync("seat-tick.project", () => taskEvidenceFor(task));
-    }
-  }, { batchSize: 4, timeBudgetMs: 8 });
+  await prepareSeatTickProjection(sources, canonical, hotLanes, hotTasks);
   const { lanes: openLanes, tasks: openTasks } = performanceSpans.sync("seat-tick.project",
-    () => openTickLanes(hotLanes, canonical, canonicalProject), hotLanes.length);
+    () => openTickLanes(projectRows(hotLanes, canonical), canonical, canonicalProject), hotLanes.length);
   const evidence = performanceSpans.sync("seat-tick.project", () => openLanes.map(pipelineEvidence), openLanes.length);
   const observedStages = new Map(openLanes.map((lane) => {
     const attempt = stageAttempt(lane);
@@ -2946,9 +3226,8 @@ async function gatherSeatTickInputWork(
   /* Pipeline membership is the read model the board itself uses, so "owned"
      means the same thing here as it does on the card. */
   canonicalProject = seatProjectResolver();
-  const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(hotTasks.map(task => [task.id, task] as const)), hotTasks.length);
-  const board = performanceSpans.sync("seat-tick.project", () => projectTaskPipelineIds(
-    hotTasks.filter(task => canonicalProject(task.project) === canonical), [...hotLanes]));
+  const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(projectRows(hotTasks, canonical).map(task => [task.id, task] as const)), hotTasks.length);
+  const board = performanceSpans.sync("seat-tick.project", () => seatTaskPipelineIds(projectRows(hotTasks, canonical), hotLanes));
   const taskEvidence = performanceSpans.sync("seat-tick.project", () => board.map(task => taskEvidenceFor(sourceById.get(task.id) ?? task, task.pipelineIds)), board.length);
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -2962,9 +3241,9 @@ async function gatherSeatTickInputWork(
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
 
-  const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
+  const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], projectRows(hotLanes, canonical), canonical, seat, now, policy.backlogAfterMs);
   const ownLanes = performanceSpans.sync("seat-tick.project",
-    () => ownSettledLanes(canonical, seat, announcedLanes, hotLanes, catchUp), hotLanes.length);
+    () => ownSettledLanes(canonical, seat, announcedLanes, projectRows(hotLanes, canonical), catchUp), hotLanes.length);
   const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs, catchUp }, sources);
   let endedMaintenance: readonly MaintenanceRun[] = [];
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
@@ -2982,7 +3261,7 @@ async function gatherSeatTickInputWork(
      because its own lane finished, and reading a lane from another project as
      terminal because it is not in this project's slice would be the same claim
      made about the wrong pipeline. */
-  const openPipelineIds = new Set(hotLanes.filter(isOpen).map((pipeline) => pipeline.id));
+  const openPipelineIds = openSeatPipelineIds(hotLanes);
   /* The projection writes stage, verdict and deploy events into the journal;
      nothing else runs it on a schedule, so the tick runs it before it reads. */
   try {
@@ -3010,7 +3289,7 @@ async function gatherSeatTickInputWork(
   const harvestedChildren = state.harvestedChildren;
   await yieldToRuntime();
   const pullRequestEvidenceKeyAtRead = await pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
-  const { pullRequests, observed: pullRequestsObserved, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
+  const { pullRequests, localPending, localScanCursor, observed: pullRequestsObserved, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,
     /* The same clause the decision applies, asked here because the read behind
@@ -3022,6 +3301,7 @@ async function gatherSeatTickInputWork(
     now,
     wakeIntervalMs: settings.wakeIntervalMs,
     gap: state.pullRequestGap,
+    localScanCursor: state.localFinishedLaneCursor ?? null,
     sources,
   });
 
@@ -3044,7 +3324,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...signals(canonical, seat, sources), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,
@@ -3061,7 +3341,7 @@ async function gatherSeatTickInputWork(
        is what attempted the read, so the gather is what records what became of
        it, and the decision reads that row to know whether this is the outage
        worth putting on the board. */
-    state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
+    state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, localFinishedLaneCursor: localScanCursor, childrenGap, harvestedChildren, accounting: state.accounting ? guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, canonical), "accounting.sources").readState().accounting : undefined },
     policy,
     settings,
     ...await (async () => {
@@ -3075,7 +3355,7 @@ async function gatherSeatTickInputWork(
       pipelinesSource: hotLanes, tasksSource: hotTasks, project: canonical,
       seatKey: seatInputKey(seat),
       announcedKey: announcedLaneKey(gathered.state, seatTickCatchUp(gathered)?.key ?? null),
-      aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
+      aliasesKey: `${projectRowsAliasKey(hotLanes)}\0${projectRowsAliasKey(hotTasks)}`, pipelines, tasks, ownLanes,
       linkedKey: linked ? JSON.stringify(linked) : null,
       openIds: openPipelineIds, openTasks,
       pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),

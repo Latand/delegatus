@@ -585,6 +585,22 @@ test("a change Codex reported re-reads the queue without the operator asking", a
   expect(reads).toBeGreaterThan(before);
 });
 
+test("a proof that lands on one entry removes its row on the change event and keeps a same-text pending row", async () => {
+  entries = [record("a", { versions: [{ revision: 1, operationId: "op-a", text: "same words", images: [], contentDigest: "d-same" }] }),
+    record("b", { versions: [{ revision: 1, operationId: "op-b", text: "same words", images: [], contentDigest: "d-same" }] })];
+  items = [submission("a"), submission("b")];
+  await mount();
+  expect(rows().map((row) => row.getAttribute("data-entry"))).toEqual(["a", "b"]);
+
+  // Codex consumed "a": the journal now holds its proof, and the session says so once.
+  entries = [{ ...entries[0]!, state: "delivered", dispatchedRevision: 1, dispatchedTurnId: "turn-1",
+    proof: { threadId: "thread-1", clientUserMessageId: entries[0]!.clientUserMessageId, revision: 1, turnId: "turn-1", itemId: "item-a", input: [] } }, entries[1]!];
+  items = [submission("b")];
+  await act(async () => { root.render(<Harness changeRevision={1} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(rows().map((row) => row.getAttribute("data-entry"))).toEqual(["b"]);
+});
+
 test("the queue survives a reload, because it was never the browser's", async () => {
   /* Codex holds it and the runtime journals it, so a fresh page has the same
      queue — including a message admitted while the last page was still open. */

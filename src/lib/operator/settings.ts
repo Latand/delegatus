@@ -1,8 +1,9 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { statePath } from "@/lib/configDir";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 /*
  * The operator's own settings, installation-wide (docs/design/orchestrator-reports.md §4.2).
@@ -127,7 +128,6 @@ export function operatorTimeZone(): string | null {
 
 function write(settings: OperatorSettings): boolean {
   const file = settingsFile();
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
   const body: OperatorSettingsFile = {
     schemaVersion: 1,
     ...(settings.locale ? { locale: settings.locale } : {}),
@@ -135,16 +135,10 @@ function write(settings: OperatorSettings): boolean {
   };
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(temporary, JSON.stringify(body, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temporary, file);
+    writeJsonDurably(file, body);
     cache = null;
     return true;
   } catch {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // The next write retries.
-    }
     return false;
   }
 }
@@ -162,6 +156,13 @@ export interface OperatorSettingsUpdate {
  * Null on a failed write.
  */
 export function updateOperatorSettings(update: OperatorSettingsUpdate, now: string = new Date().toISOString()): OperatorSettings | null {
+  /* Under the file's lock, which an install transfer holds while it writes
+     the same file, so neither loses the other's value. */
+  try { return withFileTransactionSync(settingsFile(), "operator settings are busy", () => { cache = null; return updateLocked(update, now); }); }
+  catch (error) { if (error instanceof FileTransactionBusyError) return null; throw error; }
+}
+
+function updateLocked(update: OperatorSettingsUpdate, now: string): OperatorSettings | null {
   const current = readOperatorSettings();
   const next: OperatorSettings = { ...current };
   let changed = false;

@@ -32,7 +32,7 @@ export function lessonTextLength(value: string): number {
   return [...lessonText(value)].length;
 }
 
-export type ScopeKind = "role" | "project" | "machine";
+export type ScopeKind = "role" | "swarm" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
 export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate" | "problem";
@@ -54,6 +54,8 @@ export interface RewriteInput {
 }
 
 export interface StageRuleSource {
+  /** Task provenance for a correction written before a closing request exists. */
+  taskId?: string;
   origin?: "stage";
   project: string;
   pipelineId: string;
@@ -85,6 +87,14 @@ export interface ImportRuleSource {
   sha256: string;
   importId: string;
 }
+/** Server-attributed role conversation outside a pipeline, including scheduled roles. */
+export interface ConversationRuleSource {
+  origin: "conversation";
+  project: string;
+  roleId: string;
+  fixRound: false;
+  conversationId: string;
+}
 /** The operator's own root conversation, in Delegatus mode: project and machine only. */
 export interface OperatorRuleSource {
   origin: "operator";
@@ -93,7 +103,7 @@ export interface OperatorRuleSource {
   fixRound: false;
   conversationId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource;
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource | ConversationRuleSource;
 
 /** One time a rule left the injected text, as it was then. Appended, never
     rewritten or removed, so a later restore, curation or re-archive leaves
@@ -106,6 +116,8 @@ export interface RuleDeparture {
 }
 
 export interface RoleMemoryRule {
+  /** This rule includes a lesson prompted by an operator correction. */
+  operatorCorrection?: true;
   kind: "rule";
   id: string;
   scope: string;
@@ -156,8 +168,9 @@ export interface ScopeHistoryEntry {
   revisionScope?: string;
   at: string;
   /** Who changed the scope: a stage agent's lesson, the operator in the rules
-      window, a curator, or the join of a scope stored under a project key that moved. */
-  by: "agent" | "operator" | "succession" | "curator";
+      window, a curator, the join of a scope stored under a project key that
+      moved, or an install transfer that brought rules from another install. */
+  by: "agent" | "operator" | "succession" | "curator" | "transfer";
   pass?: string;
   counts?: CuratorPassView["counts"];
   before?: string[];
@@ -215,7 +228,7 @@ export interface LessonRequestRow {
 export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
 
 export interface LessonInput {
-  scope: ScopeKind;
+  scope: Exclude<ScopeKind, "swarm">;
   /** With scope role: the role the rule is for, when it is not the writer's own. */
   role?: string;
   rule: string;
@@ -224,6 +237,7 @@ export interface LessonInput {
 
 /** What the window and the card read: no conversation ids leave the server. */
 export interface RuleView {
+  operatorCorrection?: true;
   id: string;
   rule: string;
   why: string;
@@ -270,8 +284,11 @@ export interface ScopeView {
 
 export interface RoleMemoryProjectView {
   project: string;
-  /** False only while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set. */
+  /** False while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set, or while the
+      installation chose the engines' own memory (memory-source-switch.md §3.1). */
   enabled: boolean;
+  /** Present when the Settings row's engines position stops the rules while the kill switch is unset. */
+  pausedBy?: "memorySource";
   scopes: ScopeView[];
   curation?: { lastAt: string | null; nextAt: string | null; newLessons: number; passes: CuratorPassView[] };
 }

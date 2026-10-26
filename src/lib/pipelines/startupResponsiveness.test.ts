@@ -694,6 +694,34 @@ test("history evidence keeps 48 validated rows when one row changes before fresh
   } finally { read.mockRestore(); decodes.stop(); db.close(); }
 });
 
+test("history evidence keeps warming through consecutive freshness rejections", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  retainedHistory(db, row);
+  const decodes = observeEvidenceDecodes();
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  let writes = 0;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalRead>) => {
+    const result = await originalRead(...args);
+    if (writes < 2) {
+      writes++;
+      db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+        .run(JSON.stringify({ ...row, stateDetail: `concurrent revision ${writes}` }), row.id);
+    }
+    return result;
+  }) as typeof originalRead);
+  try {
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("pipeline evidence changed during preparation");
+    expect(decodes.rows()).toBe(49);
+    decodes.reset();
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("pipeline evidence changed during preparation");
+    expect(decodes.rows(), "the first refused snapshot remains valid read progress").toBe(1);
+    decodes.reset();
+    expect(await pipelineRegistryHealthAsync()).toEqual([]);
+    expect(decodes.rows(), "the second refused snapshot remains valid read progress").toBe(1);
+  } finally { read.mockRestore(); decodes.stop(); db.close(); }
+});
+
 test("history evidence callers across revisions hydrate once and both refuse stale data", async () => {
   const { root, row } = fixture();
   const db = new Database(path.join(root, "state.sqlite"));
@@ -729,4 +757,20 @@ test("history evidence callers across revisions hydrate once and both refuse sta
     await Promise.allSettled([settledFirst, ...(second ? [second] : [])]);
     read.mockRestore(); decodes.stop(); db.close();
   }
+});
+
+
+test("keyed startup ownership keeps an attempt owner even when membership is absent", async () => {
+  const { root, row } = fixture();
+  const conversationId = "conversation_keyed_owner";
+  const record = { ...row, runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed", conversationId,
+    flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null, startedAt: "2026-10-22T00:00:00.000Z", completedAt: "2026-10-22T00:00:01.000Z",
+    error: null, output: null, verdict: null, activatedBy: null, effectiveRole: row.stages[0]!.effectiveRole }] }] };
+  const db = new Database(path.join(root, "state.sqlite"));
+  try { db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify(record)); }
+  finally { db.close(); }
+  const owners = await loadPipelineOwnershipForStartupAsync([], new Set([conversationId]));
+  expect(owners.map(owner => owner.id)).toEqual([row.id]);
+  expect(owners[0]!.attempts).toEqual([{ conversationId, state: "passed" }]);
+  expect(await loadPipelineOwnershipForStartupAsync([], new Set(["conversation_unrelated"])) ).toEqual([]);
 });

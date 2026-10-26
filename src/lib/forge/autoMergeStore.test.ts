@@ -15,9 +15,9 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-merge-store-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
-const { MERGE_POLL_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
+const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { patchPipeline } = await import("@/lib/pipelines/engine");
-const { loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -30,6 +30,27 @@ const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
 const { FlowPipelineController } = await import("@/lib/pipelines/controller");
 const { controllerPipelineKeys, withControllerPipelineScope } = await import("@/lib/pipelines/controllerScope");
 const { registerPipelineTick, requestPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+
+/** Known successful state diagnostics do not change a child's result. */
+function expectMergeChildSuccess(code: number, error: string): void {
+  if (error) console.error(error.trimEnd());
+  expect(code, error).toBe(0);
+  for (const line of error.split("\n").filter(Boolean)) {
+    const waitPrefix = "[blocking-wait] ";
+    const holdPrefix = "[state transaction-hold] ";
+    if (line.startsWith(waitPrefix)) {
+      expect(JSON.parse(line.slice(waitPrefix.length))).toMatchObject({
+        site: "state-write-lock", stateWait: { outcome: "success" },
+      });
+    } else {
+      expect(line.startsWith(holdPrefix), error).toBe(true);
+      const hold = JSON.parse(line.slice(holdPrefix.length));
+      expect(hold.collection).toBe("pipelines");
+      expect(hold.heldMs).toBeNumber();
+      expect(hold.heldMs).toBeGreaterThanOrEqual(0);
+    }
+  }
+}
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -205,7 +226,7 @@ describe("global merge admission", () => {
       stdout: "pipe", stderr: "pipe",
     });
     const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
-    expect({ code, error }).toEqual({ code: 0, error: "" });
+    expectMergeChildSuccess(code, error);
     expect(JSON.parse(output)).toEqual([["missed-admission", HEAD]]);
   });
 
@@ -387,6 +408,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
@@ -482,6 +504,7 @@ test("a completed lane with no PR keeps its task open, persists a visible block,
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -544,6 +567,7 @@ test("a human change request persists, and retry-merge waits for that reviewer's
         { reviewer: "reviewer-a", isBot: false, state: "CHANGES_REQUESTED" },
         ...(approved ? [{ reviewer: "reviewer-a", isBot: false, state: "APPROVED" }] : []),
       ].map((review) => JSON.stringify(review)).join("\n");
+      if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[]";
       if (args[0] === "api") return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -922,8 +946,89 @@ describe("refresh retry recovery", () => {
         TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe",
     });
     const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
-    expect({ code, error }).toEqual({ code: 0, error: "" });
+    expectMergeChildSuccess(code, error);
     expect(JSON.parse(output)).toEqual({ error: null, lanes: [["refresh-child", "queued", "d".repeat(40)], ["refresh-parent", "queued", HEAD]] });
+  });
+
+  test.each([
+    ["completed", "closed"], ["closed", "closed"], ["archived", "closed"],
+    ["hidden", "closed"], ["hidden", "needs_decision"],
+  ] as const)("a refresh with a %s original holds its slot across process restarts and releases on %s", async (original, failure) => {
+    const { waiting } = await waitingRefresh("running");
+    const peer = missingPrLane("refresh-peer");
+    peer.closedAt = iso(T0);
+    peer.delivery!.target.pr = 8;
+    peer.workLinks = [{ kind: "pr", repository: REPO, number: 8, addedAt: iso(T0), addedBy: "operator" }];
+    const rows = loadPipelines();
+    const parent = rows.find(lane => lane.id === waiting.id)!;
+    if (original === "closed") parent.state = "closed";
+    if (original === "hidden") parent.hiddenAt = iso(T0);
+    if (original === "archived") parent.closedAt = iso(T0 - 4 * 24 * 60 * 60_000);
+    savePipelines([...rows, peer]);
+    if (original === "archived") {
+      await archiveSettledPipelines(T0);
+      expect(loadPipelines().some(lane => lane.id === waiting.id)).toBe(false);
+      expect(loadArchivedPipelinesForOwnership([waiting.id])).toHaveLength(1);
+    }
+    const childRoot = fs.mkdtempSync(path.join(sandbox, "refresh-slot-restart-"));
+    for (const directory of ["home", "config", "tmp"]) fs.mkdirSync(path.join(childRoot, directory));
+    const script = `
+      const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const reads = [], starts = [];
+      const ports = productionAutoMergePorts({
+        now: () => FIXTURE_CLOCK, loadPipelines, cachedState: () => null,
+        run: async args => {
+          if (args[0] === "pr" && args[1] === "view") {
+            reads.push(Number(args[2]));
+            return JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: "${HEAD}", baseRefName: "main",
+              mergeable: "MERGEABLE", mergeStateStatus: Number(args[2]) === 7 ? "CLEAN" : "BEHIND", statusCheckRollup: [] });
+          }
+          if (args[1]?.includes("/reviews")) return "";
+          if (args.at(-1) === ".commit.sha") return "${"b".repeat(40)}";
+          if (args[1]?.includes("/branches/")) return "[]";
+          throw new Error("unexpected forge read");
+        },
+        write: async () => { throw new Error("unexpected forge write"); },
+        startRefresh: async request => {
+          starts.push(request.delivery.pr);
+          return { error: "fixture refresh refused" };
+        },
+      });
+      await sweepAutoMerge(ports);
+      console.log(JSON.stringify({ reads, starts, lanes: loadPipelines().map(lane => ({ id: lane.id, merge: lane.merge })) }));
+    `;
+    for (const state of ["running", "completed", failure] as const) {
+      const failed = state === failure;
+      if (state !== "running") {
+        const rows = loadPipelines();
+        const child = rows.find(lane => lane.id === "refresh-child")!;
+        child.state = state;
+        child.lastPassedCommit = HEAD;
+        child.stateDetail = "Resolution needs a decision";
+        savePipelines(rows);
+      }
+      const child = Bun.spawn([process.execPath, "-e", script.replace("FIXTURE_CLOCK", String(T0 + (state === "running" ? 1_000 : MERGE_POLL_MS)))], {
+        cwd: process.cwd(), env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
+          TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, error).toBe(0);
+      const result = JSON.parse(output);
+      expect(result.reads).toEqual(failed ? [8] : state === "completed" ? [7] : []);
+      expect(result.starts).toEqual(failed ? [8] : []);
+      if (state === "completed") expect(result.lanes.find((lane: Pipeline) => lane.id === "refresh-child").merge)
+        .toMatchObject({ state: "waiting-checks", reviewedHead: HEAD });
+      if (original !== "archived" && original !== "closed") {
+        expect(result.lanes.find((lane: Pipeline) => lane.id === waiting.id).merge).toMatchObject(failed
+          ? { state: "blocked", reason: failure === "closed" ? MERGE_REASONS.refreshClosed : "Resolution needs a decision" }
+          : { state: "refreshing", refresh: { pipelineId: "refresh-child" } });
+      }
+      expect(result.lanes.find((lane: Pipeline) => lane.id === peer.id).merge).toMatchObject(failed
+        ? { state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused", reviewedHead: HEAD }
+        : { state: "queued", reviewedHead: HEAD, head: null });
+    }
   });
 
   test.each(["completed", "closed"] as const)("a stale refreshing record on a %s lane cannot prevent a carrier on the same PR from queueing", async state => {
@@ -938,4 +1043,79 @@ describe("refresh retry recovery", () => {
     await sweepAutoMerge(ports);
     expect(loadPipelines().find(lane => lane.id === carrier.id)?.merge).toMatchObject({ prNumber: 7, reviewedHead: HEAD });
   });
+});
+
+
+test("a timed-out lane retries old duplicate green checks and merges after a real process restart", async () => {
+  resetAutoMergeForTests();
+  setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+  savePipelines([completedLane("retry-duplicates")]);
+  let clock = T0;
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    cachedState: () => null, log: () => undefined,
+    write: async () => { throw new Error("pending checks must not merge"); },
+    run: async args => {
+      if (args[0] === "pr") return JSON.stringify({ state: "OPEN", headRefOid: HEAD, baseRefName: "main",
+        mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+        statusCheckRollup: [{ name: "privacy-tracker-audit", status: "IN_PROGRESS", conclusion: "" }] });
+      if (args[1]?.includes("/reviews")) return "";
+      if (args[1]?.includes("/rules/branches/")) return "[]";
+      if (args[1]?.includes("/branches/")) return '["privacy-tracker-audit"]';
+      throw new Error("unexpected fixture read");
+    },
+  });
+  await sweepAutoMerge(ports);
+  clock += MERGE_WAIT_LIMIT_MS;
+  await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout });
+  clock += 1;
+  const unregister = registerPipelineTick(async () => {});
+  try {
+    expect((await patchPipeline("retry-duplicates", { action: "retry-merge" }, { now: () => iso(clock) } as never)).error).toBeUndefined();
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", attempts: 1, headSeenAt: null });
+    const observations: Array<{ logs: string[] }> = [];
+    for (const elapsed of [0, MERGE_SETTLE_MS]) {
+      const root = fs.mkdtempSync(path.join(sandbox, "retry-reader-"));
+      for (const directory of ["home", "config", "tmp"]) fs.mkdirSync(path.join(root, directory));
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge");
+        const { loadPipelinesForList } = await import("./src/lib/pipelines/store");
+        let merged = false;
+        const logs = [], writes = [];
+        const ports = () => productionAutoMergePorts({
+          now: () => ${clock + elapsed}, loadPipelines: loadPipelinesForList,
+          cachedState: () => null, log: line => logs.push(line),
+          write: async args => { writes.push(args); merged = true; return ""; },
+          run: async args => {
+            if (args[0] === "pr") return JSON.stringify({ state: merged ? "MERGED" : "OPEN", headRefOid: "${HEAD}",
+              baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+              statusCheckRollup: [0, 6000].map(offset => ({ __typename: "CheckRun", name: "privacy-tracker-audit",
+                workflowName: "Privacy tracker audit", status: "COMPLETED", conclusion: "SUCCESS",
+                startedAt: new Date(${T0 - MERGE_WAIT_LIMIT_MS * 2} + offset).toISOString(),
+                completedAt: "${iso(T0 - MERGE_WAIT_LIMIT_MS)}" })) });
+            if (args[0] === "repo") return '{"squashMergeAllowed":true}';
+            if (args[1].includes("/reviews")) return "";
+            if (args[1].includes("/rules/branches/")) return "[]";
+            if (args[1].includes("/branches/")) return '["privacy-tracker-audit"]';
+            throw new Error("unexpected fixture read");
+          },
+        });
+        await sweepAutoMerge(ports());
+        await sweepAutoMerge(ports());
+        console.log(JSON.stringify({ state: loadPipelinesForList()[0].merge.state, writes, logs }));
+      `], { cwd: process.cwd(), env: { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
+        TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+        stdout: "pipe", stderr: "pipe" });
+      const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expectMergeChildSuccess(code, error);
+      const result = JSON.parse(output);
+      expect(result.state).toBe(elapsed ? "merged" : "waiting-checks");
+      expect(result.writes).toEqual(elapsed ? [["pr", "merge", "7", "--repo", REPO, "--squash", "--match-head-commit", HEAD]] : []);
+      observations.push(result);
+    }
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", attempts: 1 });
+    expect(observations[0]!.logs.filter(line => line.includes("waiting-checks"))).toHaveLength(1);
+    expect(observations[1]!.logs.some(line => line.includes("waiting-checks"))).toBe(false);
+  } finally { for (let i = 0; i < 20; i++) await Promise.resolve(); unregister(); }
 });

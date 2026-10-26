@@ -47,6 +47,10 @@ for (const schema of Object.values(READ_SCHEMAS)) schema.refresh = {
   type: ["boolean", "null"],
   description: "Set true only when the operator explicitly asks for a fresh observation. Null or false reuses recent identical reads; repeated refreshes in the same delegation reuse its fresh observation.",
 };
+/** Read backends can carry nullable fields over from a neighboring tool. */
+export function withoutUnlistedNulls(properties: Record<string, ToolProperty>, args: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(args).filter(([key, value]) => value !== null || Object.hasOwn(properties, key)));
+}
 export function validToolValue(property: ToolProperty, value: unknown): boolean {
   const types = typeof property.type === "string" ? [property.type] : property.type;
   if (value === undefined || value === null) return types.includes("null");

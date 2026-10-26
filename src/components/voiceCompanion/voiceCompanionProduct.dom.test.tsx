@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 
@@ -15,6 +16,8 @@ import type { CompanionSettings } from "@/lib/voiceCompanion/storage";
  */
 
 const harness = installOnboardingDom();
+// Call-state tests use no animation timeline or layout engine.
+Object.defineProperty(harness.dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
 installActEnv();
 /* The floating component reads the page through the window's own globals. */
 const view = harness.dom as unknown as Window & typeof globalThis;
@@ -62,6 +65,8 @@ function routes(initial: CompanionSettings) {
   });
   return document;
 }
+/** The backend rows' controls; the «Microphone and speakers» section has its own test (VoiceDevicesSetting.dom.test.tsx). */
+const settingsControls = (section: Element) => [...section.querySelectorAll("input, button, select")].filter(control => !control.closest("[data-voice-devices]"));
 const sessionCalls = () => harness.calls.filter((call) => call.url.includes("/api/voice-companion/session"));
 
 let mounted: { root: Root; host: HTMLDivElement } | null = null;
@@ -249,7 +254,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     const choice = section.querySelector<HTMLElement>("[role='radiogroup'][data-voice-companion-backend]")!;
     expect([...choice.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.value, radio.checked])).toEqual([["api", true], ["codex", false]]);
     expect([choice.querySelector("[data-voice-backend='api'] label")!.textContent, choice.querySelector("[data-voice-backend='codex'] label")!.textContent]).toEqual(["Through the API (with a key)", "Codex V3 (subscription)"]);
-    expect(section.querySelectorAll("input, button, select")).toHaveLength(7);
+    expect(settingsControls(section)).toHaveLength(7);
     expect(section.querySelector("[data-call-memory]")).not.toBeNull();
     expect(section.textContent).not.toMatch(/demo|демо/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
@@ -274,7 +279,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
     expect([planBlock.firstElementChild!.className.includes("text-muted"), planBlock.lastElementChild!.className.includes("text-muted"), planBlock.children[1]!.className.includes("text-muted")]).toEqual([true, true, false]);
     expect(planBlock.textContent).not.toMatch(/AM|PM/u);
-    expect(section.querySelectorAll("input, button, select")).toHaveLength(5);
+    expect(settingsControls(section)).toHaveLength(5);
     expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
     expect(sessionCalls()).toEqual([]);
@@ -574,10 +579,10 @@ async function liveHarness() {
       const project = target.searchParams.get("project");
       return jsonResponse({ seat: { project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null, all: null });
     }
-    if (target.pathname === "/api/voice-companion/calls") return callsRoute.GET(new NextRequest(`http://127.0.0.1${target.pathname}`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+    if (target.pathname === "/api/voice-companion/calls") return callsRoute.GET(new NextRequest(`http://127.0.0.1${target.pathname}`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     if (target.pathname === "/api/voice-companion/resume") {
       const resume = await import("@/app/api/voice-companion/resume/route");
-      return resume.GET(new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+      return resume.GET(new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: "GET", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     }
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
@@ -585,7 +590,7 @@ async function liveHarness() {
     if (body?.action === "command" && holding.command) await holding.command;
     const lost = body?.action === "command" ? failing.command : null;
     if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
-    const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+    const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
     const answer = await (body ? route.POST(request) : route.GET(request));
     if (lost === "after") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     return answer;
@@ -687,6 +692,45 @@ test("project switches and null context preserve the same live call, transcript 
     expect(closed).toBe(true);
     expect(live.trackStops()).toBeGreaterThan(0);
   } finally { await unmountNow(); await live.release(); }
+});
+
+test("a call whose chosen microphone is gone names the microphone it uses in the status block and says the default was taken", async () => {
+  const live = await liveHarness();
+  const voiceDevices = await import("@/lib/audio/voiceDevices");
+  const track = { enabled: true, stop() {}, label: "Default - Headset Mic", getSettings: () => ({ deviceId: "default" }) };
+  const devices = [
+    { deviceId: "default", kind: "audioinput", label: "Default - Headset Mic", groupId: "g1" },
+    { deviceId: "mic-headset", kind: "audioinput", label: "Headset Mic", groupId: "g1" },
+  ];
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+    getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }), enumerateDevices: async () => devices,
+  } });
+  voiceDevices.setVoiceDeviceChoice("input", { id: "usb-gone", label: "USB Microphone" });
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    expect(document.querySelector("[data-companion-mic]")).toBeNull();
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause(300);
+    const line = document.querySelector("[data-companion-mic]");
+    expect(line?.textContent).toBe("Headset Mic");
+    /* The block cuts a long name, so the line itself carries the whole one for a hover. */
+    expect(line?.getAttribute("title")).toBe("Headset Mic");
+    expect(document.querySelector("[data-companion-phase]")?.hasAttribute("aria-hidden")).toBe(true);
+    const mute = document.querySelector<HTMLElement>(".vc-btn[aria-pressed]")!;
+    expect(mute.getAttribute("aria-label")).toBe(`${translate("en", "voiceCompanion.mute")} · ${translate("en", "voiceCompanion.micInUse", { name: "Headset Mic" })}`);
+    const notice = document.querySelector('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]');
+    expect(notice?.querySelector(".vc-notice-text")?.textContent).toBe(companionErrorMessage("MICROPHONE_FALLBACK", "en"));
+    expect(notice?.querySelector("[data-companion-open-settings]")).toBeTruthy();
+    expect(voiceDevices.voiceDeviceChoice("input")?.id).toBe("usb-gone");
+    await click(document.querySelector("[data-companion-end]"));
+    await pause(200);
+    expect(document.querySelector("[data-companion-mic]")).toBeNull();
+    expect(voiceDevices.activeVoiceInput()).toBeNull();
+  } finally {
+    voiceDevices.setVoiceDeviceChoice("input", null);
+    voiceDevices.configureVoiceDeviceStorage(undefined);
+    await unmountNow(); await live.release();
+  }
 });
 
 for (const backend of ["codex", "api"] as const) test(`a ${backend} call that closes ${backend === "codex" ? "at its plan limit says nothing of a reserved cost" : "without final usage says its reserved cost is retained"}`, async () => {
@@ -1464,6 +1508,94 @@ test("phone: a lost network keeps the call's history, the menu offers Reconnect,
     expect(phoneHead()?.dataset.phase).not.toBe("offline");
     expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("CONNECTION_RESTORED", "en"));
   } finally { await unmountNow(); await live.release(); }
+});
+
+test("phone: a live call names its microphone in the head's popover and the head says the default was taken; the line goes with the call", async () => {
+  const live = await liveHarness();
+  const voiceDevices = await import("@/lib/audio/voiceDevices");
+  const track = { enabled: true, stop() {}, label: "Default - Headset Mic", getSettings: () => ({ deviceId: "default" }) };
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+    getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+    enumerateDevices: async () => [
+      { deviceId: "default", kind: "audioinput", label: "Default - Headset Mic", groupId: "g1" },
+      { deviceId: "mic-headset", kind: "audioinput", label: "Headset Mic", groupId: "g1" },
+    ],
+  } });
+  voiceDevices.setVoiceDeviceChoice("input", { id: "usb-gone", label: "USB Microphone" });
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile />);
+    await phoneRow("talk");
+    await pause(300);
+    expect(document.querySelector("[data-phone-voice-words]")?.textContent?.replace(/[\s\u200b]+/g, " ")).toContain(companionErrorMessage("MICROPHONE_FALLBACK", "en"));
+    await click(document.querySelector("[data-phone-voice-head]"));
+    expect(document.querySelector("[data-phone-voice-mic]")?.textContent).toBe(translate("en", "voiceCompanion.micInUse", { name: "Headset Mic" }));
+    expect(document.querySelector("[data-phone-voice-settings]")).toBeTruthy();
+    await phoneRow("end");
+    await pause(200);
+    await click(document.querySelector("[data-phone-voice-head]"));
+    expect(document.querySelector("[data-phone-voice-mic]")).toBeNull();
+  } finally {
+    voiceDevices.setVoiceDeviceChoice("input", null);
+    voiceDevices.configureVoiceDeviceStorage(undefined);
+    await unmountNow(); await live.release();
+  }
+});
+
+/** A browser that can pick speakers, with a call whose chosen speakers are no longer listed. */
+async function speakersGone() {
+  const voiceDevices = await import("@/lib/audio/voiceDevices");
+  const track = { enabled: true, stop() {}, label: "Default - Headset Mic", getSettings: () => ({ deviceId: "default" }) };
+  const had = Object.getOwnPropertyDescriptor(globalThis, "HTMLMediaElement");
+  Object.defineProperty(globalThis, "HTMLMediaElement", { configurable: true, writable: true, value: class { setSinkId() { return Promise.resolve(); } } });
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+    getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+    enumerateDevices: async () => [
+      { deviceId: "default", kind: "audioinput", label: "Default - Headset Mic", groupId: "g1" },
+      { deviceId: "mic-headset", kind: "audioinput", label: "Headset Mic", groupId: "g1" },
+      { deviceId: "default", kind: "audiooutput", label: "Default - Headphones", groupId: "g1" },
+      { deviceId: "spk-headset", kind: "audiooutput", label: "Headphones", groupId: "g1" },
+    ],
+  } });
+  voiceDevices.setVoiceDeviceChoice("output", { id: "spk-gone", label: "Desk speakers" });
+  return {
+    voiceDevices,
+    restore() {
+      voiceDevices.setVoiceDeviceChoice("output", null);
+      voiceDevices.configureVoiceDeviceStorage(undefined);
+      if (had) Object.defineProperty(globalThis, "HTMLMediaElement", had); else Reflect.deleteProperty(globalThis, "HTMLMediaElement");
+    },
+  };
+}
+
+test("a call whose chosen speakers are gone says the system default plays and keeps the choice; the notice goes with the call", async () => {
+  const live = await liveHarness();
+  const gone = await speakersGone();
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    expect(document.querySelector('[data-companion-notice][data-code="SPEAKERS_FALLBACK"]')).toBeNull();
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause(300);
+    const notice = document.querySelector('[data-companion-notice][data-code="SPEAKERS_FALLBACK"]');
+    expect(notice?.querySelector(".vc-notice-text")?.textContent).toBe(companionErrorMessage("SPEAKERS_FALLBACK", "en"));
+    expect(notice?.querySelector("[data-companion-open-settings]")).toBeTruthy();
+    expect(document.querySelector('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]')).toBeNull();
+    expect(gone.voiceDevices.voiceDeviceChoice("output")?.id).toBe("spk-gone");
+    await click(document.querySelector("[data-companion-end]"));
+    await pause(200);
+    expect(gone.voiceDevices.voiceOutputFellBack()).toBe(false);
+  } finally { gone.restore(); await unmountNow(); await live.release(); }
+});
+
+test("phone: a call whose chosen speakers are gone says so in the head", async () => {
+  const live = await liveHarness();
+  const gone = await speakersGone();
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile />);
+    await phoneRow("talk");
+    await pause(300);
+    expect(document.querySelector("[data-phone-voice-words]")?.textContent?.replace(/[\s\u200b]+/g, " ")).toContain(companionErrorMessage("SPEAKERS_FALLBACK", "en"));
+    expect(gone.voiceDevices.voiceDeviceChoice("output")?.id).toBe("spk-gone");
+  } finally { gone.restore(); await unmountNow(); await live.release(); }
 });
 
 test("phone: a project change, and a view with no project, keep the same head and the same live call", async () => {

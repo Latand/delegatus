@@ -7,6 +7,7 @@ import path from "node:path";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
+import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 
@@ -196,11 +197,6 @@ export function submittedContinuationOutcome(
   return { state: settled, at, resolution, compacted: !reservation && !owner };
 }
 
-function sameOwner(left: InterruptionOwner | null, right: InterruptionOwner | null): boolean {
-  if (!left || !right) return false;
-  return left.pid === right.pid && left.startIdentity === right.startIdentity;
-}
-
 /** Whether an existing obligation already covers the cut `input` describes.
     One cut can be seen twice — at release by the incumbent, and again at boot
     as a severed turn — and must still owe one continuation. */
@@ -209,7 +205,9 @@ function coversSameCut(existing: InterruptionObligation, input: InterruptionObli
   /* Between two restart records of a conversation that is no seat, the id is
      the whole identity: each names its cut by the turn that was cut. */
   if (restartRecordOfNoSeat(existing) && restartRecordOfNoSeat(input)) return false;
-  if (sameOwner(existing.owner, input.owner) && existing.turnRef === input.turnRef) return true;
+  if (existing.owner && input.owner
+    && sameRecordedProcessIdentity(existing.owner, { pid: input.owner.pid, startIdentity: input.owner.startIdentity })
+    && existing.turnRef === input.turnRef) return true;
   if (input.reason !== "viewer-restart") return false;
   /* A resolved cut was taken up by its continuation or by another message,
      and either started a turn of its own. A turn the row names other than the

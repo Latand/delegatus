@@ -805,6 +805,39 @@ test("structured-host startup retries an arbitrary recoverable adoption error", 
   }
 });
 
+test("structured-host startup failure diagnostics retain the host key and a redacted message", async () => {
+  const privateDiagnostic = path.join(os.homedir(), "fixture", "runtime.sock");
+  const failure = Object.assign(new RuntimeHostUnavailableError(privateDiagnostic), {
+    hostKey: "structured-host-fixture",
+  });
+  const logged: unknown[][] = [];
+
+  try {
+    await runStructuredHostStartup(
+      async () => { throw failure; },
+      (...args) => { logged.push(args); },
+      {
+        random: () => 0.5,
+        schedule: () => ({ unref() {} }),
+      },
+    );
+
+    expect(logged).toEqual([[
+      "[structured hosts] startup adoption failed; retry scheduled",
+      {
+        message: "~/fixture/runtime.sock",
+        hostKey: "structured-host-fixture",
+        category: "runtime-host-unavailable",
+        attempt: 1,
+        retryInMs: 5_000,
+      },
+    ]]);
+    expect(JSON.stringify(logged)).not.toContain(privateDiagnostic);
+  } finally {
+    markStructuredHostStartupReady();
+  }
+});
+
 test("release activation can wait until structured-host adoption recovers", async () => {
   const scheduled: Array<() => void> = [];
   let attempts = 0;
@@ -1133,4 +1166,46 @@ test("release readiness waits for board preparation and stays refused on failure
     if (fail) expect(error.message).toContain("board unavailable");
     else expect(error).toBeNull();
   }
+});
+
+test("saved-board readiness precedes attention refinement and retirement still awaits it", async () => {
+  const { createViewerStartupBarrier } = await import("@/lib/viewerInstrumentation");
+  const barrier = createViewerStartupBarrier(new AbortController());
+  let finish!: () => void;
+  const held = new Promise<void>(resolve => { finish = resolve; });
+  const events: string[] = [];
+  let retired = false;
+  await completeViewerRuntimeActivation({
+    initializeOperatorCapability: async () => undefined,
+    publishHotStateActivation: () => undefined,
+    startStructuredHosts: null,
+    prepareBoard: async () => { events.push("saved-board"); },
+    startControllers: async () => undefined,
+    publishViewerReleaseReady: () => { events.push("ready"); },
+    refineBoard: () => barrier.run(async () => { events.push("refine"); await held; }),
+  });
+  expect(events).toEqual(["saved-board", "ready", "refine"]);
+  const retirement = barrier.quiesce(new Error("retired")).then(() => { retired = true; });
+  await Promise.resolve();
+  expect(retired).toBe(false);
+  finish();
+  await retirement;
+  expect(retired).toBe(true);
+});
+
+test("attention refinement failure is reported after readiness without rejecting activation", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  let ready = false;
+  try {
+    await completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => undefined,
+      publishHotStateActivation: () => undefined,
+      startStructuredHosts: null,
+      startControllers: async () => undefined,
+      publishViewerReleaseReady: () => { ready = true; },
+      refineBoard: async () => { throw new Error("fixture refinement refused"); },
+    });
+    expect(ready).toBe(true);
+    expect(error).toHaveBeenCalledWith("[attention reconcile] startup refinement failed", "Error");
+  } finally { error.mockRestore(); }
 });

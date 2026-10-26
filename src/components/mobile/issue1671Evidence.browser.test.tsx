@@ -1,3 +1,4 @@
+import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -19,9 +20,11 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
-import { captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAttentionRing, captureLaneReviewFrames, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
+import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
+import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
@@ -57,6 +60,93 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("lane diff comments", () => {
+  browserTest("the phone lists a lane's changed files and opens one read-only, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/lane-diff-comments/phone");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try {
+      const result = await captureLaneReviewFrames(browser, out, true);
+      expect(result.failures).toEqual([]);
+      expect(result.readings.length).toBe(2 * 2 * 2);
+    } finally { await browser.close(); }
+  }, 300_000);
+});
+
+describe("phone markdown links", () => {
+  browserTest("readable labels wrap at words and unbroken targets fit the phone", async () => {
+    const out = path.resolve(process.env.LLV_LINKS_OUT ?? ".artifacts/phone-markdown-links");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const readings: Array<Record<string, unknown>> = [];
+    const sources = Object.fromEntries([
+      "src/components/feed/markdown.tsx", "src/components/mobile/issue1671Evidence.fixture.tsx", "src/components/mobile/issue1671Evidence.browser.test.tsx",
+    ].map(file => [file, new Bun.CryptoHasher("sha256").update(fs.readFileSync(file)).digest("hex")]));
+    try {
+      for (const width of [360, 390, 430]) for (const scheme of SCHEMES) for (const locale of ["en", "uk"] as const) {
+        // One complete answer opens at the bottom of the feed; focus stays on the page.
+        const { page, context, pageErrors } = await openFixture(browser,
+          "about:blank", { width, height: 844 }, scheme, locale, "reduce", true);
+        try {
+          const epoch = Date.UTC(2026, 9, 23, 12);
+          await page.clock.setFixedTime(epoch);
+          await page.goto(`${served.base}?markdown-links=1#c=conversation_running`);
+          const label = page.locator('a[href="https://example.invalid/review"]');
+          await label.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          const links = await page.locator('a[href="https://example.invalid/review"], a[href^="https://example.invalid/unbroken"], a[data-file-link]').evaluateAll(elements => elements.map(element => {
+            const text = element.textContent ?? "";
+            const node = element.firstChild!;
+            const range = document.createRange();
+            const splitWords: string[] = [];
+            for (const match of text.matchAll(/\S+/g)) {
+              range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+              if (new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size > 1) splitWords.push(match[0]);
+            }
+            let clipped = 0;
+            let covered = 0;
+            const lines = new Set<number>();
+            for (let offset = 0; offset < text.length; offset++) {
+              if (/\s/.test(text[offset]!)) continue;
+              range.setStart(node, offset); range.setEnd(node, offset + 1);
+              const rect = range.getBoundingClientRect();
+              lines.add(Math.round(rect.top));
+              let cut = rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5;
+              for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX) && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) cut = true;
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY) && (rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)) cut = true;
+              }
+              if (cut) clipped++;
+              const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+              if (!hit || !element.contains(hit)) covered++;
+            }
+            const style = getComputedStyle(element);
+            return { text, title: element.getAttribute("title"), splitWords, lines: lines.size, clipped, covered, wordBreak: style.wordBreak, overflowWrap: style.overflowWrap };
+          }));
+          const file = `${locale}-${scheme}-${width}.png`;
+          await page.screenshot({ path: path.join(out, file) });
+          readings.push({ locale, scheme, width, file, links, pageErrors });
+          fs.mkdirSync("evidence/phone-markdown-links", { recursive: true });
+          fs.writeFileSync("evidence/phone-markdown-links/geometry.json", JSON.stringify({ sources, readings }, null, 2) + "\n");
+          expect(pageErrors).toEqual([]);
+          expect(links).toHaveLength(4);
+          expect(links[0]!.splitWords).toEqual([]);
+          expect(links[2]!.title).toBe(links[2]!.text);
+          for (const link of links) {
+            expect(link.lines).toBeGreaterThan(1);
+            expect(link.clipped, `${locale}/${scheme}/${width}: ${link.text}`).toBe(0);
+            expect(link.covered, `${locale}/${scheme}/${width}: ${link.text}`).toBe(0);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+  }, 180_000);
+});
 
 describe("machine worker limit", () => {
   browserTest("machine worker limit: phone setting, seat face and popover in both languages and themes", async () => {
@@ -1936,6 +2026,7 @@ const REVIEW_ROW_PREFIX = translate("en", "mobile2.chat.reviewOf", { title: "" }
 /** What the bar's meta line actually says, cell by cell, and whether any cell
     is showing less than its text — the line the account was crowding out. */
 const headerReading = (page: Page) => page.evaluate(() => {
+  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
   const cell = (selector: string) => {
     const element = document.querySelector(selector);
     if (!element) return null;
@@ -1945,9 +2036,11 @@ const headerReading = (page: Page) => page.evaluate(() => {
       width: Math.round(box.width * 10) / 10,
       /* Chromium rounds a truncating box down by up to a pixel. */
       cut: element.scrollWidth > element.clientWidth + 1,
+      ellipsis: getComputedStyle(element).textOverflow === "ellipsis" && getComputedStyle(element).overflow === "hidden",
+      /* A cell the line wrapped out of its one visible row is in the DOM and not drawn. */
+      drawn: line ? box.top >= line.getBoundingClientRect().top - 0.5 && box.bottom <= line.getBoundingClientRect().bottom + 0.5 : false,
     };
   };
-  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
   return {
     line: line ? { width: Math.round(line.getBoundingClientRect().width * 10) / 10, text: line.textContent ?? "" } : null,
     state: cell("[data-mobile2-chat-state]"),
@@ -2014,7 +2107,8 @@ async function sheetSurface(
   await shot("header");
   check("the header names the state, the model with its tier, and the account", Boolean(header.state && header.model && header.account));
   check("the state phrase is whole", header.state?.cut === false);
-  check("the model and its tier are whole", header.model?.cut === false);
+  check("the model and its tier are whole or end in an ellipsis", header.model?.cut === false || header.model?.ellipsis === true);
+  check("the model and its tier are drawn on the line", header.model?.drawn === true);
   check("the account the conversation runs on is the one it names", (header.account?.text ?? "").includes(account));
   /* An ordinary account id has to be READABLE, not merely present in the DOM:
      `@ spare` rendered as `@ s…` and the first evidence pass called that a pass
@@ -2314,7 +2408,8 @@ browserTest("#1846: a pick on the phone names the next account whole on the titl
           /* The running account is either whole beside it or not drawn at all — never a sliver. */
           if (parts.runs?.shown && parts.runs.cut) fail(`the running account shows cut: ${JSON.stringify(parts.runs)}`);
           if (account.length <= 8 && !parts.runs?.shown) fail(`short ids both fit: ${JSON.stringify(parts.runs)}`);
-          if (after.model?.cut !== false) fail(`the model and its tier are whole: ${JSON.stringify(after.model)}`);
+          /* The model gives way before anything else on the line and ends in an ellipsis; the line's edge never slices it. */
+          if (!after.model || (after.model.cut && after.model.ellipsis !== true)) fail(`the model and its tier are whole or end in an ellipsis: ${JSON.stringify(after.model)}`);
           if (JSON.stringify(sent.reconfigures) !== JSON.stringify([next]) || sent.selects !== 0) fail(`requests ${JSON.stringify(sent)}`);
           if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           await page.close();
@@ -10781,6 +10876,151 @@ describe("phone ⋯ menus", () => {
   }, 3_600_000);
 });
 
+describe("phone lane checks", () => {
+  /* The lane ⋯ sheet's checks face, read from the page: every choice's height,
+     every text range against the sheet and the window, and which are checked. */
+  const readChecks = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="menu"]');
+    if (!sheet) return null;
+    const box = sheet.getBoundingClientRect();
+    const cut: string[] = [];
+    /* The rows; the sheet's title is the lane's name, which the header truncates by design. */
+    const rows = sheet.querySelector("[data-mobile2-pipeline-menu], [data-mobile2-pipeline-checks]") ?? sheet;
+    const walker = document.createTreeWalker(rows, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.left < Math.max(0, box.left) || rect.right > Math.min(innerWidth, box.right) || rect.top < box.top || rect.bottom > Math.min(innerHeight, box.bottom)) cut.push(node.textContent.trim());
+    }
+    const choices = Array.from(sheet.querySelectorAll<HTMLElement>("[data-pipeline-checks-choice], [data-pipeline-checks-row], [data-pipeline-checks-back]")).map((row) => ({
+      choice: row.getAttribute("data-pipeline-checks-choice"), text: row.textContent ?? "", checked: row.getAttribute("aria-checked"), role: row.getAttribute("role"), height: row.getBoundingClientRect().height,
+    }));
+    return { cut, rows: choices, scrollX: scrollX, wider: document.documentElement.scrollWidth - innerWidth };
+  });
+  type Reading = NonNullable<Awaited<ReturnType<typeof readChecks>>>;
+  const problems = (reading: Reading) => [
+    ...reading.cut.map((text) => `«${text}» is cut`),
+    ...reading.rows.filter((row) => row.height < 44).map((row) => `«${row.text}» is ${row.height}px tall`),
+    ...(reading.wider > 0 || reading.scrollX !== 0 ? [`the page scrolls sideways by ${reading.wider}px`] : []),
+  ];
+  const BAR_MENU = '[data-mobile2-bar] [data-mobile2-open="menu"]';
+  const laneScreen = async (page: Page) => {
+    await page.locator('[data-phone-card="task:t-data"]').click({ timeout: 20_000 });
+    await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click({ timeout: 20_000 });
+    await page.waitForSelector('[data-mobile2-pipeline="lane-decision"]', { timeout: 20_000 });
+  };
+
+  browserTest("the lane ⋯ sheet offers the stage, lane and project checks choice at 390 and 360 in en and uk, light and dark, and it persists", async () => {
+    const out = path.resolve(".artifacts/phone-pipeline-checks");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    try {
+      for (const width of [390, 360] as const) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+        const t = (key: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, key, params);
+        const key = `${width}-${lang}-${scheme}`;
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 740 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await page.goto(`${base}/?kanban=1#p=atlas`);
+          await laneScreen(page);
+          const row = page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-row]');
+          const openMenu = async () => {
+            await page.locator(BAR_MENU).first().click({ timeout: 20_000 });
+            await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-row="ready"]', { timeout: 10_000 });
+            await pause(page, 350);
+          };
+          await openMenu();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksCloud") }));
+          expect(await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-pipeline-action="archive"]').innerText()).toBe(t("mobile2.pipeline.archive"));
+          for (const problem of problems((await readChecks(page))!)) failures.push(`${key} menu: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          await row.click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-group]');
+          await pause(page, 350);
+          const face = (await readChecks(page))!;
+          for (const problem of problems(face)) failures.push(`${key} checks: ${problem}`);
+          expect(face.rows.filter((entry) => entry.choice).map((entry) => [entry.choice, entry.text, entry.role, entry.checked])).toEqual([
+            ["stage:inherit", t("mobile2.pipeline.checksStageInherit", { value: t("pipelineStrip.checksLocal") }), "menuitemradio", "false"],
+            ["stage:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "true"], ["stage:local", t("pipelineStrip.checksLocal"), "menuitemradio", "false"],
+            ["lane:inherit", t("pipelineStrip.checksLaneInherit", { value: t("pipelineStrip.checksCloud") }), "menuitemradio", "false"],
+            ["lane:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "false"], ["lane:local", t("pipelineStrip.checksLocal"), "menuitemradio", "true"],
+            ["project:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "true"], ["project:local", t("pipelineStrip.checksLocal"), "menuitemradio", "false"],
+          ]);
+          expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-group="lane"]').innerText()).toContain(t("mobile2.pipeline.checksLane"));
+          await page.screenshot({ path: path.join(out, `${key}-checks.png`) });
+          await page.locator('[data-pipeline-checks-choice="stage:inherit"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="stage:inherit"][aria-checked="true"]');
+          await page.locator('[data-pipeline-checks-choice="project:local"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="project:local"][aria-checked="true"]');
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-close]').click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"]', { state: "detached", timeout: 10_000 });
+          await pause(page, 400);
+          await openMenu();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksLocal") }));
+          await row.click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-group]');
+          await pause(page, 350);
+          const after = (await readChecks(page))!;
+          expect(after.rows.filter((entry) => entry.checked === "true").map((entry) => entry.choice)).toEqual(["stage:inherit", "lane:local", "project:local"]);
+          for (const problem of problems(after)) failures.push(`${key} after: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-after.png`) });
+          expect(await page.evaluate(() => (window as unknown as { phoneCheckPosts: unknown[] }).phoneCheckPosts)).toEqual([
+            { lane: "lane-decision", scope: "stage", execution: null, stageId: "implement" },
+            { lane: "lane-decision", scope: "project", execution: "local", stageId: "implement" },
+          ]);
+          /* The back row returns to the lane's actions. */
+          await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-back]').click();
+          await page.waitForSelector('[data-mobile2-pipeline-menu="lane-decision"]');
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const mode of ["pending", "refused", "save-refused"] as const) {
+        const key = `390-${lang}-${scheme}-${mode}`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&checks=${mode}#p=atlas`);
+          await laneScreen(page);
+          await page.locator(BAR_MENU).first().click({ timeout: 20_000 });
+          const row = page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-row]');
+          if (mode === "pending") {
+            await page.waitForSelector('[data-pipeline-checks-row="loading"]');
+            await pause(page, 400);
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksLoading"));
+          } else if (mode === "refused") {
+            await page.waitForSelector('[data-pipeline-checks-row="failed"]');
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksRetry"));
+            expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="load"]').innerText()).toBe(translate(lang, "pipelineStrip.checksLoadFailed"));
+          } else {
+            await page.waitForSelector('[data-pipeline-checks-row="ready"]');
+            await row.click();
+            await page.locator('[data-pipeline-checks-choice="lane:cloud"]').click();
+            await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="save"]');
+            expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="save"]').innerText()).toBe(translate(lang, "pipelineStrip.checksSaveFailed"));
+            expect(await page.locator('[data-pipeline-checks-choice="lane:local"]').getAttribute("aria-checked")).toBe("true");
+          }
+          await pause(page, 350);
+          for (const problem of problems((await readChecks(page))!)) failures.push(`${key}: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}.png`) });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ failures }, null, 2));
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 1_800_000);
+});
+
 describe("phone voice head", () => {
   /*
    * The voice companion's head on the phone (docs/design/phone-voice-head-build.md, the operator's variant 1 of
@@ -10792,6 +11032,10 @@ describe("phone voice head", () => {
    *   product     a reload while hidden, «Показати голос» in the ⋯ menu, the head back, a drag to the other corner
    *   navigation  a call kept from project A's board through a task screen to project B's board (the Overview's projects)
    *   navigation-product  the same with no call: the same head node and no session request
+   *   devices     a call whose chosen microphone is gone (`&dev=callgone`, docs/design/voice-device-picker.md): the head says the
+   *               system default was taken, and its menu names the microphone the call listens to
+   *   speakers    a call whose chosen speakers are gone (`&dev=callspkgone`): the head says the sound plays through the default
+   *   nextcall    another microphone chosen in the settings during a call (`&dev=callnext`): the row says it is used from the next call
    *
    *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> LLV_PHONE_VOICE_GROUPS=call,product \
    *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone voice head"
@@ -10808,6 +11052,9 @@ describe("phone voice head", () => {
     product: ["menu-hidden", "restored", "drag"],
     navigation: ["navigation"],
     "navigation-product": ["navigation-product"],
+    devices: ["mic-fallback", "mic-line"],
+    speakers: ["speakers-fallback"],
+    nextcall: ["next-call"],
   } as const;
   type Group = keyof typeof GROUPS;
   const LABELS: Record<string, { uk: string; en: string }> = {
@@ -10822,6 +11069,10 @@ describe("phone voice head", () => {
     drag: { uk: "перетягування в лівий кут", en: "dragging to the left corner" },
     navigation: { uk: "розмова триває на дошці проєкту B", en: "the call goes on on project B's board" },
     "navigation-product": { uk: "на дошці проєкту B без розмови", en: "on project B's board, no call" },
+    "mic-fallback": { uk: "мікрофона немає, взято системний", en: "mic gone, default taken" },
+    "mic-line": { uk: "меню голови: мікрофон розмови", en: "head menu: the call's microphone" },
+    "next-call": { uk: "мікрофон зміниться з наступної", en: "mic changes next call" },
+    "speakers-fallback": { uk: "динаміків немає, взято системні", en: "speakers gone, default taken" },
     "navigation-column-end": { uk: "кінець колонки, картки видно", en: "column end, last card clear" },
     "navigation-product-column-end": { uk: "кінець колонки без розмови", en: "column end, no call" },
   };
@@ -11006,6 +11257,8 @@ describe("phone voice head", () => {
           if (!browser.isConnected()) throw new Error("the browser is gone");
           const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
           await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          /* `&dev=<state>` stubs the browser's audio devices; without it the script does nothing. */
+          await context.addInitScript(stubVoiceDevices);
           return context;
         };
         const openPage = async (context: BrowserContext, query: string) => {
@@ -11053,7 +11306,7 @@ describe("phone voice head", () => {
 
         for (const group of groups) {
           const context = await newContext();
-          const { page, pageErrors, cdp } = await openPage(context, group === "call" ? `voice=sim&${CHAT}` : group === "product" ? `voice=product&${CHAT}` : `voice=${group === "navigation" ? "sim" : "product"}&overview=1`);
+          const { page, pageErrors, cdp } = await openPage(context, group === "call" ? `voice=sim&${CHAT}` : group === "devices" ? `voice=sim&dev=callgone&${CHAT}` : group === "speakers" ? `voice=sim&dev=callspkgone&${CHAT}` : group === "nextcall" ? `voice=sim&dev=callnext&${CHAT}` : group === "product" ? `voice=product&${CHAT}` : `voice=${group === "navigation" ? "sim" : "product"}&overview=1`);
           const fail = (scene: string, text: string) => failures.push(`${combo} ${scene}: ${text}`);
           /* The step under way, named in a failure that a wait throws. */
           let step = "open";
@@ -11163,6 +11416,84 @@ describe("phone voice head", () => {
               if (!hidden.stored || JSON.parse(hidden.stored).hidden !== true) fail("hidden", `the stored choice reads ${hidden.stored}`);
               if (before.feedBand === null || hidden.feedBand === null || before.feedBand < 60 || hidden.feedBand !== 0) fail("hidden", `the band did not go with the head: ${before.feedBand} then ${hidden.feedBand}`);
               if (hidden.record.starts.length !== 1) fail("hidden", `${hidden.record.starts.length} calls were started`);
+            } else if (group === "devices") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 400);
+              const said = await shot("mic-fallback");
+              const normal = (text: string | null) => (text ?? "").replace(/[\s\u200b\u00a0]+/gu, " ").trim();
+              if (normal(said.words) !== companionErrorMessage("MICROPHONE_FALLBACK", lang)) fail("mic-fallback", `the head says ${JSON.stringify(said.words)}`);
+              if (said.wordsCut) fail("mic-fallback", "the notice is cut");
+
+              await tapAt(HEAD);
+              await page.waitForSelector("[data-phone-voice-pop] [data-phone-voice-mic]", { timeout: 5_000 });
+              const line = await shot("mic-line");
+              const mic = await page.evaluate(() => {
+                const pop = document.querySelector<HTMLElement>("[data-phone-voice-pop]")!.getBoundingClientRect();
+                const row = document.querySelector<HTMLElement>("[data-phone-voice-mic]")!;
+                const name = row.querySelector<HTMLElement>(".pvc-mic-name")!;
+                const box = row.getBoundingClientRect();
+                const range = document.createRange(); range.selectNodeContents(name);
+                const text = range.getBoundingClientRect();
+                return { text: name.textContent, cut: name.scrollWidth > name.clientWidth + 0.5, inPop: box.left >= pop.left - 0.5 && box.right <= pop.right + 0.5 && box.top >= pop.top - 0.5 && box.bottom <= pop.bottom + 0.5,
+                  textInPop: text.left >= pop.left - 0.5 && text.right <= pop.right + 0.5, lineHeight: Math.round(box.height), popWidth: Math.round(pop.width) };
+              });
+              readings.push({ group, combo, scene: "mic-line-box", reading: mic });
+              if (mic.text !== translate(lang, "voiceCompanion.micInUse", { name: "Microphone Array (Realtek(R) Audio)" })) fail("mic-line", `the line reads ${JSON.stringify(mic.text)}`);
+              if (!mic.inPop || !mic.textInPop) fail("mic-line", `the line leaves the popover: ${JSON.stringify(mic)}`);
+              if (mic.cut) fail("mic-line", `the line is cut by its box without room (${mic.popWidth}px popover)`);
+              if (line.popRows.map((row) => row.key).join() !== "mute,end,settings,hide") fail("mic-line", `the rows are ${JSON.stringify(line.popRows.map((row) => row.key))}`);
+              if (line.popRows.some((row) => row.height < 44 || row.cut)) fail("mic-line", `a row is under 44 px or cut: ${JSON.stringify(line.popRows)}`);
+              await tapAt(HEAD);
+              await headRow("end");
+              await pause(page, 400);
+              await tapAt(HEAD);
+              if (await page.locator("[data-phone-voice-mic]").count()) fail("mic-line", "the microphone line stays after the call ended");
+            } else if (group === "speakers") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 400);
+              const said = await shot("speakers-fallback");
+              const normal = (text: string | null) => (text ?? "").replace(/[\s\u200b\u00a0]+/gu, " ").trim();
+              if (normal(said.words) !== companionErrorMessage("SPEAKERS_FALLBACK", lang)) fail("speakers-fallback", `the head says ${JSON.stringify(said.words)}`);
+              if (said.wordsCut) fail("speakers-fallback", "the notice is cut");
+            } else if (group === "nextcall") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 400);
+              step = "open the settings";
+              await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+              step = "choose another microphone";
+              const microphone = page.locator("[data-voice-device='input'] select");
+              await microphone.waitFor({ timeout: 10_000 });
+              await page.waitForFunction(() => document.querySelectorAll("[data-voice-device='input'] option").length >= 4);
+              await microphone.selectOption("mic-array");
+              await page.waitForSelector("[data-voice-device-hint='input']", { timeout: 10_000 });
+              await page.evaluate(() => document.querySelector("[data-voice-device='input']")!.scrollIntoView({ block: "center" }));
+              await pause(page, 300);
+              const next = await page.evaluate(() => {
+                const row = document.querySelector<HTMLElement>("[data-voice-device='input']")!;
+                const dialog = row.closest<HTMLElement>("[role=dialog]")!.getBoundingClientRect();
+                const hint = row.querySelector<HTMLElement>("[data-voice-device-hint]")!;
+                const range = document.createRange(); range.selectNodeContents(hint);
+                const lines = [...range.getClientRects()].filter((line) => line.width >= 1);
+                return { hint: hint.textContent?.replace(/\s+/g, " ").trim(), lines: lines.length,
+                  inside: lines.every((line) => line.left >= dialog.left - 0.5 && line.right <= dialog.right + 0.5 && line.top >= dialog.top - 0.5 && line.bottom <= dialog.bottom + 0.5 && line.bottom <= innerHeight + 0.5 && line.right <= innerWidth + 0.5) };
+              });
+              readings.push({ group, combo, scene: "next-call-box", reading: next });
+              await stamp(size, await page.screenshot(), band("next-call", false), path.join(out, `next-call-${combo}.png`));
+              if (pageErrors.length) fail("next-call", `page errors: ${pageErrors.join(" | ")}`);
+              if (!next.hint?.endsWith(translate(lang, "voiceCompanion.devices.nextCall"))) fail("next-call", `the row says ${JSON.stringify(next.hint)}`);
+              if (!next.lines || !next.inside) fail("next-call", `the line is cut or leaves the dialog: ${JSON.stringify(next)}`);
             } else if (group === "product") {
               /* The stored choice says hidden, as a reload after «Сховати» finds it. The row stands in the ⋯ menu that holds
                  «Налаштування»: the board's (and the Overview's); a conversation's own ⋯ has no settings. */
@@ -12340,6 +12671,154 @@ describe("keys settings", () => {
   }, 3_600_000);
 });
 
+/*
+ * «Delegatus memory» (docs/design/memory-source-switch.md §3.4): the Settings
+ * row of the memory source switch in every state on the phone's menu sheet,
+ * at 360, 375 and 390 px, light and dark, en and uk. Each state is real state
+ * in a throw-away state directory (src/lib/memory/fixtures/sourceStates.ts),
+ * read through the real `GET /api/memory/source`, with the import counts at
+ * the design's real sizes; the press is held to frame the optimistic switch
+ * and refused to frame its rollback. The state line is measured from its text
+ * ranges: no line under the sheet's or the window's edge, none cut sideways,
+ * none under the switch, and its words are the row's own for that state.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_MEMORY_SOURCE_FRAMES=<dir> CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "memory source settings"
+ */
+describe("memory source settings", () => {
+  browserTest("«Delegatus memory»: every state at 360, 375 and 390, light and dark, en and uk", async () => {
+    const FRAMES = path.resolve(process.env.LLV_MEMORY_SOURCE_FRAMES ?? ".artifacts/memory-source");
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-source-browser-"));
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true, mode: 0o700 });
+    const { GET } = await import("@/app/api/memory/source/route");
+    const { MEMORY_SOURCE_FRAME_STATES, MEMORY_SOURCE_FRAME_ROW, MEMORY_SOURCE_FRAME_ON, seedMemorySourceState } = await import("@/lib/memory/fixtures/sourceStates");
+    const { memorySourceLine } = await import("@/components/memory/MemorySourceRow");
+    /* The press: held open for `pressed`, refused for `refused`; nothing else writes. */
+    let releaseWrite: (() => void) | null = null;
+    const writes: unknown[] = [];
+    let failReads = false;
+    const server = await serveEvidenceFixture(path.join(FRAMES, "bundle-root"), undefined, {
+      "/api/memory/source": async (request: Request) => {
+        if (request.method !== "PUT") return failReads ? Response.json({ error: "read_failed" }, { status: 500 }) : GET();
+        writes.push(await request.json());
+        await new Promise<void>((resolve) => { releaseWrite = resolve; });
+        return Response.json({ error: "write_failed" }, { status: 500 });
+      },
+      "/api/memory/settings": { enabled: true, reasons: [], keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
+        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } },
+      "/api/keys": { staging: false, owner: true, keys: [] },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/team": { mode: "solo" },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [360, 375, 390] as const) {
+        const viewport = { width, height: width === 360 ? 740 : width === 375 ? 812 : 844 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=keys&header=1`, viewport, theme, lang, "reduce", true, 2);
+        try {
+          for (const state of MEMORY_SOURCE_FRAME_STATES) {
+            const key = `memory-source-${state}-${lang}-${theme}-${width}`;
+            try {
+              await seedMemorySourceState(state);
+              failReads = state === "read-failed";
+              await page.goto(`${server.base}?scenario=keys&header=1`);
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.locator('[data-mobile2-menu-row="settings"]').first().click();
+              const row = page.locator("[data-mobile2-sheet='menu'] [data-header-menu-memory-source]");
+              await row.waitFor();
+              const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
+              await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first);
+              if (state === "pressed" || state === "refused") {
+                await row.locator("[data-memory-source-switch]").click();
+                await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, state === "pressed" ? "preparing" : "engines");
+                if (state === "refused") {
+                  for (let wait = 0; wait < 100 && !releaseWrite; wait++) await page.waitForTimeout(20);
+                  (releaseWrite as (() => void) | null)?.(); releaseWrite = null;
+                  await row.locator("[data-memory-source-failed]").waitFor();
+                }
+              }
+              await row.scrollIntoViewIfNeeded();
+              await page.waitForTimeout(120);
+              const geometry = await page.evaluate(() => {
+                const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet='menu']")!;
+                const host = document.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
+                const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
+                const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
+                const control = host.querySelector<HTMLElement>("[data-memory-source-switch]")!;
+                /* The sheet's own scroller bounds what shows; the window bounds everything. */
+                let clip = sheet.getBoundingClientRect();
+                for (let node: HTMLElement | null = host.parentElement; node && node !== sheet.parentElement; node = node.parentElement) {
+                  const style = getComputedStyle(node);
+                  if (/(auto|scroll|hidden)/.test(style.overflowY)) { clip = node.getBoundingClientRect(); break; }
+                }
+                const bounds = { top: Math.max(clip.top, 0), bottom: Math.min(clip.bottom, innerHeight), left: Math.max(clip.left, 0), right: Math.min(clip.right, innerWidth) };
+                const rects = (element: HTMLElement) => {
+                  const out: DOMRect[] = [];
+                  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                    if (!node.textContent?.trim()) continue;
+                    const range = document.createRange(); range.selectNodeContents(node);
+                    out.push(...[...range.getClientRects()].filter((rect) => rect.width && rect.height));
+                  }
+                  return out;
+                };
+                const lineRects = rects(line), titleRects = rects(title);
+                const cut = [...lineRects, ...titleRects].filter((rect) => rect.top < bounds.top - 0.5 || rect.bottom > bounds.bottom + 0.5 || rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5).length;
+                const s = control.getBoundingClientRect();
+                const overlaps = [...lineRects, ...titleRects].filter((rect) => rect.left < s.right && rect.right > s.left && rect.top < s.bottom && rect.bottom > s.top).length;
+                const lineTops = [...new Set(lineRects.map((rect) => Math.round(rect.top)))];
+                const colour = getComputedStyle(line.querySelector("span:last-child") ?? line).color;
+                return {
+                  rowState: host.getAttribute("data-memory-source-state"), checked: control.getAttribute("aria-checked"),
+                  line: line.textContent ?? "", title: title.textContent ?? "", lines: lineTops.length, cut, overlaps,
+                  lineClipped: line.scrollWidth > line.clientWidth + 1 || line.scrollHeight > line.clientHeight + 1,
+                  switchBox: { width: Math.round(s.width), height: Math.round(s.height) }, switchInside: s.left >= bounds.left - 0.5 && s.right <= bounds.right + 0.5 && s.top >= bounds.top - 0.5 && s.bottom <= bounds.bottom + 0.5,
+                  rowHeight: Math.round(host.getBoundingClientRect().height), sheetOverflowX: sheet.scrollWidth - sheet.clientWidth, colour,
+                };
+              });
+              await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
+              const t = (name: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, name, params);
+              const view = state === "read-failed" ? null : await (await GET()).json();
+              const words = state === "read-failed" ? memorySourceLine(null, true, t, lang)
+                : memorySourceLine(state === "pressed" ? { choice: "delegatus", phase: "importing", import: { counts: null, remainingGenerations: 0, hold: null } } : view, false, t, lang);
+              const expected = state === "refused" ? `${t("memorySource.saveFailed")} ${words}` : words;
+              readings.push({ key, state, lang, theme, width, file: `${key}.png`, expected, pageErrors: [...pageErrors], ...geometry });
+              if (geometry.rowState !== MEMORY_SOURCE_FRAME_ROW[state]) failures.push(`${key}: row reads ${geometry.rowState}`);
+              if (geometry.line !== expected) failures.push(`${key}: line «${geometry.line}» is not «${expected}»`);
+              if (geometry.title !== t("memorySource.title")) failures.push(`${key}: title «${geometry.title}»`);
+              if (geometry.checked !== String(MEMORY_SOURCE_FRAME_ON[state])) failures.push(`${key}: switch reads ${geometry.checked}`);
+              if (geometry.cut) failures.push(`${key}: ${geometry.cut} text lines cut by an edge`);
+              if (geometry.lineClipped) failures.push(`${key}: the state line is clipped inside its box`);
+              if (geometry.overlaps) failures.push(`${key}: the switch covers ${geometry.overlaps} text lines`);
+              if (!geometry.switchInside) failures.push(`${key}: the switch leaves the sheet`);
+              if (geometry.switchBox.width < 44 || geometry.switchBox.height < 44) failures.push(`${key}: switch target ${geometry.switchBox.width}×${geometry.switchBox.height}`);
+              if (geometry.sheetOverflowX > 1) failures.push(`${key}: sheet overflows sideways by ${geometry.sheetOverflowX}`);
+              if (pageErrors.length) failures.push(`${key}: ${pageErrors.join("; ")}`);
+            } catch (error) {
+              failures.push(`${key}: ${String(error).split("\n")[0]}`);
+              await page.screenshot({ path: path.join(FRAMES, `failed-${key}.png`) }).catch(() => {});
+            } finally { (releaseWrite as (() => void) | null)?.(); releaseWrite = null; }
+          }
+        } finally { await context.close(); }
+      }
+      /* Each frame pressed once: the held press and the refused one. */
+      if (writes.length !== 2 * 2 * 3 * 2 || writes.some((body) => JSON.stringify(body) !== JSON.stringify({ source: "delegatus" }) && JSON.stringify(body) !== JSON.stringify({ source: "engines" }))) failures.push(`writes ${JSON.stringify(writes.slice(0, 4))} (${writes.length})`);
+    } finally {
+      await browser.close(); server.stop();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.writeFileSync(path.join(FRAMES, "readings.json"), JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", block: "memory source settings", failures, frames: readings }, null, 2) + "\n");
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});
+
 browserTest("what a full-screen conversation opens draws above it on the phone: the runtime sheet picks a model and a document preview opens and closes", async () => {
   /* The phone's reader hosts sit on the `reader` layer; the runtime sheet is a popover and the preview is one step
      above `reader` (`src/components/layers.ts`). The conversation is deep-linked, so no board is under it. */
@@ -12630,6 +13109,89 @@ describe("team workspaces slice (a) on the phone", () => {
 });
 
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
+browserTest("digest preview boundaries and literal hints stay distinct without a floating reply row", async () => {
+  const out = path.resolve(".artifacts/digest-preview");
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(out);
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox"] });
+  try {
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+      const phone = width === 390;
+      const { page, context } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=boundaries`, { width, height: 900 }, scheme, lang, "reduce", phone);
+      try {
+        if (phone) await page.locator("[data-mobile2-seat-open]").click();
+        const preview = page.locator("[data-tts-message]").filter({ hasText: lang === "en" ? "PREVIEW" : "ПОПЕРЕДНІЙ ПЕРЕГЛЯД" }).first();
+        await preview.waitFor();
+        const marker = lang === "en" ? "PUBLISHED UP TO HERE" : "ПУБЛІКУЄТЬСЯ ДОСЮДИ";
+        const boundaries = preview.locator("b").filter({ hasText: marker });
+        /* The zero-width link drops out of the match text, so its title and body copies count with the plain fake. */
+        expect(await boundaries.count()).toBe(lang === "en" ? 4 : 3);
+        expect(await boundaries.evaluateAll(nodes => nodes.filter(node => !node.closest(".border-l-2")).length)).toBe(1);
+        /* Markers split across bold runs are quoted too: only the preview's own two keep the unquoted style. */
+        const drawn = await preview.locator("b").evaluateAll(nodes => nodes
+          .filter(node => /━━|PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ЗВІДСИ|ДОСЮДИ/.test(node.textContent ?? ""))
+          .map(node => ({ text: node.textContent, quoted: Boolean(node.closest(".border-l-2")), color: getComputedStyle(node).color })));
+        const own = lang === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"];
+        expect(drawn.filter(run => !run.quoted).map(run => run.text)).toEqual(own);
+        for (const split of ["━━ PUBLISHED", "UP TO HERE ━━", "━━ PUBLISHED FROM", "HERE ━━", "━━ ПУБЛІКУЄТЬСЯ", "ЗВІДСИ ━━", "ДОСЮДИ ━━"]) {
+          expect(drawn.some(run => run.quoted && run.text === split)).toBe(true);
+        }
+        /* Escaped link targets, an invisible joiner, a direction override and lookalike letters are quoted too; the
+           first is also the title. */
+        for (const fake of ["━━ PUBLISHED\u200b UP TO HERE ━━", "━━ PUB\u034fLISHED UP TO HERE ━━", "\u202e━━ EREH OT PU DEHSILBUP ━━\u202c", "━━ ПУБЛІКУЄТЬСЯ\u200b ДОСЮДИ ━━", "━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━"]) {
+          expect(drawn.filter(run => run.text === fake).map(run => run.quoted)).toEqual(fake.startsWith("━━ PUBLISHED\u200b") ? [true, true] : [true]);
+        }
+        const ownColor = drawn.find(run => !run.quoted)!.color;
+        expect(drawn.filter(run => run.quoted && run.color === ownColor)).toEqual([]);
+        expect(await preview.locator("span.cursor-copy").filter({ hasText: "a`b" }).innerText()).toBe("a`b");
+        const move = await boundaries.first().evaluate(node => {
+          let feed = node.parentElement;
+          while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+          if (!feed) throw new Error("missing preview scroller");
+          const frame = feed.getBoundingClientRect();
+          return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2,
+            by: node.getBoundingClientRect().top - frame.top - frame.height / 2 };
+        });
+        await page.mouse.move(move.x, move.y);
+        await page.mouse.wheel(0, move.by);
+        await page.waitForTimeout(250);
+        expect(await boundaries.first().evaluate(node => {
+          const rect = node.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return hit === node || node.contains(hit);
+        })).toBe(true);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-boundaries.png`) });
+        await page.waitForTimeout(250);
+        const fromEnd = await preview.evaluate(node => {
+          let feed = node.parentElement;
+          while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+          if (!feed) throw new Error("missing preview scroller");
+          feed.scrollTop = (feed.scrollHeight - feed.clientHeight) / 2;
+          return feed.scrollHeight - feed.clientHeight - feed.scrollTop;
+        });
+        expect(fromEnd).toBeGreaterThan(200);
+        expect(await page.locator("[data-reply-suggestions], [data-reply-suggestion]").count()).toBe(0);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}.png`) });
+        /* The hint's inline code keeps its one backtick; no doubled run is drawn. */
+        const hintCode = preview.locator("span.cursor-copy").filter({ hasText: "a`b" });
+        await hintCode.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(250);
+        expect(await preview.innerText()).not.toContain("``");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-hint.png`) });
+      } finally { await context.close(); }
+    }
+    for (const lang of ["en", "uk"] as const) {
+      const { page, context } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=legacy`, { width: 390, height: 900 }, "light", lang, "reduce", true);
+      try {
+        await page.locator("[data-mobile2-seat-open]").click();
+        const preview = page.locator("[data-tts-message]").filter({ hasText: lang === "en" ? "PREVIEW" : "ПОПЕРЕДНІЙ ПЕРЕГЛЯД" }).first();
+        await preview.waitFor();
+        expect(await preview.innerText()).toContain(lang === "en" ? "Detector hints were not recorded" : "Підказки детекторів не записано");
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); server.stop(); }
+}, 180_000);
+
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
     const { captureTelegramMultiBot, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
@@ -12779,5 +13341,145 @@ describe("phone composer tools row", () => {
       fs.writeFileSync("evidence/phone-composer-tools/row.json", JSON.stringify(readings, null, 2) + "\n");
       expect(failures).toEqual([]);
     } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});
+
+/*
+ * The phone bar's meta line never cuts a word without an ellipsis (seat finding from the 1.16.0 critique:
+ * «● done · 30m ago · ✳ Opus 5.5 · h»). At 360, 375, 390, 403 and 416 px, in en and uk, in the running, question,
+ * done (no effort), returned (with effort), held and limit states, with the launch model and a long one, what the
+ * line DRAWS is measured from the text:
+ *
+ *   - the identity (separator, engine mark, model) is whole, or its model ends in a drawn ellipsis with room for a
+ *     readable head, or the whole group is out of the line together;
+ *   - the state phrase is whole, or ends in an ellipsis after its leading word, and then the identity is gone;
+ *   - nothing else on the line sticks out of it.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_META_LINE_SHOTS=<dir outside the repo> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "meta line"
+ */
+browserTest("the phone bar's meta line never cuts a word without an ellipsis", async () => {
+  const shots = process.env.LLV_META_LINE_SHOTS ? path.resolve(process.env.LLV_META_LINE_SHOTS) : null;
+  const label = process.env.LLV_META_LINE_LABEL ?? "after";
+  if (shots) fs.mkdirSync(shots, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const results: unknown[] = [];
+  const LONG = "claude-opus-5-5-preview-extended-context-2026";
+  const states = [
+    { name: "running", query: "account=spare", hash: "conversation_running", models: ["opus-5-5", LONG] },
+    { name: "question", query: "account=spare&launch=1", hash: "conversation_running", models: ["opus-5-5", LONG] },
+    { name: "done", query: "account=spare", hash: "conversation_done-2", models: [""] },
+    { name: "wake", query: "account=spare&wake=1", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "returned", query: "account=spare&queue-recovery=1", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "held", query: "account=spare&menu-state=held", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "limit", query: "account=spare&menu-state=limit", hash: "conversation_running", models: ["opus-5-5"] },
+  ];
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      for (const width of [360, 375, 390, 403, 416]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          for (const state of states) {
+            for (const model of state.models) {
+              const page = await context.newPage();
+              try {
+                await page.goto(`${base}/?${state.query}${model ? `&model=${model}` : ""}#c=${state.hash}`);
+                await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 20_000 });
+                await pause(page, 500);
+                const reading = await page.evaluate(() => {
+                  const stateCell = document.querySelector("[data-mobile2-chat-state]") as HTMLElement;
+                  const line = stateCell.parentElement!;
+                  const lineBox = line.getBoundingClientRect();
+                  const inside = (box: DOMRect) => box.width > 0 && box.top >= lineBox.top - 0.5 && box.bottom <= lineBox.bottom + 0.5;
+                  const outside = (box: DOMRect) => box.top >= lineBox.bottom - 0.5;
+                  /** The width a head of the text takes in this cell's own font, with the ellipsis. */
+                  const headWidth = (cell: HTMLElement, head: string) => {
+                    const probe = document.createElement("span");
+                    const style = getComputedStyle(cell);
+                    Object.assign(probe.style, { position: "absolute", visibility: "hidden", whiteSpace: "nowrap", font: style.font, letterSpacing: style.letterSpacing });
+                    probe.textContent = `${head}\u2026`;
+                    line.appendChild(probe);
+                    const width = probe.getBoundingClientRect().width;
+                    probe.remove();
+                    return width;
+                  };
+                  const cut = (cell: HTMLElement) => cell.scrollWidth > cell.clientWidth + 1;
+                  const ellipsis = (cell: HTMLElement) => getComputedStyle(cell).textOverflow === "ellipsis" && getComputedStyle(cell).overflow === "hidden";
+                  const headOf = (text: string) => {
+                    const word = text.trim().split(/\s+/)[0] ?? "";
+                    return word.slice(0, 4);
+                  };
+                  const modelCell = line.querySelector("[data-mobile2-chat-model]") as HTMLElement | null;
+                  /* The line's own child that holds the model: the group, or the model cell itself. */
+                  const identity = modelCell ? ([...line.children].find((child) => child.contains(modelCell)) as HTMLElement) : null;
+                  const identityBox = identity?.getBoundingClientRect() ?? null;
+                  const children = [...line.children].map((child) => {
+                    const box = child.getBoundingClientRect();
+                    return { text: child.textContent ?? "", inside: inside(box), outside: outside(box), sticksOut: box.right > lineBox.right + 0.5 || box.left < lineBox.left - 0.5 };
+                  });
+                  /* The row holds the line and the pending self-wake chip, which the line's clip never touches. */
+                  const row = line.parentElement!;
+                  const rowBox = row.getBoundingClientRect();
+                  const rowCells = [...row.children].map((child) => {
+                    const box = child.getBoundingClientRect();
+                    return { text: child.textContent ?? "", sliced: box.right > rowBox.right + 0.5 || box.left < rowBox.left - 0.5 || box.top < rowBox.top - 0.5 || box.bottom > rowBox.bottom + 0.5 };
+                  });
+                  return {
+                    rowCells,
+                    chip: row.querySelector("[data-wakeup]") !== null,
+                    line: { width: lineBox.width },
+                    state: { text: stateCell.textContent ?? "", cut: cut(stateCell), ellipsis: ellipsis(stateCell), width: stateCell.clientWidth, head: headWidth(stateCell, headOf(stateCell.textContent ?? "")), inside: inside(stateCell.getBoundingClientRect()) },
+                    identity: identity && identityBox ? { drawn: inside(identityBox), gone: outside(identityBox) } : null,
+                    model: modelCell ? { text: modelCell.textContent ?? "", cut: cut(modelCell), ellipsis: ellipsis(modelCell), width: modelCell.clientWidth, head: headWidth(modelCell, headOf(modelCell.textContent ?? "")) } : null,
+                    children,
+                  };
+                });
+                const key = `${state.name}-${locale}-${width}${model ? `-${model.length > 12 ? "long" : "short"}` : ""}`;
+                results.push({ key, reading });
+                const fail = (what: string) => failures.push(`${key}: ${what}`);
+                if (state.name === "wake" && !reading.chip) fail("the pending self-wake chip is not on the row");
+                for (const cell of reading.rowCells) if (cell.sliced) fail(`a cell of the row is sliced by it: ${JSON.stringify(cell)}`);
+                if (!reading.state.inside) fail(`the state phrase is not on the line: ${JSON.stringify(reading.state)}`);
+                if (reading.state.cut && !(reading.state.ellipsis && reading.state.width >= reading.state.head - 0.5)) fail(`the state phrase is cut without an ellipsis after its leading word: ${JSON.stringify(reading.state)}`);
+                for (const child of reading.children) {
+                  if (child.inside ? child.sticksOut : !child.outside) fail(`a cell is sliced by the line: ${JSON.stringify(child)}`);
+                }
+                if (reading.identity) {
+                  if (!reading.identity.drawn && !reading.identity.gone) fail(`the identity is partly out of the line: ${JSON.stringify(reading.identity)}`);
+                  if (reading.identity.drawn && reading.model) {
+                    if (reading.model.cut && !(reading.model.ellipsis && reading.model.width >= reading.model.head - 0.5)) fail(`the model is cut without room for a head and an ellipsis: ${JSON.stringify(reading.model)}`);
+                    if (reading.state.cut) fail("the identity is drawn beside a state phrase that has to be cut");
+                  }
+                } else fail("no identity on the line");
+                if (shots) await page.locator("[data-mobile2-chat-title]").first().screenshot({ path: path.join(shots, `${label}-${key}.png`) });
+              } finally {
+                await page.close();
+              }
+            }
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  if (shots) fs.writeFileSync(path.join(shots, `${label}-readings.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  expect(failures).toEqual([]);
+}, 1_200_000);
+
+
+describe("new task default deadline", () => {
+  browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/task-due-composer/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskDueFrames(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
   }, 300_000);
 });

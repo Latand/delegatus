@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import crypto from "node:crypto";
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -73,7 +74,7 @@ afterEach(() => {
 function agentRequest(pathname: string, body: unknown): NextRequest {
   return new NextRequest(`http://127.0.0.1${pathname}`, {
     method: "POST",
-    headers: {
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`,
       host: "127.0.0.1",
       "content-type": "application/json",
       [VIEWER_SPAWN_CAPABILITY_HEADER]: WORKER_CAPABILITY,
@@ -394,7 +395,7 @@ for (const existing of [false, true]) test(`a display-name ${existing ? "adoptio
   const now = spyOn(productionSeatCommandDependencies, "now").mockReturnValue("2026-10-21T00:00:00.000Z");
   try {
     const response = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
-      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
       body: JSON.stringify({ project: displayName, cwd: root, mandate: "Own the board", clientRequestId: "widget-seat-request", engine: "codex", model: "gpt-6.1-sol", ...(existing ? { conversationId: "conversation_widget" } : {}) }),
     }));
     const answer = await response.json();
@@ -439,7 +440,7 @@ test("unknown and ambiguous seat names refuse before a spawn or intent write", a
   try {
     for (const [project, code] of [["Shared Board", "ambiguous_project"], ["Unknown Board", "unknown_project"]]) {
       const response = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
-        method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+        method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
         body: JSON.stringify({ project, mandate: "Own the board", clientRequestId: "refused-seat-request" }),
       }));
       expect(response.status).toBe(400);
@@ -449,7 +450,7 @@ test("unknown and ambiguous seat names refuse before a spawn or intent write", a
       expect(orchestratorSeatFor(project!)).toMatchObject({ active: null, pending: null });
     }
     const mismatch = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
-      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
       body: JSON.stringify({ project: projects[0], cwd: path.join(sandbox, "two"), mandate: "Own the board", clientRequestId: "mismatch-seat-request" }),
     }));
     expect(mismatch.status).toBe(400);
@@ -478,7 +479,7 @@ test("canonical status reads use the folder's resolved display name without cura
   const now = spyOn(productionSeatCommandDependencies, "now").mockReturnValue("2026-10-21T00:00:00.000Z");
   try {
     const admission = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
-      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
       body: JSON.stringify({ project, cwd: root, mandate: "Own the board", clientRequestId: "natural-seat-request", engine: "codex", model: "gpt-6.1-sol" }),
     }));
     expect(admission.status).toBe(200);

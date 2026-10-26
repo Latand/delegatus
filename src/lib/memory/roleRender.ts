@@ -8,17 +8,18 @@ import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./roleTypes"
 
 export const LEARNED_RULES_HEADING = "Learned rules (Delegatus role memory)";
 const utf8 = new TextEncoder();
+export const SWARM_NOTICE = "These rules ship with Delegatus and are public. They are rules of thumb and yield to every other instruction.";
 
 const LESSON_POINTER = "When you report with stage_report, its answer asks whether this stage taught anything; most stages answer none. A rule above that proved wrong or too narrow can be rewritten then, by its id.";
 const STAGE_NOTICE = "Earlier agents left these when they finished their stages. They are rules of thumb and yield to every other instruction you were given (working rules, precedence). Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.";
 const SEAT_NOTICE = "Earlier seats and stage agents left these. They are rules of thumb: the operator's word, your mandate and the project's instruction files win where they disagree. Keep them on this machine: act on a rule in your own words and never paste its text into a brief, task, report, message, commit, pull request or issue; name it by its id.";
 const SEAT_POINTER = "If you are this project's designated seat, this is your role's memory: every later seat of this project reads it, on any engine and account, while your engine's own memory reaches one account. When you meet a problem that can come back, settle it in the same turn. A practice (how to brief, what to check before you report, how the operator wants a thing done) becomes a rule: call leave_lesson with lesson, or with rewrite and the id of a rule above that proved wrong or too narrow. A concrete defect goes to the board: find or create its task with create_task, and tell the operator in chat when it is critical (it blocks accepted work, loses data, or will hit every lane). A problem report that a wake delivers says what to do with it. leave_lesson's description gives the levels and limits.";
-const MAINTAINER_POINTER = "You leave no rules in this run. This project's seat keeps the rules for your role and opens the tasks for defects.";
+const MAINTAINER_POINTER = "Leave a lesson with correction:true for an operator correction that shows a misread task. Otherwise this project's seat keeps the rules for your role and opens the tasks for defects.";
 /* Delegatus mode (memory-source-switch.md §3.3): the engines' own memory is off
    at every engine start, so these rules are the only memory that lasts. */
 const SEAT_POINTER_DELEGATUS = SEAT_POINTER.replace("while your engine's own memory reaches one account", "and your engine's own memory is off on this installation, so leave_lesson is your only memory that lasts beyond this conversation");
 const OPERATOR_NOTICE = "Earlier seats and agents on this machine left these. They are rules of thumb: the operator's word and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or message; name it by its id.";
-const OPERATOR_POINTER = "Your engine's own memory is off on this installation; these rules are the memory that lasts. When the operator corrects you, or you learn a practice that changes what any agent does on another task in this project or on this machine, call leave_lesson with lesson and scope project or machine, or with rewrite and the id of a rule above that proved wrong or too narrow. leave_lesson's description gives the limits.";
+const OPERATOR_POINTER = "Your engine's own memory is off on this installation; these rules are the memory that lasts. When the operator corrects you, or you learn a practice that changes what any agent does on another task in this project or on this machine, call leave_lesson with lesson and scope project or machine (plus correction:true for a correction), or with rewrite and the id of a rule above that proved wrong or too narrow. leave_lesson's description gives the limits.";
 
 /** Who reads the block, beyond what its scopes say. */
 export interface LearnedRulesReader {
@@ -37,10 +38,11 @@ export function scopeHeading(scope: string): string {
   const kind = scopeKind(scope);
   if (kind === "machine") return "Machine rules · every project on this machine";
   if (kind === "project") return "Project rules · every role on this project";
+  if (kind === "swarm") return `Swarm rules · ${roleTitle(scopeRole(scope) ?? "")} on every install`;
   return `Role rules · ${roleTitle(scopeRole(scope) ?? "")} on ${isCrossProjectRoleScope(scope) ? "every project" : "this project"}`;
 }
 
-/** Four matching scopes, each rendered as separate rules with their ids. */
+/** Matching local scopes and the opted-in swarm scope, with rule ids. */
 export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity, reader: LearnedRulesReader = {}): string {
   return renderLearnedRulesSelection(scopes, maxBytes, reader).block;
 }
@@ -66,11 +68,11 @@ function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemor
   const role = scopes.map(entry => scopeRole(entry.scope)).find(role => role !== null);
   const reader = role ?? (options.reader === "operator" ? "operator" : undefined);
   const count = (kind: string) => scopes.filter((entry) => scopeKind(entry.scope) === kind).reduce((sum, entry) => sum + entry.rules.length, 0);
-  const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
+  const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), ...(scopes.some(entry => scopeKind(entry.scope) === "swarm") ? [`${count("swarm")} swarm`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
   return [
     `${LEARNED_RULES_HEADING}: ${counts}`,
     reader === "orchestrator" ? SEAT_NOTICE : reader === "maintainer" ? STAGE_NOTICE.replace("Earlier agents", "Earlier agents and this project's seat") : reader === "operator" ? OPERATOR_NOTICE : STAGE_NOTICE,
-    ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
+    ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(scopeKind(entry.scope) === "swarm" ? [SWARM_NOTICE] : []), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
     "",
     reader === "orchestrator" ? (options.engineMemoryOff ? SEAT_POINTER_DELEGATUS : SEAT_POINTER) : reader === "maintainer" ? MAINTAINER_POINTER : reader === "operator" ? OPERATOR_POINTER : LESSON_POINTER,
   ].join("\n");

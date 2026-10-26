@@ -1,0 +1,512 @@
+import { expect, test, harness, PROJECT, CONVERSATION, RECENT, OVERDUE,
+  OPEN_LANE, pipelineRecord, fs, path, spawn, spyOn, SANDBOX, readSeatTickState, writeSeatTickState, emptySeatTickState, NOW,
+  runSeatTickCheck, reconcileSeatTick, startSeatTick, stopSeatTick, DEFAULT_SEAT_TICK_POLICY } from "./seatTickController.fixture";
+import type { DeliveryOutcome } from "@/lib/delivery";
+import type { DeadlineScheduler } from "@/lib/deadline";
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+function virtualClock() {
+  let now = 0;
+  let next = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  const scheduler: DeadlineScheduler = {
+    setTimeout: (run, delay) => { const id = ++next; timers.set(id, { at: now + delay, run }); return id; },
+    clearTimeout: handle => { timers.delete(handle as number); },
+  };
+  return { now: () => now, scheduler, advance: (delta: number) => {
+    now += delta;
+    for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
+  }, timers };
+}
+
+function deployRig() {
+  const rig = harness({ state: RECENT, seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],
+    deployments: { "deploy-own": { phase: "succeeded", terminal: true, revision: "a".repeat(40) } },
+    delivery: { ok: true, target: "structured", outcome: "delivered", spawned: true, structured: true } });
+  rig.deps.sources!.liveness = async () => [{ conversationId: CONVERSATION,
+    host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled", turnState: "idle" } as never];
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "stdio host gone" });
+  return rig;
+}
+
+test.each(["priority", "deploy gather", "general gather", "controller"] as const)(
+  "a recorded settlement bypasses a separate 120-second pending lookup: %s", async mode => {
+    const { beginSeatDeployment, recordSeatDeployment, seatDeploymentsFor, seatDeploymentsFile } = await import("@/lib/orchestrator/seatDeployments");
+    const { seatTickDeployPending, gatherSeatTickDeployInput, gatherSeatTickInput } = await import("./seatTickSources");
+    const rig = deployRig();
+    const clock = virtualClock();
+    const file = seatDeploymentsFile();
+    const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    const pending = { conversationId: CONVERSATION, project: PROJECT, revision: "b".repeat(40),
+      requestedAt: new Date(NOW - 60_000).toISOString(), idempotencyKey: "pending-slow-deploy" };
+    const lookupEntered = deferred(), finished = deferred();
+    let lookups = 0;
+    let checking: Promise<unknown> | undefined;
+    try {
+      await beginSeatDeployment(pending);
+      await recordSeatDeployment({ ...pending, revision: "a".repeat(40), idempotencyKey: "accepted-deploy", deploymentId: "deploy-own" });
+      rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+      rig.deps.sources!.deploymentByKey = () => {
+        lookups++;
+        lookupEntered.resolve();
+        return new Promise((_, reject) => {
+          clock.scheduler.setTimeout(() => reject(new Error("deployment lookup timed out")), 120_000);
+        });
+      };
+      // An overdue seat used to expire at the opening hint, then restart that
+      // same remote lookup on each poll, despite its other settled deployment.
+      rig.deps.writeState!(PROJECT, { ...rig.deps.readState!(PROJECT), ...OVERDUE });
+      Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler });
+      const sources = rig.deps.sources!;
+      const state = rig.deps.readState!(PROJECT);
+      checking = mode === "priority" ? seatTickDeployPending(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources)
+        : mode === "deploy gather" ? gatherSeatTickDeployInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources)
+        : mode === "general gather" ? gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources)
+        : runSeatTickCheck(PROJECT, rig.deps);
+      void checking.then(() => finished.resolve(), () => finished.resolve());
+      await Promise.race([finished.promise, lookupEntered.promise]);
+      expect(lookups).toBe(0);
+      const result = await checking;
+      if (mode === "priority") expect(result).toBe(true);
+      else if (mode === "controller") {
+        expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+        expect(rig.sent).toHaveLength(1);
+        expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
+      } else expect(result).toMatchObject({ settledDeploys: [{ deploymentId: "deploy-own" }] });
+      expect(clock.now()).toBeLessThan(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
+      expect(JSON.parse(fs.readFileSync(file, "utf8")).pending).toEqual([pending]);
+    } finally {
+      clock.advance(120_000);
+      await checking?.catch(() => {});
+      if (previous) fs.writeFileSync(file, previous);
+      else fs.rmSync(file, { force: true });
+    }
+  });
+
+test.each(["accepted", "unknown", "unavailable"] as const)(
+  "pending recovery without a recorded settlement retains its existing outcome: %s", async outcome => {
+    const { beginSeatDeployment, seatDeploymentsFor, seatDeploymentsFile } = await import("@/lib/orchestrator/seatDeployments");
+    const { gatherSeatTickDeployInput } = await import("./seatTickSources");
+    const rig = deployRig();
+    const file = seatDeploymentsFile();
+    const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    const pending = { conversationId: CONVERSATION, project: PROJECT, revision: "a".repeat(40),
+      requestedAt: new Date(NOW - 60_000).toISOString(), idempotencyKey: "pending-recovery" };
+    try {
+      await beginSeatDeployment(pending);
+      rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+      const keys: string[] = [];
+      rig.deps.sources!.deploymentByKey = async key => {
+        keys.push(key);
+        if (outcome === "unavailable") throw new Error("lookup unavailable");
+        return outcome === "unknown" ? null : { idempotencyKey: key, requestedRevision: pending.revision,
+          deploymentId: "deploy-own", revision: pending.revision } as never;
+      };
+      const result = await gatherSeatTickDeployInput(PROJECT, rig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, rig.deps.sources!);
+      expect(keys).toEqual([pending.idempotencyKey]);
+      if (outcome === "accepted") expect(result).toMatchObject({ settledDeploys: [{ deploymentId: "deploy-own" }] });
+      else expect(result).toBeNull();
+      expect(JSON.parse(fs.readFileSync(file, "utf8")).pending).toEqual(outcome === "accepted" ? [] : [pending]);
+    } finally {
+      if (previous) fs.writeFileSync(file, previous);
+      else fs.rmSync(file, { force: true });
+    }
+  });
+
+test("a deploy settling during an overlong pass revives its gone seat before one interval", async () => {
+  const rig = deployRig();
+  const clock = virtualClock();
+  const settlement = rig.deps.sources!.deployment!;
+  let settled = false;
+  let sourceNow = NOW;
+  rig.deps.sources!.now = () => sourceNow;
+  rig.deps.sources!.deployment = id => {
+    if (!settled) return { state: "unreadable", error: "still promoting" } as never;
+    const result = settlement(id) as { state: string; value?: { updatedAt?: string } };
+    return { ...result, value: result.value ? { ...result.value, updatedAt: new Date(NOW + 61_000).toISOString() } : undefined } as never;
+  };
+  const preparation = deferred();
+  const entered = deferred();
+  rig.deps.sources!.prepareRead = async () => { entered.resolve(); await preparation.promise; };
+  rig.deps.ownsTraffic = () => true;
+  rig.deps.recordSuccessions = () => [];
+  rig.deps.workClock = clock.now;
+  rig.deps.workScheduler = clock.scheduler;
+  rig.deps.release = rig.deps.curation = rig.deps.maintenance = null;
+  let callback!: () => void;
+  let pollMs = 0;
+  const longPass = deferred();
+  const delivered = deferred();
+  const append = rig.deps.appendRecord!;
+  rig.deps.appendRecord = record => { append(record); if (record.verdict === "wake") delivered.resolve(); };
+  const logs: string[] = [];
+  let passes = 0;
+  let latestCheck: ReturnType<typeof reconcileSeatTick> | undefined;
+  startSeatTick({ clock: clock.now, policy: DEFAULT_SEAT_TICK_POLICY, recordSuccessions: () => [],
+    handoffHeld: () => false, drainHeld: () => false,
+    scheduleInterval: (run, delay) => { callback = run; pollMs = delay; return { unref() {} } as never; },
+    sweep: async () => { const first = ++passes === 1; latestCheck = reconcileSeatTick(rig.deps); await latestCheck; if (first) await longPass.promise; },
+    log: line => logs.push(line), appendRecord: () => {} });
+  try {
+    await entered.promise;
+    settled = true;
+    clock.advance(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs / 4);
+    sourceNow = NOW + clock.now();
+    rig.deps.writeState!(PROJECT, { ...rig.deps.readState!(PROJECT), lastWakeAt: new Date(NOW + 60_000).toISOString() });
+    // Let the expired project unwind; the first pass stays open independently.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    clock.advance(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs / 4);
+    sourceNow = NOW + clock.now();
+    const settledAt = NOW + 61_000;
+    clock.advance(pollMs);
+    callback();
+    await delivered.promise;
+    await latestCheck;
+    expect(clock.now()).toBe(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
+    expect(sourceNow - settledAt).toBeGreaterThanOrEqual(0);
+    expect(sourceNow - settledAt).toBeLessThan(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]!.text).toContain("deploy settled");
+    expect(logs.some(line => line.includes("sweep-running") && line.includes("ageMs=") && line.includes("state=long-running"))).toBe(true);
+  } finally { stopSeatTick(); preparation.resolve(); longPass.resolve(); }
+});
+
+test("one project's deadline and late preparation cannot starve or overwrite another deploy", async () => {
+  const rig = deployRig();
+  const clock = virtualClock();
+  const entered = deferred(), preparation = deferred();
+  rig.deps.sources!.prepareRead = async () => { entered.resolve(); await preparation.promise; };
+  const seatFor = rig.deps.sources!.seatFor;
+  rig.deps.sources!.activeSeats = () => ["a-slow", PROJECT];
+  rig.deps.sources!.seatFor = project => project === PROJECT ? seatFor(project) : { active: null, pending: null, history: [] };
+  Object.assign(rig.deps, { ownsTraffic: () => true, recordSuccessions: () => [],
+    workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100,
+    curation: null, release: null, maintenance: null });
+  const delivered = deferred();
+  const append = rig.deps.appendRecord!;
+  rig.deps.appendRecord = record => { append(record); if (record.verdict === "wake") delivered.resolve(); };
+  const sweep = reconcileSeatTick(rig.deps);
+  try {
+    await entered.promise;
+    await delivered.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(rig.sent).toHaveLength(1);
+    clock.advance(100);
+    const records = await sweep;
+    expect(records.find(record => record.project === "a-slow")).toMatchObject({ verdict: "error" });
+    expect(records.find(record => record.project === "a-slow")!.detail).toContain("phase=check.sources.prepareRead");
+    const writes = rig.written.length;
+    preparation.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(rig.written).toHaveLength(writes);
+    expect(rig.sent).toHaveLength(1);
+  } finally { preparation.resolve(); await sweep; }
+});
+
+test("callbacks during one project check coalesce one owed check with fresh state", async () => {
+  const rig = deployRig();
+  const preparing = deferred(), entered = deferred(), finished = deferred();
+  let preparations = 0, checks = 0;
+  const settlement = rig.deps.sources!.deployment!;
+  let settled = false;
+  rig.deps.sources!.deployment = id => settled ? settlement(id) : { state: "unreadable", error: "still promoting" } as never;
+  rig.deps.sources!.prepareRead = async () => {
+    if (++preparations === 1) { entered.resolve(); await preparing.promise; }
+  };
+  Object.assign(rig.deps, { ownsTraffic: () => true, recordSuccessions: () => [],
+    workStarted: () => { checks++; }, curation: null, release: null, maintenance: null });
+  const append = rig.deps.appendRecord!;
+  rig.deps.appendRecord = record => { append(record); if (checks === 2) finished.resolve(); };
+  const first = reconcileSeatTick(rig.deps);
+  try {
+    await entered.promise;
+    const second = reconcileSeatTick(rig.deps), third = reconcileSeatTick(rig.deps);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(checks).toBe(1);
+    settled = true;
+    preparing.resolve();
+    await Promise.all([first, second, third]);
+    await finished.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(checks).toBe(2);
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
+  } finally { preparing.resolve(); await first; stopSeatTick(); }
+});
+
+test("an alarm-sources cancellation is retried immediately and a newly settled deploy lands", async () => {
+  const rig = deployRig();
+  const settlement = rig.deps.sources!.deployment!;
+  let settled = false;
+  rig.deps.sources!.deployment = id => settled ? settlement(id) : { state: "unreadable", error: "still promoting" } as never;
+  const rows = OPEN_LANE.map(pipelineRecord);
+  rig.deps.sources!.pipelines = () => rows as never;
+  const liveness = rig.deps.sources!.liveness;
+  const settings = rig.deps.sources!.settings;
+  let changed = false;
+  rig.deps.sources!.liveness = async request => {
+    const result = await liveness(request);
+    if (request.project && !changed) {
+      changed = true;
+      // Eligibility changes still invalidate a check across its source await.
+      rig.deps.sources!.settings = project => ({ ...settings(project), wakeIntervalMinutes: 30 });
+      settled = true;
+    }
+    return result;
+  };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(changed).toBe(true);
+  expect(rig.journal.some(record => record.detail?.includes("Seat alarm sources changed"))).toBe(true);
+  expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
+});
+
+test("a priority deploy preserves opening problem credit before epoch reset", async () => {
+  const rig = deployRig();
+  const before = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...before, seatEpoch: 6, itemsShown: ["opening-problem"] });
+  const calls: string[] = [];
+  rig.deps.sources!.prepareRead = async () => { throw new Error("general history must not delay the deploy"); };
+  rig.deps.sources!.prepareMemoryProblems = async () => { calls.push("prepared"); };
+  rig.deps.sources!.memoryProblems = (_project, shown) => { calls.push(...shown); return []; };
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.delivery?.outcome).toBe("delivered");
+  expect(calls).toEqual(["prepared", "opening-problem"]);
+  expect(rig.sent).toHaveLength(1);
+});
+
+test("a pending memory preparation cannot delay deploy settlement or discard opening problem credit", async () => {
+  const rig = deployRig();
+  const state = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...state, seatEpoch: 6, itemsShown: ["opening-problem"] });
+  const preparation = deferred();
+  const entered = deferred();
+  const credited: string[][] = [];
+  rig.deps.sources!.prepareMemoryProblems = async () => { entered.resolve(); await preparation.promise; };
+  rig.deps.sources!.prepareRead = async () => { throw new Error("deploy settlement must not prepare general history"); };
+  rig.deps.sources!.memoryProblems = (_project, shown) => { credited.push([...shown]); return []; };
+  const checking = runSeatTickCheck(PROJECT, rig.deps);
+  try {
+    await entered.promise;
+    const record = await checking;
+    expect(record).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+    expect(rig.sent).toHaveLength(1);
+    expect(credited).toEqual([]);
+    expect(rig.deps.readState!(PROJECT).memoryProblemCreditOwed).toEqual({
+      shown: ["opening-problem"], recipient: { conversationId: CONVERSATION, seatEpoch: 7 },
+    });
+    preparation.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    rig.deps.sources!.prepareRead = async () => {};
+    const retry = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(retry?.verdict).toBe("quiet");
+    expect(credited).toContainEqual(["opening-problem"]);
+    expect(rig.deps.readState!(PROJECT).memoryProblemCreditOwed).toBeUndefined();
+  } finally { preparation.resolve(); }
+});
+
+test("a failed memory preparation leaves deploy dispatch and problem credit available", async () => {
+  const rig = deployRig();
+  const state = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...state, itemsShown: ["opening-problem"] });
+  rig.deps.sources!.prepareMemoryProblems = async () => { throw new Error("memory unavailable"); };
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).memoryProblemCreditOwed?.shown).toEqual(["opening-problem"]);
+});
+
+test.each([300_000, 30_000])("an unannounced deploy wakes inside the interval despite a recent wake (%i ms)", async intervalMs => {
+  const rig = deployRig();
+  const settings = rig.deps.sources!.settings(PROJECT);
+  rig.deps.sources!.settings = () => ({ ...settings, wakeIntervalMinutes: intervalMs / 60_000,
+    updatedAt: new Date(NOW - 1_000).toISOString() });
+  const initial = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...initial, lastWakeAt: new Date(NOW - 10_000).toISOString() });
+  // The deploy settled two minutes ago; this project's last wake is recent
+  // relative to its normal cadence. The settlement deadline is now due.
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.delivery?.outcome).toBe("delivered");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.journal.at(-1)).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"] });
+});
+
+test("a blocked optional report read cannot hold up a settled deploy wake", async () => {
+  const rig = deployRig();
+  let reportReads = 0;
+  rig.deps.sources!.reports = { log: () => { reportReads++; return new Promise(() => {}); }, enabled: () => true, operatorLocale: () => "en" } as never;
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+  expect(reportReads).toBeGreaterThan(0);
+  expect(rig.sent).toHaveLength(1);
+});
+
+test("release authority lost during a deploy check fences dispatch", async () => {
+  const rig = deployRig();
+  const read = rig.deps.sources!.liveness;
+  let ownsTraffic = true;
+  rig.deps.ownsTraffic = () => ownsTraffic;
+  rig.deps.sources!.liveness = async request => { ownsTraffic = false; return read(request); };
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(0);
+  expect(record?.detail).toContain("viewer-release-replaced");
+  expect(rig.deps.readState!(PROJECT).announcedDeploys ?? []).toEqual([]);
+});
+
+test("an expired transport continuation keeps its original outstanding key and never credits a late answer", async () => {
+  const clock = virtualClock();
+  const entered = deferred(), transport = deferred<DeliveryOutcome>();
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    deliverWith: async () => { entered.resolve(); return transport.promise; } });
+  Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100 });
+  const checking = runSeatTickCheck(PROJECT, rig.deps);
+  await entered.promise;
+  clock.advance(100);
+  const result = await checking;
+  expect(result?.verdict).toBe("error");
+  expect(result?.detail).toContain("deadline");
+  const saved = rig.deps.readState!(PROJECT);
+  const key = saved.outstandingWake?.clientMessageId;
+  expect(key ?? null).toBe(rig.sent[0]?.clientMessageId ?? null);
+  expect(saved.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+  expect(clock.timers.size).toBe(0);
+  const writes = rig.written.length;
+  transport.resolve({ ok: true, target: "structured", outcome: "delivered" });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(rig.written).toHaveLength(writes);
+});
+
+test("a synchronous opening state read that exhausts the budget records one overflow", async () => {
+  const clock = virtualClock();
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100 });
+  const readState = rig.deps.readState!;
+  rig.deps.readState = project => { clock.advance(100); return readState(project); };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result).toMatchObject({ verdict: "error" });
+  expect(result?.detail).toContain("phase=check");
+  expect(rig.journal.filter(record => record.verdict === "error")).toHaveLength(1);
+  expect(rig.sent).toHaveLength(0);
+  expect(rig.written).toHaveLength(0);
+});
+
+test("opening expiry observes a late rejecting preparation port and records one overflow", async () => {
+  const clock = virtualClock();
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100 });
+  rig.deps.sources!.prepareRead = async () => {
+    clock.advance(100);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    throw new Error("late preparation rejection");
+  };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(result).toMatchObject({ verdict: "error" });
+  expect(result?.detail).toContain("phase=check.sources.prepareRead");
+  expect(rig.journal.filter(record => record.verdict === "error")).toHaveLength(1);
+  expect(rig.sent).toHaveLength(0);
+  expect(rig.written).toHaveLength(0);
+});
+
+
+test("the project deadline reaches the production liveness reader", async () => {
+  const liveness = await import("@/lib/lifecycle/liveness");
+  const { defaultSeatTickAdmissionSources } = await import("./seatTickAdmissionSources");
+  const clock = virtualClock(), entered = deferred();
+  let signal: AbortSignal | undefined;
+  const snapshot = spyOn(liveness, "agentLivenessSnapshot").mockImplementation(async request => {
+    signal = request.signal ?? undefined;
+    entered.resolve();
+    await new Promise<void>((_, reject) => request.signal!.addEventListener("abort", () => reject(request.signal!.reason), { once: true }));
+    return { conversations: [] } as never;
+  });
+  try {
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+    rig.deps.sources!.liveness = defaultSeatTickAdmissionSources().liveness;
+    Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100 });
+    const checking = runSeatTickCheck(PROJECT, rig.deps);
+    await entered.promise;
+    expect(signal?.aborted).toBe(false);
+    clock.advance(100);
+    expect((await checking)?.verdict).toBe("error");
+    expect(signal?.aborted).toBe(true);
+  } finally { snapshot.mockRestore(); }
+});
+
+const childMode = process.env.LLV_SEAT_DEADLINE_TEST_MODE;
+test.skipIf(!childMode)("seat deadline subprocess case", async () => {
+  const filename = process.env.LLV_SEAT_DEADLINE_TEST_STATE!;
+  if (childMode === "expire") writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, filename);
+  let elapsed = 0;
+  let expireDeadline = () => {};
+  const rig = harness({ pipelines: OPEN_LANE, stateFile: filename, wakeState: "landed",
+    ...(childMode === "expire" ? { deliverWith: async () => {
+      const key = readSeatTickState(PROJECT, filename).outstandingWake?.clientMessageId;
+      process.stdout.write(`DEADLINE_READY:${key ?? "missing"}\n`);
+      elapsed += 1000;
+      expireDeadline();
+      return new Promise<DeliveryOutcome>(() => {});
+    } } : {}) });
+  rig.deps.workBudgetMs = 1000;
+  rig.deps.workClock = () => elapsed;
+  rig.deps.workScheduler = {
+    setTimeout: callback => { expireDeadline = callback; return 1 as never; },
+    clearTimeout: () => {},
+  };
+  rig.deps.sources!.prepareRead = async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+    process.stdout.write("PREPARATION_READY\n");
+  };
+  if (childMode === "recover") {
+    const key = readSeatTickState(PROJECT, filename).outstandingWake?.clientMessageId;
+    expect(typeof key).toBe("string");
+    rig.deps.sources!.wakeState = async wake => {
+      expect(wake.clientMessageId).toBe(key!);
+      process.stdout.write(`RECOVERY_READY:${wake.clientMessageId}\n`);
+      elapsed += 250;
+      return "landed";
+    };
+  }
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  const state = readSeatTickState(PROJECT, filename);
+  if (childMode === "expire") {
+    const key = state.outstandingWake?.clientMessageId;
+    expect(typeof key).toBe("string");
+    expect(record?.verdict).toBe("error");
+    expect(record?.detail).toContain("deadline exceeded");
+    expect(key ?? undefined).toBe(rig.sent[0]?.clientMessageId ?? undefined);
+    expect(state.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+  } else {
+    expect(state.outstandingWake).toBeNull();
+    expect(state.lastWakeAt).toBe(new Date(NOW).toISOString());
+    expect(rig.sent).toHaveLength(0);
+  }
+  process.stdout.write(`DEADLINE_DONE:${childMode}\n`);
+});
+
+test.skipIf(!!childMode)("a deadline in a real process preserves the wake for the restarted controller", async () => {
+  const filename = path.join(fs.mkdtempSync(path.join(SANDBOX, "deadline-process-")), "state.json");
+  for (const mode of ["expire", "recover"]) {
+    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "seat deadline subprocess case"], {
+      env: { ...process.env, LLV_SEAT_DEADLINE_TEST_MODE: mode, LLV_SEAT_DEADLINE_TEST_STATE: filename }, stdio: ["pipe", "pipe", "pipe"],
+    });
+    let output = "", errors = "";
+    child.stdout.on("data", chunk => { output += chunk.toString(); });
+    child.stderr.on("data", chunk => { errors += chunk.toString(); });
+    const timeout = setTimeout(() => { child.kill("SIGKILL"); }, 15_000);
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject); child.once("exit", resolve);
+      });
+      expect({ code, errors }).toMatchObject({ code: 0 });
+      expect(output).toContain(`DEADLINE_DONE:${mode}`);
+      expect(output).toContain("PREPARATION_READY");
+      if (mode === "expire") expect(output).toMatch(/DEADLINE_READY:[^\s]+/);
+      else expect(output).toMatch(/RECOVERY_READY:[^\s]+/);
+    } finally { clearTimeout(timeout); child.stdin.end(); }
+  }
+});

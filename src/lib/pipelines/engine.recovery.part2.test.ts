@@ -1,7 +1,9 @@
 import { expect, spyOn, test, spawn, fs, path, accountManager, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, harness, durableStageTurnEvidence, create, forbiddenSleep, frozenWallClock, HOST_UNAVAILABLE, failedReceipt, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly } from "./engine.fixture";
 import type { Snapshot, PipelinePorts } from "./engine.fixture";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
-const RAW_ADMISSION_BUSY = ["database is locked", "database is busy", "SQLITE_BUSY", "SQLITE_LOCKED"] as const;
+const RAW_ADMISSION_BUSY = ["database is locked", "database is busy", "SQLITE_BUSY", "SQLITE_LOCKED",
+  "the delivery record's write lock is held by another writer (spawn membership record); holder=registry.staged-recovery pid=321 age=2500ms"] as const;
 
 
 
@@ -297,6 +299,9 @@ test.each([false, true])("restart after receipt completion clears only the recov
     f.advance(61_000);
     await f.recover(f.launchId(), () => true);
   }
+  const cap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage" as const, clamped: true, enforced: true };
+  await f.registry.recordSpawnMemoryCapOffLoop(f.launchId(), cap);
+  productionHostSeams(f);
   expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
   expect(f.attempt().state).toBe("spawning");
   expect(loadPipelines()[0]!.stateDetail).toContain("waiting for the runtime host");
@@ -315,6 +320,7 @@ test.each([false, true])("restart after receipt completion clears only the recov
     expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
     expect(f.attempt().controllerWait).toBeDefined();
   } else {
+    expect(f.attempt().memoryCap).toMatchObject(cap);
     expect(f.attempt().controllerWait).toBeUndefined();
     expect(loadPipelines()[0]!.stateDetail).toBeNull();
   }
@@ -495,14 +501,14 @@ test.each([
     }
     const ports = defaultPipelinePorts();
     const spawn = ports.spawnAgent;
-    await drainStageActivations({ ...ports, structuredDeliveryPublication: () => "ready",
+    await drainStageActivations({ ...ports, now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready",
       spawnAgent: (input) => spawn(input, async (reservation) => {
         fs.writeFileSync(process.env.LLV_TEST_MARKER, reservation.launchId);
         process.exit(0);
       }),
     });
     process.exit(2);
-  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker, LLV_TEST_FAILURE: failed ? "1" : "0" }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker, LLV_TEST_FAILURE: failed ? "1" : "0", LLV_TEST_CLOCK: h.ports.now() }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
   const launch = fs.readFileSync(marker, "utf8");
   const before = loadPipelines()[0]!.runs[0]!.attempts[0]!;
@@ -568,9 +574,9 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
       transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
     }});
     registry.beginSpawnRequestAsync = async () => { process.exit(0); };
-    await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready" });
+    await drainStageActivations({ ...defaultPipelinePorts(), now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready" });
     process.exit(2);
-  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_CLOCK: h.ports.now() }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
   const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
   expect(before).toMatchObject({ launchId: null, spawnCalls: 1, activation: { phase: "reserving", owner: { pid: child.pid } } });
@@ -586,13 +592,20 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     dispatches.push(input.receipt.launchId);
     return { path: null } as never;
   });
-  // The activation harness provisions a synthetic worktree. Supply its HEAD
-  // only at the native Git boundary; keep admission and recovery real.
+  // The activation harness provisions a synthetic worktree. Supply its Git
+  // directory and HEAD at the native boundary; keep guard writes, admission
+  // and recovery real and confined to this test's state directory.
+  const gitDirectory = path.join(process.env.LLV_STATE_DIR!, `unsubmitted-${seam}.git`);
+  fs.mkdirSync(gitDirectory);
   const provision = await import("@/lib/workflows/provision");
   const execute = provision.realExec;
-  const gitHead = spyOn(provision, "realExec").mockImplementation((command, args, cwd, ...rest) =>
-    command === "git" && args.join(" ") === "rev-parse HEAD" && cwd === before.activation!.input.cwd
-      ? { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" } : execute(command, args, cwd, ...rest));
+  const gitPreparation = spyOn(provision, "realExec").mockImplementation((command, args, cwd, ...rest) => {
+    if (command === "git" && cwd === before.activation!.input.cwd) {
+      if (args.join(" ") === "rev-parse --absolute-git-dir") return { code: 0, stdout: gitDirectory, stderr: "" };
+      if (args.join(" ") === "rev-parse HEAD") return { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" };
+    }
+    return execute(command, args, cwd, ...rest);
+  });
   const hold = () => drain.writeDrain(drain.drainFile(), { id: "unsubmitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
   let resume!: () => void;
   let locking: Promise<void> | undefined;
@@ -618,7 +631,8 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     await (recovering ?? engineModule.drainStageActivations(recoveryPorts));
     await engineModule.drainStageActivations(recoveryPorts);
     expect(dispatches).toHaveLength(0);
-    expect(gitHead).not.toHaveBeenCalled();
+    expect(gitPreparation).not.toHaveBeenCalled();
+    expect(fs.readdirSync(gitDirectory)).toEqual([]);
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
     const held = loadPipelines()[0]!.runs[0]!.attempts[0]!;
     expect(held).toMatchObject({ n: before.n, launchId: null, spawnCalls: 1, activation: {
@@ -637,13 +651,16 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     expect(JSON.parse(fs.readFileSync(path.join(launched.account.env.LLV_STAGE_GIT_RECEIPT!, "start.json"), "utf8"))).toMatchObject({
       launchId: launched.receipt.launchId, head: ORIGIN_MAIN_SHA, worktree: before.activation!.input.cwd,
     });
+    const ownerFile = path.join(gitDirectory, "delegatus-stage-owner");
+    expect(fs.readFileSync(ownerFile, "utf8")).toBe(launched.account.env.LLV_STAGE_GIT_RECEIPT!);
+    expect(fs.readFileSync(path.join(launched.account.env.LLV_STAGE_GIT_RECEIPT!, "owner"), "utf8")).toBe(ownerFile);
     const receipts = Object.values(registry.readOnlySnapshot().receipts);
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(1);
   } finally {
     resume?.(); await locking; await recovering;
-    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); gitHead.mockRestore();
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); gitPreparation.mockRestore();
     drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
   }
 });
@@ -1097,7 +1114,7 @@ test.each(RAW_ADMISSION_BUSY.flatMap(message => (["released", "exhausted"] as co
       const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ code, errors }).toMatchObject({ code: 0 });
       const result = JSON.parse(output);
-      expect({ calls: result.calls, detail: result.pipeline.stateDetail }).toMatchObject({ calls: 1 });
+      expect({ calls: result.calls, detail: result.pipeline.stateDetail }).toMatchObject({ calls: 0 });
       expect(result.pipeline).toMatchObject({ state: "needs_decision", worktreeDir: waiting.worktreeDir });
       expect(result.pipeline.runs[0].attempts).toHaveLength(1);
       expect(result.pipeline.runs[0].attempts[0]).toMatchObject({ n: 1, launchId: null, conversationId: null, spawnCalls: 2,
@@ -1176,3 +1193,59 @@ test.each(["registry", "account-commit", "lease", "deferred", "wrapped-deferred"
   expect(h.spawnInputs).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1", spawnCalls: 2 });
 });
+
+
+test("the final three seconds of a persisted spawn wait survive a controller restart", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  frozenWallClock(h);
+  const busy = RAW_ADMISSION_BUSY.at(-1)!;
+  h.ports.spawnAgent = async () => { throw new Error(busy); };
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  const startedAt = waiting.runs[0]!.attempts[0]!.controllerWait!.startedAt;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { spyOn } = await import("bun:test");
+    const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const { accountManager } = await import("./src/lib/accounts/manager.ts");
+    const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+    let monotonic = 1000, wall = Number(process.env.LLV_TEST_CLOCK);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => monotonic });
+    const registry = new AgentRegistry(process.env.LLV_STATE_DIR + "/restart-admission.json");
+    setAgentRegistryForTests(registry);
+    spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+      engine, accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR,
+      transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+    }}));
+    const waits = [];
+    spyOn(registry, "accountMutationWrite").mockImplementation(async (_label, _write, _guard, options) => {
+      waits.push(options.waitMs);
+      wall += options.waitMs; monotonic += options.waitMs;
+      return { acquired: false };
+    });
+    const defaults = defaultPipelinePorts();
+    await tickPipelines([], { ...defaults,
+      now: () => new Date(wall).toISOString(), exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+      worktreePresent: () => true, sourcePathAllowed: () => false, engineReadiness: () => "connected",
+      cpuPressureHold: () => null, cpuAdmissionReconcile: () => {}, drainHold: () => null,
+      structuredDeliveryPublication: () => "ready", scheduleTick: () => {}, spawnReceipt: () => null,
+    });
+    const pipeline = loadPipelines()[0];
+    process.stdout.write(JSON.stringify({ waits, wall, pipeline }));
+    registry.close();
+    process.exit(0);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_CLOCK: String(Date.parse(startedAt) + 597_000) }, stdout: "pipe", stderr: "pipe" });
+  const deadline = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 10_000);
+  try {
+    const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    assertStateChildSuccess(code, errors);
+    const result = JSON.parse(output);
+    expect(result.waits).toEqual([3_000]);
+    expect(result.wall).toBe(Date.parse(startedAt) + 600_000);
+    expect(result.pipeline).toMatchObject({ state: "needs_decision" });
+    expect(result.pipeline.stateDetail).toContain("over 600s");
+    expect(result.pipeline.runs[0].attempts[0].controllerWait).toMatchObject({ startedAt, budgetMs: 600_000, rounds: 1 });
+  } finally { clearTimeout(deadline); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
+}, 15_000);

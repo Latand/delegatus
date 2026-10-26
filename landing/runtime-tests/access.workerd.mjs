@@ -43,7 +43,10 @@ async function runtime(run, { certs, sql } = {}) {
       if (url.origin === "https://api.cloudflare.com" && url.pathname.endsWith("/analytics_engine/sql")) {
         assert.equal(request.method, "POST");
         assert.equal(request.headers.get("authorization"), "Bearer fixture-credential");
-        return sql ? sql() : Response.json({ data: [{ total: 7 }] });
+        const query = await request.text();
+        return sql ? sql() : Response.json({ data: query.includes("FROM swarm_usage")
+          ? [{ rule: "r_0123456789abcdef", reports: 4, delivered: 10, applied: 3, misled: 1, misled_reports: 1 }]
+          : [{ total: 7 }] });
       }
       throw new Error("Unexpected upstream in fixture");
     },
@@ -63,12 +66,15 @@ test("valid synthetic RSA assertion reaches aggregates on both stats paths and r
       assert.equal(response.headers.get("cache-control"), "private, no-store");
       const html = await response.text();
       assert.ok(html.includes(">7</strong>"));
+      assert.ok(html.includes("Swarm rule usage"));
+      assert.ok(html.includes("r_0123456789abcdef"));
+      assert.ok(html.includes("30.0%"));
       assert.ok(!html.includes("Data unavailable"));
       assert.ok(!html.includes(jwt));
       assert.ok(!html.includes("fixture-credential"));
     }
     assert.equal(calls.filter(path => path.endsWith("/certs")).length, 1);
-    assert.equal(calls.filter(path => path.endsWith("/sql")).length, 20);
+    assert.equal(calls.filter(path => path.endsWith("/sql")).length, 22);
   });
 });
 
@@ -130,7 +136,7 @@ test("SQL redirects are not followed or given the server credential", async () =
     const html = await response.text();
     assert.ok(html.includes("Data unavailable"));
     assert.ok(!html.includes("fixture-credential"));
-    assert.equal(calls.filter(path => path.endsWith("/sql")).length, 10);
-    assert.equal(calls.length, 11);
+    assert.equal(calls.filter(path => path.endsWith("/sql")).length, 11);
+    assert.equal(calls.length, 12);
   }, { sql: () => new Response(null, { status: 302, headers: { Location: "https://redirect.example/sql" } }) });
 });

@@ -1,4 +1,4 @@
-import { tierOffers } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,8 +32,9 @@ export type RoleMappingViolation = { field: string; message: string; expected: s
 
 function configViolations(field: string, config: RoleConfig): RoleMappingViolation[] {
   if (config.serviceTier) {
-    const offers = tierOffers(listCodexAccounts(), config.model, config.serviceTier);
-    if (config.engine !== "codex" || !offers.offering.length) return [{ field: `${field}.serviceTier`, message: `serviceTier ${config.serviceTier} is not offered for ${config.model}; offered: ${offers.offered.join(", ") || "none"}`, expected: "Codex model/account catalog tier id" }];
+    const accounts = listCodexAccounts();
+    const offers = tierOffers(accounts, config.model, config.serviceTier);
+    if (config.engine !== "codex" || !offers.offering.length) return [{ field: `${field}.serviceTier`, message: codexServiceTierRefusal(accounts, config.model, config.serviceTier), expected: "Codex model/account catalog tier id" }];
   }
   const engines: readonly string[] = MAPPING_ENGINES;
   if (!engines.includes(config.engine)) {

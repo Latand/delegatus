@@ -76,7 +76,13 @@ answers with.
 
 - **Full agent for the owner**, off by default on each target, runs the relay
   owner's requests as ordinary Delegatus agents with full access to this
-  computer.
+  computer. These turns use the target's time cap, even after the service's
+  request window closes. A late answer arrives as a new text message replying
+  to your original message in the same topic. Files are omitted with a note.
+  Delivery requires the service's owner delivery context and clone send route;
+  an unavailable route keeps the answer saved for retry. Missing delivery
+  context keeps it saved as pending. An interrupted owner turn is retried once
+  after startup.
 - When the service offers them, the card can create a new clone.
 - A published prototype review goes to the paired owner's private chat, where a
   reply records the decision.

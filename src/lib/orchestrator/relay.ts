@@ -39,7 +39,10 @@ export function orchestratorRelayPayload(text: string, seat: AuthorizedManagerSe
 
 /** A seat relay grants no designation or operator authority. Resolve its author
  * from the request capability and durable seats, never a caller-supplied role.
- * The shared conversation-host handlers apply this on both HTTP paths. */
+ * The shared conversation-host handlers apply this on both HTTP paths.
+ * `inProcessPerson` is set only by `conversationHostPOST` after it rechecked the
+ * operator or member an in-process caller (voice delivery) passed as its actor;
+ * no header or body can set it. */
 export function admitOrchestratorRelay(
   request: Pick<NextRequest, "headers">,
   project: string,
@@ -47,6 +50,7 @@ export function admitOrchestratorRelay(
   text: string,
   clientMessageId?: string,
   voice?: { sessionId: string; proposalId: string },
+  inProcessPerson = false,
 ): RelayAdmission {
   const refused = (code: string, error: string, status = 403): RelayAdmission => ({ ok: false, status, code, error });
   const conversationId = callerConversationId(request);
@@ -58,7 +62,8 @@ export function admitOrchestratorRelay(
     : null;
   const gateway = conversationId && !seat ? deputyAskerOf(request) : null;
   const owner = conversationId && !seat && !gateway?.ok ? ownerRelayPayload(text, conversationId) : null;
-  if ((!seat && !gateway?.ok && !owner && !operatorBrowserRequest(request)) || (seat && !seat.project)) {
+  const operator = !conversationId && (inProcessPerson || operatorBrowserRequest(request));
+  if ((!seat && !gateway?.ok && !owner && !operator) || (seat && !seat.project)) {
     return refused("orchestrator_relay_refused", "only a designated orchestrator seat, the voice gateway, a verified owner relay or the operator may send to an orchestrator");
   }
   // A seat relays words, not delivery metadata or a gateway's correlation claim.
@@ -71,7 +76,7 @@ export function admitOrchestratorRelay(
     : { kind: "operator" as const } };
   let voiceBinding: ReturnType<typeof admittedVoiceBinding> = null;
   if (voice) {
-    if (seat || gateway?.ok || owner || !operatorBrowserRequest(request)) return refused("voice_admission_refused", "voice delegation requires the operator's confirmed proposal");
+    if (seat || gateway?.ok || owner || !operator) return refused("voice_admission_refused", "voice delegation requires the operator's confirmed proposal");
     try { voiceBinding = admittedVoiceBinding({ ...voice, project: canonicalOrchestratorProject(project), recipient, key: clientMessageId?.slice(0, 128).trim(), text }); }
     catch { return refused("voice_evidence_unavailable", "the confirmed proposal could not be read", 503); }
     if (!voiceBinding) return refused("voice_admission_refused", "the voice send does not match a confirmed proposal", 409);

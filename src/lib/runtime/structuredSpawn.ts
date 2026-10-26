@@ -1,8 +1,12 @@
+import { recordHostStop, withHostStopOrigin } from "./hostExit";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
+import { agentMemoryScopes, agentMemoryCapForPlan, PIPELINE_MEMORY_DEFAULT_ROLE } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
 import os from "node:os";
@@ -400,9 +404,11 @@ async function terminateVerifiedStructuredSpawnProcess(expected: ProcessIdentity
   const matches = () => procBackend.processIdentity(expected.pid) === expected.startIdentity;
   if (!matches()) return true;
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    const withdraw = recordHostStop(expected, signal, "stale-structured-spawn-reap");
+    if (!matches()) { withdraw?.(); return true; }
     if (!signalProcessGroup(expected.pid, signal)) {
       try { process.kill(expected.pid, signal); }
-      catch { return !matches(); }
+      catch { withdraw?.(); return !matches(); }
     }
     for (let attempt = 0; attempt < STALE_SPAWN_PROCESS_REAP_ATTEMPTS; attempt += 1) {
       if (!matches()) return true;
@@ -566,7 +572,7 @@ async function failStructuredLaunchAndReap(
     },
   });
   if (!failure.claimed) {
-    return { claimed: false, receipt: failure.receipt ?? registry.readOnlySnapshot().receipts[launchId] ?? null };
+    return { claimed: false, receipt: failure.receipt ?? registry.spawnReceipt(launchId) ?? null };
   }
   const spawnStatus = options.spawnStatus;
   if ((spawnStatus === null && options.failUnreadOperation)
@@ -583,7 +589,7 @@ async function failStructuredLaunchAndReap(
   const cleanup = failure.cleanup;
   if (cleanup) {
     let released = false;
-    const entryBeforeRelease = registry.readOnlySnapshot().entries[sessionKeyId(cleanup.key)];
+    const entryBeforeRelease = startupHostSnapshot(registry, cleanup.key).entries[sessionKeyId(cleanup.key)];
     if (cleanup.releaseRegisteredHost && entryBeforeRelease?.structuredHostOperationId === launchId) {
       try {
         released = await (options.releaseHost ?? releaseStructuredDeliveryHost)(cleanup.key);
@@ -595,7 +601,7 @@ async function failStructuredLaunchAndReap(
       }
     }
     if (!released && cleanup.process) {
-      const entryBeforeTermination = registry.readOnlySnapshot().entries[sessionKeyId(cleanup.key)];
+      const entryBeforeTermination = startupHostSnapshot(registry, cleanup.key).entries[sessionKeyId(cleanup.key)];
       const stillOwned = cleanup.releaseRegisteredHost
         ? entryBeforeTermination?.structuredHostOperationId === launchId
         : entryBeforeTermination?.structuredHostOperationId == null
@@ -604,7 +610,7 @@ async function failStructuredLaunchAndReap(
           && entryBeforeTermination.claimOwner === null;
       if (stillOwned) {
         try {
-          const terminated = await (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process);
+          const terminated = await withHostStopOrigin({ path: "stale-structured-spawn-reap", operationId: launchId }, () => (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process!));
           if (!terminated && cleanup.process.pid !== process.pid) {
             spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] staged host termination remained unconfirmed", {
               launchId,
@@ -620,7 +626,7 @@ async function failStructuredLaunchAndReap(
       }
     }
   }
-  return { claimed: true, receipt: registry.readOnlySnapshot().receipts[launchId] ?? null };
+  return { claimed: true, receipt: registry.spawnReceipt(launchId) ?? null };
 }
 
 /** Delivery settlement can fail the launch in the registry without reaching
@@ -975,7 +981,7 @@ async function failQueuedPinnedSpawn(
     return (await registry.failStructuredSpawnOffLoop(receipt.launchId, reason)).receipt ?? receipt;
   }
   await registry.failSpawnOffLoop(receipt.launchId, reason);
-  return registry.readOnlySnapshot().receipts[receipt.launchId] ?? receipt;
+  return registry.spawnReceipt(receipt.launchId) ?? receipt;
 }
 
 async function actuateQueuedPinnedSpawn(
@@ -1105,7 +1111,7 @@ async function actuateQueuedPinnedSpawn(
         admissionClaim.receipt,
       );
       assertActive();
-      const launched = registry.readOnlySnapshot().receipts[receipt.launchId];
+      const launched = registry.spawnReceipt(receipt.launchId);
       if (launched?.state === "prompt-delivered" || launched?.state === "host-verified") {
         (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));
       }
@@ -1134,14 +1140,14 @@ async function actuateQueuedPinnedSpawn(
   } catch (error) {
     if (receipt.transport === "tmux") {
       await registry.failSpawnOffLoop(receipt.launchId, structuredSpawnFailureReason(error));
-      const failed = registry.readOnlySnapshot().receipts[receipt.launchId] ?? admissionClaim.receipt;
+      const failed = registry.spawnReceipt(receipt.launchId) ?? admissionClaim.receipt;
       if (!failed.pane) deleteInboxImages(tmuxImagePaths);
       if (failed.queuedPinnedSpawn && failed.admissionOwner) {
         return (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, failed.launchId, failed.admissionOwner))).receipt;
       }
       return failed;
     }
-    const current = registry.readOnlySnapshot().receipts[receipt.launchId];
+    const current = registry.spawnReceipt(receipt.launchId);
     if (current?.queuedPinnedSpawn && current.admissionOwner) {
       (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, current.launchId, current.admissionOwner)));
     }
@@ -1171,7 +1177,7 @@ async function actuateQueuedPinnedSpawn(
       });
     }
   }
-  return registry.readOnlySnapshot().receipts[receipt.launchId] ?? admissionClaim.receipt;
+  return registry.spawnReceipt(receipt.launchId) ?? admissionClaim.receipt;
 }
 
 /** Bounded, idempotent convergence for stale non-terminal structured launches
@@ -1313,7 +1319,7 @@ export async function terminalizeStaleStructuredSpawns(
           receipt.launchId,
           `tmux spawn interrupted before durable queue publication or pane binding: ${receipt.launchId}`,
         );
-        const failed = registry.readOnlySnapshot().receipts[receipt.launchId];
+        const failed = registry.spawnReceipt(receipt.launchId);
         if (failed?.state === "failed" || failed?.state === "conflicted") terminalized.push(receipt.launchId);
       } catch (error) {
         spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale tmux spawn reconciliation failed", {
@@ -1400,7 +1406,7 @@ export interface StructuredSpawnInput {
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
-  const receipt = input.registry.readOnlySnapshot().receipts[input.receipt.launchId];
+  const receipt = input.registry.spawnReceipt(input.receipt.launchId);
   if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
   if (input.spec.launchProfile?.mcpServers.includes("telegram")
     && !receipt.launchProfile.mcpServers.includes("telegram")) {
@@ -1672,8 +1678,8 @@ async function recoverPendingStructuredSpawnPass(
     afterEventSeq = next;
     batch = await client.effectBatch(["runtime.spawn"], afterEventSeq);
   }
-  const snapshot = registry.spawnRecoverySnapshot([...open.map(receipt => receipt.launchId), ...spawnEffects.keys()],
-    activity.sessions.filter(session => session.host !== "dead").map(session => session.conversationId));
+  const snapshot = await registry.prepareSpawnRecoverySnapshot([...open.map(receipt => receipt.launchId), ...spawnEffects.keys()],
+    activity.sessions.filter(session => session.host !== "dead").map(session => session.conversationId), assertActive);
 
   // Historical failures need one identity snapshot for this pass. Fetching the
   // entire runtime once per failed receipt multiplies startup admission work
@@ -1705,7 +1711,7 @@ async function recoverPendingStructuredSpawnPass(
   let previous: string | undefined;
   const reportRecovery = async () => {
     if (!options.reportProgress) return;
-    const current = registry.spawnRecoverySnapshot(selected.map(receipt => receipt.launchId));
+    const current = await registry.prepareSpawnRecoverySnapshot(selected.map(receipt => receipt.launchId), [], assertActive);
     const completed = selected.filter(receipt => ["completed", "failed", "conflicted"].includes(current.receipts[receipt.launchId]?.state ?? "")).length;
     // Deferred identities remain durably pending; examining one never closes it.
     await options.reportProgress({ examined, total: selected.length, completed, deferred: selected.length - completed });
@@ -1787,7 +1793,7 @@ async function recoverPendingStructuredSpawnPass(
       const identity = resumeIdentityForReceipt(registry, failure.receipt ?? receipt);
       let claimed: AgentRegistryEntry | null = null;
       if (identity) {
-        const entry = registry.readOnlySnapshot().entries[sessionKeyId(identity.key)];
+        const entry = startupHostSnapshot(registry, identity.key).entries[sessionKeyId(identity.key)];
         if (entry?.structuredHost) {
           claimed = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
           if (!claimed?.claimOwner) continue;
@@ -2086,7 +2092,7 @@ export async function startCopilotStructuredHost(
 ): Promise<CopilotAcpHost> {
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
-    ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: "copilot", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
+    ? startupHostSnapshot(input.registry, { engine: "copilot", sessionId: resumeSessionId }).entries[sessionKeyId({ engine: "copilot", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
     : undefined;
   const access = await materializeAttemptAccess(input, capability);
   const options = { ...copilotHostOptions(input, access, initialEventCursor), ...overrides };
@@ -2139,11 +2145,13 @@ export async function claudeStructuredHostOptions(
  * keeps its class and its controls across restarts. Throws
  * CpuContainmentUnavailable for work that cannot be contained.
  */
-export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined): AgentMemoryCell | null {
-  const snapshot = registry.readOnlySnapshot();
-  const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-  const cpu = planAgentCpu(workloadForMemberships(conversationId ? snapshot.memberships[registry.canonicalConversationId(conversationId)] : undefined));
-  const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu });
+export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
+  const { liveAgents, memberships, conversation } = registry.structuredHostPlanningFacts(conversationId);
+  const cpu = planAgentCpu(workloadForMemberships(memberships));
+  const profile = receipt?.launchProfile ?? conversation?.launchProfile;
+  const scopes = agentMemoryScopes({ cwd: receipt?.cwd ?? profile?.cwd ?? "", project: receipt?.explicitProject ?? conversation?.project ?? profile?.project,
+    role: receipt?.agentRole ?? conversation?.agentRole ?? (memberships.some(row => row.kind === "pipeline") ? PIPELINE_MEMORY_DEFAULT_ROLE : null), profile });
+  const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
   return plan ? new AgentMemoryCell(plan) : null;
 }
 
@@ -2157,7 +2165,9 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId);
+  const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
+  await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
+  input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...(memoryCell ? { memoryCell } : {}),
   });
@@ -2167,7 +2177,7 @@ export async function defaultStartHost(
     : undefined;
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
-    ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: input.engine, sessionId: resumeSessionId })]?.structuredHost?.eventCursor
+    ? startupHostSnapshot(input.registry, { engine: input.engine, sessionId: resumeSessionId }).entries[sessionKeyId({ engine: input.engine, sessionId: resumeSessionId })]?.structuredHost?.eventCursor
     : undefined;
   if (initialEventCursor !== undefined
     && (!Number.isSafeInteger(initialEventCursor) || initialEventCursor < 0)) {
@@ -2312,8 +2322,8 @@ async function terminalHostExitReason(host: SpawnedStructuredHost | null): Promi
   return host.terminalExitReason?.() ?? "structured spawn host exited before its first message";
 }
 
-async function cleanupHost(host: SpawnedStructuredHost | null, binding: HostBinding): Promise<void> {
-  await host?.release();
+async function cleanupHost(host: SpawnedStructuredHost | null, binding: HostBinding, operationId: string): Promise<void> {
+  await withHostStopOrigin({ path: "structured-spawn-failure-cleanup", operationId }, () => host?.release());
   let unregisterError: unknown = null;
   try {
     await binding.unregister();
@@ -2485,7 +2495,7 @@ export async function recoverStagedStructuredLaunch(
   const inFlight = stagedRecoveryWork.get(launchId);
   if (inFlight) return inFlight;
   const work = async (): Promise<SpawnReceipt> => {
-    const read = () => registry.readOnlySnapshot().receipts[launchId]!;
+    const read = () => registry.spawnReceipt(launchId)!;
     const receipt = read();
     if (!receipt) throw new Error("unknown staged launch receipt");
     let recovery = stagedLaunchRecovery(receipt);
@@ -2504,7 +2514,7 @@ export async function recoverStagedStructuredLaunch(
     }
     if (lostStagedLaunch(registry.readOnlySnapshot(), receipt, now())) {
       if (receipt.artifactPath && hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)) {
-        const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+        const entry = receipt.key ? startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)] : null;
         const evidence = !entry && receipt.key ? {
           key: receipt.key, artifactPath: receipt.artifactPath, cwd: receipt.cwd ?? "", accountId: receipt.accountId,
           launchProfile: receipt.launchProfile, status: "dead" as const, host: null, structuredHost: null,
@@ -2532,7 +2542,7 @@ export async function recoverStagedStructuredLaunch(
       || options.eligible?.() === false) return receipt;
     const continuation = stagedContinuations.get(launchId);
     const host = continuation?.host ?? structuredDeliveryHostForConversation(receipt.conversationId);
-    const writer = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+    const writer = receipt.key ? startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)] : null;
     // A successor with no local host still observes the original operations.
     // Publication and dispatch continue to require the current writer.
     const ownsHost = Boolean(host && writer?.claimOwner && receipt.key && (continuation ? await continuation.owns()
@@ -2620,7 +2630,7 @@ export async function recoverStagedStructuredLaunch(
         await client.transitionOperation(launchId, "delivered");
         options.assertActive?.();
         if (!current()) return read();
-        const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+        const entry = receipt.key ? startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)] : null;
         const live = entry?.structuredHost?.process && entry.claimOwner && entry.status !== "dead" && entry.status !== "unhosted";
         if (!live && (entry?.structuredHost?.process || entry?.claimOwner)) return read();
         const result = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId)));
@@ -2634,12 +2644,19 @@ export async function recoverStagedStructuredLaunch(
         await persist({ ...recovery, reason: `original first-message lookup: ${message?.receipt.status ?? "absent; publication remains uncertain"}` });
         return read();
       }
+      assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
+        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
       if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
       if (continuation && !await continuation.owns()) return read();
       if (!current()) return read();
       let curatorAuthorize: () => void;
       try {
-        curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+        const curator = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+        curatorAuthorize = () => {
+          assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
+            ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
+          curator();
+        };
         options.assertActive?.();
         curatorAuthorize();
       } catch (error) {
@@ -2724,6 +2741,14 @@ export async function spawnStructuredConversation(
   input: StructuredSpawnInput,
   dependencies: StructuredSpawnDependencies = {},
 ): Promise<SpawnResponse> {
+  const authorize = input.authorize;
+  input = { ...input, authorize: async () => {
+    assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+    await authorize?.();
+    assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+  } };
   const startHost = dependencies.startHost ?? defaultStartHost;
   const bindHost = dependencies.bindHost ?? defaultBindHost;
   const publishHost = dependencies.publishHost
@@ -2764,7 +2789,7 @@ export async function spawnStructuredConversation(
     assertSpawnMemoryAvailable();
     const assertResumeSurvivorsRetired = () => {
       if (!resumeKey) return;
-      const entry = input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)];
+      const entry = startupHostSnapshot(input.registry, resumeKey).entries[sessionKeyId(resumeKey)];
       if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) {
         throw new Error("structured resume host termination still has live survivors");
       }
@@ -2850,7 +2875,7 @@ export async function spawnStructuredConversation(
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) return;
       try {
-        await lateHost.release();
+        await withHostStopOrigin({ path: "structured-spawn-late-cleanup", operationId: input.receipt.launchId }, () => lateHost.release());
       } catch (error) {
         spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] late structured host could not be released after setup timeout", {
           launchId: input.receipt.launchId,
@@ -2901,7 +2926,7 @@ export async function spawnStructuredConversation(
     await input.authorize?.();
     const ownsLaunch = async () => {
       if (durableSetupTimedOut || launchReleased) return false;
-      const snapshot = input.registry.readOnlySnapshot();
+      const snapshot = input.registry.spawnRecoverySnapshot([input.receipt.launchId]);
       const current = snapshot.receipts[input.receipt.launchId];
       const entry = snapshot.entries[sessionKeyId(key!)];
       return Boolean(current
@@ -2963,7 +2988,7 @@ export async function spawnStructuredConversation(
       release: async () => {
         launchReleased = true;
         stagedContinuations.delete(operationId);
-        await cleanupHost(host, binding);
+        await cleanupHost(host, binding, input.receipt.launchId);
       },
     });
     binding.unregister = await withinDurableSetup(publishAuthorized());
@@ -3008,6 +3033,7 @@ export async function spawnStructuredConversation(
           ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
           : {}),
         launchId: input.receipt.launchId,
+        memoryCap: input.registry.spawnReceipt(input.receipt.launchId)?.memoryCap,
         conversationId: input.receipt.conversationId,
         launched: true,
         retrySafe: false,
@@ -3028,6 +3054,7 @@ export async function spawnStructuredConversation(
           ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
           : {}),
         launchId: input.receipt.launchId,
+        memoryCap: input.registry.spawnReceipt(input.receipt.launchId)?.memoryCap,
         conversationId: input.receipt.conversationId,
         launched: true,
         retrySafe: false,
@@ -3077,6 +3104,7 @@ export async function spawnStructuredConversation(
         ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
         : {}),
       launchId: input.receipt.launchId,
+      memoryCap: settled.receipt.memoryCap,
       conversationId: settled.conversation.id,
       launched: true,
       retrySafe: false,
@@ -3086,12 +3114,12 @@ export async function spawnStructuredConversation(
     };
   } catch (error) {
     clearDurableSetupTimeout();
-    const pending = input.registry.readOnlySnapshot().receipts[operationId];
+    const pending = input.registry.spawnReceipt(operationId) ?? undefined;
     const recovery = stagedLaunchRecovery(pending);
     if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
       await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
-      return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
+      return { ok: true, target: null, path: null, launchId: operationId, memoryCap: pending?.memoryCap, conversationId: input.receipt.conversationId,
         launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
     }
     stagedContinuations.delete(operationId);
@@ -3116,7 +3144,7 @@ export async function spawnStructuredConversation(
     }
     let cleanupError: unknown = null;
     try {
-      await cleanupHost(host, binding);
+      await cleanupHost(host, binding, input.receipt.launchId);
     } catch (failure) {
       cleanupError = failure;
     }
@@ -3127,14 +3155,14 @@ export async function spawnStructuredConversation(
     let failedEntry: AgentRegistryEntry | null = null;
     let failedIdentity = resumeIdentity;
     if (key) {
-      const entry = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
+      const entry = startupHostSnapshot(input.registry, key).entries[sessionKeyId(key)];
       if (entry) {
         failedEntry = entry;
         failedIdentity = { key, artifactPath: entry.artifactPath };
       }
     } else {
       if (resumeIdentity) {
-        failedEntry = input.registry.readOnlySnapshot().entries[sessionKeyId(resumeIdentity.key)] ?? null;
+        failedEntry = startupHostSnapshot(input.registry, resumeIdentity.key).entries[sessionKeyId(resumeIdentity.key)] ?? null;
       }
     }
     if (typeof failedEntry?.structuredHostOperationId === "string"

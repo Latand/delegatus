@@ -1,3 +1,4 @@
+import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
@@ -19,6 +20,7 @@ import {
   type ViewerMcpServerEntry,
 } from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
@@ -181,13 +183,16 @@ export function copilotChildEnv(
 }
 
 /** A stdio launcher, or the Viewer's shared HTTP endpoint. */
-export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string };
+export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string; headers?: Record<string, string> };
 
 /** The Viewer server for one launch, from the environment its agent runs
     with: the shared endpoint when `viewerMcpTransportForLaunch` admits HTTP,
     the resolved stdio launcher otherwise. */
 export function copilotViewerMcpServer(launchEnv: Readonly<Record<string, string | undefined>>): CopilotViewerMcpServer {
-  return viewerMcpTransportForLaunch(launchEnv) === "http" ? { url: viewerMcpHttpUrl() } : viewerMcpServerEntry();
+  const access = mcpHttpAccessToken();
+  return viewerMcpTransportForLaunch(launchEnv) === "http"
+    ? { url: viewerMcpHttpUrl(), ...(access ? { headers: { [MCP_HTTP_ACCESS_HEADER]: access } } : {}) }
+    : viewerMcpServerEntry();
 }
 
 /** The `--additional-mcp-config` document. ACP `session/new` rejects stdio
@@ -227,7 +232,7 @@ export function copilotMcpConfig(
     ? {
         type: "http",
         url: viewer.url,
-        headers: capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {},
+        headers: { ...viewer.headers, ...(capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}) },
         tools: ["*"],
       }
     : {
@@ -302,6 +307,7 @@ export class CopilotAcpHost implements EngineHost {
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
   private readonly childStartIdentity: string | null;
+  private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
   private readonly pending = new Map<number, PendingRequest>();
@@ -354,6 +360,9 @@ export class CopilotAcpHost implements EngineHost {
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
+    this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
+    this.memoryCell?.setExitProcess(this.exitProcess);
+    if (!signalDomain(child)) observeHostExit(child, this.exitProcess);
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     /* ACP advertises `promptCapabilities.image`; images ride `session/prompt`
@@ -450,7 +459,7 @@ export class CopilotAcpHost implements EngineHost {
       return host;
     } catch (error) {
       try {
-        await host.release();
+        await withHostStopOrigin({ path: "copilot-startup-cleanup", operationId: host.identity.sessionId }, () => host.release());
       } catch (cleanupError) {
         throw new StructuredHostAdoptionCleanupError(safeError(error), host, { cause: cleanupError });
       }
@@ -740,6 +749,7 @@ export class CopilotAcpHost implements EngineHost {
       endpoint: pid ? `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
+      ...(this.exitProcess ? { exitProcess: this.exitProcess } : {}),
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
@@ -1019,7 +1029,14 @@ export class CopilotAcpHost implements EngineHost {
         || this.childStartIdentity !== expected.startIdentity
         || this.processIdentity(pid) !== expected.startIdentity) return false;
     }
-    return signalAgentDomain(this.child, signal) ?? signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    const record = () => recordHostStop(this.exitProcess, signal, this.dead ? "copilot-host-fault" : "copilot-host-release");
+    const protectedSignal = signalAgentDomain(this.child, signal, record);
+    if (protectedSignal !== undefined) return protectedSignal;
+    const withdraw = record();
+    if (expected && this.processIdentity(expected.pid) !== expected.startIdentity) { withdraw?.(); return false; }
+    const signalled = signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    if (!signalled) withdraw?.();
+    return signalled;
   }
 
   private startTermination(): boolean {
@@ -1033,7 +1050,10 @@ export class CopilotAcpHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
-    try { this.child.stdin.end(); } catch { /* already closed */ }
+    let withdrawEof: (() => void) | undefined;
+    if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
+      && !procBackend.processExited(nativeProcessId(this.child)!)) withdrawEof = recordHostStop(this.exitProcess, "EOF", "copilot-host-release");
+    try { this.child.stdin.end(); } catch { withdrawEof?.(); }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;
     this.terminationTimer = setTimeout(() => {
