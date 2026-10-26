@@ -1,6 +1,7 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, claudeCatalogModelId, modelDisplayName } from "@/lib/agent/models";
+import type { TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
@@ -63,7 +64,17 @@ function catalogModelId(engine: "claude" | "codex" | "copilot", raw: string | nu
   const id = claudeCatalogModelId(raw);
   const row = ENGINE_MODELS.claude.find((item) => item.id === id);
   if (!row) return null;
-  return row.id === stem || !/\d/.test(stem) || modelDisplayName("claude", stem) === row.label ? row.id : null;
+  return row.id === stem || !/\d/.test(stem) || modelDisplayName("claude", stem) === row.label || standsForFamily(row) ? row.id : null;
+}
+
+/** An alias row whose label carries no version (`fable`) stands for every release
+    of its family when the catalogue lists no other release of that family: the
+    transcript's `fable-5-1` is that row. A family with a pinned sibling row
+    (`sonnet` next to `claude-sonnet-5-5`) or a versioned label (`opus` = Opus 5.5)
+    names one release, and another version is not it. */
+function standsForFamily(row: { id: string; label: string }): boolean {
+  if (/\d/.test(row.label)) return false;
+  return !ENGINE_MODELS.claude.some((item) => item.id !== row.id && item.id.startsWith(`claude-${row.id}-`));
 }
 
 /** The model the transcript reports, as the catalogue names it when it does and as stored otherwise. */
@@ -90,6 +101,22 @@ export function runningModelId(file: FileEntry): string | null {
     outside the catalogue (the pill then names the stored id itself). */
 export function listedModelId(file: FileEntry): string {
   return catalogModelId(file.engine as "claude" | "codex" | "copilot", runningModelId(file)) ?? "";
+}
+
+/** The running model's own name where the catalogue has no row for it (a model
+    the transcript reports that the pickers do not list), or "" when none is known. */
+export function unlistedModelName(file: FileEntry): string {
+  const id = runningModelId(file);
+  return id && !listedModelId(file) ? modelDisplayName(file.engine, id) : "";
+}
+
+/** Why a change that sends a model is held, in words: one line for a conversation
+    with no known model and another for one whose model the pickers cannot send.
+    Null when the conversation runs on a listed model. */
+export function modelHoldMessage(t: TFunction, file: FileEntry): string | null {
+  if (listedModelId(file)) return null;
+  const name = unlistedModelName(file);
+  return name ? t("runtimeConfig.modelUnlisted", { model: name }) : t("runtimeConfig.modelUnknown");
 }
 
 /** Engine defaults for a conversation: the running model when the catalogue lists

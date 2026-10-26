@@ -576,7 +576,8 @@ export const uk: Record<keyof typeof en, Message> = {
   // (issue #390) — таблетка застосовує вибір автоматично.
   "runtimeConfig.failed": "Не вдалося змінити конфігурацію активного агента",
   "runtimeConfig.pending": "зміна очікує",
-  "runtimeConfig.modelUnknown": "Модель ще невідома — спершу оберіть модель",
+  "runtimeConfig.modelUnknown": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+  "runtimeConfig.modelUnlisted": "{model} немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
   "runtimeConfig.switchHeld": "Не надіслано: перехід на {account} не вдався — {reason}",
   "runtimeConfig.switchReasonSignedOut": "з акаунта виконано вихід",
   "runtimeConfig.switchReasonLimit": "акаунт вичерпав ліміт використання",

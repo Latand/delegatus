@@ -8,7 +8,7 @@ import { DeputyBlock } from "./DeputyBlock";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { StagesSheet } from "@/components/kanban/StagesSheet";
 import { summarizePipeline } from "@/components/kanban/pipelineSummary";
-import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { ReaderPlacement, ReaderPortals, ReaderSlot } from "@/components/kanban/KanbanReaders";
 import { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -119,6 +119,7 @@ export type ConversationWindowCase =
   | "delivery-stalled"
   | "delivery-check-card"
   | "runtime-model-face"
+  | "runtime-model-face-headers"
   | "lifecycle"
   | "long-history"
   | "codex-history"
@@ -1455,14 +1456,41 @@ const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
 };
 
-function RuntimeModelFaceFixture() {
-  const { t } = useLocale();
-  const which = params.get("file") ?? "luna";
-  const file = {
-    ...DEAD_FILE, proc: "running", pid: 10, effort: "high", fast: false, mtime: 1, size: 1, activity: "idle",
+function modelFaceFile(which: string): FileEntry {
+  return {
+    ...DEAD_FILE, proc: "running", pid: 10, effort: "high", fast: false, mtime: 1, size: 1, activity: "idle", title: "Review the stage switch",
     conversationId: `conversation_model_face_${which}`, path: `/model-face-${which}.jsonl`, name: `model-face-${which}.jsonl`,
     ...MODEL_FACE_FILES[which],
   } as FileEntry;
+}
+
+/** The two desktop headers that name a conversation's model: the pane's own and the board reader's. */
+function RuntimeModelFaceHeadersFixture() {
+  const file = modelFaceFile(params.get("file") ?? "luna");
+  const [placement] = useState(() => new ReaderPlacement());
+  const [now] = useState(() => Date.now());
+  if (params.get("part") !== "reader") {
+    return (
+      <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas p-3 text-primary">
+        <div className="mx-auto flex min-h-0 w-full max-w-[720px] flex-1">
+          <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <main data-evidence-case="runtime-model-face-headers" className="kb h-dvh bg-canvas p-3 text-primary">
+      <div className="aw-reader mx-auto h-full w-full max-w-[720px]">
+        <ReaderSlot placement={placement} readerKey="model-face" />
+        <ReaderPortals placement={placement} readers={[{ readerKey: "model-face", file, owner: null, composerPrimary: true }]} now={now} onClose={noop} onLeave={noop} onMenu={noop} />
+      </div>
+    </main>
+  );
+}
+
+function RuntimeModelFaceFixture() {
+  const { t } = useLocale();
+  const file = modelFaceFile(params.get("file") ?? "luna");
   const composer = useComposer({
     initialText: () => "",
     persistText: () => undefined,
@@ -1496,6 +1524,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
   if (id === "runtime-model-face") return <RuntimeModelFaceFixture />;
+  if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;

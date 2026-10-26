@@ -179,6 +179,20 @@ test("a Claude conversation names its observed release, not the family alias a d
   expect(defaults({ ...claudeFile, model: null, launchModel: "opus" }).model).toBe("opus");
 });
 
+test("a Fable conversation reads as the fable row whether the launch asked for the alias or recorded nothing", () => {
+  for (const launchModel of ["fable", null, undefined] as const) {
+    const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel };
+    expect(defaults(fable).model).toBe("fable");
+    expect(runningModelId(fable)).toBe("fable");
+    expect(listedModelId(fable)).toBe("fable");
+  }
+  expect(defaults({ ...claudeFile, model: "claude-fable-5-1", launchModel: "fable" }).model).toBe("fable");
+  expect(defaults({ ...claudeFile, model: "fable-5-1[1m]", launchModel: null }).model).toBe("fable");
+  /* A family the catalogue lists a pinned release of keeps another version off its alias row. */
+  expect(defaults({ ...claudeFile, model: "sonnet-4-5", launchModel: "sonnet" }).model).toBe("");
+  expect(defaults({ ...claudeFile, model: "opus-4-1", launchModel: null }).model).toBe("");
+});
+
 test("an explicit resume selection with no model sends no model", () => {
   const unknown: FileEntry = { ...file, model: null, launchModel: null };
   writeResumeProfile(unknown, { effort: "high" });

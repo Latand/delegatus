@@ -15,7 +15,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { Hint } from "./Hint";
 import type { RuntimeSession } from "./runtime/runtimeModel";
-import { effectiveProfile } from "./runtimeProfile";
+import { effectiveProfile, modelHoldMessage } from "./runtimeProfile";
 import { hueFromId } from "./scheme/agentLinks";
 import { pushTaskToast } from "./tasks/taskToast";
 
@@ -153,7 +153,7 @@ export function AccountBadge({
     if (!file || targetId === next || (switching && targetId === accountId)) return;
     /* The move is a reconfigure, and a reconfigure names a model: a conversation whose model is not known holds it. */
     if (!effectiveProfile(file).model) {
-      pushTaskToast("err", t("runtimeConfig.modelUnknown"));
+      pushTaskToast("err", modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown"));
       return;
     }
     const previous = readPickedAccount(key);

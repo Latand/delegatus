@@ -13469,3 +13469,85 @@ describe("new task default deadline", () => {
     finally { await browser.close(); server.stop(); }
   }, 300_000);
 });
+
+describe("the phone names the model the conversation runs on", () => {
+  /*
+   * The chat header's identity line and the conversation menu's identity line,
+   * over a Codex conversation launched on Luna that the transcript has not named
+   * yet, one nobody has named, one the transcript names differently from the
+   * launch, and a Fable conversation, at the phone widths, both languages, both
+   * schemes. `LLV_MODEL_FACE_SIDE=before` records the same case over a checkout
+   * that names the engine instead; the default records `after` and gates it.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… bun test \
+   *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "names the model"
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const CASES = {
+    luna: { shown: "gpt-6-luna", never: ["Sol", "Codex"] },
+    unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
+    observed: { shown: "gpt-6-astra", never: ["Sol", "gpt-6-luna"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+  } as const;
+  browserTest("the chat header and the menu show the observed or requested model, or the engine's name, never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face/phone-headers");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const base = served.base.replace(/\/$/, "");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const readings: Record<string, unknown> = {};
+    /* The line's deciding fact is the model (or the engine's name): that text range has to be whole, inside the line's own box and in view.
+       The reasoning tier after it may end in the ellipsis the line is built to draw, so `whole` records the full line and is not gated. */
+    const measure = ({ selector, shown }: { selector: string; shown: string }) => {
+      const element = document.querySelector(selector) as HTMLElement | null;
+      if (!element) return null;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      for (let next = walker.nextNode(); next; next = walker.nextNode()) if ((next.textContent ?? "").includes(shown)) { node = next as Text; break; }
+      const range = document.createRange();
+      if (node) { const at = node.textContent!.indexOf(shown); range.setStart(node, at); range.setEnd(node, at + shown.length); }
+      else range.selectNodeContents(element);
+      const drawn = range.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      return {
+        text: element.textContent?.trim() ?? "",
+        whole: element.scrollWidth <= element.clientWidth + 1,
+        modelWhole: drawn.left >= box.left - 0.5 && drawn.right <= box.right + 0.5,
+        inView: drawn.left >= 0 && drawn.right <= innerWidth && drawn.top >= 0 && drawn.bottom <= innerHeight,
+        overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      };
+    };
+    try {
+      for (const [name, expected] of Object.entries(CASES)) for (const viewport of [{ width: 390, height: 844 }, { width: 360, height: 780 }]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { page, context, pageErrors } = await openFixture(browser, `${base}/?runtime=structured&modelface=${name}#c=conversation_running`, viewport, scheme, lang, "reduce", true);
+        const key = `${name}-${viewport.width}-${lang}-${scheme}`;
+        try {
+          await page.locator("[data-mobile2-chat-model]").first().waitFor({ timeout: 20_000 });
+          await page.mouse.move(0, 0);
+          const header = await page.evaluate(measure, { selector: "[data-mobile2-chat-model]", shown: expected.shown });
+          await page.screenshot({ path: path.join(out, `${side}-${key}-header.png`) });
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-chat-identity]').waitFor();
+          const menu = await page.evaluate(measure, { selector: '[data-mobile2-sheet="menu"] [data-mobile2-chat-identity] .truncate', shown: expected.shown });
+          await page.screenshot({ path: path.join(out, `${side}-${key}-menu.png`) });
+          readings[key] = { header, menu };
+          expect(pageErrors).toEqual([]);
+          if (side === "after") {
+            for (const [part, reading] of [["header", header], ["menu", menu]] as const) {
+              expect({ key, part, present: reading !== null }).toEqual({ key, part, present: true });
+              /* The chat header ends its line in an ellipsis below the named 390 px (its floor is six characters), so 360 only records. */
+              const gatesModel = part === "menu" || viewport.width >= 390;
+              expect({ key, part, overflowX: reading!.overflowX, inView: reading!.inView, modelWhole: gatesModel ? reading!.modelWhole : true }).toEqual({ key, part, overflowX: 0, inView: true, modelWhole: true });
+              expect(reading!.text).toContain(expected.shown);
+              for (const never of expected.never) expect(reading!.text).not.toContain(never);
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/headers-phone.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 900_000);
+});

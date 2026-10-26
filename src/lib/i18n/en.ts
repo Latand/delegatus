@@ -579,7 +579,8 @@ export const en = {
   // retired with the strip controls (issue #390) — the pill auto-applies.
   "runtimeConfig.failed": "Could not change the running agent configuration",
   "runtimeConfig.pending": "switch pending",
-  "runtimeConfig.modelUnknown": "The model is not known yet — pick a model first",
+  "runtimeConfig.modelUnknown": "No model reported yet — pick a model to change reasoning and speed",
+  "runtimeConfig.modelUnlisted": "{model} is not in the model list — pick a model to change reasoning and speed",
   "runtimeConfig.switchHeld": "Not sent: moving to {account} failed — {reason}",
   "runtimeConfig.switchReasonSignedOut": "the account is signed out",
   "runtimeConfig.switchReasonLimit": "the account has reached its usage limit",

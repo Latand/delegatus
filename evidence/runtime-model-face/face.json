@@ -9,7 +9,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-desktop-1440-en-dark": {
       "text": "6.1-Sol \u00b7 High",
@@ -20,7 +22,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-desktop-1440-uk-light": {
       "text": "6.1-Sol \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -31,7 +35,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-desktop-1440-uk-dark": {
       "text": "6.1-Sol \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -42,7 +48,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-phone-390-en-light": {
       "text": "6.1-Sol \u00b7 high",
@@ -53,7 +61,14 @@
       "overflowX": 0
     },
     "luna-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "luna-phone-390-en-dark": {
       "text": "6.1-Sol \u00b7 high",
@@ -64,7 +79,14 @@
       "overflowX": 0
     },
     "luna-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "luna-phone-390-uk-light": {
       "text": "6.1-Sol \u00b7 high",
@@ -75,7 +97,14 @@
       "overflowX": 0
     },
     "luna-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "luna-phone-390-uk-dark": {
       "text": "6.1-Sol \u00b7 high",
@@ -86,7 +115,14 @@
       "overflowX": 0
     },
     "luna-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-desktop-1440-en-light": {
       "text": "6.1-Sol \u00b7 High",
@@ -97,7 +133,9 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unknown-desktop-1440-en-dark": {
       "text": "6.1-Sol \u00b7 High",
@@ -108,7 +146,9 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unknown-desktop-1440-uk-light": {
       "text": "6.1-Sol \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -119,7 +159,9 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unknown-desktop-1440-uk-dark": {
       "text": "6.1-Sol \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -130,7 +172,9 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unknown-phone-390-en-light": {
       "text": "6.1-Sol \u00b7 high",
@@ -141,7 +185,14 @@
       "overflowX": 0
     },
     "unknown-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-phone-390-en-dark": {
       "text": "6.1-Sol \u00b7 high",
@@ -152,7 +203,14 @@
       "overflowX": 0
     },
     "unknown-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-phone-390-uk-light": {
       "text": "6.1-Sol \u00b7 high",
@@ -163,7 +221,14 @@
       "overflowX": 0
     },
     "unknown-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-phone-390-uk-dark": {
       "text": "6.1-Sol \u00b7 high",
@@ -174,7 +239,14 @@
       "overflowX": 0
     },
     "unknown-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-desktop-1440-en-light": {
       "text": "6.1-Sol \u00b7 High",
@@ -185,7 +257,9 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unlisted-desktop-1440-en-dark": {
       "text": "6.1-Sol \u00b7 High",
@@ -196,7 +270,9 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unlisted-desktop-1440-uk-light": {
       "text": "6.1-Sol \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -207,7 +283,9 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unlisted-desktop-1440-uk-dark": {
       "text": "6.1-Sol \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -218,7 +296,9 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "unlisted-phone-390-en-light": {
       "text": "6.1-Sol \u00b7 high",
@@ -229,7 +309,14 @@
       "overflowX": 0
     },
     "unlisted-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-phone-390-en-dark": {
       "text": "6.1-Sol \u00b7 high",
@@ -240,7 +327,14 @@
       "overflowX": 0
     },
     "unlisted-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-phone-390-uk-light": {
       "text": "6.1-Sol \u00b7 high",
@@ -251,7 +345,14 @@
       "overflowX": 0
     },
     "unlisted-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-phone-390-uk-dark": {
       "text": "6.1-Sol \u00b7 high",
@@ -262,7 +363,14 @@
       "overflowX": 0
     },
     "unlisted-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6.1-Sol \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-desktop-1440-en-light": {
       "text": "Opus 5.5 \u00b7 High",
@@ -273,7 +381,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-desktop-1440-en-dark": {
       "text": "Opus 5.5 \u00b7 High",
@@ -284,7 +394,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-desktop-1440-uk-light": {
       "text": "Opus 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -295,7 +407,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-desktop-1440-uk-dark": {
       "text": "Opus 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -306,7 +420,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-phone-390-en-light": {
       "text": "Opus 5.5 \u00b7 high",
@@ -317,7 +433,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-phone-390-en-dark": {
       "text": "Opus 5.5 \u00b7 high",
@@ -328,7 +451,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-phone-390-uk-light": {
       "text": "Opus 5.5 \u00b7 high",
@@ -339,7 +469,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-phone-390-uk-dark": {
       "text": "Opus 5.5 \u00b7 high",
@@ -350,7 +487,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-desktop-1440-en-light": {
       "text": "Opus 5.5 \u00b7 High",
@@ -361,7 +505,9 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "claude-unreported-desktop-1440-en-dark": {
       "text": "Opus 5.5 \u00b7 High",
@@ -372,7 +518,9 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "claude-unreported-desktop-1440-uk-light": {
       "text": "Opus 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -383,7 +531,9 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "claude-unreported-desktop-1440-uk-dark": {
       "text": "Opus 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -394,7 +544,9 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "claude-unreported-phone-390-en-light": {
       "text": "Opus 5.5 \u00b7 high",
@@ -405,7 +557,14 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-phone-390-en-dark": {
       "text": "Opus 5.5 \u00b7 high",
@@ -416,7 +575,14 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-phone-390-uk-light": {
       "text": "Opus 5.5 \u00b7 high",
@@ -427,7 +593,14 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-phone-390-uk-dark": {
       "text": "Opus 5.5 \u00b7 high",
@@ -438,7 +611,14 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-desktop-1440-en-light": {
       "text": "Opus 5.5 \u00b7 High",
@@ -449,7 +629,9 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "opus-old-desktop-1440-en-dark": {
       "text": "Opus 5.5 \u00b7 High",
@@ -460,7 +642,9 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "opus-old-desktop-1440-uk-light": {
       "text": "Opus 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -471,7 +655,9 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "opus-old-desktop-1440-uk-dark": {
       "text": "Opus 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -482,7 +668,9 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "opus-old-phone-390-en-light": {
       "text": "Opus 5.5 \u00b7 high",
@@ -493,7 +681,14 @@
       "overflowX": 0
     },
     "opus-old-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-phone-390-en-dark": {
       "text": "Opus 5.5 \u00b7 high",
@@ -504,7 +699,14 @@
       "overflowX": 0
     },
     "opus-old-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-phone-390-uk-light": {
       "text": "Opus 5.5 \u00b7 high",
@@ -515,7 +717,14 @@
       "overflowX": 0
     },
     "opus-old-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-phone-390-uk-dark": {
       "text": "Opus 5.5 \u00b7 high",
@@ -526,7 +735,14 @@
       "overflowX": 0
     },
     "opus-old-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     }
   },
   "after": {
@@ -539,7 +755,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-desktop-1440-en-dark": {
       "text": "6-Luna \u00b7 High",
@@ -550,7 +768,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-desktop-1440-uk-light": {
       "text": "6-Luna \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -561,7 +781,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-desktop-1440-uk-dark": {
       "text": "6-Luna \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -572,7 +794,9 @@
       "overflowX": 0
     },
     "luna-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "luna-phone-390-en-light": {
       "text": "6-Luna \u00b7 high",
@@ -583,7 +807,14 @@
       "overflowX": 0
     },
     "luna-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6-Luna \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "luna-phone-390-en-dark": {
       "text": "6-Luna \u00b7 high",
@@ -594,7 +825,14 @@
       "overflowX": 0
     },
     "luna-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6-Luna \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "luna-phone-390-uk-light": {
       "text": "6-Luna \u00b7 high",
@@ -605,7 +843,14 @@
       "overflowX": 0
     },
     "luna-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6-Luna \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "luna-phone-390-uk-dark": {
       "text": "6-Luna \u00b7 high",
@@ -616,7 +861,14 @@
       "overflowX": 0
     },
     "luna-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: 6-Luna \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-desktop-1440-en-light": {
       "text": "Model \u00b7 High",
@@ -627,7 +879,14 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-en-light-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unknown-desktop-1440-en-dark": {
       "text": "Model \u00b7 High",
@@ -638,7 +897,14 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-en-dark-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unknown-desktop-1440-uk-light": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -649,7 +915,14 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-uk-light-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unknown-desktop-1440-uk-dark": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -660,7 +933,14 @@
       "overflowX": 0
     },
     "unknown-desktop-1440-uk-dark-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unknown-phone-390-en-light": {
       "text": "Model \u00b7 high",
@@ -671,7 +951,19 @@
       "overflowX": 0
     },
     "unknown-phone-390-en-light-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-phone-390-en-dark": {
       "text": "Model \u00b7 high",
@@ -682,7 +974,19 @@
       "overflowX": 0
     },
     "unknown-phone-390-en-dark-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-phone-390-uk-light": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 high",
@@ -693,7 +997,19 @@
       "overflowX": 0
     },
     "unknown-phone-390-uk-light-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unknown-phone-390-uk-dark": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 high",
@@ -704,7 +1020,19 @@
       "overflowX": 0
     },
     "unknown-phone-390-uk-dark-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-desktop-1440-en-light": {
       "text": "gpt-5.5 \u00b7 High",
@@ -715,7 +1043,14 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-en-light-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unlisted-desktop-1440-en-dark": {
       "text": "gpt-5.5 \u00b7 High",
@@ -726,7 +1061,14 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-en-dark-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unlisted-desktop-1440-uk-light": {
       "text": "gpt-5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -737,7 +1079,14 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-uk-light-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unlisted-desktop-1440-uk-dark": {
       "text": "gpt-5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -748,7 +1097,14 @@
       "overflowX": 0
     },
     "unlisted-desktop-1440-uk-dark-open": {
-      "disabledTiers": 4
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "unlisted-phone-390-en-light": {
       "text": "gpt-5.5 \u00b7 high",
@@ -759,7 +1115,19 @@
       "overflowX": 0
     },
     "unlisted-phone-390-en-light-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: gpt-5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-phone-390-en-dark": {
       "text": "gpt-5.5 \u00b7 high",
@@ -770,7 +1138,19 @@
       "overflowX": 0
     },
     "unlisted-phone-390-en-dark-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: gpt-5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-phone-390-uk-light": {
       "text": "gpt-5.5 \u00b7 high",
@@ -781,7 +1161,19 @@
       "overflowX": 0
     },
     "unlisted-phone-390-uk-light-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: gpt-5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "unlisted-phone-390-uk-dark": {
       "text": "gpt-5.5 \u00b7 high",
@@ -792,7 +1184,19 @@
       "overflowX": 0
     },
     "unlisted-phone-390-uk-dark-open": {
-      "disabledTiers": 6
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: gpt-5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-desktop-1440-en-light": {
       "text": "Sonnet 5.5 \u00b7 High",
@@ -803,7 +1207,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-desktop-1440-en-dark": {
       "text": "Sonnet 5.5 \u00b7 High",
@@ -814,7 +1220,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-desktop-1440-uk-light": {
       "text": "Sonnet 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -825,7 +1233,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-desktop-1440-uk-dark": {
       "text": "Sonnet 5.5 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -836,7 +1246,9 @@
       "overflowX": 0
     },
     "sonnet-desktop-1440-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
     },
     "sonnet-phone-390-en-light": {
       "text": "Sonnet 5.5 \u00b7 high",
@@ -847,7 +1259,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-en-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Sonnet 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-phone-390-en-dark": {
       "text": "Sonnet 5.5 \u00b7 high",
@@ -858,7 +1277,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-en-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Sonnet 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-phone-390-uk-light": {
       "text": "Sonnet 5.5 \u00b7 high",
@@ -869,7 +1295,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-uk-light-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Sonnet 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "sonnet-phone-390-uk-dark": {
       "text": "Sonnet 5.5 \u00b7 high",
@@ -880,7 +1313,14 @@
       "overflowX": 0
     },
     "sonnet-phone-390-uk-dark-open": {
-      "disabledTiers": 0
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Sonnet 5.5 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-desktop-1440-en-light": {
       "text": "Model \u00b7 High",
@@ -891,7 +1331,14 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-en-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "claude-unreported-desktop-1440-en-dark": {
       "text": "Model \u00b7 High",
@@ -902,7 +1349,14 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-en-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "claude-unreported-desktop-1440-uk-light": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -913,7 +1367,14 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-uk-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "claude-unreported-desktop-1440-uk-dark": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -924,7 +1385,14 @@
       "overflowX": 0
     },
     "claude-unreported-desktop-1440-uk-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "claude-unreported-phone-390-en-light": {
       "text": "Model \u00b7 high",
@@ -935,7 +1403,19 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-en-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-phone-390-en-dark": {
       "text": "Model \u00b7 high",
@@ -946,7 +1426,19 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-en-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet \u2014 pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-phone-390-uk-light": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 high",
@@ -957,7 +1449,19 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-uk-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "claude-unreported-phone-390-uk-dark": {
       "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u00b7 high",
@@ -968,7 +1472,19 @@
       "overflowX": 0
     },
     "claude-unreported-phone-390-uk-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "\u041c\u043e\u0434\u0435\u043b\u044c \u0449\u0435 \u043d\u0435 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043e \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-desktop-1440-en-light": {
       "text": "Opus 4.1 \u00b7 High",
@@ -979,7 +1495,14 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-en-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "opus-old-desktop-1440-en-dark": {
       "text": "Opus 4.1 \u00b7 High",
@@ -990,7 +1513,14 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-en-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "opus-old-desktop-1440-uk-light": {
       "text": "Opus 4.1 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -1001,7 +1531,14 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-uk-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "opus-old-desktop-1440-uk-dark": {
       "text": "Opus 4.1 \u00b7 \u0412\u0438\u0441\u043e\u043a\u0456",
@@ -1012,7 +1549,14 @@
       "overflowX": 0
     },
     "opus-old-desktop-1440-uk-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
     },
     "opus-old-phone-390-en-light": {
       "text": "Opus 4.1 \u00b7 high",
@@ -1023,7 +1567,19 @@
       "overflowX": 0
     },
     "opus-old-phone-390-en-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: Opus 4.1 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-phone-390-en-dark": {
       "text": "Opus 4.1 \u00b7 high",
@@ -1034,7 +1590,19 @@
       "overflowX": 0
     },
     "opus-old-phone-390-en-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list \u2014 pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: Opus 4.1 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-phone-390-uk-light": {
       "text": "Opus 4.1 \u00b7 high",
@@ -1045,7 +1613,19 @@
       "overflowX": 0
     },
     "opus-old-phone-390-uk-light-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 4.1 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     },
     "opus-old-phone-390-uk-dark": {
       "text": "Opus 4.1 \u00b7 high",
@@ -1056,7 +1636,19 @@
       "overflowX": 0
     },
     "opus-old-phone-390-uk-dark-open": {
-      "disabledTiers": 5
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 \u043d\u0435\u043c\u0430\u0454 \u0432 \u0441\u043f\u0438\u0441\u043a\u0443 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u2014 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c, \u0449\u043e\u0431 \u0437\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u0456\u0440\u043a\u0443\u0432\u0430\u043d\u043d\u044f \u0439 \u0448\u0432\u0438\u0434\u043a\u0456\u0441\u0442\u044c",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "\u0421\u0442\u043e\u0441\u0443\u0454\u0442\u044c\u0441\u044f \u043d\u0430\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f: Opus 4.1 \u00b7 high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
     }
   }
 }

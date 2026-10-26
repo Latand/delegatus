@@ -34,6 +34,7 @@ import {
   defaults,
   effectiveProfile,
   launchedModelId,
+  modelHoldMessage,
   observedModelId,
   phaseKey,
   phaseOperationKey,
@@ -42,8 +43,8 @@ import {
   readDraft,
   readProfile,
   readResumeDraft,
-  runningModelId,
   storageKey,
+  unlistedModelName,
   writeProfile,
   dropStoredSelection,
   writeResumeProfile,
@@ -124,13 +125,6 @@ function modelShortLabel(engine: "claude" | "codex" | "copilot", modelId: string
 
 function modelLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.label ?? modelId;
-}
-
-/** The running model's own name where the catalogue has no row for it (a model
-    the transcript reports that the pickers do not list), or "" when none is known. */
-function unlistedModelName(file: FileEntry): string {
-  const id = runningModelId(file);
-  return id ? modelDisplayName(file.engine, id) : "";
 }
 
 /**
@@ -579,7 +573,8 @@ export function RuntimePill({
   const effortLocked = modelUnknown;
   const modelLocked = false;
   const speedLocked = modelUnknown;
-  const lockReason = modelUnknown ? t("runtimeConfig.modelUnknown") : t("composer.settingsNextResume");
+  const modelHold = modelUnknown ? modelHoldMessage(t, file) : null;
+  const lockReason = modelHold ?? t("composer.settingsNextResume");
 
   const announceCommit = useCallback((next: RuntimeDraft) => {
     const model = next.model ? (engine ? modelLabel(engine, next.model) : next.model) : unlistedModelName(file);
@@ -666,7 +661,7 @@ export function RuntimePill({
     if (!engine || accountId === nextAccount || (switchApplying && accountId === runsOnAccount)) return;
     /* The move is a reconfigure, and a reconfigure names a model. */
     if (!stageRoute && !liveDraftRef.current.model) {
-      pushTaskToast("err", t("runtimeConfig.modelUnknown"));
+      pushTaskToast("err", modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown"));
       return;
     }
     const previous = readPickedAccount(cardId);
@@ -843,6 +838,7 @@ export function RuntimePill({
           modelLocked={modelLocked}
           speedLocked={speedLocked}
           lockReason={lockReason}
+          hold={modelHold}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
           onSelectFast={selectFast}
@@ -870,6 +866,7 @@ export function RuntimePill({
           modelLocked={modelLocked}
           speedLocked={speedLocked}
           lockReason={lockReason}
+          hold={modelHold}
           limit={file.rateLimit ?? null}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
@@ -1096,6 +1093,8 @@ interface PanelProps {
   modelLocked: boolean;
   speedLocked: boolean;
   lockReason: string;
+  /** Visible words for why reasoning and speed are held (no model, or one the pickers cannot send); absent when nothing is held. */
+  hold?: string | null;
   onSelectEffort: (tier: string) => void;
   onSelectModel: (id: string) => void;
   onSelectFast: (fast: boolean) => void;
@@ -1104,7 +1103,7 @@ interface PanelProps {
 
 export function RuntimePopover({
   t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, modelName = null, efforts, speedShown, speedDetail, panel, setPanel,
-  effortLocked, modelLocked, speedLocked, lockReason,
+  effortLocked, modelLocked, speedLocked, lockReason, hold = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
   panel: Panel;
@@ -1215,6 +1214,7 @@ export function RuntimePopover({
               {error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
           ) : null}
+          {hold ? <p className="px-2 pb-1 text-label text-muted" data-runtime-hold>{hold}</p> : null}
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
               <MenuRow key={row.key} row={row} active={rows.indexOf(row) === activeIndex} refFor={(el) => { rowRefs.current[rows.indexOf(row)] = el; }} />
@@ -1475,7 +1475,7 @@ function MenuRow({
 
 export function RuntimeSheet({
   t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, modelName = null, efforts, speedShown, speedDetail,
-  effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
+  effortLocked, modelLocked, speedLocked, lockReason, hold = null, limit = null, heading = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & {
   limit?: RateLimitState | null;
@@ -1567,6 +1567,8 @@ export function RuntimeSheet({
             </SheetSection>
           </div>
         ) : null}
+
+        {hold ? <p className="mb-2 px-1 text-label text-muted" data-runtime-hold>{hold}</p> : null}
 
         <SheetSection label={t("composer.modelGroup")}>
           {modelOptions.map((model) => (

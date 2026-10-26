@@ -830,3 +830,40 @@ test("a model the catalogue does not list is named as the transcript reports it,
   expect(faceOf(claude.host)).not.toContain("Opus 5.5");
   await act(async () => claude.root.unmount());
 });
+
+test("a Fable conversation keeps its catalogue model: tiers stay enabled and an effort pick is sent on fable", async () => {
+  for (const launchModel of ["fable", null] as const) {
+    requests.length = 0;
+    const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel, effort: "high" };
+    const { host, root } = await renderPill(<RuntimePill file={fable} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+    expect(faceOf(host)).toContain("Fable");
+    await click(host.querySelector("[data-runtime-pill]")!);
+    expect(host.ownerDocument.querySelector("[data-runtime-hold]")).toBeNull();
+    const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
+    expect(tiers.length).toBeGreaterThan(0);
+    expect(tiers.some((row) => row.hasAttribute("aria-disabled"))).toBe(false);
+    await click(tiers.find((row) => row.getAttribute("aria-checked") !== "true")!);
+    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "fable" });
+    await act(async () => root.unmount());
+  }
+});
+
+test("a held conversation says why in visible text, with other words for no model and for a model the pickers cannot send", async () => {
+  const held = async (file: FileEntry, phone: boolean) => {
+    mobile = phone;
+    const { host, root } = await renderPill(<RuntimePill file={file} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+    await click(host.querySelector("[data-runtime-pill]")!);
+    const line = host.ownerDocument.querySelector("[data-runtime-hold]")?.textContent ?? null;
+    await act(async () => root.unmount());
+    return line;
+  };
+  for (const phone of [false, true]) {
+    const unknown = await held({ ...codexFile, model: null, launchModel: null }, phone);
+    const unlisted = await held({ ...codexFile, model: "gpt-5.5", launchModel: null }, phone);
+    expect(unknown).toContain("No model reported yet");
+    expect(unlisted).toContain("gpt-5.5");
+    expect(unlisted).toContain("not in the model list");
+    expect(unlisted).not.toBe(unknown);
+    expect(await held(codexFile, phone)).toBeNull();
+  }
+});
