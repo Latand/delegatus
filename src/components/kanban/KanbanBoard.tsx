@@ -1,6 +1,6 @@
 "use client";
 
-import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
+import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 
@@ -38,7 +38,7 @@ import { canHandoff } from "@/components/HandoffHandle";
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
 import { PipelineChecksPopover } from "./PipelineChecksPopover";
 import { publishingStage } from "@/components/pipelines/PipelineCheckSettings";
-import { BAR_MENU_ROW, BarCreateGroup, BarFilterMenu, BarIslandSlot, BarRecentAgents, useBarFit, useBoardPaneRef } from "@/components/ProjectBar";
+import { BAR_MENU_ROW, BarCreateGroup, BarFilterMenu, BarIslandSlot, BarRecentAgents, useBarFit, useBoardPaneRef, type BarFitStep } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
@@ -155,9 +155,9 @@ export interface KanbanBoardProps {
   selection: ReadonlySet<string>;
   /** The bar's first group (the project's name and accounts) (#1801). */
   barLead?: () => ReactNode;
-  /** The bar's last groups (the panel toggles and the ⋯ menu), given whether the row gave the
-      account switches up to ⋯, and what the board adds to them (#1801). */
-  barTrail?: (accountsInMenu: boolean, extra: BarTrailExtra) => ReactNode;
+  /** The bar's last groups (the panel toggles and the ⋯ menu), given the steps the row has taken
+      (`BAR_FIT_STEPS`), so ⋯ carries what left the row, and what the board adds to them (#1801). */
+  barTrail?: (fit: readonly BarFitStep[], extra: BarTrailExtra) => ReactNode;
   /** The recent agents' list, which the bar opens under its icon: every agent of the project,
       reached without leaving the board. */
   recentAgents?: (close: () => void, countSlot: HTMLElement | null) => ReactNode;
@@ -262,6 +262,10 @@ export interface BarTrailExtra {
   menuRows: (close: () => void) => ReactNode;
   /** The recent agents' control, the panel group's last segment. */
   panelsTail: ReactNode;
+  /** The ⋯ rows of the controls a short row gave up (`panels`, `create`): the recent agents' list
+      and the two creators of `+`. The trail draws them only once the row has taken that step. */
+  recentRow: ((close: () => void) => ReactNode) | null;
+  createRows: (close: () => void) => ReactNode;
 }
 
 const VIEWER_OWNED = "[data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
@@ -331,8 +335,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      quiet note, a long outage the red alert it always was. */
   const reach = useServerReach();
   const reachStatus = reach.kind === "reconnecting"
-    ? <span className="bar-note" data-bar-reach="reconnecting">{reachLineText(t, locale, reach)}</span>
-    : catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null;
+    ? <span className="bar-note" data-bar-reach="reconnecting" data-bar-whole="" title={reachLineText(t, locale, reach)}>{reachLineText(t, locale, reach)}</span>
+    : catalogFailures > 0 ? <span className="bar-alert" role="alert" data-bar-whole="" title={t("kanban.filesFailed")}>{t("kanban.filesFailed")}</span> : null;
   /* `+ Task` (K9a): a task this board created is drawn at once, on the tasks it was created against. The next
      tasks payload is the authority: it carries the task, or the task is gone (deleted, moved to another project)
      and so is its card. */
@@ -2698,7 +2702,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   };
   const closeNewTask = useCallback(() => {
     setComposingTask(false);
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-bar-create]")?.focus({ preventScroll: true }));
+    /* Back to `+`, or to ⋯ while a short row keeps `+` there. */
+    queueMicrotask(() => {
+      const folded = rootRef.current?.querySelector('.bar[data-fit~="create"]');
+      rootRef.current?.querySelector<HTMLElement>(folded ? "[data-bar-more]" : "[data-bar-create]")?.focus({ preventScroll: true });
+    });
   }, []);
   const taskCreated = useCallback((task: BoardTask) => {
     setComposingTask(false);
@@ -2913,6 +2921,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         type="search"
         placeholder={t("kanban.find")}
         aria-label={t("kanban.find")}
+        title={t("kanban.find")}
         data-kanban-search=""
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -2970,7 +2979,29 @@ export function KanbanBoard(props: KanbanBoardProps) {
         <span className="font-normal tabular-nums text-muted">{hiddenCount}</span>
       </button>
     ) : null,
-    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} /> : null,
+    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null,
+    /* The list still hangs under its own segment, which the row keeps as an empty anchor beside ⋯. */
+    recentRow: props.recentAgents ? (close) => (
+      <button type="button" className={BAR_MENU_ROW} data-bar-more-recent="" aria-haspopup="dialog" onClick={() => { close(); queueMicrotask(() => setRecentOpen(true)); }}>
+        <History className="h-[15px] w-[15px] shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1">{t("dash.recentAgents")}</span>
+      </button>
+    ) : null,
+    /* The same two creators as the `+` menu, with its words and icons. */
+    createRows: (close) => (
+      <>
+        <button type="button" className={BAR_MENU_ROW} data-bar-more-create="task" onClick={() => { close(); openNewTask(); }}>
+          <ListPlus className="h-[15px] w-[15px] shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">{t("dash.newTask")}</span>
+        </button>
+        {props.onNewAgent ? (
+          <button type="button" className={BAR_MENU_ROW} data-bar-more-create="agent" disabled={!loaded} onClick={() => { close(); props.onNewAgent?.(); }}>
+            <MessageSquarePlus className="h-[15px] w-[15px] shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">{t("dash.newConvo")}</span>
+          </button>
+        ) : null}
+      </>
+    ),
   };
 
   return (
@@ -3018,12 +3049,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
               <>
                 <span className="dot" aria-hidden="true" />
                 <span className="num" data-bar-working="" aria-label={t("kanban.summaryWorking", { count: model.totals.working })}>{model.totals.working}</span>
-                {props.updating ? <span className="bar-note" data-bar-updating="">{t("dash.updating")}</span> : null}
+                {props.updating ? <span className="bar-note" data-bar-updating="" data-bar-whole="">{t("dash.updating")}</span> : null}
               </>
             )}
           </span>
           <OpenAgentsPill count={windowAgents.length} open={windowOpen} onOpen={windowOpen ? leaveWindow : reopenWindow} />
-          <span className="grow" />
+          <span className="grow" data-bar-spacer="" />
           {/* The search and its one filter: the reasons and «Needs you», which was the island's funnel. */}
           <div className="bar-find" data-bar-group="find">
             {searchField()}
@@ -3041,7 +3072,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit.includes("accounts"), barExtra)}</div> : null}
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : null}
           <BarIslandSlot />
         </header>
       )}
