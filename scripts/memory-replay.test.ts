@@ -1,0 +1,77 @@
+import { test, expect } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { Database } from "bun:sqlite";
+
+const script = path.resolve(import.meta.dir, "memory-replay.ts");
+function fixture(scenario = "complete") {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-replay-test-"));
+  try {
+    const repo = path.join(root, "repo"), state = path.join(root, "state"), out = path.join(root, "out");
+    fs.mkdirSync(repo); fs.mkdirSync(state);
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q");
+    const tree = execFileSync("git", ["-C", repo, "mktree"], { input: "", encoding: "utf8" }).trim();
+    const base = execFileSync("git", ["-C", repo, "hash-object", "-t", "commit", "-w", "--stdin"], { input: `tree ${tree}\nauthor Fixture <noreply> 1 +0000\ncommitter Fixture <noreply> 1 +0000\n\nbase\n`, encoding: "utf8" }).trim();
+    git("update-ref", "refs/heads/main", base);
+    const role = { roleId: "builder", engine: "codex", access: "read-write", promptScaffold: "Check {{task}} and {{prev.output}}" };
+    const pipeline = { id: "lane", project: "fixture", repoDir: repo, baseRef: base, branch: "work", task: "Build a widget", spec: "Validate shape", stages: [{ id: "build", role: { roleId: "builder" } }, { id: "review", role: { roleId: "reviewer" } }, { id: "fix", role: { roleId: "builder" } }], runs: [
+      { stageId: "build", attempts: [{ n: 1, startedAt: "2026-01-02", completedAt: "2026-01-03", effectiveRole: role, definition: { prompt: "{{task}} {{prev.output}}" }, input: "Frozen relay" }] },
+      { stageId: "review", attempts: [{ n: 1, startedAt: "2026-01-04", completedAt: "2026-01-05", effectiveRole: { roleId: "reviewer" }, verdict: { status: "fail", findings: [{ text: "Schema defect; reproduce: run shape probe" }] } }] },
+      { stageId: "fix", attempts: [{ n: 1, startedAt: "2026-01-06", effectiveRole: role, activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }] },
+    ] };
+    const memory: Record<string, unknown>[] = [
+      { kind: "scope", scope: "role:fixture:builder", active: ["old", "new"], history: [{ at: "2026-01-01", revision: 1, added: ["old"], archived: [] }, { at: "2026-01-07", revision: 2, added: ["new"], archived: [] }] },
+      { kind: "rule", id: "old", scope: "role:fixture:builder", rule: "Changed later", createdAt: "2026-01-01", changedAt: "2026-01-08" },
+      { kind: "rule", id: "version", versionOf: "old", rule: "Original guidance", changedAt: "2026-01-08" },
+      { kind: "rule", id: "new", scope: "role:fixture:builder", rule: "Validate every schema", createdAt: "2026-01-07", changedAt: "2026-01-07", source: { pipelineId: "lane", stageId: "fix", attempt: 1 } },
+      { kind: "request", pipelineId: "lane", stageId: "fix", attempt: 1, at: "2026-01-06T12:00:00Z", ruleIds: ["new"] },
+    ];
+    if (scenario === "history") memory[0] = { ...memory[0], history: [{ at: "2026-01-07", revision: 20, added: ["new"], archived: [] }] };
+    if (scenario === "mismatch") memory[3] = { ...memory[3], rule: "Take screenshots at every width" };
+    if (scenario === "request-rewrite") {
+      memory[3] = { ...memory[3], createdAt: "2026-01-01", revisedBy: { by: "agent", at: "2026-01-07", source: { pipelineId: "lane", stageId: "fix", attempt: 1 } } };
+      memory[4] = { ...memory[4], ruleIds: [], rewrote: "new" };
+      memory.push({ kind: "rule", id: "prior-new", versionOf: "new", rule: "Old wording", changedAt: "2026-01-07" });
+    }
+    if (scenario === "rewrite") {
+      memory[3] = { ...memory[3], rule: "A later unrelated instruction", changedAt: "2026-01-10" };
+      memory.push({ kind: "rule", id: "new-version", versionOf: "new", rule: "Validate every schema", changedAt: "2026-01-10" });
+    }
+    const db = new Database(path.join(state, "state.sqlite"));
+    db.exec("CREATE TABLE state_rows(collection TEXT, row_key TEXT, value_json TEXT)");
+    const put = (collection: string, key: string, row: unknown) => db.run("INSERT INTO state_rows VALUES(?,?,?)", [collection, key, JSON.stringify(row)]);
+    put("pipelines", "lane", pipeline);
+    put("pipelines", "live", { ...pipeline, id: "live", task: "Read https://example.invalid/task" });
+    put("role_memory", "live-request", { ...memory[4], pipelineId: "live", ruleIds: ["live-new"] });
+    put("role_memory", "live-new", { ...memory[3], id: "live-new", source: { pipelineId: "live", stageId: "fix", attempt: 1 } });
+    memory.forEach((row, i) => put("role_memory", String(i), row)); db.close();
+    const before = fs.readFileSync(path.join(state, "state.sqlite"));
+    execFileSync(process.execPath, [script, "--state-dir", state, "--output", out], { env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, LLV_STATE_DIR: state } });
+    const manifest = JSON.parse(fs.readFileSync(path.join(out, "manifest.json"), "utf8"));
+    if (scenario === "history" || scenario === "mismatch") {
+      expect(manifest.items).toHaveLength(0); expect(manifest.dropped).toHaveLength(2);
+      expect(manifest.dropped.some((r: { reason: string }) => r.reason.includes(scenario === "history" ? "retained history" : "finding class"))).toBe(true);
+      return;
+    }
+    expect(manifest.items).toHaveLength(1); expect(manifest.dropped).toHaveLength(1);
+    const input = JSON.parse(fs.readFileSync(path.join(out, "items", "lane", "input.json"), "utf8"));
+    expect(input.baseCommit).toBe(base); expect(input.message).toContain("Frozen relay");
+    expect(input.rules.map((r: { text: string }) => r.text)).toEqual(["Original guidance"]);
+    expect(JSON.stringify(input)).not.toContain("Schema defect");
+    const oracle = JSON.parse(fs.readFileSync(path.join(out, "oracle", "lane.json"), "utf8"));
+    expect(oracle.findings[0].reproduction).toContain("run shape probe");
+    expect(oracle.rules[0].text).toBe("Validate every schema");
+    expect(fs.readFileSync(path.join(state, "state.sqlite"))).toEqual(before);
+    execFileSync("git", ["bundle", "verify", path.join(out, "items", "lane", "base.bundle")], { cwd: repo, stdio: "pipe" });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+test("free replay freezes historical inputs and isolates the oracle without changing state", () => fixture());
+test("replay rejects inputs outside retained history", () => fixture("history"));
+test("replay rejects a lesson with no matching finding class", () => fixture("mismatch"));
+test("replay freezes the rule at the lesson time before a later rewrite", () => fixture("rewrite"));
+
+test("replay resolves a rewrite from its attempt provenance after the lesson request", () => fixture("request-rewrite"));

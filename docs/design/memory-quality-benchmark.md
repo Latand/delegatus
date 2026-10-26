@@ -797,6 +797,58 @@ written afterwards are all on record.
   and a labelled disposition per rule; report agreement and stability over
   k = 3 runs.
 
+#### Build the free input bundle
+
+Run the offline exporter against a state directory whose repositories still
+contain the recorded base commits. Choose a new output directory outside every
+checkout and outside the source state directory; its parent must already exist:
+
+```sh
+bun scripts/memory-replay.ts --state-dir "$STATE_DIR" --output "$PRIVATE_EXPORT/replay"
+```
+
+This command makes no model calls and starts no engine. It opens `state.sqlite`
+read-only, uses `VACUUM INTO` for a consistent private snapshot, and reads the
+`pipelines`, `pipelines_archive` and `role_memory` collections from that snapshot.
+It keeps `source.sqlite` and its SHA-256 with the export. The source database and
+repository refs are never changed. The output directory and files have private
+permissions. The command prints only eligible, dropped and pilot counts.
+
+`manifest.json` lists all eligible items, rejection reasons, and the deterministic
+4/3/3 pilot chosen by SHA-256 of pipeline ids. A short stratum remains short;
+the exporter does not silently fill it from another one. Each `items/<id>/`
+contains `base.bundle` and `input.json`: the resolved base commit, brief, pinned
+specification, substituted scaffold, full first message, byte count, inline-limit
+flag, ordered historical rule ids and texts, reconstructed rule lines, the current learned-rule wrapper and hashes.
+The renderer is the current checkout's `renderStagePrompt`, with the attempt's
+frozen definition and scaffold, worker limit 30, and one fixed test-guidance
+string. It is a reproducible replay input, not proof of byte identity with the
+historical launch. The replay uses the full inline message even when the flag
+says the historical launch would have spilled into files.
+
+`oracle/<id>.json` separately retains matching findings, their verbatim text as
+reproduction evidence, and the rules at their actual write times. A request's
+`at` is when the lesson was requested, not when it was written; new rules use
+`createdAt`, and rewrites use the matching attempt's retained revision provenance.
+Reproductions are neither inferred nor executed. Turn them into red/green checks
+before paid replay. Give the builder only its item directory: the oracle and
+source snapshot contain answers and must remain hidden.
+
+The exporter implements the historical four-scope reconstruction from the
+appendix, including text versions. It rejects missing inputs, unavailable base
+objects, missing relays, unresolved placeholders, live references, unmatched
+finding/rule classes, unavailable write provenance, and attempts outside the
+retained scope history. Scope succession or transfers recorded as moves are
+rejected because the four-scope reconstruction cannot establish their delivered
+order. This exporter does not yet consume the delivery ledger or reproduce
+swarm selections; use it for historical four-scope cohorts described here.
+It does not build a replay launcher or claim that engine memory has been disabled
+in an actual run. Keep the export private and outside version control.
+
+The fixture-backed test is `scripts/memory-replay.test.ts`; it creates synthetic
+SQLite records and a disposable repository, and checks the git bundle, historical
+text, oracle separation, rejection cases and unchanged source database.
+
 ### 4.2 Online metrics from existing records
 
 Computed weekly from the store and the pipeline records, each with n and an
@@ -851,7 +903,7 @@ definitions below; the last three need judging and the ledger of 4.4.
    Ids only, so the egress rules are untouched. A hash cannot recover the
    engine memory files' content, so the ledger also stores a private copy of
    each distinct file version, keyed by that hash, outside the checkout.
-2. **History that lasts.** `keepHistory` keeps every curator-pass entry and
+2. **History that lasts.** Historical observation at the analysis cutoff: `keepHistory` kept every curator-pass entry and
    the last 500 entries of any kind (`roleStore.ts:39-42`); curator entries
    inside the window use its slots, so 500 ordinary entries followed by 10 pass
    entries leave 490 of the ordinary ones. The builder scope of project A holds
@@ -864,6 +916,11 @@ definitions below; the last three need judging and the ledger of 4.4.
    built from a read-only snapshot taken before that scope passes 500 entries
    and kept outside any checkout; it is the benchmark's frozen input for R0
    and R1.
+   Current code now retains 10,000 ordinary changes independently of curator
+   records (`roleStore.ts`, `ROLE_MEMORY_HISTORY_LIMIT`) and has a delivery
+   ledger. The 500-entry limit and six-day counts above describe the historical
+   snapshot, not the current retention policy. The free exporter above still
+   uses retained scope history and rejects gaps.
 3. **Finding to rule link.** `leave_lesson` in a fix round should record which
    handed findings its answer addresses, so attribution and recurrence stop
    depending on keyword classes.
