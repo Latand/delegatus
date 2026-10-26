@@ -168,6 +168,9 @@ export interface SqliteStateCollectionOptions<T> {
   collection: string;
   schemaVersion: number;
   busyMessage: string;
+  /** Open an existing compatible collection without schema upgrades. Writes
+      still require release authority and the activated schema. */
+  readOnlyOpen?: boolean;
   key(record: T): string;
   decode(value: unknown): T | null;
   clone(record: T): T;
@@ -1426,7 +1429,7 @@ export class SqliteStateCollection<T> {
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
-    this.readDb = openDatabase(filename);
+    this.readDb = options.readOnlyOpen ? connectReadonlyDatabase(filename) : openDatabase(filename);
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);

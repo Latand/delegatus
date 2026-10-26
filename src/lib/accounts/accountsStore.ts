@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
+import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import {
@@ -447,6 +448,9 @@ function openAccountCollection(database: string): SqliteStateCollection<AccountS
     collection: ACCOUNTS_COLLECTION,
     schemaVersion: 1,
     busyMessage: ACCOUNTS_BUSY,
+    // The candidate must read the serving release's account registry before
+    // promotion; only the promoted owner may upgrade the shared schema.
+    readOnlyOpen: !hotStateSqliteWriterReady(path.dirname(database)),
     key: (row) => row.k,
     decode: (value) => (isAccountRow(value) ? value : null),
     clone: (row) => structuredClone(row),
