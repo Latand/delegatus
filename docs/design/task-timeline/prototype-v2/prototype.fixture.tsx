@@ -194,7 +194,7 @@ const PIPELINES: Pipeline[] = [
       ))] },
       { stageId: "review", attempts: [attempt(B, "review", 1, AT.refreshReview, "pass", L("The conflict resolution is right; nothing else changed.", "Розв’язання конфлікту правильне; більше нічого не змінено."), { roleId: "reviewer", activatedBy: { stageId: "refresh", attempt: 1, edge: "pass" } })] },
     ]),
-  lane(C, L(`Deploy ${RELEASE}`, `Розгортання ${RELEASE}`), AT.laneC, AT.deploy[1],
+  lane(C, L("Deploy to production", "Розгортання на прод"), AT.laneC, AT.deploy[1],
     [stage("deploy", "deployer", null)],
     [{ stageId: "deploy", attempts: [attempt(C, "deploy", 1, AT.deploy, "pass", L(
       `Release ${RELEASE} serves since 15:05. On production an 80k-row export finished in 6 s at 118 MB.`,
@@ -250,7 +250,7 @@ const NOTES: Record<string, Note> = {
     why: [L("Answers ", "Відповідь на "), { link: attemptKey(A, "review", 2), text: `${stageName(A, "review")} · 2` }],
     result: L("Pauses of 1 → 2 → 4 s; the test covers all three retries", "Паузи 1 → 2 → 4 с; тест покриває всі три повтори"),
   },
-  [attemptKey(A, "review", 3)]: { result: L("No findings; 80k rows in 6 s, under 120 MB", "Без зауважень; 80 тис. рядків за 6 с, до 120 МБ") },
+  [attemptKey(A, "review", 3)]: { result: L("No findings; memory stays under 120 MB", "Без зауважень; пам’ять не перевищує 120 МБ") },
   [`${A}:merge:update:0`]: { result: L(`#${OTHER_PR} changed the same upload.ts: a conflict`, `#${OTHER_PR} змінив той самий upload.ts: конфлікт`) },
   [`${B}:started`]: {
     why: [L("After ", "Після "), { link: `${A}:merge:update:0`, text: L("the update from main", "оновлення з main") }],
@@ -262,7 +262,7 @@ const NOTES: Record<string, Note> = {
     why: [L("After ", "Після "), { link: `${A}:merge:merged`, text: L(`the merge of PR #${PR}`, `мерджу PR #${PR}`) }, L("; you approved the deploy", "; розгортання схвалили ви")],
     result: "",
   },
-  [attemptKey(C, "deploy", 1)]: { result: L(`${RELEASE} serves since 15:05; 80k rows in 6 s on production`, `${RELEASE} працює з 15:05; на проді 80 тис. рядків за 6 с`) },
+  [attemptKey(C, "deploy", 1)]: { result: L("A check export on production passed without errors", "Контрольний експорт на проді пройшов без помилок") },
 };
 /** Entries that answer another one: variant 3 draws a rule beside their words. */
 const ANSWERS = new Set(Object.entries(NOTES).filter(([, note]) => note.why).map(([key]) => key));
@@ -282,16 +282,18 @@ const SUMMARY = {
     "The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1 → 2 → 4 s), then a clear error. 80k rows take 6 s; the file format is unchanged.",
     "Файл пишеться потоком частинами по 5 000 рядків; збій сховища дає три повтори (1 → 2 → 4 с), далі зрозуміла помилка. 80 тис. рядків проходять за 6 с; формат файлу той самий.",
   ),
-  facts: [
-    { label: L("Live since", "Працює з"), value: `${RELEASE} · 15:05` },
-    { label: L("PR", "PR"), value: `#${PR}` },
-    { label: L("Left", "Лишилось"), value: L("nothing required; an idea: show the export's progress in the UI", "нічого обов’язкового; ідея: показувати прогрес експорту в інтерфейсі") },
-  ],
+  facts: {
+    release: [
+      { label: L("Live since", "Працює з"), value: `${RELEASE} · 15:05` },
+      { label: L("PR", "PR"), value: `#${PR}` },
+    ],
+    left: { label: L("Left", "Лишилось"), value: L("nothing required; an idea: show the export's progress in the\u00a0UI", "нічого обов’язкового; ідея: показувати прогрес експорту в інтерфейсі") },
+  },
   rows: [
-    { label: L("Done", "Зроблено"), value: L("Streaming CSV writes in 5,000-row chunks and an upload retry on 503.", "Потоковий запис CSV частинами по 5 000 рядків і повтор вивантаження на 503.") },
+    { label: L("Changed", "Зроблено"), value: L("Streaming CSV writes in 5,000-row chunks and an upload retry on 503.", "Потоковий запис CSV частинами по 5 000 рядків і повтор вивантаження на 503.") },
     { label: L("Works now", "Працює тепер"), value: L("80k rows in 6 s, the same format. A storage failure gets three retries with pauses of 1 → 2 → 4 s, then a clear error.", "80 тис. рядків за 6 с, формат той самий. Збій сховища дає три повтори з паузами 1 → 2 → 4 с, далі зрозуміла помилка.") },
     { label: L("Release", "Версія"), value: `${RELEASE} · 15:05 · PR #${PR}` },
-    { label: L("Left", "Лишилось"), value: L("Nothing required. An idea: show the export's progress in the UI.", "Нічого обов’язкового. Ідея: показувати прогрес експорту в інтерфейсі.") },
+    { label: L("Left", "Лишилось"), value: L("Nothing required. An idea: show the export's progress in the\u00a0UI.", "Нічого обов’язкового. Ідея: показувати прогрес експорту в інтерфейсі.") },
   ],
 };
 
@@ -347,14 +349,20 @@ function SummaryBody({ variant }: { variant: 1 | 2 | 3 }) {
       <span className="tsum-by" aria-label={SUMMARY.byAria}>{SUMMARY.by}</span>
     </h4>
   );
+  /* Two lines: the release facts, then what is left, each label beside its value. */
   const facts = (
     <p className="tsum-facts" data-proto-summary-facts="">
-      {SUMMARY.facts.map((fact, index) => (
-        <span key={fact.label}>
-          {index ? " · " : ""}
-          <b>{fact.label}</b> <span className="num">{fact.value}</span>
-        </span>
-      ))}
+      <span className="tsum-fact-line">
+        {SUMMARY.facts.release.map((fact, index) => (
+          <span key={fact.label} className="tsum-fact">
+            {index ? " · " : ""}
+            <b>{fact.label}</b> <span className="num">{fact.value}</span>
+          </span>
+        ))}
+      </span>
+      <span className="tsum-fact-line">
+        <b>{SUMMARY.facts.left.label}</b>{"\u00a0"}{SUMMARY.facts.left.value}
+      </span>
     </p>
   );
   return (
@@ -404,6 +412,19 @@ function Summary({ variant }: { variant: 1 | 2 | 3 }) {
   return host ? createPortal(<SummaryBody variant={variant} />, host) : null;
 }
 
+/** The desktop card's description, which the phone labels «Опис» and the card
+    leaves bare: under the summary it read as the summary's last sentence. The
+    label is the one the card's sections («Підсумок», «Хронологія») use. */
+function DescriptionLabel() {
+  const find = useMemo(() => () => {
+    if (PHONE) return null;
+    const description = document.querySelector(`[data-kanban-card="${CARD}"][data-collapsed="0"] [data-describe="${CARD}"]`);
+    return description?.parentElement ? { parent: description.parentElement, before: description } : null;
+  }, []);
+  const host = useInsertedHost(find);
+  return host ? createPortal(<h4 className="tsum-head tdesc-head" data-proto-description-label="">{t("mobile2.task.description")}</h4>, host) : null;
+}
+
 /* ---------- the timeline with the stages' lines ---------- */
 
 const TONE: Partial<Record<ChronologyEntry["kind"], "ok" | "bad" | "warn">> = {
@@ -419,10 +440,10 @@ function NoteLine({ note, variant }: { note: Note; variant: 1 | 2 | 3 }) {
       ))}
     </span>
   ) : null;
-  const joiner = why && note.result ? (variant === 2 ? "; " : ": ") : "";
+  const joiner = why && note.result ? ": " : "";
   return (
-    <span className="tl-note" data-proto-note="">
-      {why}{joiner}{why && note.result && variant !== 2 ? <span>{note.result}</span> : note.result}
+    <span className="tl-note" data-proto-note={variant}>
+      {why}{joiner}{note.result ? <span>{note.result}</span> : null}
     </span>
   );
 }
@@ -450,7 +471,7 @@ function Timeline({ variant }: { variant: 1 | 2 | 3 }) {
           const pipeline = entry.pipelineId ? byId.get(entry.pipelineId) : undefined;
           const text = chronologyEntryText(t as never, entry, pipeline);
           const note = NOTES[entry.key];
-          const words = note ? <>{text}{variant === 2 && note ? <NoteLine note={note} variant={variant} /> : null}</> : text;
+          const words = note && variant === 2 ? <span>{text}<NoteLine note={note} variant={variant} /></span> : text;
           const tone = TONE[entry.kind];
           return (
             <li
@@ -498,6 +519,7 @@ function Additions({ variant }: { variant: Variant }) {
   return (
     <>
       <Summary variant={variant} />
+      <DescriptionLabel />
       <Timeline variant={variant} />
       {/* The summary takes the agent note's place (it said the release a second time), and the prototype's timeline the product's. */}
       <style>{`[data-proto-screen] [data-task-note] { display: none !important; } ${productTimeline} { display: none !important; }`}</style>

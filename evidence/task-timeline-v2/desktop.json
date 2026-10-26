@@ -1,8 +1,8 @@
 {
-  "capturedAt": "2026-10-26T09:17:59.204Z",
+  "capturedAt": "2026-10-26T10:18:46.538Z",
   "sourceDigests": {
-    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "5461eccf0b0e633f67f160861b37affae7105c9270a1979e691b8f6402fba55e",
-    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "9c7c7e6b6926ded39fef0f8986306a72a8e4bf1fc7c91eec7760472913e923ef"
+    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "375263c12f4c2dcfb0a1fe6f203865e410415d6d15467ff3415f08444d0cc9f4",
+    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "4853f6374a0091c952f44cbfb16d27538a4e4665f7ef55267299eafe61220204"
   },
   "readings": [
     {
@@ -14,7 +14,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1697
+        "height": 1713
       },
       "first": {
         "summaryTop": 222,
@@ -49,7 +49,7 @@
       "folded": true,
       "viewport": {
         "width": 1440,
-        "height": 1359
+        "height": 1375
       },
       "first": {
         "summaryTop": 222,
@@ -78,7 +78,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1697
+        "height": 1713
       },
       "first": {
         "summaryTop": 222,
@@ -113,7 +113,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1681
+        "height": 1713
       },
       "first": {
         "summaryTop": 222,
@@ -136,7 +136,7 @@
         2,
         2
       ],
-      "summaryHeight": 158,
+      "summaryHeight": 174,
       "timelineHeight": 705
     },
     {
@@ -148,7 +148,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1681
+        "height": 1713
       },
       "first": {
         "summaryTop": 222,
@@ -171,7 +171,7 @@
         2,
         2
       ],
-      "summaryHeight": 158,
+      "summaryHeight": 174,
       "timelineHeight": 705
     },
     {
@@ -183,7 +183,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1974
+        "height": 1990
       },
       "first": {
         "summaryTop": 262,
@@ -218,7 +218,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1974
+        "height": 1990
       },
       "first": {
         "summaryTop": 262,
@@ -253,7 +253,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1893
+        "height": 1925
       },
       "first": {
         "summaryTop": 262,
@@ -277,7 +277,7 @@
         2
       ],
       "summaryHeight": 208,
-      "timelineHeight": 849
+      "timelineHeight": 865
     },
     {
       "name": "variant-1-820-en-dark",
@@ -288,7 +288,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1893
+        "height": 1925
       },
       "first": {
         "summaryTop": 262,
@@ -312,7 +312,7 @@
         2
       ],
       "summaryHeight": 208,
-      "timelineHeight": 849
+      "timelineHeight": 865
     },
     {
       "name": "variant-2-1440-uk-light",
@@ -323,7 +323,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1666
+        "height": 1682
       },
       "first": {
         "summaryTop": 222,
@@ -358,7 +358,7 @@
       "folded": true,
       "viewport": {
         "width": 1440,
-        "height": 1344
+        "height": 1360
       },
       "first": {
         "summaryTop": 222,
@@ -387,7 +387,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1666
+        "height": 1682
       },
       "first": {
         "summaryTop": 222,
@@ -422,7 +422,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1602
+        "height": 1618
       },
       "first": {
         "summaryTop": 222,
@@ -457,7 +457,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1602
+        "height": 1618
       },
       "first": {
         "summaryTop": 222,
@@ -492,7 +492,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1973
+        "height": 1989
       },
       "first": {
         "summaryTop": 262,
@@ -512,11 +512,11 @@
         3,
         3,
         3,
-        2,
-        3
+        3,
+        2
       ],
       "summaryHeight": 240,
-      "timelineHeight": 833
+      "timelineHeight": 849
     },
     {
       "name": "variant-2-820-uk-dark",
@@ -527,7 +527,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1973
+        "height": 1989
       },
       "first": {
         "summaryTop": 262,
@@ -547,11 +547,11 @@
         3,
         3,
         3,
-        2,
-        3
+        3,
+        2
       ],
       "summaryHeight": 240,
-      "timelineHeight": 833
+      "timelineHeight": 849
     },
     {
       "name": "variant-2-820-en-light",
@@ -562,7 +562,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1877
+        "height": 1925
       },
       "first": {
         "summaryTop": 262,
@@ -576,17 +576,17 @@
         3,
         4,
         2,
-        3,
+        4,
         2,
         2,
+        4,
         3,
         3,
         3,
-        2,
         3
       ],
       "summaryHeight": 192,
-      "timelineHeight": 737
+      "timelineHeight": 785
     },
     {
       "name": "variant-2-820-en-dark",
@@ -597,7 +597,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1877
+        "height": 1925
       },
       "first": {
         "summaryTop": 262,
@@ -611,17 +611,17 @@
         3,
         4,
         2,
-        3,
+        4,
         2,
         2,
+        4,
         3,
         3,
         3,
-        2,
         3
       ],
       "summaryHeight": 192,
-      "timelineHeight": 737
+      "timelineHeight": 785
     },
     {
       "name": "variant-3-1440-uk-light",
@@ -632,7 +632,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1695
+        "height": 1743
       },
       "first": {
         "summaryTop": 222,
@@ -667,7 +667,7 @@
       "folded": true,
       "viewport": {
         "width": 1440,
-        "height": 1341
+        "height": 1373
       },
       "first": {
         "summaryTop": 222,
@@ -696,7 +696,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1695
+        "height": 1743
       },
       "first": {
         "summaryTop": 222,
@@ -731,7 +731,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1679
+        "height": 1711
       },
       "first": {
         "summaryTop": 222,
@@ -766,7 +766,7 @@
       "folded": false,
       "viewport": {
         "width": 1440,
-        "height": 1679
+        "height": 1711
       },
       "first": {
         "summaryTop": 222,
@@ -801,7 +801,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1971
+        "height": 1987
       },
       "first": {
         "summaryTop": 262,
@@ -812,7 +812,7 @@
       },
       "noteLines": [
         3,
-        2,
+        3,
         5,
         2,
         3,
@@ -825,7 +825,7 @@
         2
       ],
       "summaryHeight": 222,
-      "timelineHeight": 913
+      "timelineHeight": 929
     },
     {
       "name": "variant-3-820-uk-dark",
@@ -836,7 +836,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1971
+        "height": 1987
       },
       "first": {
         "summaryTop": 262,
@@ -847,7 +847,7 @@
       },
       "noteLines": [
         3,
-        2,
+        3,
         5,
         2,
         3,
@@ -860,7 +860,7 @@
         2
       ],
       "summaryHeight": 222,
-      "timelineHeight": 913
+      "timelineHeight": 929
     },
     {
       "name": "variant-3-820-en-light",
@@ -871,7 +871,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1907
+        "height": 1939
       },
       "first": {
         "summaryTop": 262,
@@ -895,7 +895,7 @@
         2
       ],
       "summaryHeight": 190,
-      "timelineHeight": 849
+      "timelineHeight": 881
     },
     {
       "name": "variant-3-820-en-dark",
@@ -906,7 +906,7 @@
       "folded": false,
       "viewport": {
         "width": 820,
-        "height": 1907
+        "height": 1939
       },
       "first": {
         "summaryTop": 262,
@@ -930,7 +930,7 @@
         2
       ],
       "summaryHeight": 190,
-      "timelineHeight": 849
+      "timelineHeight": 881
     },
     {
       "name": "today-1440-uk-light",

@@ -19,6 +19,10 @@ export const PROTOTYPE_CSS = `
 .tsum-facts { margin: 0; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); overflow-wrap: anywhere; }
 .tsum-facts b { font-weight: 600; color: var(--color-secondary); }
 .tsum-facts .num { font-variant-numeric: tabular-nums; }
+.tsum-fact-line { display: block; }
+.tsum-fact { white-space: nowrap; }
+/* The desktop card's description label: the section label, pulled toward the description's own line box. */
+.tdesc-head { margin-bottom: -6px; }
 /* Variant 2: labelled rows, the label in a column of its own. */
 .tsum-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 10px; row-gap: 4px; margin: 0; font-size: var(--text-label); line-height: 16px; }
 .tsum-rows dt { margin: 0; font-weight: 600; color: var(--color-muted); white-space: nowrap; }
@@ -44,14 +48,17 @@ export const PROTOTYPE_CSS = `
 /* A stage's one-line result, under the entry's words; a reason names the
    entry it answers as a link, in the words the timeline itself uses. */
 .tl-note { display: block; color: var(--color-muted); overflow-wrap: anywhere; }
-.tl-note a { all: unset; cursor: pointer; color: var(--color-accent); border-radius: 3px; }
+.tl-note a { all: unset; cursor: pointer; color: var(--color-accent); border-radius: 3px; white-space: nowrap; }
 .tl-note a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tl-note a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
-/* Variant 2: the result runs on in the entry's own line. */
+/* Variant 2: the result runs on in the entry's own line; the separator sticks
+   to the entry's last word, so no line starts with it. */
 .v2 .tl-note { display: inline; }
-.v2 .tl-note::before { content: " · "; }
-/* Variant 3: an entry that answers another carries a rule beside its words. */
-.v3 .chronology-entry.answers .chronology-what { padding-left: 8px; box-shadow: inset 2px 0 0 var(--border-strong); }
+.v2 .tl-note::before { content: "\\00a0· "; }
+/* Variant 3: an entry that answers another carries a rule in the gutter
+   beside its words; every entry's words start at the same x. */
+.v3 .chronology-what { position: relative; padding-left: 6px; }
+.v3 .chronology-entry.answers .chronology-what::before { content: ""; position: absolute; left: 1px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--border-strong); }
 .v3 .tl-note { color: var(--color-secondary); }
 .v3 .tl-note .tl-why { color: var(--color-muted); }
 /* The phone's timeline rows: the words start on the time's line and keep

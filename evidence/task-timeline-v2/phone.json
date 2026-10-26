@@ -1,8 +1,8 @@
 {
-  "capturedAt": "2026-10-26T09:22:42.136Z",
+  "capturedAt": "2026-10-26T10:19:13.538Z",
   "sourceDigests": {
-    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "5461eccf0b0e633f67f160861b37affae7105c9270a1979e691b8f6402fba55e",
-    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "9c7c7e6b6926ded39fef0f8986306a72a8e4bf1fc7c91eec7760472913e923ef"
+    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "375263c12f4c2dcfb0a1fe6f203865e410415d6d15467ff3415f08444d0cc9f4",
+    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "4853f6374a0091c952f44cbfb16d27538a4e4665f7ef55267299eafe61220204"
   },
   "readings": [
     {
@@ -14,7 +14,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 2023
+        "height": 2041
       },
       "first": {
         "summaryTop": 156,
@@ -35,10 +35,10 @@
         2,
         2,
         1,
-        1
+        2
       ],
       "summaryHeight": 216,
-      "timelineHeight": 747
+      "timelineHeight": 765
     },
     {
       "name": "variant-1-390-uk-light-folded",
@@ -49,7 +49,7 @@
       "folded": true,
       "viewport": {
         "width": 390,
-        "height": 1686
+        "height": 1704
       },
       "first": {
         "summaryTop": 156,
@@ -64,10 +64,10 @@
         2,
         2,
         1,
-        1
+        2
       ],
       "summaryHeight": 216,
-      "timelineHeight": 410
+      "timelineHeight": 428
     },
     {
       "name": "variant-1-390-uk-dark",
@@ -78,7 +78,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 2023
+        "height": 2041
       },
       "first": {
         "summaryTop": 156,
@@ -99,10 +99,10 @@
         2,
         2,
         1,
-        1
+        2
       ],
       "summaryHeight": 216,
-      "timelineHeight": 747
+      "timelineHeight": 765
     },
     {
       "name": "variant-1-390-en-light",
@@ -113,7 +113,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1995
+        "height": 1994
       },
       "first": {
         "summaryTop": 163.359375,
@@ -134,10 +134,10 @@
         2,
         1,
         1,
-        2
+        1
       ],
-      "summaryHeight": 199,
-      "timelineHeight": 729
+      "summaryHeight": 216,
+      "timelineHeight": 711
     },
     {
       "name": "variant-1-390-en-dark",
@@ -148,7 +148,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1995
+        "height": 1994
       },
       "first": {
         "summaryTop": 163.359375,
@@ -169,10 +169,10 @@
         2,
         1,
         1,
-        2
+        1
       ],
-      "summaryHeight": 199,
-      "timelineHeight": 729
+      "summaryHeight": 216,
+      "timelineHeight": 711
     },
     {
       "name": "variant-2-390-uk-light",
@@ -183,7 +183,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 2024
+        "height": 1898
       },
       "first": {
         "summaryTop": 156,
@@ -196,9 +196,9 @@
         2,
         2,
         3,
-        1,
         2,
-        1,
+        2,
+        2,
         2,
         3,
         2,
@@ -207,7 +207,7 @@
         2
       ],
       "summaryHeight": 199,
-      "timelineHeight": 765
+      "timelineHeight": 639
     },
     {
       "name": "variant-2-390-uk-light-folded",
@@ -218,7 +218,7 @@
       "folded": true,
       "viewport": {
         "width": 390,
-        "height": 1687
+        "height": 1633
       },
       "first": {
         "summaryTop": 156,
@@ -236,7 +236,7 @@
         2
       ],
       "summaryHeight": 199,
-      "timelineHeight": 428
+      "timelineHeight": 374
     },
     {
       "name": "variant-2-390-uk-dark",
@@ -247,7 +247,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 2024
+        "height": 1898
       },
       "first": {
         "summaryTop": 156,
@@ -260,9 +260,9 @@
         2,
         2,
         3,
-        1,
         2,
-        1,
+        2,
+        2,
         2,
         3,
         2,
@@ -271,7 +271,7 @@
         2
       ],
       "summaryHeight": 199,
-      "timelineHeight": 765
+      "timelineHeight": 639
     },
     {
       "name": "variant-2-390-en-light",
@@ -282,7 +282,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1988
+        "height": 1898
       },
       "first": {
         "summaryTop": 156,
@@ -294,19 +294,19 @@
       "noteLines": [
         2,
         2,
+        3,
         2,
-        1,
         2,
-        1,
+        2,
         2,
         3,
         2,
-        1,
+        2,
         2,
         2
       ],
       "summaryHeight": 199,
-      "timelineHeight": 729
+      "timelineHeight": 639
     },
     {
       "name": "variant-2-390-en-dark",
@@ -317,7 +317,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1988
+        "height": 1898
       },
       "first": {
         "summaryTop": 156,
@@ -329,19 +329,19 @@
       "noteLines": [
         2,
         2,
+        3,
         2,
-        1,
         2,
-        1,
+        2,
         2,
         3,
         2,
-        1,
+        2,
         2,
         2
       ],
       "summaryHeight": 199,
-      "timelineHeight": 729
+      "timelineHeight": 639
     },
     {
       "name": "variant-3-390-uk-light",
@@ -352,7 +352,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 2002
+        "height": 2020
       },
       "first": {
         "summaryTop": 163.359375,
@@ -373,10 +373,10 @@
         2,
         2,
         1,
-        1
+        2
       ],
       "summaryHeight": 188,
-      "timelineHeight": 747
+      "timelineHeight": 765
     },
     {
       "name": "variant-3-390-uk-light-folded",
@@ -387,7 +387,7 @@
       "folded": true,
       "viewport": {
         "width": 390,
-        "height": 1665
+        "height": 1683
       },
       "first": {
         "summaryTop": 163.359375,
@@ -402,10 +402,10 @@
         2,
         2,
         1,
-        1
+        2
       ],
       "summaryHeight": 188,
-      "timelineHeight": 410
+      "timelineHeight": 428
     },
     {
       "name": "variant-3-390-uk-dark",
@@ -416,7 +416,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 2002
+        "height": 2020
       },
       "first": {
         "summaryTop": 163.359375,
@@ -437,10 +437,10 @@
         2,
         2,
         1,
-        1
+        2
       ],
       "summaryHeight": 188,
-      "timelineHeight": 747
+      "timelineHeight": 765
     },
     {
       "name": "variant-3-390-en-light",
@@ -451,7 +451,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1986
+        "height": 1967
       },
       "first": {
         "summaryTop": 163.359375,
@@ -471,11 +471,11 @@
         2,
         2,
         1,
-        2,
-        2
+        1,
+        1
       ],
-      "summaryHeight": 154,
-      "timelineHeight": 765
+      "summaryHeight": 171,
+      "timelineHeight": 729
     },
     {
       "name": "variant-3-390-en-dark",
@@ -486,7 +486,7 @@
       "folded": false,
       "viewport": {
         "width": 390,
-        "height": 1986
+        "height": 1967
       },
       "first": {
         "summaryTop": 163.359375,
@@ -506,11 +506,11 @@
         2,
         2,
         1,
-        2,
-        2
+        1,
+        1
       ],
-      "summaryHeight": 154,
-      "timelineHeight": 765
+      "summaryHeight": 171,
+      "timelineHeight": 729
     },
     {
       "name": "today-390-uk-light",

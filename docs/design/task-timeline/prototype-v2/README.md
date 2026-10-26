@@ -27,15 +27,20 @@ built from the product's own card, task screen, tokens and type.
 
 | Variant | The summary block | The timeline's lines |
 |---|---|---|
-| 1 «Абзацом» | A section like «Хронологія»: its heading with the writer and time at the end («від Deploy · 15:07»), a paragraph in the card's primary ink (12 px on the desktop, 13 px on the phone), and one quiet line of facts under it («Працює з 2.14.1 · 15:05 · PR #412 · Лишилось …») | A stage's line on a second line of its entry, muted; the reason first, its link in the accent, then the result |
-| 2 «Рядками» | The same heading over labelled rows: «Зроблено», «Працює тепер», «Версія», «Лишилось», the label in a muted column of its own, the value in primary ink | The line runs on in the entry's own words after « · », so the timeline stays one paragraph per entry |
-| 3 «Панеллю» | A panel on the well surface (the one the card's details use), a one-line headline in bold, two shorter sentences and the facts line | An entry that answers another carries a 2 px rule beside its words, so the answer is seen before it is read; the reason stays in muted ink and the result in secondary |
+| 1 «Абзацом» | A section like «Хронологія»: its heading with the writer and time at the end («від Deploy · 15:07»), a paragraph in the card's primary ink (12 px on the desktop, 13 px on the phone), and two quiet lines of facts under it («Працює з 2.14.1 · 15:05 · PR #412», then «Лишилось …» on a line of its own) | A stage's line on a second line of its entry, muted; the reason first, its link in the accent, then the result |
+| 2 «Рядками» | The same heading over labelled rows: «Зроблено» («Changed» in en, a word apart from the state line's «Done»), «Працює тепер», «Версія», «Лишилось», the label in a muted column of its own, the value in primary ink | The line runs on in the entry's own words after « · » (the separator stuck to the entry's last word, so no line starts with it), the reason joined to its result by «: » as in the other variants; the timeline stays one paragraph per entry |
+| 3 «Панеллю» | A panel on the well surface (the one the card's details use), a one-line headline in bold, two shorter sentences and the facts lines | An entry that answers another carries a 2 px rule in the gutter beside its words (every entry's words start at one x), so the answer is seen before it is read; the reason stays in muted ink and the result in secondary |
 
 Every treatment uses the card's label (11 px), ui (12 px) and body (13 px)
 sizes, its primary, secondary, muted and accent inks and its card and well
 surfaces; no new colour, font, pill or card shape. The phone block takes the
 task screen's card frame (12 px radius, the card surface, shadow 1); variant
-3's phone block sits on the well surface with the default border.
+3's phone block sits on the well surface with the default border. On the
+desktop card the description under the summary carries the section label the
+phone already gives it («Опис»), so it never reads as the summary's last
+sentence. A fact is said once per surface: the measurement (80 тис. рядків за
+6 с) and the release live in the summary, and Review · 3 and Deploy's lines
+say what only they say. A reason's link («Review · 1») never breaks inside.
 
 ## The fixture
 
@@ -46,7 +51,8 @@ One finished task, «Експорт CSV падає на великих проє�
   main, merged by Delegatus;
 - an extra lane «Оновити гілку PR»: main moved on (#408 changed the same
   file), so a Refresh stage merged main and a Review checked the resolution;
-- a deploy lane: Deploy 2.14.1, passed.
+- a deploy lane «Розгортання на прод»: Deploy, passed; the release 2.14.1 is
+  named once, in the summary.
 
 Project, PR numbers, files and times are invented. The clock is frozen at
 16:30 Kyiv time; the frames run in Europe/Kyiv.
