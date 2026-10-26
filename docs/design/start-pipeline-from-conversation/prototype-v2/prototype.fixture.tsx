@@ -41,7 +41,8 @@ import { BranchPane } from "@/components/BranchPane";
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
 import { CHAT_TONE_DOT, CHAT_TONE_TEXT, chatStateBits } from "@/components/mobile/mobileChatState";
 import { MobileConversationMenu } from "@/components/mobile/MobileConversationMenu";
-import { MobileSheet, MobileSheetRow } from "@/components/mobile/MobileSheet";
+import { MobileSheetRow } from "@/components/mobile/MobileSheet";
+import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { MobileTaskScreen } from "@/components/mobile/MobileTaskScreen";
 import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
 import { ComposerMenu } from "@/components/ComposerBar";
@@ -103,6 +104,10 @@ const TASK_TITLE = L(
   "Експорт CSV падає на великих проєктах: воркер вилітає по пам’яті понад 50 тис. рядків",
 );
 
+/* The retry's pauses are one figure: its gaps are no-break spaces, so no line
+   ends on «4» with a lone «s.» under it. */
+const PAUSES = L("1 → 2 → 4 s.", "1 → 2 → 4 с.");
+
 const USAGE = { input_tokens: 120, cache_read_input_tokens: 30000, cache_creation_input_tokens: 0, output_tokens: 90 };
 let seq = 0;
 const user = (minutesAgo: number, text: string) => JSON.stringify({ type: "user", uuid: `u-${++seq}`, timestamp: iso(minutesAgo), message: { role: "user", content: text } });
@@ -129,8 +134,8 @@ const SOURCE_LINES = [
     "Формат файлу не міняй: клієнти його парсять. І додай повтор, якщо сховище відповіло 503.",
   )),
   said(32, L(
-    "Understood: the format stays byte for byte. Done: streaming writes, and a retry on 503 with pauses of 1 → 2 → 4 s. Three files changed: `src/export/csvWriter.ts`, `src/export/upload.ts` and a new `src/export/retry.ts`.",
-    "Зрозумів: формат лишаю байт у байт. Зробив потоковий запис і повтор на 503 з паузами 1 → 2 → 4 с. Змінено три файли: `src/export/csvWriter.ts`, `src/export/upload.ts` і новий `src/export/retry.ts`.",
+    `Understood: the format stays byte for byte. Done: streaming writes, and a retry on 503 with pauses of ${PAUSES} Three files changed: \`src/export/csvWriter.ts\`, \`src/export/upload.ts\` and a new \`src/export/retry.ts\`.`,
+    `Зрозумів: формат лишаю байт у байт. Зробив потоковий запис і повтор на 503 з паузами ${PAUSES} Змінено три файли: \`src/export/csvWriter.ts\`, \`src/export/upload.ts\` і новий \`src/export/retry.ts\`.`,
   )),
   user(16, L("Run the tests and check a file of 80k rows.", "Запусти тести і перевір на файлі з 80 тис. рядків.")),
   said(15, L("Running the export tests first.", "Спершу запускаю тести експорту."), { id: "t-test", name: "Bash", input: { command: "bun test src/export", description: L("Run the export tests", "Тести експорту") } }),
@@ -182,13 +187,13 @@ const BRIEF = L(
   [
     "CSV export fails on large projects (over 50k rows): the worker runs out of memory.",
     "Decided in the conversation: the file format stays byte for byte, customers parse it.",
-    "Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass).",
+    `Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of ${PAUSES} Tests green (42 pass).`,
     "Left: a test for the retry after 503, then a review of the three changed files.",
   ].join("\n"),
   [
     "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркер вилітає по пам’яті.",
     "Вирішено в розмові: формат файлу лишається байт у байт, клієнти його парсять.",
-    "Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 pass).",
+    `Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами ${PAUSES} Тести зелені (42 pass).`,
     "Лишилось: тест на повтор після 503, потім рев’ю трьох змінених файлів.",
   ].join("\n"),
 );
@@ -255,6 +260,7 @@ const WORDS = {
   enterStarts: L("Enter starts the pipeline; Esc returns to a plain message.", "Enter запускає пайплайн; Esc повертає до звичайного повідомлення."),
   stageOf: (k: number, n: number) => L(`stage ${k} of ${n}`, `етап ${k} з ${n}`),
   removeStage: L("Remove this stage", "Прибрати цей етап"),
+  removeStageWhy: L(`${BUILD_NAME} stays the only stage`, `Лишиться один етап: ${BUILD_NAME}`),
   fromConversationRow: L("Pipeline from conversation…", "Пайплайн з розмови…"),
   startDraft: L("Start", "Запустити"),
   startDraftLong: L("Start pipeline", "Запустити пайплайн"),
@@ -366,42 +372,154 @@ function usePress(selector: string | null) {
   }, [selector]);
 }
 
+/** Every drawn box of a feed: each text run's line rectangles and each leaf
+    element's box (an avatar, an icon, a rule, a dot), because an author row's
+    avatar stands lower than its words and was the one thing left under the
+    header once the words were above it. */
+function feedBoxes(scroller: HTMLElement): DOMRect[] {
+  const boxes: DOMRect[] = [];
+  const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    if (!walker.currentNode.textContent?.trim()) continue;
+    const range = document.createRange();
+    range.selectNodeContents(walker.currentNode);
+    for (const rect of range.getClientRects()) if (rect.height > 0 && rect.width > 0) boxes.push(rect);
+  }
+  for (const leaf of scroller.querySelectorAll<Element>("*")) {
+    const picture = leaf.tagName === "svg" || leaf.tagName === "IMG";
+    if (!picture && (leaf.childElementCount || leaf.textContent?.trim() || leaf.closest("svg") || leaf.hasAttribute("data-proto-spacer"))) continue;
+    const rect = leaf.getBoundingClientRect();
+    if (rect.height > 0 && rect.width > 0) boxes.push(rect);
+  }
+  return boxes;
+}
+
 /** A frame whose transcript is scrolled to its tail: the row at the top edge
     is shown whole when the feed's bottom padding has the room, so no line is
     cut under the window header. Runs once the frame is ready and the fonts
     are in; the frame stays at its tail (the feed's tail magnet keeps a small
-    distance). */
+    distance, and pins the view back to the tail whenever the content
+    changes, so the view is moved by trimming or extending the tail, never by
+    scrolling against the magnet). When the room is short (variant 2b's
+    strip takes it), the transcript is pushed the other way instead, into a
+    spacer at its end, until the top edge lands between two drawn boxes: the
+    cut row goes out of view whole, and nothing is left under the header. */
 function useWholeTopRow() {
   useEffect(() => {
     let cancelled = false;
     const align = () => {
+      const record: Record<string, number>[] = [];
       for (const scroller of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+        /* The pass measures the feed as it is now, an earlier pass's spacer
+           included, and adds to that spacer: taking it out first would
+           measure the same state and repeat the same move every pass. */
+        let spacer = scroller.querySelector<HTMLElement>("[data-proto-spacer]");
+        let adjust = spacer ? Number(spacer.dataset.adjust) : 0;
         const box = scroller.getBoundingClientRect();
-        const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+        const boxes = feedBoxes(scroller);
+        const crossing = (edge: number) => boxes.filter((rect) => rect.top < edge && rect.bottom > edge);
         let cut = 0;
         let lastBottom = box.top;
-        while (walker.nextNode()) {
-          if (!walker.currentNode.textContent?.trim()) continue;
-          const range = document.createRange();
-          range.selectNodeContents(walker.currentNode);
-          for (const rect of range.getClientRects()) {
-            if (rect.height === 0) continue;
-            if (rect.top < box.top && rect.bottom > box.top) cut = Math.max(cut, box.top - rect.top);
-            if (rect.bottom <= box.bottom) lastBottom = Math.max(lastBottom, rect.bottom);
-          }
+        for (const rect of boxes) {
+          if (rect.top < box.top && rect.bottom > box.top) cut = Math.max(cut, box.top - rect.top);
+          if (rect.bottom <= box.bottom) lastBottom = Math.max(lastBottom, rect.bottom);
         }
         const slack = box.bottom - lastBottom;
-        if (cut > 0 && cut <= slack) scroller.scrollTop -= Math.ceil(cut);
+        /* The feed pins itself to its tail, so the view is moved by changing
+           the tail, never by scrolling against it: a spacer at the content's
+           end with a negative top margin trims the bottom padding by the cut
+           (the top row comes whole), or with a height pushes the cut row out. */
+        let delta = 0;
+        if (cut > 0 && cut <= slack) {
+          delta = -Math.ceil(cut);
+        } else if (cut > 0) {
+          /* The smallest shift down that puts the top edge in a gap. */
+          let shift = 0;
+          for (let guard = 0; guard < 12; guard += 1) {
+            const under = crossing(box.top + shift);
+            if (!under.length) break;
+            shift = Math.max(...under.map((rect) => rect.bottom)) - box.top;
+          }
+          delta = Math.ceil(shift) + 1;
+        }
+        if (delta) {
+          adjust += delta;
+          if (!spacer) {
+            spacer = document.createElement("div");
+            spacer.dataset.protoSpacer = "";
+            spacer.setAttribute("aria-hidden", "true");
+            (scroller.firstElementChild ?? scroller).append(spacer);
+          }
+          spacer.dataset.adjust = String(adjust);
+          spacer.style.height = adjust > 0 ? `${adjust}px` : "0px";
+          spacer.style.marginTop = adjust < 0 ? `${adjust}px` : "0px";
+          scroller.scrollTop = scroller.scrollHeight;
+        }
+        const images = [...scroller.querySelectorAll("img")];
+        record.push({ cut: Math.round(cut), slack: Math.round(slack), delta, adjust, images: images.length, loaded: images.filter((img) => img.complete && img.naturalWidth > 0).length, scrollTop: Math.round(scroller.scrollTop), scrollMax: Math.round(scroller.scrollHeight - scroller.clientHeight) });
       }
-      document.body.dataset.protoAligned = "";
+      return record;
+    };
+    /* The fonts and the feed's pictures (an avatar is an image with no size
+       until it is loaded) are in before anything is measured. */
+    const pictures = () => Promise.all([...document.querySelectorAll<HTMLImageElement>("[data-log-feed-scroller] img")].map((img) => (
+      img.complete ? null : new Promise<void>((resolve) => { img.addEventListener("load", () => resolve(), { once: true }); img.addEventListener("error", () => resolve(), { once: true }); })
+    )));
+    /* The feed keeps changing after the frame is ready (an avatar mounts once
+       its picture is fetched), so every change to it aligns again, and the
+       frame counts as aligned once the feed has been quiet for a while. The
+       observer is off while a pass runs: the pass's own spacer is no change. */
+    const observer = new MutationObserver(() => { schedule(); });
+    /* A change of the feed's own size (the strip or the composer settling
+       under it) moves the pinned tail without any mutation in the feed. */
+    let sized = false;
+    const resizer = new ResizeObserver(() => { if (sized) schedule(); sized = true; });
+    let timer = 0;
+    let passes = 0;
+    const watch = () => {
+      for (const scroller of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+        observer.observe(scroller, { childList: true, subtree: true, attributes: true });
+        /* Observed once: a second observe() of the same element fires its first report again. */
+        if (passes === 1) resizer.observe(scroller);
+      }
+    };
+    const pass = () => {
+      if (cancelled) return;
+      observer.disconnect();
+      const record = align();
+      passes += 1;
+      watch();
+      clearTimeout(timer);
+      const mark = () => {
+        if (cancelled) return;
+        const settled = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")].map((scroller) => {
+          const edge = scroller.getBoundingClientRect().top;
+          return {
+            scrollTop: Math.round(scroller.scrollTop), scrollMax: Math.round(scroller.scrollHeight - scroller.clientHeight), edge: Math.round(edge),
+            crossing: feedBoxes(scroller).filter((rect) => rect.top < edge && rect.bottom > edge).map((rect) => `${Math.round(rect.top)}-${Math.round(rect.bottom)}`),
+          };
+        });
+        /* The feed's rows settle after the pass (a row that left the viewport
+           is drawn at its placeholder height): while a box still crosses the
+           edge, the pass runs again on the geometry as it is now, a few times. */
+        if (settled.some((feed) => feed.crossing.length) && passes < 6) { schedule(); return; }
+        document.body.dataset.protoAligned = JSON.stringify({ passes, record, settled });
+      };
+      timer = window.setTimeout(mark, 400);
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      /* A feed that never settles still marks the frame, with what the last pass recorded. */
+      if (passes >= 10) { document.body.dataset.protoAligned = JSON.stringify({ passes, unsettled: true }); return; }
+      timer = window.setTimeout(() => { void document.fonts.ready.then(pictures).then(() => requestAnimationFrame(() => requestAnimationFrame(pass))); }, 150);
     };
     const whenReady = () => {
       if (cancelled) return;
       if (!document.body.dataset.protoReady) { requestAnimationFrame(whenReady); return; }
-      void document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => { if (!cancelled) align(); })));
+      schedule();
     };
     whenReady();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(timer); observer.disconnect(); resizer.disconnect(); };
   }, []);
 }
 
@@ -504,10 +622,24 @@ function BranchChip({ className = "" }: { className?: string }) {
   );
 }
 
+/** The conversation's state as the header behind the dialog names it: the
+    desktop reader's header reads `mobileRowState` (KanbanReaders.tsx), the
+    phone's bar reads `chatStateBits`; the dialog's dot takes the same tone and
+    the same word, so one screen gives the conversation one colour. */
+function sourceState(phone: boolean): { tone: keyof typeof CHAT_TONE_DOT; word: string } {
+  if (phone) {
+    const bits = chatStateBits(t as never, SOURCE, { nowMs: NOW_MS });
+    return { tone: bits.tone, word: bits.phrase };
+  }
+  const row = mobileRowState(SOURCE, NOW);
+  return { tone: row.dot, word: rowStateWord(t as never, row) };
+}
+
 /** The «New pipeline» template picker (PipelineTemplatePicker.tsx), with the
     conversation where its repository field is: the checkout is the conversation's. */
-function TemplatePickerFromConversation() {
+function TemplatePickerFromConversation({ phone }: { phone: boolean }) {
   const templates = PIPELINE_TEMPLATES.filter((template) => template.id !== "blank");
+  const state = sourceState(phone);
   return (
     <div data-pipeline-picker-state="ready" data-proto-dialog="" className={`fixed inset-0 ${Z.modal} flex items-end justify-center bg-black/40 sm:items-center`} role="presentation">
       <div role="dialog" aria-modal="true" aria-label={t("pipelineTemplates.title")} data-proto-new="" className="w-full max-w-[460px] rounded-t-surface bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 sm:rounded-surface sm:pb-3">
@@ -521,7 +653,8 @@ function TemplatePickerFromConversation() {
         <div className="mb-2 flex flex-col gap-1">
           <span className="text-label font-semibold text-secondary">{WORDS.conversation}</span>
           <div className="flex min-h-11 min-w-0 items-center gap-2 rounded-control border border-border bg-canvas px-3 py-1.5" data-proto-source="">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-success" aria-hidden />
+            {/* The state dot with its word behind it, as the header's own dot is drawn. */}
+            <span className={`h-2 w-2 shrink-0 rounded-full ${CHAT_TONE_DOT[state.tone]}`} role="img" aria-label={state.word} title={state.word} data-proto-state-dot={state.tone} />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="min-w-0 text-ui font-semibold leading-snug text-primary">{SOURCE_TITLE}</span>
               <span className="flex min-w-0"><BranchChip className="min-w-0 max-w-full" /></span>
@@ -578,21 +711,20 @@ const findComposerForm = () => document.querySelector("[data-conversation-body] 
 function SendMenuWithPipeline({ phone }: { phone: boolean }) {
   const rect = useRect(findSendButton);
   const form = useRect(findComposerForm);
+  useMarkMenu("composer-send-menu", "protoSendMenu", Boolean(rect && form));
   if (!rect || !form) return null;
   const top = phone ? form.top : rect.top;
   return (
-    <div data-proto-new="" data-proto-send-menu="">
-      <ComposerMenu
-        label={t("composer.sendMenuTitle")}
-        actions={[
-          { id: "context-auto", label: t("composer.context.auto"), description: t("composer.context.autoHint"), checked: false, onSelect: () => {} },
-          { id: "start-pipeline", label: WORDS.runAsPipeline, description: WORDS.runAsPipelineHint, icon: Workflow, onSelect: () => {} },
-        ]}
-        onClose={() => {}}
-        position={{ bottom: Math.round(window.innerHeight - top + 6), right: Math.round(window.innerWidth - form.right) }}
-        owner={document}
-      />
-    </div>
+    <ComposerMenu
+      label={t("composer.sendMenuTitle")}
+      actions={[
+        { id: "context-auto", label: t("composer.context.auto"), description: t("composer.context.autoHint"), checked: false, onSelect: () => {} },
+        { id: "start-pipeline", label: WORDS.runAsPipeline, description: WORDS.runAsPipelineHint, icon: Workflow, onSelect: () => {} },
+      ]}
+      onClose={() => {}}
+      position={{ bottom: Math.round(window.innerHeight - top + 6), right: Math.round(window.innerWidth - form.right) }}
+      owner={document}
+    />
   );
 }
 
@@ -705,34 +837,54 @@ function ChainStrip({ phone, onPill }: { phone: boolean; onPill: (element: HTMLE
   );
 }
 
-/** The role rows of one pill: the board's popover on the desktop (kanbanMenus.tsx), a sheet on the phone. */
+/** A menu the product draws through a portal (`ComposerMenu` renders into the
+    document's body) is marked as this prototype's once it is in the DOM, so
+    the readings measure its words and its rows like every other new element,
+    and a frame can wait for it. The menu moves focus to its first plain row
+    on mount; in a frame nobody pressed anything, so the ring that focus would
+    draw is taken off again. */
+function useMarkMenu(testId: string, mark: string, ready: boolean) {
+  useEffect(() => {
+    if (!ready) return;
+    const menu = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+    if (!menu) return;
+    menu.dataset.protoNew = "";
+    menu.dataset[mark] = "";
+    if (menu.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+  }, [testId, mark, ready]);
+}
+
+const findStrip = () => document.querySelector("[data-proto-strip]");
+
+/** The role rows of one pill: the board's popover on the desktop
+    (kanbanMenus.tsx); on the phone the composer's own menu (`ComposerMenu`,
+    the one its Send button opens in frame 2a), standing above the strip so
+    the chain, «+ Stage» and the Send button's «Start» stay in view while the
+    operator chooses. A sheet would cover the composer, and with it the very
+    thing this frame is about. */
 function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | null }) {
   const title = `${REVIEW_NAME} · ${WORDS.stageOf(2, CHAIN.length)}`;
   /* The pill stands inside the board, whose `.kb` scopes the popover's styles. */
   const scope = anchor?.closest(".kb") ?? null;
+  const strip = useRect(findStrip);
+  const pill = useRect(() => anchor);
+  useMarkMenu("proto-role-menu", "protoRoles", Boolean(phone && strip && pill));
   if (phone) {
+    if (!strip || !pill) return null;
+    /* The menu's left edge on the pill's, its right edge no further than the strip's. */
+    const right = Math.round(window.innerWidth - Math.min(pill.left + 220, strip.right));
     return (
-      <MobileSheet name="menu" title={title} onClose={() => {}}>
-        <div role="menu" aria-label={title} className="flex flex-col py-1" data-proto-new="" data-proto-roles="">
-          {ROLES.map((roleId) => (
-            <MobileSheetRow
-              key={roleId}
-              label={(
-                <span className="flex min-w-0 flex-col">
-                  <span className="min-w-0 truncate">{roleNameById(t as never, roleId)}</span>
-                  <span className="min-w-0 truncate text-label font-medium text-secondary">{ROLE_WHY[roleId]}</span>
-                </span>
-              )}
-              checked={roleId === "reviewer"}
-              selected={roleId === "reviewer"}
-              trailing={roleId === "reviewer" ? <Check className="h-4 w-4 text-accent" aria-hidden /> : undefined}
-              onSelect={() => {}}
-            />
-          ))}
-          <div className="my-1.5 h-px shrink-0 bg-border" aria-hidden />
-          <MobileSheetRow icon={<X className="h-[18px] w-[18px]" aria-hidden />} label={WORDS.removeStage} danger onSelect={() => {}} />
-        </div>
-      </MobileSheet>
+      <ComposerMenu
+        label={title}
+        testId="proto-role-menu"
+        actions={[
+          ...ROLES.map((roleId) => ({ id: roleId, label: roleNameById(t as never, roleId), description: ROLE_WHY[roleId], checked: roleId === "reviewer", onSelect: () => {} })),
+          { id: "remove", label: WORDS.removeStage, description: WORDS.removeStageWhy, icon: X, onSelect: () => {} },
+        ]}
+        onClose={() => {}}
+        position={{ bottom: Math.round(window.innerHeight - strip.top + 6), right }}
+        owner={document}
+      />
     );
   }
   if (!anchor || !scope) return null;
@@ -763,8 +915,8 @@ function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | n
 
 /** Variant 2b: the strip goes over the composer's form, the Send button says
     «Start pipeline», and the review pill's choice is open: the board's popover
-    on the desktop, the sheet on the phone (it covers the strip it opened from,
-    and names the pill in its title). */
+    on the desktop, the composer's own menu above the strip on the phone (both
+    name the pill in their title and leave the strip's words uncovered). */
 function ChainOverComposer({ phone }: { phone: boolean }) {
   const host = useInsertedHost(findComposerSpot);
   const [pill, setPill] = useState<HTMLElement | null>(null);
@@ -884,7 +1036,7 @@ function DesktopScreen() {
         />
       </div>
       {VARIANT === 1 && FRAME === "a" ? <DesktopMenuRow label={WORDS.start} why={WORDS.startWhy} find={findReaderMenuSpot} /> : null}
-      {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation /> : null}
+      {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation phone={false} /> : null}
       {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline phone={false} /> : null}
       {VARIANT === 2 && FRAME === "b" ? <ChainOverComposer phone={false} /> : null}
       {VARIANT === 3 && FRAME === "a" ? <DesktopMenuRow label={WORDS.fromConversationRow} why={<>{SOURCE_TITLE} · <span className="whitespace-nowrap">{BRANCH}</span></>} find={findCardMenuSpot} /> : null}
@@ -929,7 +1081,7 @@ function PhoneChat() {
           <PhoneMenuRow label={WORDS.start} why={WORDS.startWhy} find={findPhoneChatMenuSpot} />
         </>
       ) : null}
-      {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation /> : null}
+      {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation phone /> : null}
       {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline phone /> : null}
       {VARIANT === 2 && FRAME === "b" ? <ChainOverComposer phone /> : null}
     </div>

@@ -5926,6 +5926,28 @@ describe("start pipeline from conversation prototype v2", () => {
                     }
                   }
                 }
+                /* Nothing is cut under the window header: no text line and
+                   no drawn leaf (an avatar, an icon, a dot) of the transcript
+                   crosses the feed's top edge once the fixture aligned it. */
+                const underHeader: string[] = [];
+                for (const scroller of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+                  const edge = scroller.getBoundingClientRect().top;
+                  const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const text = walker.currentNode.textContent?.trim();
+                    if (!text) continue;
+                    const range = document.createRange();
+                    range.selectNodeContents(walker.currentNode);
+                    for (const rect of range.getClientRects()) if (rect.height > 0 && rect.top < edge && rect.bottom > edge) underHeader.push(text);
+                  }
+                  for (const leaf of scroller.querySelectorAll<Element>("*")) {
+                    const picture = leaf.tagName === "svg" || leaf.tagName === "IMG";
+                    if (!picture && (leaf.childElementCount || leaf.textContent?.trim() || leaf.closest("svg"))) continue;
+                    const rect = leaf.getBoundingClientRect();
+                    if (rect.height > 0 && rect.width > 0 && rect.top < edge && rect.bottom > edge) underHeader.push(`<${leaf.tagName.toLowerCase()} class="${leaf.getAttribute("class") ?? ""}"> ${Math.round(rect.top)}-${Math.round(rect.bottom)} at edge ${Math.round(edge)}`);
+                  }
+                }
+                const aligned = document.body.dataset.protoAligned;
                 /* The brief the composer holds is whole: its field grew to its text. */
                 const field = document.querySelector<HTMLTextAreaElement>("[data-composer-field]");
                 const briefCut = field && field.value.length > 0 ? field.scrollHeight > field.clientHeight + 1 : false;
@@ -5940,7 +5962,9 @@ describe("start pipeline from conversation prototype v2", () => {
                   const alpha = Number(/\/\s*([\d.]+)\)|,\s*([\d.]+)\)/.exec(getComputedStyle(dialog).backgroundColor)?.slice(1).find(Boolean) ?? (getComputedStyle(dialog).backgroundColor.startsWith("rgba") ? 0 : 1));
                   scrim = { over, alpha };
                 }
-                return { ready: document.body.dataset.protoReady, clipped, offscreen, small, covered: [...new Set(covered)], briefCut, scrim, texts: texts.length, captionHeight: caption ? Math.round(caption.height) : null, scrollWidth: document.documentElement.scrollWidth, innerWidth };
+                /* The dialog's state dot and the header's dot behind it agree: the fixture draws both from the product's helper and records the tone. */
+                const stateDot = document.querySelector<HTMLElement>("[data-proto-state-dot]")?.dataset.protoStateDot ?? null;
+                return { ready: document.body.dataset.protoReady, clipped, offscreen, small, covered: [...new Set(covered)], briefCut, scrim, underHeader: [...new Set(underHeader)], aligned: aligned ? JSON.parse(aligned) as unknown : null, stateDot, texts: texts.length, captionHeight: caption ? Math.round(caption.height) : null, scrollWidth: document.documentElement.scrollWidth, innerWidth };
               }, phone);
               await page.screenshot({ path: path.join(out, `${name}.png`) });
               frames.push(path.join(out, `${name}.png`));
@@ -5951,6 +5975,7 @@ describe("start pipeline from conversation prototype v2", () => {
                 ...(reading.scrollWidth > reading.innerWidth ? [`${name}: the page scrolls sideways`] : []),
                 ...reading.covered.map((text) => `${name}: covered «${text}»`),
                 ...(reading.briefCut ? [`${name}: the composer cuts the brief`] : []),
+                ...reading.underHeader.map((text) => `${name}: cut under the header ${text}`),
                 ...(reading.scrim && !(reading.scrim.over && reading.scrim.alpha > 0.2) ? [`${name}: the dialog's scrim does not dim the window (${JSON.stringify(reading.scrim)})`] : []),
                 ...pageErrors.map((error) => `${name}: page error ${error}`),
               ];

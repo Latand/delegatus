@@ -5,12 +5,40 @@
 @import "../../../../src/app/globals.css";
 @source "./";
 
-/* Two rules the implementation carries into the product's own stylesheets
-   (kanbanBoard.css); they are here so the frames show the finished look.
-   1. The draft bubble reserves room for its Edit pill: the product's 64 px
-      fits «Edit», and «Змінити» with its icon is 86 px with the pill's right
-      offset, so the first line of a Ukrainian brief ran under the pill.
+/* Four rules the implementation carries into the product's own stylesheets
+   (kanbanBoard.css; ComposerBar.tsx for the fourth); they are here so the
+   frames show the finished look.
+   1. The draft bubble reserves room for its Edit pill on the first line
+      only: the pill is 24 px tall at the bubble's top right corner, so a
+      float of its width and one line's height makes the first line stop
+      short of it, and every line under it runs to the bubble's edge. The
+      product's 64 px gutter on every line fits «Edit» but not «Змінити»
+      with its icon, and it wrapped each line about 100 px early.
    2. The board's popover has no destructive row yet; its title keeps the row
-      colour, so the danger utility on the button was overridden. */
-.kb .msg.user.draft .bubble { padding-right: 104px; }
+      colour, so the danger utility on the button was overridden.
+   3. The board's filled primary button (`.btn.primary`) is the brand fill,
+      which in the dark theme is the emblem's cream: a light slab on the dark
+      card. darkControls.css already gives every `bg-brand` action the
+      accent with a canvas label (Send, «Говорити», the phone's Start); the
+      board's own button takes the same.
+   4. The composer's menu rows (`ComposerMenu`, the Send menu and the role
+      choice on the phone) are 43.6 px tall with a one-line hint: under a
+      finger they take the 44 px floor the feed's own buttons declare with
+      `[@media(pointer:coarse)]:min-h-11`. */
+.kb .msg.user.draft .bubble { padding-right: 14px; }
+.kb .msg.user.draft .btext::before { content: ""; float: right; width: 84px; height: 1.45em; }
 .kb .popover .row.danger .title { color: var(--color-danger); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-canvas); }
+}
+:root[data-theme="dark"] .kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-canvas); }
+@media (pointer: coarse) {
+  [role="menu"][data-testid="composer-send-menu"] > button, [role="menu"][data-testid="proto-role-menu"] > button { min-height: 44px; }
+}
+
+/* The frames are still pictures: every transcript row is drawn, so the
+   desktop feed's off-screen rows (content-visibility: auto, globals.css) do
+   not swap their drawn height for a placeholder's as the alignment moves
+   them, which shifted the pinned tail after every pass. What is seen is the
+   same; what is measured no longer drifts. */
+.feed-cv { content-visibility: visible; }
