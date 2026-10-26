@@ -349,7 +349,7 @@ for (const mode of ["current", "copied", "other-registry", "changed-before-compl
   }
 });
 
-test("empty startup finalization skips unused selections and captures open receipts before its evidence fence", async () => {
+for (const retainedHost of [false, true]) test(`startup finalization reads selected retry rows and captures open receipts before its evidence fence (host=${retainedHost})`, async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
   const { structuredStartupStatus } = await import("./startupStatus");
@@ -370,8 +370,9 @@ test("empty startup finalization skips unused selections and captures open recei
     return open();
   });
   try {
+    if (retainedHost) registry.upsert(seeded(root, 0).entries["codex:reader-0"]!);
     expect(await adoptStructuredHostsAtStartup({
-      registry, client, orchestratorSeats: () => [],
+      registry, client, orchestratorSeats: () => [], adopt: async () => [], adoptClaude: async () => [], schedule: () => ({}),
       pipelineEvidence: () => {
         if (capturedReceipts) fencedAfterCapture = true;
         return { settled: new Set(), deferred: new Set() };
@@ -382,6 +383,7 @@ test("empty startup finalization skips unused selections and captures open recei
     expect(preparations).not.toContain("finalizing structured delivery");
     expect(preparations).not.toContain("recovering orchestrator deliveries");
     expect(preparations).not.toContain("kicking recovered deliveries");
+    expect(preparations).not.toContain("recovering pending spawns");
     expect(capturedReceipts).toBe(true);
     expect(fencedAfterCapture).toBe(true);
   } finally {

@@ -3010,8 +3010,16 @@ async function adoptStructuredHostsPass(
     }
     assertActive();
     adoptedHosts = nextAdoptedHosts;
-    const heldEntries = heldHostKeys.size || failures.size || retryEntries.length
-      ? (await preparedStartupSnapshot(registry)).entries : {};
+    const retryEntryKeys = new Map(retryEntries.map(entry => [sessionKeyId(entry.key), entry.key] as const));
+    for (const key of new Set([...heldHostKeys, ...failures.keys()])) {
+      const entry = publicationSnapshot.entries[key] ?? initialSnapshot.entries[key];
+      if (entry) retryEntryKeys.set(key, entry.key);
+    }
+    const heldEntries: RegistryFile["entries"] = {};
+    await forEachStartupBatch(retryEntryKeys, async ([key, identity]) => {
+      const entry = startupHostSnapshot(registry, identity).entries[key];
+      if (entry) heldEntries[key] = entry;
+    }, assertActive);
     const held = new Map([...heldHostKeys].flatMap((key) => {
       const stamp = stamps.get(key);
       const entry = heldEntries[key];
