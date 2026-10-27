@@ -7003,6 +7003,9 @@ async function agentActivity(
         ? { evidence: "pending", unverifiedCount, ...undescribed }
         : {}),
       ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
+  } catch (error) {
+    if (error instanceof ProjectNameRefusal) throw new McpUnadmittedRefusal(error.message, error.details);
+    throw error;
   } finally {
     deadline.release();
   }
