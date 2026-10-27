@@ -182,11 +182,25 @@ alias the operator defined with `gh alias set` is not expanded.
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
 `service=delegatus-github-app` and `repository=<owner/name>`; the helper reads
-it with `secret-tool`. Nothing about the App is stored in this repository, in
-state files or in logs, and a token exists only in the memory and environment
-of the process that asked for it. `bun bin/forge-app-token.mjs token` prints one
+it with `secret-tool`. Credentials stay out of state and logs, and a token
+exists only in the memory and environment of the process that asked for it.
+`forge-app-tokens.ndjson` in Delegatus state records each mint, credential use
+for a git push, and revocation result with its time, purpose (`git push`, `gh`
+or `token command`), repository, expiry and SHA-256 token fingerprint. A failed
+or unreachable revocation records its status or an unknown outcome; Git push
+credentials otherwise expire on their own. A mint or push credential use that
+cannot be recorded is refused. Launched helpers receive the resolved audit
+path before their configuration is sandboxed. `bun bin/forge-app-token.mjs token` prints one
 on captured stdout and refuses a terminal. The declaration names repositories
 and holds nothing secret.
+
+A publication refused by GitHub with a git App denial or HTTP 403 after its
+credential helper verified a fresh mint waits for GitHub to accept the App
+push. It retries with a fresh token after one minute, then five minutes, then
+at most fifteen minutes between attempts, through a one-hour window. The first
+403 time is retained with the accepted head through restarts and delivery
+takeover. Window exhaustion parks the lane with the GitHub access reason;
+installation verification and permission refusals keep their existing recovery.
 
 A push that edits `.github/workflows` needs a `workflows` permission the App
 does not hold and is refused by GitHub itself. Nothing here changes git or

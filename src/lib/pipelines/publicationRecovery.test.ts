@@ -9,6 +9,7 @@ import { serveRuntimeHost } from "@/runtime-host/socket";
 import { once } from "node:events";
 import { defaultPipelinePorts } from "./engine";
 import { beforeEach, afterEach } from "bun:test";
+import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 
 // Literal Git wrappers also read the parent's command configuration. Isolate
 // that source as well as each child overlay, then restore the caller exactly.
@@ -28,6 +29,61 @@ const stages = [
   { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
 ];
 const current = () => loadPipelines()[0]!;
+
+test.each(["recovers", "expires"])("App git 403 publication %s after waiting with its accepted content intact", async outcome => {
+  const f = await fixture();
+  try {
+    const start = Date.parse("2026-10-27T08:00:00.000Z");
+    let clock = start, repairs = 0;
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async () => { repairs++; return true; };
+    const accepted = await f.commit("implementation");
+    // The fake push transport supplies the helper's verified fresh-mint
+    // receipt and Git's denial. No GitHub credential or network is used.
+    fs.writeFileSync(path.join(f.hooks, "pre-push"), `#!/bin/sh\necho '${FORGE_PUSH_MINT_MARKER}' >&2\necho 'fatal: HTTP 403' >&2\necho 'Everything up-to-date' >&2\nexit 1\n`, { mode: 0o700 });
+    await f.finish();
+    expect(current().state).toBe("running");
+    expect(current().stateDetail).toContain("waiting for GitHub to accept the App push");
+    expect(current().runs[0]!.attempts[0]!.publicationRetry?.retryAt).toBe(new Date(start + 60_000).toISOString());
+    expect(current().delivery!.operation!.result?.failure).toMatchObject({ retryableApp403: true, changedFiles: 1 });
+    const restarted = await realExec("bun", ["-e", `
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const { recordPublicationFailure, PUBLICATION_RETRY_DELAYS_MS } = await import("./src/lib/pipelines/publicationHistory.ts");
+      const pipeline = loadPipelines()[0];
+      pipeline.delivery.operation.id = "restarted-app-probe";
+      const record = recordPublicationFailure(pipeline, undefined, { operationId: "restarted-app-probe", epoch: pipeline.delivery.epoch,
+        at: "2026-10-27T09:00:00.000Z", cause: "app-git-403", detail: "App git access unavailable", recoverable: true }, PUBLICATION_RETRY_DELAYS_MS);
+      console.log(JSON.stringify({ since: pipeline.publicationRecovery[pipeline.lastPassedCommit].app403Since, retryAt: record.retryAt }));
+    `], process.cwd(), { ...process.env });
+    expect(restarted.code, restarted.stderr).toBe(0);
+    expect(JSON.parse(restarted.stdout)).toEqual({ since: new Date(start).toISOString(), retryAt: null });
+    // Before its due time no new push is reserved, including after reload.
+    const operationId = current().delivery!.operation!.id;
+    clock += 59_999;
+    await tickPipelines([], f.h.ports);
+    expect(current().delivery!.operation!.id).toBe(operationId);
+    if (outcome === "recovers") fs.rmSync(path.join(f.hooks, "pre-push"));
+    const delays = outcome === "recovers" ? [1] : [1, 300_000, 900_000, 900_000, 900_000, 540_000];
+    for (const delay of delays) {
+      clock += delay;
+      for (let n = 0; n < 4; n++) await tickPipelines([], f.h.ports);
+    }
+    const result = current();
+    expect(result.lastPassedCommit).toBe(accepted);
+    expect(repairs).toBe(0);
+    expect(result.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
+    if (outcome === "recovers") {
+      expect(result.cursor?.stageId).toBe("review");
+      expect(result.publishedCommit).toBe(accepted);
+    } else {
+      expect(clock).toBe(start + 60 * 60_000);
+      expect(result.state).toBe("needs_decision");
+      expect(result.stateDetail).toContain("waiting for GitHub to accept the App push; the one-hour automatic retry window ended");
+      expect(result.stateDetail).toContain("fatal: HTTP 403");
+      expect(result.publicationRecovery![accepted]!.history).toHaveLength(7);
+    }
+  } finally { f.close(); }
+}, 30_000);
 
 test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
   (["idle", "unknown", "running"] as const).map(activity => ({ action, activity })),

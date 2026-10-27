@@ -961,9 +961,11 @@ export type PipelinePublicationRecovery = {
   /** Recoverable failures across attempts, manual retries and ownership epochs. */
   failures: number;
   totalAttempts: number;
+  /** First verified App git 403 for this accepted head, retained on takeover. */
+  app403Since?: string;
   /** Newest 64 failed operations; totalAttempts includes omitted older records. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403";
     detail: string; retryAt: string | null }>;
 };
 
@@ -985,6 +987,8 @@ export type PipelinePublicationFailure = {
   hookStoppedCheck?: string;
   /** Full output proved a deadline with no decisive check or cleanup refusal. */
   retryableDeadline?: boolean;
+  /** Git refused HTTP access after its App credential helper verified a fresh mint. */
+  retryableApp403?: boolean;
 };
 
 export type PipelinePublicationResult = (

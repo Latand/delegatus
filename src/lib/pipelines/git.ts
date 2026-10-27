@@ -22,7 +22,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -1584,6 +1584,8 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
+  const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+  if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -1592,7 +1594,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
   if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
   if (runner) return `git push was refused (${status}${tests}${lost})`;
-  const last = lines.filter(Boolean).at(-1);
+  const last = lines.filter(line => line && !/^Everything up-to-date$/i.test(line)).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
@@ -1996,6 +1998,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;

@@ -2,6 +2,8 @@ import type { Pipeline, PipelinePublicationFailure, PipelinePublicationRecovery,
 
 const HISTORY_LIMIT = 64;
 export const PUBLICATION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+export const APP_PUSH_WAIT_REASON = "waiting for GitHub to accept the App push";
+export const APP_PUSH_RETRY_WINDOW_MS = 60 * 60_000;
 
 export function publicationInterrupted(result: { error: string; outcome?: "not-landed" }): boolean {
   return result.outcome === "not-landed" || result.error === "interrupted publication did not leave its accepted head on the remote";
@@ -19,7 +21,7 @@ export function publicationFailurePhase(failure: PipelinePublicationFailure): st
 }
 
 export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" }): boolean {
-  return result.failure?.retryableDeadline === true || publicationInterrupted(result)
+  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || publicationInterrupted(result)
     || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy";
 }
 
@@ -39,11 +41,18 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
     totalAttempts: Math.max(0, inheritedFailures - (sameLegacy ? 1 : 0)), history: [] };
   const recorded = recovery.history.find(item => item.operationId === operation.id);
   if (recorded) return recorded;
+  if (input.cause === "app-git-403") recovery.app403Since ??= input.at;
   if (input.recoverable && !sameLegacy) recovery.failures++;
   if (sameLegacy && legacy.exhausted) recovery.failures = Math.max(recovery.failures, delays.length + 1);
   const delay = input.recoverable && recovery.failures <= delays.length ? delays[Math.max(0, recovery.failures - 1)] : undefined;
-  const retryAt = sameLegacy && !legacy.exhausted ? legacy.retryAt
+  let retryAt = sameLegacy && !legacy.exhausted ? legacy.retryAt
     : delay === undefined ? null : new Date(Date.parse(input.at) + delay).toISOString();
+  if (input.cause === "app-git-403" && input.recoverable) {
+    const end = Date.parse(recovery.app403Since!) + APP_PUSH_RETRY_WINDOW_MS;
+    const count = recovery.history.filter(entry => entry.cause === "app-git-403").length;
+    retryAt = Date.parse(input.at) >= end ? null
+      : new Date(Math.min(end, Date.parse(input.at) + PUBLICATION_RETRY_DELAYS_MS[Math.min(count, PUBLICATION_RETRY_DELAYS_MS.length - 1)]!)).toISOString();
+  }
   const record = { operationId: input.operationId, epoch: input.epoch, at: input.at,
     cause: input.cause, detail: input.detail, retryAt };
   recovery.totalAttempts++;
@@ -61,6 +70,7 @@ export function mergePublicationRecovery(previous: Pipeline["publicationRecovery
     if (!old) { merged[sha] = structuredClone(row); continue; }
     const entries = new Map([...old.history, ...row.history].map(entry => [entry.operationId, entry]));
     merged[sha] = { sha, failures: Math.max(old.failures, row.failures),
+      ...((old.app403Since || row.app403Since) ? { app403Since: [old.app403Since, row.app403Since].filter((at): at is string => !!at).sort()[0] } : {}),
       totalAttempts: Math.max(old.totalAttempts, row.totalAttempts, entries.size),
       history: [...entries.values()].sort((a, b) => a.epoch - b.epoch || a.at.localeCompare(b.at)).slice(-HISTORY_LIMIT) };
   }
@@ -74,12 +84,13 @@ export function isPublicationRecovery(value: unknown): boolean {
     if (!/^[0-9a-f]{40}$/i.test(sha) || !item || typeof item !== "object" || Array.isArray(item)) return false;
     const row = item as PipelinePublicationRecovery;
     return row.sha === sha && Number.isSafeInteger(row.failures) && row.failures >= 0
+      && (row.app403Since === undefined || typeof row.app403Since === "string" && Number.isFinite(Date.parse(row.app403Since)))
       && Number.isSafeInteger(row.totalAttempts) && Array.isArray(row.history) && row.history.length <= HISTORY_LIMIT
       && row.totalAttempts >= row.failures && row.totalAttempts >= row.history.length
       && new Set(row.history.map(entry => entry?.operationId)).size === row.history.length
       && row.history.every(entry => entry && typeof entry.operationId === "string" && !!entry.operationId
         && Number.isSafeInteger(entry.epoch) && entry.epoch > 0 && typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
-        && ["infrastructure-deadline", "interrupted", "check-failure"].includes(entry.cause)
+        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403"].includes(entry.cause)
         && typeof entry.detail === "string" && entry.detail.length <= 400
         && (entry.retryAt === null || typeof entry.retryAt === "string" && Number.isFinite(Date.parse(entry.retryAt))));
   });

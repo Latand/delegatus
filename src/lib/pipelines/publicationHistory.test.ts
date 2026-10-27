@@ -1,10 +1,34 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
-import { isPublicationRecovery, mergePublicationRecovery, recordPublicationFailure } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, recordPublicationFailure } from "./publicationHistory";
 import { pipelineCompactRow } from "./listProjection";
 
 const SHA = "a".repeat(40);
 const DELAYS = [60_000, 300_000, 900_000];
+
+test("App git 403 uses a persisted one-hour window with bounded backoff and a final attempt", () => {
+  let { pipeline, attempt } = fixture();
+  const start = Date.parse("2026-10-27T08:00:00.000Z");
+  let clock = start;
+  for (const [n, delay] of [60_000, 300_000, 900_000, 900_000, 900_000, 540_000, null].entries()) {
+    pipeline.delivery!.operation!.id = `app-operation-${n}`;
+    const input = { operationId: `app-operation-${n}`, epoch: 1, at: new Date(clock).toISOString(),
+      cause: "app-git-403" as const, detail: "waiting for GitHub to accept the App push", recoverable: true };
+    const record = recordPublicationFailure(pipeline, attempt, input, DELAYS);
+    expect(record.retryAt).toBe(delay === null ? null : new Date(clock + delay).toISOString());
+    expect(isPublicationRecovery(pipeline.publicationRecovery)).toBe(true);
+    // Exercise JSON reload and loss of attempt-local counters on each pass.
+    pipeline = JSON.parse(JSON.stringify(pipeline));
+    attempt = pipeline.runs[0]!.attempts[0]!;
+    delete attempt.publicationRetry;
+    if (delay !== null) clock += delay;
+  }
+  expect(clock).toBe(start + APP_PUSH_RETRY_WINDOW_MS);
+  expect(pipeline.publicationRecovery![SHA]!.app403Since).toBe(new Date(start).toISOString());
+  const stale = structuredClone(pipeline.publicationRecovery);
+  stale![SHA]!.app403Since = new Date(clock).toISOString();
+  expect(mergePublicationRecovery(pipeline.publicationRecovery, stale)![SHA]!.app403Since).toBe(new Date(start).toISOString());
+});
 function fixture() {
   const pipeline = structuredClone(pipelineCorpus(1, 1)[0]!);
   pipeline.lastPassedCommit = SHA;

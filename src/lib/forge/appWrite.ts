@@ -3,8 +3,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { agentForgeDir, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
+import { statePath } from "@/lib/configDir";
 
-import { refusalMessage } from "../../../bin/forge-app-token.mjs";
+import { FORGE_AUDIT_ENV, refusalMessage } from "../../../bin/forge-app-token.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -81,7 +82,8 @@ export async function mintForgeAppToken(repository: string, source: NodeJS.Proce
   try {
     const helper = path.join(agentForgeDir(source), "forge-app-token.mjs");
     /* `issues` asks for the permission set that files an issue and no other (#2518). */
-    ({ stdout } = await execFileAsync("bun", [helper, "token", "--repository", repository, "--json", ...(kind === "issues" ? ["--issues"] : [])], { timeout: MINT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: source }));
+    ({ stdout } = await execFileAsync("bun", [helper, "token", "--repository", repository, "--json", ...(kind === "issues" ? ["--issues"] : [])], { timeout: MINT_TIMEOUT_MS, maxBuffer: 64 * 1024,
+      env: { ...source, [FORGE_AUDIT_ENV]: source[FORGE_AUDIT_ENV] || statePath("forge-app-tokens.ndjson") } }));
   } catch (error) {
     throw refusalFrom(error, repository);
   }

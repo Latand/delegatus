@@ -1,4 +1,14 @@
 import type { Pipeline } from "./types";
+import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
+
+/** A verification refusal (including a mint's own 403) has no fresh-use marker. */
+export function publicationApp403(output: string): boolean {
+  return output.split("\n").some(line => line.trim() === FORGE_PUSH_MINT_MARKER)
+    && !output.includes("Delegatus refused this GitHub write")
+    && !/^(?:pre-push: .*failed \(|\(fail\) |NEW |PRIVACY GATE: FAIL)/m.test(output)
+    && (/^remote:\s*Permission to .+ denied to .*(?:\[bot\]|App bot)(?:[.\s]|$).*$/im.test(output)
+      || /(?:requested URL returned error:\s*403|HTTP(?:\/\d(?:\.\d)?)?\s+403)\b/i.test(output));
+}
 
 /** Implicit owner publication requires a stored remote. Explicit remote
     publication keeps its remote fence even on older remote-less records. */
