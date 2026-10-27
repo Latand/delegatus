@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { updateCodex, CHECK_INTERVAL_MS, newer, type UpdateNotice, type UpdatePorts } from "./update";
+import { hasPendingCodexUpdate, updateCodex, CHECK_INTERVAL_MS, newer, type UpdateNotice, type UpdatePorts } from "./update";
 import { installedTarget, updateDirectory, waitForCodexProcess, withCliSwitch, withCodexCliLaunch } from "./installation";
 import { codexProcessesPresent, runUpdateCommand } from "./production";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
@@ -10,6 +10,7 @@ import { runHeadlessCodexOnce } from "@/lib/agent/headless";
 import { headlessFixtureTransport, setHeadlessSpawnForTests } from "@/lib/runtime/agentSignalSandbox";
 import { spawn } from "node:child_process";
 import { procBackend } from "@/lib/proc";
+import { createCodexUpdateTicker } from "./scheduler";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -42,6 +43,162 @@ function fixture() {
 }
 
 describe("Codex CLI automatic updates", () => {
+  test.each([false, true])("a requested check survives the CLI's pre-check report failure (initial explicit: %s)", async initialExplicit => {
+    const work = fixture(), clockFile = path.join(work.root, "scheduler.json");
+    const notice: UpdateNotice = { id: "retained", at: 0, version: "0.163.0", failed: false, line: "retained report" };
+    const clock = JSON.stringify({ until: CHECK_INTERVAL_MS, notice: null });
+    fs.writeFileSync(clockFile, clock);
+    const stateFile = path.join(updateDirectory(work.binary), "state.json");
+    fs.mkdirSync(path.dirname(stateFile));
+    const state = JSON.stringify({ nextCheck: CHECK_INTERVAL_MS, pending: null, previous: null, rejectedVersion: null, notice });
+    fs.writeFileSync(stateFile, state);
+    let entered!: () => void, reject!: (error: Error) => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>((_, refuse) => { reject = refuse; });
+    let reports = 0;
+    work.ports.report = async () => { reports++; entered(); await hold; };
+    const tick = createCodexUpdateTicker({ clockFile, now: work.ports.now, current: () => work.ports.current(),
+      hasPending: () => hasPendingCodexUpdate(work.binary), report: notice => work.ports.report(notice),
+      update: requested => updateCodex(work.binary, work.ports, false, requested) });
+    const run = tick(initialExplicit);
+    await ready; await tick(true); await tick(true);
+    reject(new Error("journal busy")); await run;
+    // A blocked outbox retries on a later tick, without spending the request.
+    expect(reports).toBe(1); expect(work.calls).toEqual([]);
+    await tick(); expect(reports).toBe(2); expect(work.calls).toEqual([]);
+    expect(fs.readFileSync(stateFile, "utf8")).toBe(state);
+    work.ports.current = () => false;
+    await tick(); expect(reports).toBe(2);
+    work.ports.current = () => true;
+    work.ports.report = async delivered => { work.notices.push(structuredClone(delivered)); };
+    await tick(); await tick();
+    expect(work.calls).toEqual(["latest", "install", "probe"]);
+    expect(work.notices[0]).toEqual(notice);
+    expect(work.notices.map(row => row.line)).toEqual(["retained report", "Codex CLI 0.164.0: updated"]);
+    expect(installedTarget(work.binary)).toBe(work.candidate);
+    expect(hasPendingCodexUpdate(work.binary)).toBeFalse();
+    expect(fs.readFileSync(clockFile, "utf8")).toBe(clock);
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, "scheduler-resume", "0"], { stdout: "pipe", stderr: "pipe" });
+    const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+    expect(fs.existsSync(path.join(work.root, "calls"))).toBeFalse();
+  });
+
+  test.each(["updated", "registry failure", "probe failure"])("a completed requested check is not repeated after CLI report recovery (%s)", async outcome => {
+    const work = fixture(), clockFile = path.join(work.root, "scheduler.json");
+    fs.writeFileSync(clockFile, JSON.stringify({ until: CHECK_INTERVAL_MS, notice: null }));
+    if (outcome === "registry failure") work.ports.latest = async () => { work.calls.push("latest"); throw new Error("registry unavailable"); };
+    if (outcome === "probe failure") work.ports.probe = async () => { work.calls.push("probe"); throw new Error("schema refused"); };
+    let entered!: () => void, reject!: (error: Error) => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>((_, refuse) => { reject = refuse; });
+    let attempted!: UpdateNotice;
+    work.ports.report = async notice => { attempted = structuredClone(notice); entered(); await hold; };
+    const tick = createCodexUpdateTicker({ clockFile, now: work.ports.now, current: work.ports.current,
+      hasPending: () => hasPendingCodexUpdate(work.binary), report: notice => work.ports.report(notice),
+      update: requested => updateCodex(work.binary, work.ports, false, requested) });
+    const run = tick(true);
+    await ready; await tick(true); await tick(true);
+    reject(new Error("journal busy")); await run;
+    expect(hasPendingCodexUpdate(work.binary)).toBeTrue();
+    work.ports.report = async notice => { work.notices.push(structuredClone(notice)); };
+    await tick(); await tick();
+    expect(work.calls).toEqual(outcome === "registry failure" ? ["latest"] : ["latest", "install", "probe"]);
+    expect(work.notices).toEqual([attempted]);
+    expect(work.notices[0]?.failed).toBe(outcome !== "updated");
+    expect(installedTarget(work.binary)).toBe(outcome === "updated" ? work.candidate : work.old);
+    expect(hasPendingCodexUpdate(work.binary)).toBeFalse();
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, "scheduler-resume", "0"], { stdout: "pipe", stderr: "pipe" });
+    const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+    expect(fs.existsSync(path.join(work.root, "calls"))).toBeFalse();
+  });
+
+  test.each([true, false])("a CLI outbox flush failure retains only unfinished requested work (before check: %s)", async beforeCheck => {
+    const work = fixture(), clockFile = path.join(work.root, "scheduler.json");
+    fs.writeFileSync(clockFile, JSON.stringify({ until: CHECK_INTERVAL_MS, notice: null }));
+    const stateFile = path.join(updateDirectory(work.binary), "state.json");
+    fs.mkdirSync(path.dirname(stateFile));
+    const retained: UpdateNotice = { id: "retained", at: 0, version: "0.163.0", failed: false, line: "retained report" };
+    fs.writeFileSync(stateFile, JSON.stringify({ nextCheck: CHECK_INTERVAL_MS, pending: null, previous: null, rejectedVersion: null,
+      notice: beforeCheck ? retained : null }));
+    const tick = createCodexUpdateTicker({ clockFile, now: work.ports.now, current: work.ports.current,
+      hasPending: () => hasPendingCodexUpdate(work.binary), report: work.ports.report,
+      update: requested => updateCodex(work.binary, work.ports, false, requested) });
+    const original = fs.renameSync;
+    const rename = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (to === stateFile && work.notices.length > 0) throw new Error("outbox flush failed");
+      return original(from, to);
+    });
+    try { await tick(true); }
+    finally { rename.mockRestore(); }
+    expect(work.calls).toEqual(beforeCheck ? [] : ["latest", "install", "probe"]);
+    expect(work.notices).toHaveLength(1);
+    const attempted = structuredClone(work.notices[0]);
+    await tick(); await tick();
+    expect(work.calls).toEqual(["latest", "install", "probe"]);
+    expect(work.notices[1]).toEqual(attempted);
+    expect(work.notices).toHaveLength(beforeCheck ? 3 : 2);
+    expect(installedTarget(work.binary)).toBe(work.candidate);
+    expect(hasPendingCodexUpdate(work.binary)).toBeFalse();
+  });
+
+  test.each(["busy", "report-fail"])("requested recovery crosses an earlier location cooldown after restart (%s)", async outcome => {
+    const work = fixture(); let clock = "";
+    for (const mode of ["scheduler-fail", `scheduler-request-${outcome}`, "scheduler-resume"]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, mode, "0"], { stdout: "pipe", stderr: "pipe" });
+      const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+      const currentClock = fs.readFileSync(path.join(work.root, "scheduler.json"), "utf8");
+      if (mode === "scheduler-fail") clock = currentClock;
+      else expect(currentClock).toBe(clock);
+      if (mode.startsWith("scheduler-request-")) {
+        expect(hasPendingCodexUpdate(work.binary)).toBeTrue();
+        expect(installedTarget(work.binary)).toBe(outcome === "busy" ? work.old : work.candidate);
+      }
+    }
+    expect(installedTarget(work.binary)).toBe(work.candidate);
+    expect(hasPendingCodexUpdate(work.binary)).toBeFalse();
+    const lines = fs.readFileSync(path.join(work.root, "calls"), "utf8").trim().split("\n");
+    expect(lines.filter(line => line === "probe")).toHaveLength(1);
+    expect(lines.filter(line => line === "Codex CLI 0.164.0: updated")).toHaveLength(1);
+  });
+  test("explicit checks keep a rolled-back release rejected", async () => {
+    const work = fixture();
+    await updateCodex(work.binary, work.ports);
+    await updateCodex(work.binary, work.ports, true);
+    await updateCodex(work.binary, work.ports, false, true);
+    expect(installedTarget(work.binary)).toBe(work.old);
+    expect(work.calls).toEqual(["latest", "install", "probe", "latest"]);
+    expect(work.notices.at(-1)?.line).toBe("Codex CLI 0.163.0: rolled back; rejected release held");
+  });
+  test.each(["idle", "busy", "refused", "demoted"])("explicit checks retain compatibility and serving/idle admission (%s)", async outcome => {
+    const work = fixture();
+    work.ports.latest = async () => "0.163.0";
+    await updateCodex(work.binary, work.ports);
+    work.ports.latest = async () => { work.calls.push("latest"); return "0.164.0"; };
+    work.ports.idle = async () => outcome !== "busy";
+    if (outcome === "refused") work.ports.probe = async () => { work.calls.push("probe"); throw new Error("unreviewed schema"); };
+    if (outcome === "demoted") work.ports.current = () => false;
+    await updateCodex(work.binary, work.ports, false, true);
+    expect(installedTarget(work.binary)).toBe(outcome === "idle" ? work.candidate : work.old);
+    expect(work.calls).toEqual(outcome === "demoted" ? [] : ["latest", "install", "probe"]);
+    if (outcome === "busy") {
+      work.ports.idle = async () => true;
+      await updateCodex(work.binary, work.ports);
+      expect(installedTarget(work.binary)).toBe(work.candidate);
+    }
+  });
+
+  test("a requested retry after restart probes and waits for idle without resetting stored clocks", async () => {
+    const work = fixture();
+    for (const mode of ["fail", "request-busy", "request"]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, mode, "0"], { stdout: "pipe", stderr: "pipe" });
+      const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+      if (mode !== "request") expect(installedTarget(work.binary)).toBe(work.old);
+    }
+    expect(installedTarget(work.binary)).toBe(work.candidate);
+    const lines = fs.readFileSync(path.join(work.root, "calls"), "utf8").trim().split("\n");
+    expect(lines.filter(line => line === "probe")).toHaveLength(2);
+    expect(JSON.parse(fs.readFileSync(path.join(updateDirectory(work.binary), "state.json"), "utf8")).nextCheck).toBe(CHECK_INTERVAL_MS);
+  });
   test("no newer version spends one durable daily check", async () => {
     const work = fixture(); work.ports.latest = async () => { work.calls.push("latest"); return "0.163.0"; };
     await updateCodex(work.binary, work.ports); await updateCodex(work.binary, work.ports);

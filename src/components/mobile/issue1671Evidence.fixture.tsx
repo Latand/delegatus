@@ -327,6 +327,23 @@ if (SEAT_NOISE !== null) {
   else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
   else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
 }
+/* `?modelface=<luna|unknown|observed|fable>`: what the transcript and the launch have told the running conversation
+   about its model, so the chat header and the menu's identity line show the model it runs on. */
+const MODEL_FACE = new URLSearchParams(location.search).get("modelface");
+if (MODEL_FACE) {
+  const facts: Record<string, { engine: "claude" | "codex"; model: string | null; launchModel: string | null }> = {
+    /* A stage launched on Luna whose transcript has not named a model yet. */
+    luna: { engine: "codex", model: null, launchModel: "gpt-6-luna" },
+    /* Neither the transcript nor the launch has told. */
+    unknown: { engine: "codex", model: null, launchModel: null },
+    /* The transcript names a model other than the one the launch asked for. */
+    observed: { engine: "codex", model: "gpt-6-astra", launchModel: "gpt-6-luna" },
+    fable: { engine: "claude", model: "fable-5-1", launchModel: "fable" },
+  };
+  const fact = facts[MODEL_FACE] ?? facts.luna!;
+  seatOn(fact.engine, fact.model ?? "", "high", "");
+  Object.assign(files[0]!, { model: fact.model, launchModel: fact.launchModel });
+}
 /* The first-message cases. The raw recovery envelope rides in `error` on every pending step on purpose: the window
    must not print it. */
 const FM_PROMPT = "Fix the failing export test. The pinned task is in the card.";

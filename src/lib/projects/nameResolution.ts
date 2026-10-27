@@ -180,16 +180,48 @@ export class ProjectNameRefusal extends Error {
   constructor(message: string, readonly details: Record<string, unknown>) { super(message); }
 }
 
+interface ProjectLookup {
+  normalizedNames: Map<string, Set<string>>;
+  shortIdentities: Map<string, Set<string>>;
+}
+
+/** Compile retained names once for bulk reads. Misses need no fuzzy suggestions
+ * on a metadata selection path; ambiguity uses the ordinary resolver's rules. */
+export function indexedProjectResolver(directory: NamedProjectDirectory): (named: string) => string {
+  const lookup: ProjectLookup = { normalizedNames: new Map(), shortIdentities: new Map() };
+  const merge = (index: Map<string, Set<string>>, key: string, projects: Set<string>) => {
+    const members = index.get(key) ?? new Set<string>();
+    for (const project of projects) members.add(project);
+    index.set(key, members);
+  };
+  for (const [name, projects] of directory.names) merge(lookup.normalizedNames, normalizeProjectName(name), projects);
+  for (const [key, projects] of directory.identities) {
+    if (!/^(repo|dir)-[a-f0-9]{32}$/i.test(key)) continue;
+    for (let length = key.indexOf("-") + 8; length < key.length; length++) {
+      merge(lookup.shortIdentities, key.slice(0, length), projects);
+    }
+  }
+  return named => resolveProjectName(named, directory, false, lookup);
+}
+
 /** Exact folded names select a unique designated seat when several members
  * share a name. Several seated members remain an explicit operator choice. */
 export function resolveNamedProject(named: string, directory: NamedProjectDirectory, requireActiveSeat = false): string {
+  return resolveProjectName(named, directory, requireActiveSeat);
+}
+
+function resolveProjectName(named: string, directory: NamedProjectDirectory, requireActiveSeat: boolean, lookup?: ProjectLookup): string {
   const requested = named.trim();
   const folded = requested.toLowerCase();
   const normalized = normalizeProjectName(folded);
-  const normalizedNames = normalized ? [...directory.names].filter(([name]) => normalizeProjectName(name) === normalized).flatMap(([, projects]) => [...projects]) : [];
+  const normalizedNames = normalized ? lookup
+    ? [...(lookup.normalizedNames.get(normalized) ?? [])]
+    : [...directory.names].filter(([name]) => normalizeProjectName(name) === normalized).flatMap(([, projects]) => [...projects]) : [];
   const identity = [...new Set([
     ...(directory.identities.get(folded) ?? []),
-    ...(/^(repo|dir)-[a-f0-9]{7,31}$/i.test(folded) ? [...directory.identities.keys()].filter(key => matchesShortId(key, folded)).flatMap(key => [...directory.identities.get(key)!]) : []),
+    ...(/^(repo|dir)-[a-f0-9]{7,31}$/i.test(folded) ? lookup
+      ? lookup.shortIdentities.get(folded) ?? []
+      : [...directory.identities.keys()].filter(key => matchesShortId(key, folded)).flatMap(key => [...directory.identities.get(key)!]) : []),
     ...(!normalizedNames.length && normalized ? directory.encodedDirectories.get(normalized) ?? [] : []),
   ])].sort();
   const namedCandidates = [...new Set([...(directory.names.get(folded) ?? []), ...normalizedNames])];
@@ -217,7 +249,7 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
     });
   }
   if (candidates.length === 1 && (!requireActiveSeat || directory.active.has(candidates[0]!))) return candidates[0]!;
-  const closeMatches = [...directory.labels].filter(([project]) => !requireActiveSeat || directory.suggestions.has(project)).map(([project, name]) => ({ project, name, distance: Math.min(projectNameDistance(folded, name.toLowerCase()), projectNameDistance(folded, project.toLowerCase())) }))
+  const closeMatches = lookup ? [] : [...directory.labels].filter(([project]) => !requireActiveSeat || directory.suggestions.has(project)).map(([project, name]) => ({ project, name, distance: Math.min(projectNameDistance(folded, name.toLowerCase()), projectNameDistance(folded, project.toLowerCase())) }))
     .filter(match => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
     .sort((a, b) => a.distance - b.distance || a.project.localeCompare(b.project)).slice(0, 5).map(({ project, name }) => ({ project, name }));
   throw new ProjectNameRefusal(`no such project "${shortId(requested)}"; ${closeMatches.length

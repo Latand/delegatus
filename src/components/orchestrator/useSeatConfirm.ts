@@ -24,6 +24,7 @@ import {
   type OrchestratorSeatStatus,
   type SeatSubmitFailure,
 } from "./seatState";
+import { speedBody } from "@/components/ReasoningControls";
 
 /**
  * ONE durable confirm, for both of the panel's designation flows (PRD #976).
@@ -84,7 +85,8 @@ export function seatProvisionalFile(input: {
       model: draft.model,
       cwd,
       effort: draft.effort,
-      fast: draft.engine === "codex" && draft.speed ? draft.speed === "fast" : null,
+      fast: null,
+      ...speedBody(draft.engine, draft.speed),
       accountId: draft.launchAccountId,
       ["prompt"]: firstMessage,
       images: [],

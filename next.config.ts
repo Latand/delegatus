@@ -95,7 +95,7 @@ export default function configureNext(phase: string): NextConfig {
     // Preserve unrelated Node options and any larger caller-supplied heap.
     const options = process.env.NODE_OPTIONS ?? "";
     const limits = [...options.matchAll(/(?:^|\s)["']?--max[-_]old[-_]space[-_]size(?:=|\s+)["']?(\d+)/g)];
-    const heap = Math.max(6144, ...limits.map(match => Number(match[1])));
+    const heap = Math.max(11264, ...limits.map(match => Number(match[1])));
     process.env.NODE_OPTIONS = `${options} --max-old-space-size=${heap}`.trim();
     // Keep the full repository check in tsconfig.json for development and gates.
     return { ...nextConfig,
