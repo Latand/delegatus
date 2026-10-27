@@ -169,7 +169,7 @@ describe("LogTailStreamSession", () => {
     const nativeSetTimeout = globalThis.setTimeout;
     // Hold pump callbacks so a queued retry is visible even if timer delivery
     // stalls. Native handles let close() exercise its normal cancellation path.
-    const schedule = spyOn(globalThis, "setTimeout").mockImplementation((callback, _delay, ...args) => {
+    const controlledSetTimeout = Object.assign((...[callback, , ...args]: Parameters<typeof setTimeout>) => {
       const timer = nativeSetTimeout(() => undefined, 60_000);
       timers.add(timer);
       pumpCallbacks.push(() => {
@@ -178,7 +178,8 @@ describe("LogTailStreamSession", () => {
         callback(...args);
       });
       return timer;
-    });
+    }, { __promisify__: nativeSetTimeout.__promisify__ });
+    const schedule = spyOn(globalThis, "setTimeout").mockImplementation(controlledSetTimeout);
     let received = Promise.withResolvers<void>();
     const session = new LogTailStreamSession([{ id: "log", path: file, offset: 0 }], {
       restatMs: 60_000,
