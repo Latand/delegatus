@@ -1001,6 +1001,45 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
   });
 
+  test("HTTP proactive deployment retains its authority check through the service's green wait", async () => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void; let greenReady = false;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return greenReady ? Promise.resolve({ state: "green" })
+      : new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+    const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+    const project = "proactive-http-deploy";
+    const { task } = await admitProactiveTask({ ...candidate("http-deploy"), project }, { ...context(), project }, undefined, authority());
+    const decide = (decision: "adopt" | "reject") => decideProactiveTask(task.id, decision, "operator", proactiveDecisionToken(task));
+    await decide("adopt");
+    const registry = agentRegistry();
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: checkout, taskIds: [task.id], origin: { kind: "operator" } });
+    if (begun.kind !== "created") throw new Error("expected a fresh launch");
+    const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+    const request = () => {
+      const value = post("/runtime/deployments", { revision: tipSha, idempotencyKey: "proactive-http-green-wait" });
+      value.headers.set(VIEWER_SPAWN_CAPABILITY_HEADER, capability);
+      return value;
+    };
+    try {
+      const response = deployPost(request());
+      await reading; await decide("reject"); greenReady = true; releaseGreen({ state: "green" });
+      expect((await response).status).toBe(403);
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      await decide("adopt");
+      expect((await deployPost(request())).status).toBe(202);
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+      h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+    } finally { registry.failStructuredSpawn(begun.receipt.launchId, "fixture completed before dispatch", { announce: false }); }
+  });
+
   /* A launcher started in a multiplexer pane sits in that unit's cgroup.
      Restarting the unit would end every pane and bring no launcher back. */
   test.each(["built", "unbuilt"] as const)("a unit not proven to be this launcher's service is never restarted, by the dialog or by a seat: %s", async built => {
