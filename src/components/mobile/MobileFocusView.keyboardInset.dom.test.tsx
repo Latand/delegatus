@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { BranchGroup } from "@/components/projectModel";
 import { MOBILE_COMPOSER_CHROME_PX } from "@/lib/composerScroll";
+import { installComposerStorageForTests, type ComposerStorageForTests } from "@/test-helpers/composerStorage";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -71,9 +72,15 @@ const OVERRIDES: Record<string, unknown> = {
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
 const settle = async () => { await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); };
+/* The composer keeps a complete submission in IndexedDB under a Web Lock;
+   happy-dom has neither. Without them it mounts its storage-failure recovery
+   panel above the field, and that panel's reserve, not the keyboard
+   arithmetic, would decide the ceilings asserted below. */
+let composerStorage: ComposerStorageForTests | null = null;
 
 beforeAll(() => {
   for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; }
+  composerStorage = installComposerStorageForTests();
   (dom.HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {};
   /* Text always overflows, so the composer textarea lands exactly on its grow
      ceiling — the number the integrated geometry tests assert on. */
@@ -81,6 +88,8 @@ beforeAll(() => {
 });
 afterAll(async () => {
   await settle();
+  composerStorage?.uninstall();
+  composerStorage = null;
   delete (dom.HTMLElement.prototype as unknown as { scrollHeight?: unknown }).scrollHeight;
   for (const key of Object.keys(OVERRIDES)) { if (HAS[key]) G[key] = SAVED[key]; else delete G[key]; }
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
@@ -93,6 +102,7 @@ afterEach(async () => {
   roots = [];
   await settle();
   dom.sessionStorage.clear();
+  composerStorage?.reset();
   delete (dom as unknown as Record<string, unknown>).visualViewport;
   delete G.visualViewport;
 });
@@ -198,6 +208,8 @@ test("integrated, portrait keyboard: long draft caps at 160px and the chrome fit
   const textarea = composerTextarea();
   expect(textarea).not.toBeNull();
   expect(textarea.value).toBe(LONG_DRAFT);
+  /* No storage-failure alert takes room from the field (see composerStorage). */
+  expect(dom.document.querySelector('[role="alert"]')).toBeNull();
   expect(textarea.style.height).toBe("160px");
   expect(160 + MOBILE_COMPOSER_CHROME_PX).toBeLessThanOrEqual(400);
 });
@@ -214,6 +226,7 @@ test("integrated, a 280px visible viewport: the whole composer unit still fits i
   const textarea = composerTextarea();
   expect(textarea).not.toBeNull();
   expect(textarea.value).toBe(LONG_DRAFT);
+  expect(dom.document.querySelector('[role="alert"]')).toBeNull();
   /* #983 reserved 156px of chrome here — a docked focus strip, a separate
      conversation header and a 44px picker row under the input — and shrank the
      field to 124px to pay for it. Mobile v2 renders none of the three, so the
