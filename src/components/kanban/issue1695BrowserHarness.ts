@@ -2026,6 +2026,64 @@ async function linkTarget(page: Page, selector: string) {
   });
 }
 
+/** The shown timeline's rhythm, from text ranges: the gap from each row's last line to the next row's first, and on
+    the phone the 44 px open rows whose corners a neighbouring row takes. */
+async function timelineRhythm(page: Page, scope: string) {
+  return page.locator(`${scope} section.chronology`).evaluate((section) => {
+    const lines = (element: Element) => {
+      const rects: DOMRect[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) { if (!text.textContent?.trim()) continue; const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
+      return rects;
+    };
+    const rows = [...section.querySelectorAll<HTMLElement>("ol > li")];
+    const gaps = rows.slice(1).map((row, index) => {
+      const above = lines(rows[index]!);
+      return { after: rows[index]!.dataset.chronologyEntry ?? "earlier", gap: Math.round((Math.min(...lines(row).map((rect) => rect.top)) - Math.max(...above.map((rect) => rect.bottom))) * 10) / 10 };
+    });
+    const stolen: string[] = [];
+    for (const open of section.classList.contains("phone") ? section.querySelectorAll<HTMLElement>(".chronology-open") : []) {
+      const row = open.closest("li")!;
+      const box = open.getBoundingClientRect();
+      if (box.height < 44) stolen.push(`${row.dataset.chronologyEntry}: ${box.height}px`);
+      for (const [x, y] of [[box.left + 1, box.top + 1], [box.right - 1, box.top + 1], [box.left + 1, box.bottom - 1], [box.right - 1, box.bottom - 1]] as const) {
+        /* A neighbouring row only: the screen's own fixed bars may cover a row near the window's edge. */
+        const neighbour = document.elementFromPoint(x, y)?.closest("li");
+        if (neighbour && neighbour !== row && section.contains(neighbour)) stolen.push(`${row.dataset.chronologyEntry} at ${Math.round(x)},${Math.round(y)}: ${neighbour.dataset.chronologyEntry ?? "earlier"}`);
+      }
+    }
+    return { gaps, stolen };
+  });
+}
+
+/** The landed mark's ring, from its outline and box, against text ranges: the room left to the entry's own words
+    on each side and to the neighbouring rows' words above and below. */
+async function landedRing(page: Page, selector: string) {
+  return page.locator(selector).evaluate((node) => {
+    const lines = (element: Element | null) => {
+      const rects: DOMRect[] = [];
+      if (!element) return rects;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) { if (!text.textContent?.trim()) continue; const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
+      return rects;
+    };
+    const style = getComputedStyle(node);
+    const offset = parseFloat(style.outlineOffset), width = parseFloat(style.outlineWidth);
+    const box = node.getBoundingClientRect();
+    const inner = { left: box.left - offset, right: box.right + offset, top: box.top - offset, bottom: box.bottom + offset };
+    const outer = { top: inner.top - width, bottom: inner.bottom + width };
+    const own = lines(node);
+    const above = lines(node.previousElementSibling), below = lines(node.nextElementSibling);
+    const round = (value: number) => Math.round(value * 10) / 10;
+    return {
+      left: round(Math.min(...own.map((rect) => rect.left)) - inner.left), right: round(inner.right - Math.max(...own.map((rect) => rect.right))),
+      top: round(Math.min(...own.map((rect) => rect.top)) - inner.top), bottom: round(inner.bottom - Math.max(...own.map((rect) => rect.bottom))),
+      above: above.length ? round(outer.top - Math.max(...above.map((rect) => rect.bottom))) : null,
+      below: below.length ? round(Math.min(...below.map((rect) => rect.top)) - outer.bottom) : null,
+    };
+  });
+}
+
 export async function captureTaskSummaryFrames(browser: Browser, base: string, out: string, phone: boolean) {
   const { translate } = await import("@/lib/i18n");
   fs.mkdirSync(out, { recursive: true });
@@ -2194,6 +2252,12 @@ export async function captureTaskSummaryFrames(browser: Browser, base: string, o
       expect(target.outline).toBe("solid 2px");
       expect(target.background).toBe(target.well);
       expect(await page.locator(`${csv} section.chronology`).getAttribute("data-chronology-hidden")).toBe("0");
+      /* The ring clears the entry's own words by 4 px on either side and a pixel above and below, and the
+         neighbouring rows' words by 2 px. */
+      const ring = await landedRing(page, `${csv} [data-chronology-entry="p-export:merge:update:0"]`);
+      expect(Math.min(ring.left, ring.right)).toBeGreaterThanOrEqual(4);
+      expect(Math.min(ring.top, ring.bottom)).toBeGreaterThanOrEqual(1);
+      expect(Math.min(ring.above ?? 99, ring.below ?? 99)).toBeGreaterThanOrEqual(2);
       await page.screenshot({ path: path.join(out, `${name}-csv-link.png`) });
       /* The mark lasts while the entry holds focus. */
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -2205,8 +2269,15 @@ export async function captureTaskSummaryFrames(browser: Browser, base: string, o
       expect(await entry("p-export:build:attempt:2").locator("[data-chronology-result]").innerText()).toStartWith(`${word("chronology.retryOf", { label: "Build · 1" })}: `);
       await fix.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
       await page.screenshot({ path: path.join(out, `${name}-csv-unfolded.png`) });
+      /* One gap between every pair of rows, whatever a row carries and whatever follows it, clearly wider than an
+         entry's heading-to-result gap; on the phone no row's 44 px open target loses a corner to a neighbour. */
+      const rhythm = await timelineRhythm(page, csv);
+      const spread = rhythm.gaps.map((entry) => entry.gap);
+      expect(Math.max(...spread) - Math.min(...spread)).toBeLessThanOrEqual(2);
+      expect(Math.min(...spread)).toBeGreaterThan(row.gap + 2);
+      expect(rhythm.stolen).toEqual([]);
       const timelineCuts = [...foldedCuts, ...await wholeEach(page, csv, "[data-chronology-result]")];
-      Object.assign(reading, { csv: { by: await panel.locator("[data-task-summary-by]").innerText(), firstLine, surface, refreshLine, fixLine, rule, row, link: linkBox, resultLink, hiddenBefore, target, summaryCuts, timelineCuts } });
+      Object.assign(reading, { csv: { by: await panel.locator("[data-task-summary-by]").innerText(), firstLine, surface, refreshLine, fixLine, rule, row, link: linkBox, resultLink, hiddenBefore, target, ring, rhythm, summaryCuts, timelineCuts } });
       expect(summaryCuts).toEqual([]);
       expect(timelineCuts).toEqual([]);
 

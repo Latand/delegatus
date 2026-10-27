@@ -6,10 +6,10 @@
     "src/components/kanban/taskChronologyModel.ts": "4398b24cdaecc9baf5a69c95f1a8a6e03cab18b098a34e5ff8119c79460e9e10",
     "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
     "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
-    "src/components/kanban/kanbanBoard.css": "577e3bfa4b753b36b27658b680e30dea70dc0cfd73ec4231e42f744d90f4e262",
+    "src/components/kanban/kanbanBoard.css": "175ebf742e2b617de4ca799ee3b96923ccd0b90e7b86d14d151026081c9acd10",
     "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
     "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
-    "src/components/kanban/issue1695BrowserHarness.ts": "a47ee9fa609ef6affb0393e1297d2cae003dd79f84240359b9b965fc07e73365"
+    "src/components/kanban/issue1695BrowserHarness.ts": "415ddf8855cca2ec133072c05744120115cb2795f378968007b895e39c523a5f"
   },
   "readings": [
     {
@@ -69,6 +69,83 @@
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
         },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -137,6 +214,83 @@
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
         },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -204,6 +358,83 @@
           "outline": "solid 2px",
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 270.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -273,6 +504,83 @@
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
         },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -340,6 +648,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -409,6 +794,83 @@
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
         },
+        "ring": {
+          "left": 4,
+          "right": 270.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -478,6 +940,83 @@
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
         },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -546,6 +1085,83 @@
           "outline": "solid 2px",
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -617,6 +1233,83 @@
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
         },
+        "ring": {
+          "left": 4,
+          "right": 279,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -685,6 +1378,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -755,6 +1525,83 @@
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
         },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
         "summaryCuts": [],
         "timelineCuts": []
       },
@@ -824,6 +1671,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 279,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []

@@ -6,10 +6,10 @@
     "src/components/kanban/taskChronologyModel.ts": "4398b24cdaecc9baf5a69c95f1a8a6e03cab18b098a34e5ff8119c79460e9e10",
     "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
     "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
-    "src/components/kanban/kanbanBoard.css": "577e3bfa4b753b36b27658b680e30dea70dc0cfd73ec4231e42f744d90f4e262",
+    "src/components/kanban/kanbanBoard.css": "175ebf742e2b617de4ca799ee3b96923ccd0b90e7b86d14d151026081c9acd10",
     "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
     "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
-    "src/components/kanban/issue1695BrowserHarness.ts": "a47ee9fa609ef6affb0393e1297d2cae003dd79f84240359b9b965fc07e73365"
+    "src/components/kanban/issue1695BrowserHarness.ts": "415ddf8855cca2ec133072c05744120115cb2795f378968007b895e39c523a5f"
   },
   "readings": [
     {
@@ -38,12 +38,12 @@
         },
         "row": {
           "resultLines": 5,
-          "time": 587,
-          "words": 587,
+          "time": 607,
+          "words": 607,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 605,
-          "bottom": 616,
+          "resultTop": 625,
+          "bottom": 636,
           "target": 44,
           "plainOpens": true
         },
@@ -65,6 +65,83 @@
           "outline": "solid 2px",
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 138.9,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -103,12 +180,12 @@
         },
         "row": {
           "resultLines": 5,
-          "time": 643,
-          "words": 643,
+          "time": 633,
+          "words": 633,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 661,
-          "bottom": 672,
+          "resultTop": 651,
+          "bottom": 662,
           "target": 44,
           "plainOpens": true
         },
@@ -130,6 +207,83 @@
           "outline": "solid 2px",
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 178.9,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -168,12 +322,12 @@
         },
         "row": {
           "resultLines": 5,
-          "time": 587,
-          "words": 587,
+          "time": 607,
+          "words": 607,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 605,
-          "bottom": 616,
+          "resultTop": 625,
+          "bottom": 636,
           "target": 44,
           "plainOpens": true
         },
@@ -195,6 +349,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 138.9,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -233,12 +464,12 @@
         },
         "row": {
           "resultLines": 5,
-          "time": 643,
-          "words": 643,
+          "time": 633,
+          "words": 633,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 661,
-          "bottom": 672,
+          "resultTop": 651,
+          "bottom": 662,
           "target": 44,
           "plainOpens": true
         },
@@ -260,6 +491,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 178.9,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -298,12 +606,12 @@
         },
         "row": {
           "resultLines": 6,
-          "time": 587,
-          "words": 587,
+          "time": 607,
+          "words": 607,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 605,
-          "bottom": 616,
+          "resultTop": 625,
+          "bottom": 636,
           "target": 44,
           "plainOpens": true
         },
@@ -325,6 +633,83 @@
           "outline": "solid 2px",
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 147.7,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -363,12 +748,12 @@
         },
         "row": {
           "resultLines": 5,
-          "time": 631,
-          "words": 631,
+          "time": 651,
+          "words": 651,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 649,
-          "bottom": 660,
+          "resultTop": 669,
+          "bottom": 680,
           "target": 44,
           "plainOpens": true
         },
@@ -390,6 +775,83 @@
           "outline": "solid 2px",
           "background": "rgb(242, 239, 233)",
           "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 187.7,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -428,12 +890,12 @@
         },
         "row": {
           "resultLines": 6,
-          "time": 587,
-          "words": 587,
+          "time": 607,
+          "words": 607,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 605,
-          "bottom": 616,
+          "resultTop": 625,
+          "bottom": 636,
           "target": 44,
           "plainOpens": true
         },
@@ -455,6 +917,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 147.7,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -493,12 +1032,12 @@
         },
         "row": {
           "resultLines": 5,
-          "time": 631,
-          "words": 631,
+          "time": 651,
+          "words": 651,
           "gap": 4,
           "nextGap": 30,
-          "resultTop": 649,
-          "bottom": 660,
+          "resultTop": 669,
+          "bottom": 680,
           "target": 44,
           "plainOpens": true
         },
@@ -520,6 +1059,83 @@
           "outline": "solid 2px",
           "background": "rgb(21, 22, 29)",
           "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 187.7,
+          "top": 13,
+          "bottom": 13,
+          "above": 15,
+          "below": 15
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 30
+            },
+            {
+              "after": "p-export:started",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 30
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 30
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 30
+            }
+          ],
+          "stolen": []
         },
         "summaryCuts": [],
         "timelineCuts": []

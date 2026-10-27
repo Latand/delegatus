@@ -2082,8 +2082,10 @@
 .chronology-open { text-align: left; color: inherit; border-radius: 3px; }
 .chronology-open:hover { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
 .chronology-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
-/* The entry an answer's link landed on: the board's focus ring round the whole entry and a well tint, until focus leaves it. */
-.chronology-entry.landed { outline: 2px solid var(--color-accent); outline-offset: 1px; border-radius: 4px; background: var(--surface-well); }
+/* The entry an answer's link landed on: the board's focus ring round the whole entry and a well tint, until focus
+   leaves it. The ring is drawn inside a box grown into the gutters by a padding its margin takes back, so it clears
+   the entry's own words and its neighbours' without moving a line. */
+.chronology-entry.landed { padding: 2px 6px; margin: -2px -6px; outline: 2px solid var(--color-accent); outline-offset: -2px; border-radius: 4px; background: var(--surface-well); }
 .chronology-detail summary { cursor: pointer; color: var(--color-muted); width: fit-content; }
 .chronology-detail summary:hover { color: var(--color-secondary); }
 .chronology-detail p { margin: 2px 0 0; max-height: 96px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-secondary); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-caption); }
@@ -2110,22 +2112,30 @@
 .chronology.phone .chronology-result .chronology-link::after { content: ""; position: absolute; inset: -13px 0; }
 /* The phone: the time leads the entry's line, and the stop's ⋯ keeps 44 px. */
 .chronology.phone { padding: 8px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); }
+/* Every row, whatever it carries, keeps 13 px above its first line and below its last: two rows' 44 px targets
+   meet without overlapping, and one gap separates every pair of rows. A target on a row's first or last line
+   reaches into that room with a margin that takes its own padding back, so it moves no words. */
+.chronology.phone ol { gap: 0; }
+.chronology.phone .chronology-entry, .chronology.phone .chronology-earlier { padding: 13px 0; }
 .chronology.phone .chronology-entry { display: flex; align-items: flex-start; gap: 6px; line-height: 18px; font-size: var(--text-ui); }
+.chronology.phone .chronology-entry.landed { padding: 13px 6px; margin: 0 -6px; }
 .chronology.phone .chronology-mark { display: none; }
 .chronology.phone .chronology-what { flex: 1; }
-.chronology.phone .chronology-menu { flex: none; margin-right: -8px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--color-muted); }
+.chronology.phone .chronology-menu { flex: none; margin: -13px -8px -13px 0; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--color-muted); }
 .chronology.phone .chronology-menu svg { width: 18px; height: 18px; }
 .chronology.phone .chronology-earlier button, .chronology.phone .chronology-detail summary { min-height: 44px; display: inline-flex; align-items: center; }
-/* An entry that opens its conversation is a whole 44 px row on the phone; its words sit at the row's top
-   padding, where its time sits too, so a result line under them reads as the same entry. */
-.chronology.phone .chronology-open { display: flex; align-items: flex-start; width: 100%; min-height: 44px; padding-top: 13px; }
-.chronology.phone .chronology-entry:has(> .chronology-what > .chronology-open) .chronology-time { padding-top: 13px; }
-/* Its result line sits in the row's bottom padding, right under its words: the row keeps 44 px, a tap on
-   the result's words opens the entry, and the result's link keeps its own target. */
+.chronology.phone .chronology-earlier button { margin: -13px 0; }
+/* An entry that opens its conversation: its words are a 44 px row reaching 13 px above and below them. */
+.chronology.phone .chronology-open { display: flex; align-items: flex-start; width: 100%; min-height: 0; padding: 13px 0; margin-top: -13px; }
+.chronology.phone .chronology-open:last-child { margin-bottom: -13px; }
+/* Its result line sits in the row's bottom reach, right under its words: a tap on the result's words opens the
+   entry, and the result's link keeps its own target. */
 .chronology.phone .chronology-open + .chronology-result { margin-top: -13px; pointer-events: none; }
 .chronology.phone .chronology-open + .chronology-result .chronology-link { pointer-events: auto; }
-/* A result's link reaches 13 px below its line; the next entry starts past it. */
-.chronology.phone .chronology-entry:has(> .chronology-what > .chronology-result .chronology-link) { margin-bottom: 10px; }
+/* A result's link reaches 13 px below its line: a «Details» or an answer under it starts past that reach. */
+.chronology.phone .chronology-result:has(.chronology-link):not(:last-child) { margin-bottom: 13px; }
+/* The last line's 44 px, «Details» or a stop's answers, reaches into the row's bottom room. */
+.chronology.phone .chronology-detail:last-child:not([open]), .chronology.phone .chronology-acts:last-child { margin-bottom: -13px; }
 /* ── Task limit spend (docs/design/task-limit-spend.md §7.2, variant 2) ─────
    At the end of the state line, per provider: its engine mark and a scale of
    four cells, filled in the engine's colour; a bar, so it never reads as the
