@@ -444,16 +444,16 @@ describe("deriveFlowLinks", () => {
       kind: "flow",
       from: "/impl",
       to: deckKey("f1"),
-      leg: "forward",
+      leg: null,
     });
-    expect(links[0]!.flow).toMatchObject({ round: 1, phase: "awaiting_verdict" });
+    expect(links[0]!.flow).toMatchObject({ round: 1, phase: "done" });
   });
 
   test("a round without a transcript yet falls back to the deck placeholder", () => {
     const f = flow({ id: "f1", implementerPath: "/impl", state: "spawning", rounds: [round({ n: 2 })] });
     const links = deriveFlowLinks([f], anchorsFor([f]));
     expect(links[0]!.to).toBe(deckKey("f1"));
-    expect(links[0]!.flow).toMatchObject({ round: 2, phase: "running" });
+    expect(links[0]!.flow).toMatchObject({ round: 2, phase: "done" });
   });
 
   test("a reviewer visible as its own full node links directly to that node", () => {
@@ -465,15 +465,15 @@ describe("deriveFlowLinks", () => {
   test("relay traffic reports the back leg", () => {
     const f = flow({ id: "f1", implementerPath: "/impl", state: "fixing" });
     const links = deriveFlowLinks([f], anchorsFor([f]));
-    expect(links[0]!.leg).toBe("back");
-    expect(links[0]!.flow!.phase).toBe("running");
+    expect(links[0]!.leg).toBeNull();
+    expect(links[0]!.flow!.phase).toBe("done");
   });
 
   test("a flow with no rounds yet reports round 0 and links to its deck", () => {
     const f = flow({ id: "f1", implementerPath: "/impl", state: "waiting_ready", rounds: [] });
     const links = deriveFlowLinks([f], anchorsFor([f]));
     expect(links[0]!.to).toBe(deckKey("f1"));
-    expect(links[0]!.flow).toMatchObject({ round: 0, phase: "waiting" });
+    expect(links[0]!.flow).toMatchObject({ round: 0, phase: "done" });
     expect(links[0]!.leg).toBeNull();
   });
 

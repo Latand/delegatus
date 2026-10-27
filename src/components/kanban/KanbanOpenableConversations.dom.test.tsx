@@ -225,6 +225,8 @@ test.each([
   expect(opened).toEqual(["spawn:launch-failed"]);
   /* The launch view keeps the cause in its error tooltip and a working Retry. */
   const launchView = host.querySelector('[data-launch-state="failed"]') as HTMLElement | null;
+  expect(launchView?.textContent).toContain("The launch ended with an error.");
+  expect(launchView?.textContent).toContain("First message: failed");
   expect(launchView?.querySelector('[data-launch-chip="error"]')?.getAttribute("title")).toBe(reason);
   flushSync(() => (launchView!.querySelector("[data-launch-retry]") as HTMLElement).click());
   expect(retried).toEqual(["spawn:launch-failed"]);

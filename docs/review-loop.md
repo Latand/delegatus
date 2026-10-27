@@ -34,8 +34,9 @@ The number of rounds is fixed when the pipeline is created, on the reviewer's
 (`src/lib/reviewHistory/limits.ts`, `src/lib/pipelines/limits.ts`). What the
 number buys depends on `onExhausted` below: under `advance` and
 `stop-after-fix` N rounds are N reviews and N fixes, the last fix repairing the
-final review's findings; under `park` N rounds are N fixes and N + 1 reviews.
-Nothing adds a round afterwards: `continue-review` and the **One more round**
+final review's findings. A terminal `advance` gate then checks that fix once;
+under `park` N rounds are N fixes and N + 1 reviews.
+No additional fix rounds are granted afterwards: `continue-review` and the **One more round**
 action are always refused (`src/components/kanban/stagesModel.ts`), so a budget
 that was too small needs a new pipeline.
 
@@ -47,13 +48,15 @@ The edge's `onExhausted` decides (`src/lib/pipelines/types.ts`). With
 - `advance`, the default: two reviews, and the last review's findings go to
   the fix stage once more. When that fix passes the pipeline follows the
   reviewer's own pass edge without a re-review, marking the fix as not
-  re-reviewed.
+  re-reviewed. A terminal gate (`next: null`) re-checks the last fix's head
+  once before completion. A pass completes; a fail parks in `needs_decision`
+  with a budget-spent detail and the remaining findings. Retries and restarts
+  preserve that decision and never add another automatic fix.
 - `stop-after-fix`: two reviews and the same last fix. If that fix wrote a new
   head, nobody reviewed it, and the pipeline waits in `needs_review` on that
   head until you press **Accept as is**. If the fix left the head unchanged
   there is nothing unreviewed to accept: the pipeline follows the reviewer's
-  pass edge and completes (or moves on) without your acceptance, exactly as
-  under `advance`.
+  pass edge and completes (or moves on) without your acceptance.
 - `park`: the second fix is followed by a third review. If it fails too, the
   pipeline parks in `needs_decision` at the reviewer before any further fix
   and waits for you. A third review that passes follows the pass edge.
@@ -64,8 +67,10 @@ line says the last fix was not re-reviewed. The current result precedes the
 original description, preserving the producer's text and attribution footer;
 it supersedes earlier head, checks and review-status statements. The refreshed
 text passes the publication privacy gates and is read back from the forge.
-A failed refresh is reported on the lane. This adds no review round and keeps
-the configured merge policy.
+A failed refresh is reported on the lane. A terminal gate's final re-check
+still has to pass before the lane can complete and reach automatic merging.
+Completed records from older releases whose terminal budget fix was never
+re-checked also fail automatic merge admission.
 
 ## Defining one
 

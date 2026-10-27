@@ -861,7 +861,7 @@ test("override-stage rejects an unknown/disallowed role and an incompatible role
   const unknown = await patchPipeline(created.id, { action: "override-stage", stageId: "build", engine: "codex", model: "gpt-5.6-codex" }, ports);
   expect(unknown).toMatchObject({
     status: 400,
-    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra",
   });
 });
 
@@ -1148,19 +1148,19 @@ test("onExhausted: park keeps today's park once the review budget is spent (#186
   expect(current.stages.find((stage) => stage.id === "critique")!.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "park" });
 });
 
-test("a spent review budget on the last stage completes after its final fix (#1868)", async () => {
+test("a spent review budget on the last stage parks after its final re-check (#3037)", async () => {
   const h = harness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1);
 
   const current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
-  expect(current.cursor).toBeNull();
-  expect(current.reviewPending).toBeUndefined();
+  expect(current.state).toBe("needs_decision");
+  expect(current.cursor?.stageId).toBe("critique");
+  expect(current.reviewPending?.terminalRecheck).toBe(true);
   expect(current.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
   const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(critiques).toHaveLength(1);
+  expect(critiques).toHaveLength(2);
   expect(critiques[0]).toMatchObject({ state: "failed", budgetSpent: true, verdict: { findings: ["P2 evidence gap 1"] } });
 });
 
@@ -1415,26 +1415,26 @@ test("another gate's fail loop gives a spent gate a fresh bounded check cycle (#
   expect(pipeline.state).toBe("completed");
   expect(pipeline.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(2);
   expect(pipeline.runs.find((run) => run.stageId === "fix")!.attempts).toHaveLength(4);
-  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail"]);
+  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail", "pass"]);
 });
 
-test.each([1, 3, 5])("terminal advance budget %s completes after its N reviews and final fix", async (reviews) => {
+test.each([1, 3, 5])("terminal advance budget %s parks after its N reviews, final fix and terminal re-check", async (reviews) => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: reviews }, null) as never);
   const { pipeline } = await driveWithController(h);
   const builds = pipeline.runs.find(run => run.stageId === "build")!.attempts;
   const critiques = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.cursor).toBeNull();
-  expect(pipeline.reviewPending).toBeUndefined();
-  expect(critiques).toHaveLength(reviews);
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.cursor?.stageId).toBe("critique");
+  expect(pipeline.reviewPending?.terminalRecheck).toBe(true);
+  expect(critiques).toHaveLength(reviews + 1);
   expect(builds).toHaveLength(reviews + 1);
   expect(builds.at(-1)!.input).toContain(`P2 evidence gap ${reviews}`);
   expect(builds.at(-1)!.state).toBe("passed");
-  expect(critiques.every(a => !a.activatedBy?.budgetRecheck)).toBe(true);
-  expect(pipelineCompletedUnreviewed(pipeline)?.stageId).toBe("critique");
+  expect(critiques.at(-1)!.activatedBy?.budgetRecheck).toBe(true);
+  expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews);
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews + 1);
 });
 
 
@@ -2374,6 +2374,28 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(parked.lastPassedCommit).toBe(box.passedSha);
   expect(parked.publishedCommit ?? null).toBeNull();
   expect(box.order).toEqual(["commit", "push-rejected"]);
+  expect(h.flows.size).toBe(0);
+});
+
+test("a read-write privacy gate checks the accepted committed head and leaves a rejected head unpublished (#2424)", async () => {
+  const h = harness();
+  const box = publishHarness(h, { privacyRejects: true });
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+
+  const rejected = loadPipelines()[0]!;
+  expect(box.order).toEqual(["commit", `privacy:${box.passedSha}:${box.passedSha}`]);
+  expect(rejected).toMatchObject({
+    state: "needs_decision",
+    lastPassedCommit: box.passedSha,
+    publishedCommit: null,
+    stateDetail: expect.stringContaining("privacy"),
+  });
+  expect(rejected.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
+  expect(box.remote()).toBeNull();
   expect(h.flows.size).toBe(0);
 });
 
