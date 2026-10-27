@@ -94,6 +94,19 @@ test("the orchestrator's own retained task consumes no worker slot", async () =>
   expect(f.h.spawnInputs).toHaveLength(1);
 });
 
+test("a completed proactive outcome retains authority for its reviewed publication", async () => {
+  const f = await fixture("completed-effect");
+  await f.tick(); await f.pass();
+  for (const [n, role] of [[2, "builder"], [3, "reviewer"]] as const) {
+    expect((await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role, conversationId: `conversation_stage_${n}` }, f.h.ports)).error).toBeUndefined();
+    await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, "pass", "Checked")], f.h.ports);
+    await f.tick();
+  }
+  expect(f.current()).toMatchObject({ state: "completed", closedAt: expect.any(String) });
+  expect(() => assertProactivePipelineExecution(f.current(), "effect")).not.toThrow();
+});
+
 test("the first prompt uses its receipt account before a native generation exists", async () => {
   const f = await fixture("first-prompt");
   await f.tick();
