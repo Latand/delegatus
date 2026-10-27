@@ -5,7 +5,7 @@ import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -22,7 +22,7 @@ import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, 
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import type { ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationDraftLane, DraftStartButton, DraftStartNote } from "@/components/pipelines/DraftStageControls";
-import { conversationRefusalText, useConversationDraftAttempt } from "@/components/pipelines/useConversationDraft";
+import { conversationRefusalText, useConversationDraftAttempt, useDroppedFocus } from "@/components/pipelines/useConversationDraft";
 import { laneMergeUnsettled } from "@/components/pipelines/pipelineBlockModel";
 import { needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
@@ -278,18 +278,40 @@ export interface KanbanCardProps {
 function ConversationDraftNotice({ store, taskId }: { store: ConversationDrafts; taskId: string }) {
   const { t } = useLocale();
   const attempt = useConversationDraftAttempt(store, taskId);
+  const ref = useRef<HTMLDivElement>(null);
+  useDroppedFocus(ref, attempt?.phase ?? null);
   if (!attempt) return null;
   const title = cleanTitle(attempt.source.title, 90);
   if (attempt.phase === "creating") {
     return (
-      <div className="draft-notice info" role="status" data-conversation-draft="creating">
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="creating">
         <span className="msg-text">{t("kanban.fromConversation.preparing", { title, branch: attempt.source.branch })}</span>
+      </div>
+    );
+  }
+  if (attempt.phase === "checking") {
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="checking">
+        <span className="msg-text">{t("kanban.fromConversation.checking", { title })}</span>
+      </div>
+    );
+  }
+  if (attempt.phase === "checked" && attempt.checked) {
+    /* What the conversation reads now, before anything is posted for it. */
+    const checked = attempt.checked;
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="checked">
+        <span className="msg-text">{t("kanban.fromConversation.checked", { title, branch: attempt.source.branch })}</span>
+        <span className="acts">
+          <button type="button" data-conversation-draft-create="" onClick={() => void store.create(taskId, checked)}>{t("kanban.fromConversation.create")}</button>
+          <button type="button" data-conversation-draft-dismiss="" onClick={() => store.dismiss(taskId)}>{t("common.close")}</button>
+        </span>
       </div>
     );
   }
   if (attempt.phase === "unknown") {
     return (
-      <div className="draft-notice warn" role="status" data-conversation-draft="unknown">
+      <div ref={ref} className="draft-notice warn" role="status" data-conversation-draft="unknown">
         <span className="msg-text">{t("kanban.fromConversation.unknown")}</span>
         <button type="button" data-conversation-draft-check="" onClick={() => void store.retry(taskId)}>{t("kanban.pipelineAct.checkAgain")}</button>
       </div>
@@ -297,7 +319,7 @@ function ConversationDraftNotice({ store, taskId }: { store: ConversationDrafts;
   }
   const changed = !attempt.refusal?.retryable;
   return (
-    <div className="draft-notice error" role="alert" data-conversation-draft="refused" data-conversation-draft-code={attempt.refusal?.code ?? ""}>
+    <div ref={ref} className="draft-notice error" role="alert" data-conversation-draft="refused" data-conversation-draft-code={attempt.refusal?.code ?? ""}>
       <span className="msg-text">{t("kanban.fromConversation.notCreated", { reason: conversationRefusalText(t, attempt.refusal) })}</span>
       <span className="acts">
         <button type="button" data-conversation-draft-retry="" onClick={() => void store.retry(taskId)}>{changed ? t("kanban.fromConversation.refresh") : t("kanban.retry")}</button>

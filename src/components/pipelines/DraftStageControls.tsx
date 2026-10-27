@@ -80,7 +80,7 @@ export function DraftStartButton({ pipeline, title, store, drafts, ports, varian
       className={variant === "board" ? "btn primary draft-start" : `${PHONE_BUTTON} w-full bg-brand text-on-brand active:opacity-90`}
       data-draft-start={pipeline.id}
       data-draft-start-state={state?.phase ?? (unsaved ? "blocked" : "ready")}
-      aria-label={t("kanban.fromConversation.startAria", { title })}
+      aria-label={t("kanban.fromConversation.startAria", { label, title })}
       aria-describedby={`draft-start-note-${pipeline.id}`}
       disabled={disabled}
       onClick={(event) => {

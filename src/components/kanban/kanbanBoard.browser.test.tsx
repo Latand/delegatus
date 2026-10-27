@@ -40134,16 +40134,26 @@ describe("start a pipeline from a conversation", () => {
     const label = `${combo.width}-${combo.locale}-${combo.scheme}`;
     const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=from-conversation`, { width: combo.width, height: combo.height }, combo.scheme, combo.locale, "reduce", phone(combo));
     const states: Record<string, unknown> = {};
-    let post: "hold" | "ok" | "refuse" | "lose" = "ok";
+    let post: "hold" | "ok" | "refuse" | "lose" | "changed" = "ok";
     const held: Array<() => Promise<void>> = [];
+    /* What the source reads as; a check after a refusal may find it on another branch. */
+    let read = { branch: BRANCH, revision: "rev-1", hold: false };
+    const heldReads: Array<() => Promise<void>> = [];
+    const posted: Array<{ clientRequestId: string; sourceRevision: string }> = [];
     await page.route("**/api/pipelines/from-conversation**", async (route) => {
       if (route.request().method() === "GET") {
-        await route.fulfill({ json: { ok: true, source: { conversationId: "conversation_csv-export", title: SOURCE_TITLE[combo.locale], branch: BRANCH, head: HEAD, sourceRevision: "rev-1", canCreate: true } } });
+        const { branch, revision } = read;
+        const answer = () => route.fulfill({ json: { ok: true, source: { conversationId: "conversation_csv-export", title: SOURCE_TITLE[combo.locale], branch, head: HEAD, sourceRevision: revision, canCreate: true } } });
+        if (read.hold) heldReads.push(answer);
+        else await answer();
         return;
       }
+      const body = route.request().postDataJSON() as { clientRequestId: string; sourceRevision: string };
+      posted.push({ clientRequestId: body.clientRequestId, sourceRevision: body.sourceRevision });
       const answer = () => route.fulfill({ status: 201, json: { ok: true, pipeline: draftRecord(combo.locale) } });
       if (post === "hold") held.push(answer);
       else if (post === "refuse") await route.fulfill({ status: 409, json: { error: "card no longer holds source", code: "SOURCE_NOT_ON_TASK" } });
+      else if (post === "changed") await route.fulfill({ status: 409, json: { error: "source changed after preview", code: "SOURCE_CHANGED" } });
       else if (post === "lose") await route.abort("connectionreset");
       else await answer();
     });
@@ -40267,6 +40277,68 @@ describe("start a pipeline from a conversation", () => {
       await (await openMenu()).click();
       await page.locator('[data-conversation-draft="unknown"]').waitFor();
       await shot("create-unknown", ['[data-conversation-draft="unknown"]'], [phone(combo) ? "[data-conversation-draft-retry]" : "[data-conversation-draft-check]"]);
+      /* 11. The menu while that answer is lost names the request's own source and asks for it again. */
+      const lostKey = posted.at(-1)!.clientRequestId;
+      read = { branch: `${BRANCH}-v2`, revision: "rev-2", hold: false };
+      const cardMenu = '.card[data-id="task:t-csv-export"] [data-menu]';
+      let again: Locator;
+      if (phone(combo)) again = await openMenu();
+      else {
+        /* By keyboard: ⋯ with Enter, the row with Enter. */
+        await page.locator(cardMenu).first().focus();
+        await page.keyboard.press("Enter");
+        again = page.locator('.menu [data-cm-item="fromConversation"]:not([aria-disabled="true"])');
+        await again.waitFor();
+      }
+      expect(await again.textContent()).toContain(`${SOURCE_TITLE[combo.locale]} · ${BRANCH}`);
+      expect(await again.textContent()).not.toContain(`${BRANCH}-v2`);
+      const unknownNote = phone(combo) ? '[data-phone-task-menu-note="fromConversation"]' : '.menu [data-cm-item="fromConversation"] .why.warn';
+      expect(await page.locator(unknownNote).textContent()).toBe(t("kanban.fromConversation.unknownRow"));
+      await shot("unknown-menu", [phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"] .why:not(.warn)', unknownNote], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      post = "changed";
+      if (phone(combo)) await again.click();
+      else {
+        await again.focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.locator('[data-conversation-draft="refused"][data-conversation-draft-code="SOURCE_CHANGED"]').waitFor();
+      expect(posted.slice(-2).map((entry) => entry.clientRequestId)).toEqual([lostKey, lostKey]);
+      /* Keyboard focus is back on the card's ⋯, beside the notice. */
+      const focus = () => page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        if (active?.hasAttribute("data-menu")) return `⋯ ${active.getAttribute("data-menu")}`;
+        if (active?.hasAttribute("data-conversation-draft-create")) return "Create";
+        return active?.tagName ?? null;
+      });
+      if (!phone(combo)) expect(await focus()).toBe("⋯ task:t-csv-export");
+      expect(await page.locator("[data-conversation-draft-retry]").textContent()).toBe(t("kanban.fromConversation.refresh"));
+      await shot("create-changed", ['[data-conversation-draft="refused"] ' + (phone(combo) ? "p" : ".msg-text")], ["[data-conversation-draft-retry]", "[data-conversation-draft-dismiss]"]);
+      /* 12. Check again reads the source while saying so, then shows the branch it found; it posts nothing. */
+      const postsBefore = posted.length;
+      read = { ...read, hold: true };
+      if (phone(combo)) await page.locator("[data-conversation-draft-retry]").click();
+      else {
+        await page.locator("[data-conversation-draft-retry]").focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.locator('[data-conversation-draft="checking"]').waitFor();
+      expect(await page.locator('[data-conversation-draft="checking"]').textContent()).toBe(t("kanban.fromConversation.checking", { title: SOURCE_TITLE[combo.locale] }));
+      await shot("create-checking", ['[data-conversation-draft="checking"]']);
+      read = { ...read, hold: false };
+      await heldReads.shift()!();
+      await page.locator('[data-conversation-draft="checked"]').waitFor();
+      expect(posted.length).toBe(postsBefore);
+      const checkedText = '[data-conversation-draft="checked"] ' + (phone(combo) ? "p" : ".msg-text");
+      expect(await page.locator(checkedText).textContent()).toBe(t("kanban.fromConversation.checked", { title: SOURCE_TITLE[combo.locale], branch: `${BRANCH}-v2` }));
+      /* The Check button that held focus is gone: Create, where the answer is, takes it. */
+      if (!phone(combo)) expect(await focus()).toBe("Create");
+      await shot("create-checked", [checkedText, "[data-conversation-draft-create]"], ["[data-conversation-draft-create]", "[data-conversation-draft-dismiss]"]);
+      post = "hold";
+      await page.locator("[data-conversation-draft-create]").click();
+      await page.locator('[data-conversation-draft="creating"]').waitFor();
+      expect(posted.at(-1)?.sourceRevision).toBe("rev-2");
+      expect(posted.at(-1)?.clientRequestId).not.toBe(lostKey);
+      states.requestKeys = posted.map((entry, index) => ({ n: index + 1, sameAsLost: entry.clientRequestId === lostKey, sourceRevision: entry.sourceRevision }));
       expect(pageErrors).toEqual([]);
       return { label, states, pageErrors };
     } finally {

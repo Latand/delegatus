@@ -165,3 +165,45 @@ test("a started lane, or a draft no conversation made, carries none of these con
   expect(q(plain.host, "[data-draft-start]")).toBeNull();
   expect(q(plain.host, "[data-mobile2-dock]")).toBeNull();
 });
+
+test("Start's accessible name begins with the words it shows, on the board and the phone, idle and starting, in en and uk", async () => {
+  const { DraftStartButton } = await import("./DraftStageControls");
+  const { resetLocaleForTests, setLocale } = await import("@/lib/i18n");
+  const names: string[][] = [];
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      setLocale(locale);
+      for (const variant of ["board", "phone"] as const) {
+        /* A Start that is never answered stays starting. */
+        const ports: PipelinePorts = { read: async () => null, patch: () => new Promise(() => {}), refresh: () => {} };
+        const store = new ConversationDrafts({ post: async () => ({ kind: "unknown", error: "unused" }), preview: async () => ({ kind: "failed", refusal: null }), apply: () => {}, newKey: () => "k" });
+        const host = dom.document.createElement("div");
+        dom.document.body.appendChild(host);
+        const root = createRoot(host as unknown as Element);
+        roots.push(root);
+        flushSync(() => root.render(<DraftStartButton pipeline={draft()} title="CSV export fails on large projects" store={store} drafts={new StageDrafts()} ports={ports} variant={variant} />));
+        const button = () => q(host as unknown as HTMLElement, '[data-draft-start="p-export"]')!;
+        for (const phase of ["idle", "starting"]) {
+          if (phase === "starting") click(button());
+          const shown = button().textContent!;
+          const name = button().getAttribute("aria-label")!;
+          names.push([locale, variant, phase, shown, name]);
+          expect(name.startsWith(shown)).toBe(true);
+          expect(name).toContain("CSV export fails on large projects");
+        }
+      }
+    }
+  } finally {
+    resetLocaleForTests();
+  }
+  expect(names.map((entry) => entry.slice(3))).toEqual([
+    ["Start", "Start · CSV export fails on large projects"],
+    ["Starting…", "Starting… · CSV export fails on large projects"],
+    ["Start pipeline", "Start pipeline · CSV export fails on large projects"],
+    ["Starting…", "Starting… · CSV export fails on large projects"],
+    ["Запустити", "Запустити · CSV export fails on large projects"],
+    ["Запускаю…", "Запускаю… · CSV export fails on large projects"],
+    ["Запустити пайплайн", "Запустити пайплайн · CSV export fails on large projects"],
+    ["Запускаю…", "Запускаю… · CSV export fails on large projects"],
+  ]);
+});

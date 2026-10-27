@@ -1585,22 +1585,32 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const fromConversationItem = (card: KanbanCardModel): KanbanMenuItem[] => {
     const task = card.task;
     if (!task || card !== menuCard || !menuSource?.conversationId) return [];
-    const base = { type: "item" as const, id: "fromConversation", label: t("kanban.fromConversation.menu"), icon: <Workflow className="cm-lane" aria-hidden />, keepFocus: true };
+    /* Choosing it hands focus back to ⋯, so a refusal or a lost answer that
+       follows leaves the keyboard on the card that says it. */
+    const base = { type: "item" as const, id: "fromConversation", label: t("kanban.fromConversation.menu"), icon: <Workflow className="cm-lane" aria-hidden /> };
     const fileTitle = cleanTitle(menuSource.title ?? "", 90) || t("kanban.untitledConversation");
     const existing = card.pipelines.find((entry) => entry.pipeline.state === "draft" && entry.pipeline.conversationSource?.conversationId === menuSource.conversationId);
     if (existing) {
-      return [{ ...base, why: `${fileTitle} · ${existing.pipeline.conversationSource!.branch}`, onSelect: () => openConversationDraft(card.id, existing.pipeline) }];
+      /* The Builder's first message opens and takes focus. */
+      return [{ ...base, keepFocus: true, why: `${fileTitle} · ${existing.pipeline.conversationSource!.branch}`, onSelect: () => openConversationDraft(card.id, existing.pipeline) }];
     }
     const state = sourcePreview.state;
-    if (conversationDrafts.attempt(task.id)?.phase === "creating") {
-      return [{ ...base, why: fileTitle, disabled: true, onSelect: () => {} }];
+    /* A request on its way, or one that may have landed, keeps its own source:
+       the row names it and never posts under a new key. */
+    const attempt = conversationDrafts.attempt(task.id);
+    const pending = attempt ? `${cleanTitle(attempt.source.title, 90) || fileTitle} · ${attempt.source.branch}` : fileTitle;
+    if (attempt?.phase === "creating" || attempt?.phase === "checking") {
+      return [{ ...base, why: pending, disabled: true, onSelect: () => {} }];
+    }
+    if (attempt?.phase === "unknown") {
+      return [{ ...base, why: pending, warn: t("kanban.fromConversation.unknownRow"), onSelect: () => { void conversationDrafts.retry(task.id); } }];
     }
     if (!state || state.kind === "pending") return [{ ...base, why: t("kanban.fromConversation.checking", { title: fileTitle }), disabled: true, onSelect: () => {} }];
     if (state.kind === "failed") {
       /* A reason that may pass: choosing the row reads the source again. */
       const transient = !state.refusal || state.refusal.retryable === true;
       const anchor = menu.open?.anchor;
-      return [{ ...base, why: fileTitle, warn: conversationRefusalText(t, state.refusal), disabled: !transient, onSelect: () => {
+      return [{ ...base, keepFocus: true, why: fileTitle, warn: conversationRefusalText(t, state.refusal), disabled: !transient, onSelect: () => {
         sourcePreview.reload();
         if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "card", cardId: card.id } }));
       } }];

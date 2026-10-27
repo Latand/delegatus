@@ -23,7 +23,7 @@ import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { conversationSourceFile, type ConversationDraftAttempt, type ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
-import { conversationRefusalText, useConversationDraftAttempt, useConversationPreview, useLandedDraft } from "@/components/pipelines/useConversationDraft";
+import { conversationRefusalText, useConversationDraftAttempt, useConversationPreview, useDroppedFocus, useLandedDraft } from "@/components/pipelines/useConversationDraft";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { PhoneTaskSpend } from "@/components/kanban/TaskSpend";
 import { PhonePrototypeRow } from "@/components/prototypeReview/PrototypeReviewButton";
@@ -286,24 +286,37 @@ function FieldEditor({ field, editing, onDraft, onSave, onCancel, onUseTheirs }:
 
 /* ── Sections ───────────────────────────────────────────────────────────── */
 
-/** A conversation owed an answer the task's blocks do not already carry: a
-    question or a plan to approve (§3.5, 3). */
 /** A pipeline being drafted from the task's conversation, or the answer that it was not, in place on the task. */
 function ConversationDraftNote({ attempt, store }: { attempt: ConversationDraftAttempt; store: ConversationDrafts }) {
   const { t } = useLocale();
+  const ref = useRef<HTMLDivElement>(null);
+  useDroppedFocus(ref, attempt.phase);
   const title = cleanTitle(attempt.source.title, 90);
   const button = "inline-flex min-h-11 items-center rounded-[8px] px-2 text-ui font-semibold text-accent underline underline-offset-2 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-  if (attempt.phase === "creating") {
+  if (attempt.phase === "creating" || attempt.phase === "checking") {
     return (
-      <p role="status" data-conversation-draft="creating" className="m-0 shrink-0 rounded-[12px] bg-accent-soft px-3 py-2.5 text-ui text-accent [overflow-wrap:anywhere]">
-        {t("kanban.fromConversation.preparing", { title, branch: attempt.source.branch })}
+      <p role="status" data-conversation-draft={attempt.phase} className="m-0 shrink-0 rounded-[12px] bg-accent-soft px-3 py-2.5 text-ui text-accent [overflow-wrap:anywhere]">
+        {attempt.phase === "creating" ? t("kanban.fromConversation.preparing", { title, branch: attempt.source.branch }) : t("kanban.fromConversation.checking", { title })}
       </p>
+    );
+  }
+  if (attempt.phase === "checked" && attempt.checked) {
+    /* What the conversation reads now, before anything is posted for it. */
+    const checked = attempt.checked;
+    return (
+      <div ref={ref} role="status" data-conversation-draft="checked" className="flex shrink-0 flex-col gap-1 rounded-[12px] bg-accent-soft px-3 pt-2.5 pb-1 text-ui text-accent">
+        <p className="m-0 [overflow-wrap:anywhere]">{t("kanban.fromConversation.checked", { title, branch: attempt.source.branch })}</p>
+        <span className="flex flex-wrap gap-x-2">
+          <button type="button" className={button} data-conversation-draft-create="" onClick={() => void store.create(attempt.taskId, checked)}>{t("kanban.fromConversation.create")}</button>
+          <button type="button" className={button} data-conversation-draft-dismiss="" onClick={() => store.dismiss(attempt.taskId)}>{t("common.close")}</button>
+        </span>
+      </div>
     );
   }
   const unknown = attempt.phase === "unknown";
   const changed = !unknown && !attempt.refusal?.retryable;
   return (
-    <div role={unknown ? "status" : "alert"} data-conversation-draft={attempt.phase} data-conversation-draft-code={attempt.refusal?.code ?? ""} className={`flex shrink-0 flex-col gap-1 rounded-[12px] px-3 pt-2.5 pb-1 text-ui ${unknown ? "bg-warning-soft text-primary" : "bg-danger-soft text-danger"}`}>
+    <div ref={ref} role={unknown ? "status" : "alert"} data-conversation-draft={attempt.phase} data-conversation-draft-code={attempt.refusal?.code ?? ""} className={`flex shrink-0 flex-col gap-1 rounded-[12px] px-3 pt-2.5 pb-1 text-ui ${unknown ? "bg-warning-soft text-primary" : "bg-danger-soft text-danger"}`}>
       <p className="m-0 [overflow-wrap:anywhere]">{unknown ? t("kanban.fromConversation.unknown") : t("kanban.fromConversation.notCreated", { reason: conversationRefusalText(t, attempt.refusal) })}</p>
       <span className="flex flex-wrap gap-x-2">
         <button type="button" className={button} data-conversation-draft-retry="" onClick={() => void store.retry(attempt.taskId)}>
@@ -315,6 +328,8 @@ function ConversationDraftNote({ attempt, store }: { attempt: ConversationDraftA
   );
 }
 
+/** A conversation owed an answer the task's blocks do not already carry: a
+    question or a plan to approve (§3.5, 3). */
 function AskCard({ file, now, onOpen }: { file: FileEntry; now: number; onOpen: () => void }) {
   const { t } = useLocale();
   const state = mobileRowState(file, now);
@@ -881,16 +896,21 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     const fileTitle = cleanTitle(sourceFile.title ?? "", 90) || t("kanban.untitledConversation");
     const existing = lanes.find((summary) => summary.pipeline.state === "draft" && summary.pipeline.conversationSource?.conversationId === sourceFile.conversationId)?.pipeline ?? null;
     const state = sourcePreview.state;
-    const creating = draftAttempt?.phase === "creating";
+    /* A request on its way, or one that may have landed, keeps its own source:
+       the row names it and never posts under a new key. */
+    const creating = draftAttempt?.phase === "creating" || draftAttempt?.phase === "checking";
+    const unanswered = !existing && draftAttempt?.phase === "unknown";
+    const held = !existing && (creating || unanswered) && draftAttempt ? `${cleanTitle(draftAttempt.source.title, 90) || fileTitle} · ${draftAttempt.source.branch}` : null;
     const source = state?.kind === "ready" ? state.source : null;
     const hint = existing ? `${fileTitle} · ${existing.conversationSource!.branch}`
-      : source ? `${cleanTitle(source.title, 90) || fileTitle} · ${source.branch}`
-        : !state || state.kind === "pending" ? t("kanban.fromConversation.checking", { title: fileTitle }) : fileTitle;
+      : held ?? (source ? `${cleanTitle(source.title, 90) || fileTitle} · ${source.branch}`
+        : !state || state.kind === "pending" ? t("kanban.fromConversation.checking", { title: fileTitle }) : fileTitle);
     const reason = existing || creating ? null
-      : state?.kind === "failed" ? conversationRefusalText(t, state.refusal)
-        : source && !source.canCreate ? conversationRefusalText(t, source.refusal ?? null) : null;
-    const transient = state?.kind === "failed" && (!state.refusal || state.refusal.retryable === true);
-    const enabled = Boolean(existing) || transient || (Boolean(source?.canCreate) && !creating);
+      : unanswered ? t("kanban.fromConversation.unknownRow")
+        : state?.kind === "failed" ? conversationRefusalText(t, state.refusal)
+          : source && !source.canCreate ? conversationRefusalText(t, source.refusal ?? null) : null;
+    const transient = !unanswered && state?.kind === "failed" && (!state.refusal || state.refusal.retryable === true);
+    const enabled = Boolean(existing) || unanswered || transient || (Boolean(source?.canCreate) && !creating);
     return (
       <>
         <MobileSheetRow
@@ -906,6 +926,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
             if (existing) {
               close();
               props.onOpenPipeline(existing);
+            } else if (unanswered) {
+              close();
+              void drafts.retry(taskId);
             } else if (transient) {
               sourcePreview.reload();
             } else if (source?.canCreate) {

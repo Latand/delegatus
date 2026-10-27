@@ -293,7 +293,149 @@
             }
           ],
           "overflow": false
-        }
+        },
+        "unknown-menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why:not(.warn)",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why.warn",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "No answer yet. Choosing it asks for the same pipeline again."
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 81,
+              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streamingNo answer yet. Choosing it asks for the same pipeline again."
+            }
+          ],
+          "overflow": false
+        },
+        "create-changed": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Pipeline not created. The conversation changed after it was checked."
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 156,
+              "height": 24,
+              "text": "Check the conversation again"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 30,
+              "height": 24,
+              "text": "Close"
+            }
+          ],
+          "overflow": false
+        },
+        "create-checking": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checking\"]",
+              "missing": false,
+              "cut": false,
+              "width": 566,
+              "height": 28,
+              "text": "CSV export retry and streaming writes · checking the branch…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-checked": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checked\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Checked again: CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming-v2."
+            },
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 79,
+              "height": 24,
+              "text": "Create pipeline"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 79,
+              "height": 24,
+              "text": "Create pipeline"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 30,
+              "height": 24,
+              "text": "Close"
+            }
+          ],
+          "overflow": false
+        },
+        "requestKeys": [
+          {
+            "n": 1,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 2,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 3,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 4,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 5,
+            "sameAsLost": false,
+            "sourceRevision": "rev-2"
+          }
+        ]
       },
       "pageErrors": []
     },
@@ -589,7 +731,149 @@
             }
           ],
           "overflow": false
-        }
+        },
+        "unknown-menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why:not(.warn)",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why.warn",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "No answer yet. Choosing it asks for the same pipeline again."
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 81,
+              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streamingNo answer yet. Choosing it asks for the same pipeline again."
+            }
+          ],
+          "overflow": false
+        },
+        "create-changed": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Pipeline not created. The conversation changed after it was checked."
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 156,
+              "height": 24,
+              "text": "Check the conversation again"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 30,
+              "height": 24,
+              "text": "Close"
+            }
+          ],
+          "overflow": false
+        },
+        "create-checking": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checking\"]",
+              "missing": false,
+              "cut": false,
+              "width": 566,
+              "height": 28,
+              "text": "CSV export retry and streaming writes · checking the branch…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-checked": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checked\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Checked again: CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming-v2."
+            },
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 79,
+              "height": 24,
+              "text": "Create pipeline"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 79,
+              "height": 24,
+              "text": "Create pipeline"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 30,
+              "height": 24,
+              "text": "Close"
+            }
+          ],
+          "overflow": false
+        },
+        "requestKeys": [
+          {
+            "n": 1,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 2,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 3,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 4,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 5,
+            "sameAsLost": false,
+            "sourceRevision": "rev-2"
+          }
+        ]
       },
       "pageErrors": []
     },
@@ -885,7 +1169,149 @@
             }
           ],
           "overflow": false
-        }
+        },
+        "unknown-menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why:not(.warn)",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why.warn",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "Відповіді ще немає. Вибір запитає той самий пайплайн ще раз."
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 81,
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streamingВідповіді ще немає. Вибір запитає той самий пайплайн ще раз."
+            }
+          ],
+          "overflow": false
+        },
+        "create-changed": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Пайплайн не створено. Розмова змінилася після перевірки."
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 151,
+              "height": 24,
+              "text": "Перевірити розмову ще раз"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 44,
+              "height": 24,
+              "text": "Закрити"
+            }
+          ],
+          "overflow": false
+        },
+        "create-checking": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checking\"]",
+              "missing": false,
+              "cut": false,
+              "width": 566,
+              "height": 28,
+              "text": "Повтор експорту CSV і потоковий запис · перевіряю гілку…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-checked": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checked\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Перевірено ще раз: Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming-v2."
+            },
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 108,
+              "height": 24,
+              "text": "Створити пайплайн"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 108,
+              "height": 24,
+              "text": "Створити пайплайн"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 44,
+              "height": 24,
+              "text": "Закрити"
+            }
+          ],
+          "overflow": false
+        },
+        "requestKeys": [
+          {
+            "n": 1,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 2,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 3,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 4,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 5,
+            "sameAsLost": false,
+            "sourceRevision": "rev-2"
+          }
+        ]
       },
       "pageErrors": []
     },
@@ -1181,7 +1607,149 @@
             }
           ],
           "overflow": false
-        }
+        },
+        "unknown-menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why:not(.warn)",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .why.warn",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 26,
+              "text": "Відповіді ще немає. Вибір запитає той самий пайплайн ще раз."
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 81,
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streamingВідповіді ще немає. Вибір запитає той самий пайплайн ще раз."
+            }
+          ],
+          "overflow": false
+        },
+        "create-changed": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Пайплайн не створено. Розмова змінилася після перевірки."
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 151,
+              "height": 24,
+              "text": "Перевірити розмову ще раз"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 44,
+              "height": 24,
+              "text": "Закрити"
+            }
+          ],
+          "overflow": false
+        },
+        "create-checking": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checking\"]",
+              "missing": false,
+              "cut": false,
+              "width": 566,
+              "height": 28,
+              "text": "Повтор експорту CSV і потоковий запис · перевіряю гілку…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-checked": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"checked\"] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 550,
+              "height": 16,
+              "text": "Перевірено ще раз: Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming-v2."
+            },
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 108,
+              "height": 24,
+              "text": "Створити пайплайн"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-create]",
+              "missing": false,
+              "cut": false,
+              "width": 108,
+              "height": 24,
+              "text": "Створити пайплайн"
+            },
+            {
+              "selector": "[data-conversation-draft-dismiss]",
+              "missing": false,
+              "cut": false,
+              "width": 44,
+              "height": 24,
+              "text": "Закрити"
+            }
+          ],
+          "overflow": false
+        },
+        "requestKeys": [
+          {
+            "n": 1,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 2,
+            "sameAsLost": false,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 3,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 4,
+            "sameAsLost": true,
+            "sourceRevision": "rev-1"
+          },
+          {
+            "n": 5,
+            "sameAsLost": false,
+            "sourceRevision": "rev-2"
+          }
+        ]
       },
       "pageErrors": []
     }

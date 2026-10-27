@@ -158,6 +158,9 @@ const rowText = (host: HTMLElement) => {
   const item = row(host);
   return item ? [item.querySelector(".lbl")?.firstChild?.textContent, item.querySelector(".why:not(.warn)")?.textContent ?? null, item.querySelector(".why.warn")?.textContent ?? null, item.getAttribute("aria-disabled") === "true"] : null;
 };
+/* Where focus is, by its opening tag: a failed match then prints a line, never a whole DOM node. */
+const tag = (element: Element | null | undefined) => (element ? element.outerHTML.slice(0, element.outerHTML.indexOf(">") + 1) : "none");
+const focused = () => tag(document.activeElement);
 const openMenu = async (host: HTMLElement) => {
   click(card(host).querySelector("[data-menu]"));
   await tick();
@@ -265,6 +268,59 @@ test("a refused draft keeps the card as it was and says why, with Retry; an unan
   route.release.shift()!(json(200, { ok: true, pipeline: draft() }));
   await tick(20);
   expect(card(host).querySelector('[data-draft-message="p-export:builder"]')).toBeTruthy();
+});
+
+test("by keyboard, the row hands focus back to ⋯; a refusal leaves it on the card, and Check again shows the branch it read before anything is posted", async () => {
+  route.preview = { status: 200, body: source() };
+  const { host } = mount();
+  await openMenu(host);
+  const more = card(host).querySelector<HTMLElement>("[data-menu]")!;
+  row(host)!.focus();
+  expect(focused()).toBe(tag(row(host)));
+  click(row(host));
+  await tick();
+  expect(focused()).toBe(tag(more));
+  route.release.shift()!(json(409, { error: "changed", code: "SOURCE_CHANGED" }));
+  await tick(20);
+  const refused = card(host).querySelector<HTMLElement>('[data-conversation-draft="refused"]')!;
+  expect(refused.querySelector("[data-conversation-draft-retry]")?.textContent).toBe("Check the conversation again");
+  expect(focused()).toBe(tag(more));
+
+  /* The conversation moved to another branch. The check reads it and says so; it posts nothing. */
+  route.preview = { status: 200, body: source({ branch: "other-branch", sourceRevision: "rev-2" }) };
+  const check = refused.querySelector<HTMLElement>("[data-conversation-draft-retry]")!;
+  check.focus();
+  click(check);
+  await tick(20);
+  expect(route.posts).toHaveLength(1);
+  const checked = card(host).querySelector<HTMLElement>('[data-conversation-draft="checked"]')!;
+  expect(checked.querySelector(".msg-text")?.textContent).toBe("Checked again: CSV export retry and streaming writes · other-branch.");
+  /* The button that held focus is gone: focus is on Create, where the answer is. */
+  const create = checked.querySelector<HTMLElement>("[data-conversation-draft-create]")!;
+  expect([create.textContent, focused()]).toEqual(["Create pipeline", tag(create)]);
+  click(create);
+  await tick();
+  expect(route.posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-1"], ["key-2", "rev-2"]]);
+  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from CSV export retry and streaming writes · other-branch…");
+});
+
+test("a create with no answer: the row names the request's own source and asks for it again under the same key", async () => {
+  route.preview = { status: 200, body: source() };
+  const { host } = mount();
+  await openMenu(host);
+  click(row(host));
+  await tick();
+  route.release.shift()!(json(502, {}));
+  await tick(20);
+  expect(card(host).querySelector('[data-conversation-draft="unknown"]')).toBeTruthy();
+  /* The menu now reads another branch; the row still names the pending request's. */
+  route.preview = { status: 200, body: source({ branch: "other-branch", sourceRevision: "rev-2" }) };
+  await openMenu(host);
+  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes · fix/csv-export-retry", "No answer yet. Choosing it asks for the same pipeline again.", false]);
+  click(row(host));
+  await tick();
+  expect(route.posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-1"], ["key-1", "rev-1"]]);
+  expect(card(host).querySelector('[data-conversation-draft="creating"]')).toBeTruthy();
 });
 
 test("a card that already holds this conversation's draft opens it instead of making another", async () => {

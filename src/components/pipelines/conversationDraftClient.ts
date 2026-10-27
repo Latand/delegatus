@@ -95,8 +95,12 @@ export interface ConversationDraftAttempt {
   taskId: string;
   source: DraftSourceLabel;
   request: ConversationDraftRequest;
-  phase: "creating" | "refused" | "unknown";
+  /* "checking" reads the source again after a refusal; "checked" holds what
+     it read until the operator creates from it or closes it. */
+  phase: "creating" | "refused" | "unknown" | "checking" | "checked";
   refusal: ConversationDraftError | null;
+  /** The source read again, which Create posts under a new key. */
+  checked?: ConversationSource;
 }
 
 export interface DraftStartState {
@@ -162,9 +166,15 @@ export class ConversationDrafts {
     if (this.landed.delete(taskId)) this.changed();
   }
 
-  /** Post the draft once. A second press while one is on its way changes nothing. */
+  /**
+   * Post the draft once. A second press while one is on its way, or while the
+   * source is being read again, changes nothing; a request that may have
+   * landed goes again under its own key and never under a new one.
+   */
   create(taskId: string, source: ConversationSource): Promise<Pipeline | null> {
-    if (this.attempts.get(taskId)?.phase === "creating") return Promise.resolve(null);
+    const attempt = this.attempts.get(taskId);
+    if (attempt?.phase === "creating" || attempt?.phase === "checking") return Promise.resolve(null);
+    if (attempt?.phase === "unknown") return this.send({ ...attempt, phase: "creating", refusal: null });
     return this.fresh(taskId, source);
   }
 
@@ -176,27 +186,34 @@ export class ConversationDrafts {
   /**
    * Retry: a request that may have landed, or one refused for a passing
    * reason, goes again under its own key, which the server answers with the
-   * draft it already made. A source that changed is read again and, when it
-   * can still be drafted, posted as a new request.
+   * draft it already made. A source that changed is only read again: what it
+   * reads now is shown, and nothing is posted until the operator creates
+   * from it (`create`), under a new key.
    */
   async retry(taskId: string): Promise<Pipeline | null> {
     const attempt = this.attempts.get(taskId);
-    if (!attempt || attempt.phase === "creating") return null;
+    if (!attempt || attempt.phase === "creating" || attempt.phase === "checking" || attempt.phase === "checked") return null;
     if (attempt.phase === "unknown" || attempt.refusal?.retryable) return this.send({ ...attempt, phase: "creating", refusal: null });
-    this.set(taskId, { ...attempt, phase: "creating", refusal: null });
+    this.set(taskId, { ...attempt, phase: "checking", refusal: null, checked: undefined });
+    /* Nothing replaces a check while it reads: create and dismiss both hold. */
     const preview = await this.deps.preview(attempt.request.conversationId, taskId);
     if (preview.kind === "failed" || !preview.source.canCreate) {
-      const refusal = preview.kind === "ready" ? preview.source.refusal ?? { code: "SOURCE_CHANGED", error: "" } : preview.refusal ?? { code: "PREVIEW_FAILED", error: "", retryable: true };
+      /* A read that failed for a passing reason is read again, never answered
+         by sending the refused request. */
+      const failed = preview.kind === "ready" ? preview.source.refusal ?? { code: "SOURCE_CHANGED", error: "" } : preview.refusal ?? { code: "PREVIEW_FAILED", error: "" };
+      const refusal: ConversationDraftError = { code: failed.code, error: failed.error };
       this.set(taskId, { ...attempt, phase: "refused", refusal });
       return null;
     }
-    return this.fresh(taskId, preview.source);
+    const read = preview.source;
+    this.set(taskId, { ...attempt, phase: "checked", refusal: null, checked: read, source: { conversationId: read.conversationId, title: read.title, branch: read.branch } });
+    return null;
   }
 
-  /** Close a refusal. A request on its way, or one that may have landed, stays until it is answered. */
+  /** Close a refusal or a source read again. A request on its way, or one that may have landed, stays until it is answered. */
   dismiss(taskId: string): void {
     const attempt = this.attempts.get(taskId);
-    if (attempt?.phase !== "refused") return;
+    if (attempt?.phase !== "refused" && attempt?.phase !== "checked") return;
     this.set(taskId, null);
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, type RefObject } from "react";
 
 import type { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { MessageKey, TFunction } from "@/lib/i18n";
@@ -62,6 +62,21 @@ export function useLandedDraft(store: ConversationDrafts | null | undefined, tas
 }
 
 const noSubscribe = () => () => {};
+
+/**
+ * A notice whose buttons replace the ones that held focus (Check again,
+ * Retry, a menu row that unmounted) takes focus on its first button when the
+ * page dropped it, so the keyboard stays where the answer is. Focus anywhere
+ * else is left alone.
+ */
+export function useDroppedFocus(ref: RefObject<HTMLElement | null>, phase: string | null): void {
+  useEffect(() => {
+    if (!phase) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    ref.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+  }, [phase, ref]);
+}
 
 /** Whether the lane's first messages hold an edit that Start would leave behind: open, saving, conflicted or unconfirmed. */
 export function useUnsavedStageEdit(drafts: StageDrafts, pipelineId: string): boolean {

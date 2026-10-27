@@ -62,12 +62,17 @@ function fakeRoute() {
   const posts: ConversationDraftRequest[] = [];
   const previews: string[] = [];
   const waiting: Array<(outcome: CreateOutcome) => void> = [];
+  let held: ((outcome: PreviewOutcome) => void) | null = null;
+  let hold = false;
   let preview: PreviewOutcome = { kind: "ready", source: { conversationId: "c1", title: "Export retry", branch: "fix/export", head: "b".repeat(40), sourceRevision: "rev-2", canCreate: true } };
   const applied: Pipeline[] = [];
   let keys = 0;
   const store = new ConversationDrafts({
     post: (body) => { posts.push(body); return new Promise((resolve) => waiting.push(resolve)); },
-    preview: async (conversationId) => { previews.push(conversationId); return preview; },
+    preview: async (conversationId) => {
+      previews.push(conversationId);
+      return hold ? new Promise<PreviewOutcome>((resolve) => { held = resolve; }) : preview;
+    },
     apply: (record) => { applied.push(record); },
     newKey: () => `key-${++keys}`,
   });
@@ -75,6 +80,8 @@ function fakeRoute() {
     store, posts, previews, applied,
     answer: (outcome: CreateOutcome) => waiting.shift()!(outcome),
     setPreview: (next: PreviewOutcome) => { preview = next; },
+    holdPreview: () => { hold = true; },
+    releasePreview: (outcome: PreviewOutcome) => held!(outcome),
   };
 }
 const source: ConversationSource = { conversationId: "c1", title: "Export retry", branch: "fix/export", head: "a".repeat(40), sourceRevision: "rev-1", canCreate: true };
@@ -111,7 +118,7 @@ test("a create with no answer asks again under the same key and never claims a f
   expect(route.previews).toEqual([]);
 });
 
-test("a passing refusal retries the same request; a changed source is read again and posted as a new one", async () => {
+test("a passing refusal retries the same request; a changed source is only read again, and Create posts it under a new key", async () => {
   const route = fakeRoute();
   void route.store.create("t1", source);
   route.answer({ kind: "refused", refusal: { code: "store_busy", error: "busy", retryable: true } });
@@ -121,14 +128,80 @@ test("a passing refusal retries the same request; a changed source is read again
   route.answer({ kind: "refused", refusal: { code: "SOURCE_CHANGED", error: "changed" } });
   await flush();
   expect(route.posts.map((post) => post.clientRequestId)).toEqual(["key-1", "key-1"]);
-  /* The source changed: the task keeps the refusal until the operator retries. */
+  /* The source changed: the task keeps the refusal until the operator checks it. */
   expect(route.store.attempt("t1")).toMatchObject({ phase: "refused", refusal: { code: "SOURCE_CHANGED" } });
-  const fresh = route.store.retry("t1");
-  await flush();
+  /* The conversation moved to another branch meanwhile. Checking reads it and shows it; nothing is posted. */
+  route.setPreview({ kind: "ready", source: { ...source, branch: "other-branch", sourceRevision: "rev-2" } });
+  expect(await route.store.retry("t1")).toBeNull();
   expect(route.previews).toEqual(["c1"]);
+  expect(route.posts).toHaveLength(2);
+  expect(route.store.attempt("t1")).toMatchObject({ phase: "checked", refusal: null, source: { branch: "other-branch" }, checked: { sourceRevision: "rev-2" } });
+  /* A second check press while it shows sends nothing either. */
+  expect(await route.store.retry("t1")).toBeNull();
+  expect([route.previews.length, route.posts.length]).toEqual([1, 2]);
+  const fresh = route.store.create("t1", route.store.attempt("t1")!.checked!);
   expect(route.posts.at(-1)).toEqual({ conversationId: "c1", taskId: "t1", sourceRevision: "rev-2", clientRequestId: "key-2" });
   route.answer({ kind: "created", pipeline: pipeline() });
   expect((await fresh)?.id).toBe("p1");
+});
+
+test("a source read again can be closed without posting, and a read that fails is checked again, never answered by the refused request", async () => {
+  const route = fakeRoute();
+  void route.store.create("t1", source);
+  route.answer({ kind: "refused", refusal: { code: "SOURCE_NOT_ON_TASK", error: "gone" } });
+  await flush();
+  route.setPreview({ kind: "failed", refusal: { code: "store_busy", error: "busy", retryable: true } });
+  await route.store.retry("t1");
+  /* The busy read keeps its reason; the next press reads again. */
+  expect(route.store.attempt("t1")).toMatchObject({ phase: "refused", refusal: { code: "store_busy" } });
+  expect(route.store.attempt("t1")?.refusal?.retryable).toBeUndefined();
+  route.setPreview({ kind: "ready", source: { ...source, sourceRevision: "rev-2" } });
+  await route.store.retry("t1");
+  expect(route.previews).toEqual(["c1", "c1"]);
+  expect(route.posts).toHaveLength(1);
+  expect(route.store.attempt("t1")?.phase).toBe("checked");
+  route.store.dismiss("t1");
+  expect(route.store.attempt("t1")).toBeNull();
+  expect(route.posts).toHaveLength(1);
+});
+
+test("a check still reading holds the menu row and Close, and what it read is shown", async () => {
+  const route = fakeRoute();
+  void route.store.create("t1", source);
+  route.answer({ kind: "refused", refusal: { code: "SOURCE_CHANGED", error: "changed" } });
+  await flush();
+  route.holdPreview();
+  const checking = route.store.retry("t1");
+  await flush();
+  expect(route.store.attempt("t1")?.phase).toBe("checking");
+  expect(await route.store.create("t1", source)).toBeNull();
+  expect(await route.store.retry("t1")).toBeNull();
+  route.store.dismiss("t1");
+  expect(route.posts).toHaveLength(1);
+  expect(route.previews).toHaveLength(1);
+  route.releasePreview({ kind: "ready", source: { ...source, sourceRevision: "rev-2" } });
+  await checking;
+  expect(route.store.attempt("t1")).toMatchObject({ phase: "checked", checked: { sourceRevision: "rev-2" } });
+  expect(route.posts).toHaveLength(1);
+});
+
+test("choosing the row again while a create has no answer asks again under the same key, never a new one", async () => {
+  const route = fakeRoute();
+  void route.store.create("t1", source);
+  route.answer({ kind: "unknown", error: "offline" });
+  await flush();
+  expect(route.store.attempt("t1")?.phase).toBe("unknown");
+  /* The menu read a newer revision meanwhile; the pending request still stands for it. */
+  const again = route.store.create("t1", { ...source, branch: "other-branch", sourceRevision: "rev-2" });
+  expect(route.posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-1"], ["key-1", "rev-1"]]);
+  expect(route.store.attempt("t1")).toMatchObject({ phase: "creating", source: { branch: "fix/export" } });
+  route.answer({ kind: "unknown", error: "offline" });
+  await again;
+  void route.store.create("t1", source);
+  expect(new Set(route.posts.map((post) => post.clientRequestId))).toEqual(new Set(["key-1"]));
+  route.answer({ kind: "created", pipeline: pipeline() });
+  await flush();
+  expect(route.store.landedFor("t1")).toBe("p1");
 });
 
 test("a changed source that can no longer be drafted keeps its reason and sends nothing", async () => {
