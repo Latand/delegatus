@@ -1,5 +1,5 @@
 import { fileConfirmationText } from "@/lib/telegram/bot/fileConfirmationContract";
-import { describe, expect } from "bun:test";
+import { afterAll, describe, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5713,9 +5713,10 @@ describe("streamed composer attachments", () => {
 describe("owner confirmation of one Telegram file send", () => {
   /* Variant 2 of docs/design/telegram-file-confirmation/prototype: the strongest warning is the heading,
      «Don't send» is the primary answer and the send carries the warning tone. Each case frames one width
-     and language in both themes; the last writes the readings of every case. */
+     and language in both themes and records its readings once all of its frames pass; geometry.json is
+     written after the describe, and only when every case's frames are recorded. */
   const output = path.resolve(".artifacts/telegram-file-confirmation");
-  const evidence: Array<Record<string, unknown>> = [];
+  const recorded = new Map<string, Record<string, unknown>>();
   const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const;
   type Frame = { width: 390 | 820 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
   const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
@@ -5723,14 +5724,17 @@ describe("owner confirmation of one Telegram file send", () => {
   /* Names, captions and code tokens a Ukrainian frame may carry in Latin letters; any other Latin word is an English fallback. */
   const LATIN_ALLOWED = /^(?:Telegram|Delegatus|HTML|SHA-256|JWT|API|handoff|codex)$/;
   const POSTED = { id: "fixture-confirmation", digest: "a".repeat(64) };
+  const frameName = ({ width, lang, theme, state, data }: Frame) => `${width}-${lang}-${theme}-${state}${data ? `-${data}` : ""}`;
   async function frames(list: Frame[]) {
     fs.mkdirSync(output, { recursive: true });
     const served = await serveEvidenceFixture(output, FIXTURE);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
     try {
-      for (const { width, lang, theme, state, data } of list) {
-        const name = `${width}-${lang}-${theme}-${state}${data ? `-${data}` : ""}`;
+      for (const frame of list) {
+        const { width, lang, theme, state, data } = frame;
+        const name = frameName(frame);
         const words = fileConfirmationText[lang];
         const phone = width === 390;
         const viewport = { width, height: phone ? 844 : 900 };
@@ -5953,27 +5957,31 @@ describe("owner confirmation of one Telegram file send", () => {
             await page.getByRole("status").filter({ hasText: words.sentTitle(chat) }).waitFor();
             expect(await page.evaluate(() => (window as unknown as { fileConfirmationPosts(): unknown[] }).fileConfirmationPosts())).toEqual([{ ...POSTED, approve: true }]);
           }
-          evidence.push({ frame: name, firstScreen, ...reading, latin: undefined });
+          readings.push({ frame: name, firstScreen, ...reading, latin: undefined });
         } finally { await context.close(); }
       }
     } finally { await browser.close(); served.stop(); }
     expect(failures).toEqual([]);
+    for (const reading of readings) recorded.set(reading.frame as string, reading);
   }
   const themed = (width: Frame["width"], lang: Frame["lang"]) => (["light", "dark"] as const).flatMap((theme) => STATES.map((state): Frame => ({ width, lang, theme, state })));
-  for (const width of [390, 1440] as const) for (const lang of ["en", "uk"] as const) {
-    browserTest(`${width} px, ${lang}: every state in light and dark`, () => frames(themed(width, lang)), 300_000);
-  }
-  browserTest("820 px pending in both languages; two images and long names at 390 px", () => frames([
-    { width: 820, lang: "en", theme: "light", state: "pending" },
-    { width: 820, lang: "uk", theme: "light", state: "pending" },
-    { width: 390, lang: "uk", theme: "light", state: "pending", data: "media" },
-    { width: 390, lang: "uk", theme: "light", state: "pending", data: "long" },
-  ]), 300_000);
-  browserTest("the file, destination, warnings and decisions fit both languages and themes", async () => {
-    expect(evidence.length).toBe(4 * 2 * STATES.length + 4);
+  const CASES: Array<[title: string, list: Frame[]]> = [
+    ...([390, 1440] as const).flatMap((width) => (["en", "uk"] as const).map((lang): [string, Frame[]] => [`${width} px, ${lang}: every state in light and dark`, themed(width, lang)])),
+    ["820 px pending in both languages; two images and long names at 390 px", [
+      { width: 820, lang: "en", theme: "light", state: "pending" },
+      { width: 820, lang: "uk", theme: "light", state: "pending" },
+      { width: 390, lang: "uk", theme: "light", state: "pending", data: "media" },
+      { width: 390, lang: "uk", theme: "light", state: "pending", data: "long" },
+    ]],
+  ];
+  for (const [title, list] of CASES) browserTest(title, () => frames(list), 300_000);
+  /* The record covers every frame or is left as committed: a filtered or failed run writes nothing. */
+  afterAll(async () => {
+    const expected = CASES.flatMap(([, list]) => list.map(frameName));
+    if (!expected.every((name) => recorded.has(name))) return;
     fs.mkdirSync("evidence/telegram-file-confirmation", { recursive: true });
     const { createHash } = await import("node:crypto");
     const sources = ["src/components/telegram/TelegramFileConfirmation.tsx", "src/lib/telegram/bot/fileConfirmationContract.ts", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
-    fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
-  }, 120_000);
+    fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: expected.map((name) => recorded.get(name)) }, null, 2) + "\n");
+  });
 });

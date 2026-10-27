@@ -14,7 +14,7 @@
     },
     {
       "path": "src/components/conversation/conversationWindow.browser.test.tsx",
-      "sha256": "4eb67809c9852fb98e60fc279862bb3fba7f9a7b812d668e048f5ff5e5db4f85"
+      "sha256": "289398faa4214e8677733b382acd85fcf383bdc81b06a1b9fc32eea218259d00"
     }
   ],
   "frames": [

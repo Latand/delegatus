@@ -165,7 +165,9 @@ the card and off every word, the dot on the Details chevron's centre line,
 outside names and code tokens.
 Geometry and source hashes live in
 `evidence/telegram-file-confirmation/geometry.json`; captures are private
-artifacts. Reproduce with:
+artifacts. Each case judges its own frames, so any one runs alone by `-t`;
+the file is rewritten only after a run in which every case passed.
+Reproduce with:
 
 ```sh
 LLV_CONVERSATION_BROWSER_TEST=1 bun test src/components/conversation/conversationWindow.browser.test.tsx -t 'owner confirmation of one Telegram file send'
