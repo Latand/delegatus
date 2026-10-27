@@ -3848,7 +3848,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_flow: "Read one archived flow by durable id. Flows are retired; the reply grants no execution or current-head approval.",
   flow_action: "Deprecated: flows are retired. New operations refuse with FLOW_RETIRED; use pipeline run stages with review/fix edges. Replay an already accepted clientRequestId to read its original receipt without execution.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
-  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
+  conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
@@ -4583,6 +4583,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   conversation_action: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
     conversationId: z.string().optional()
       .describe("Durable Delegatus conversation id. Archive and unarchive actions expand it to every registered generation path."),
     transcriptPath: z.string().optional()
@@ -4590,7 +4591,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     selectedContext: selectedContextSchema,
     targets: z.array(conversationArchiveTargetSchema).min(1).max(100).optional()
       .describe("Archive/unarchive list form. Cannot be combined with the single-target fields."),
-    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "archive", "unarchive"]),
+    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "speed", "archive", "unarchive"]),
     key: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "Tab", "Enter", "Escape"]).optional(),
     decision: z.enum(["allow", "deny"]).optional()
       .describe("permission only: allow once or deny the structured host's pending tool permission request."),
@@ -4794,6 +4795,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   create_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier."),
     project: z.string().min(1).describe("Known project key, display name or repository name this orchestrator will own. Case and surrounding whitespace are ignored."),
     conversationId: z.string().regex(/^conversation_/).optional().describe("Existing registered conversation to adopt. Delegatus validates its project, cwd, transcript, lifecycle, and operator authority before seating it."),
     mandate: z.string().optional().describe("Edited mandate text; defaults to the approved versioned orchestrator prompt."),
@@ -4817,6 +4820,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   rotate_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier."),
     project: z.string().min(1).describe("Known project key, display name or repository name whose orchestrator seat rotates to a fresh successor. Case and surrounding whitespace are ignored."),
     mandate: z.string().optional().describe("Successor mandate. Omitted: the incumbent's own mandate when it is based on the current default version or is bespoke; the current built-in default when the incumbent's is based on an older version (get_orchestrator reports both versions)."),
     keepIncumbentMandate: z.boolean().optional().describe("Carry the incumbent's mandate forward even when it is based on an older default version. Ignored when mandate is given."),

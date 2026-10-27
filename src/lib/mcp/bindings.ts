@@ -49,6 +49,7 @@ import { budgetPage } from "./budgetPage";
 import { fleetAgents, fleetDetailRows, fleetLimitWaits, fleetPublicRow, fleetRuntimeFor, fleetSummary, type FleetScope, type FleetFilters } from "./agentFleet";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { entryServiceTierResult } from "@/lib/scanner/effort";
 import os from "node:os";
 import path from "node:path";
 
@@ -764,6 +765,11 @@ async function dispatchViewerControl(
     if (operationId || launchId) {
       throw new McpDispatchVerdictError(message, {
         status: response.status,
+        ...(pathname === "/api/conversation-host" && body.action === "speed" ? {
+          ...(typeof result.requestedTier === "string" ? { requestedTier: result.requestedTier } : {}),
+          ...(typeof result.appliedTier === "string" || result.appliedTier === null ? { appliedTier: result.appliedTier } : {}),
+          ...(typeof result.echoed === "boolean" ? { echoed: result.echoed } : {}),
+        } : {}),
         ...(refusals.length ? { refusals } : {}),
         ...(operationId ? { operationId } : {}),
         ...(launchId ? { launchId } : {}),
@@ -4654,6 +4660,16 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const receiptMatches = launchReceipt?.conversationId === active.conversationId;
   const engine = conversation?.engine ?? (receiptMatches ? launchReceipt.engine : null);
   const model = generation?.launchProfile?.model ?? (receiptMatches ? launchReceipt.launchProfile.model : null);
+  const profile = generation?.launchProfile ?? (receiptMatches ? launchReceipt.launchProfile : null);
+  const profileTier = profile?.serviceTier ?? (profile?.fast === true ? "priority" : profile?.fast === false ? "default" : null);
+  let tier: { value: string | null; source: "native" | "profile" | null } = { value: profileTier, source: profileTier === null ? null : "profile" };
+  if (engine === "codex" && transcriptPath) {
+    try {
+      const stat = fs.statSync(transcriptPath);
+      tier = entryServiceTierResult({ engine, path: transcriptPath, pid: null, size: stat.size, mtime: stat.mtimeMs / 1000 },
+        new Map([[transcriptPath, profileTier]]));
+    } catch { /* A missing transcript leaves only the persisted launch profile. */ }
+  }
   let session: { messages: number; tools: number; compactions: number } | null = null;
   if (transcriptPath && (engine === "claude" || engine === "codex")) {
     try {
@@ -4705,6 +4721,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     transcriptPath,
     engine,
     model,
+    runtime: { accountId: generation?.accountId ?? (receiptMatches ? launchReceipt.accountId : null),
+      serviceTier: engine === "codex" ? tier.value : null, serviceTierSource: engine === "codex" ? tier.source : null },
     promptVersion: active.promptVersion,
     predecessorConversationId: active.predecessorConversationId,
     health: {
@@ -5564,7 +5582,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     mandate: text(args.mandate) || ORCHESTRATOR_SYSTEM_PROMPT,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
     clientRequestId: spawnAttemptId(requestId(args)),
-    ...allowedSeatFields(args, ["conversationId", "cwd", "engine", "model", "effort", "accountId"]),
+    ...allowedSeatFields(args, ["conversationId", "cwd", "engine", "model", "effort", "fast", "serviceTier", "accountId"]),
   }, callerCapabilityHeaders());
   return redactPayload({
     /* The key the seat was designated under, which the route resolves after
@@ -5726,7 +5744,7 @@ async function rotateOrchestrator(
   const project = canonicalOrchestratorProject(required(args, "project"));
   /* Omitting mandate preserves the incumbent's core and handoff history;
      sending one explicitly replaces the core. */
-  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
+  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "fast", "serviceTier", "accountId", "keepIncumbentMandate"]);
   const result = await dispatchControl(control)("/api/orchestrator/rotate", {
     project,
     clientRequestId: spawnAttemptId(requestId(args)),
@@ -6790,6 +6808,7 @@ async function conversationAction(
     key: text(args.key),
     label: args.label,
     question: args.question,
+    ...(action === "speed" ? { serviceTier: args.serviceTier } : {}),
     ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
     ...(action === "answer" ? {
       requestId: text(args.requestId),

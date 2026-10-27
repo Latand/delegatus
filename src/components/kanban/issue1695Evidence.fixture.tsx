@@ -30,6 +30,9 @@ import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
+import { AgentLaunchControls, useAgentLaunchDraft } from "@/components/draft/AgentLaunchControls";
+import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
+import { RunsOnRow } from "@/components/orchestrator/RunsOnRow";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
@@ -4060,6 +4063,7 @@ if (WORKSPACES) {
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
+const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   // The driver supplies the real server projection for the liveness case.
@@ -4122,6 +4126,26 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
     return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
+  /* Ultra on the speed control (`service-tier&speed=…`): each Codex account's own tier catalog,
+     Account B listing ultrafast for GPT-6.1-Sol and Account D only priority, and the in-place speed action. */
+  if (SCENARIO === "service-tier" && (SPEED_PARAMS_FETCH.has("speed") || SPEED_PARAMS_FETCH.has("draft")) && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
+  if (SCENARIO === "service-tier" && url.pathname === "/api/accounts/codex/models") {
+    const id = url.searchParams.get("account") || accountsBody.codex.active;
+    const row = accountsBody.codex.accounts.find((account) => account.id === id);
+    if (!row) return json({ error: "Codex account was not found in the requested pool" }, 404);
+    const tiers = id === "default" ? [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] : [{ id: "priority", name: "Fast" }];
+    return json({ accounts: [{ id, label: row.label, models: [{ slug: "gpt-6.1-sol", tiers }] }] });
+  }
+  if (SCENARIO === "service-tier" && url.pathname === "/api/conversation-host" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { action?: string; serviceTier?: string };
+    if (body.action === "speed") {
+      const answer = new URLSearchParams(location.search).get("speedanswer");
+      if (answer === "hold") await new Promise(() => {});
+      /* The server's own service_tier_unavailable wording (serviceTierRefusal): several lines on a phone. */
+      if (answer === "refuse") return json({ ok: false, code: "service_tier_unavailable", requestedTier: body.serviceTier, error: `no evaluated account offers serviceTier ${body.serviceTier} for model gpt-6.1-sol; evaluated pinned account "default": account "Account B" (default): gpt-6.1-sol offered: priority` }, 409);
+      return json({ ok: true, operationId: "speed-fixture", requestedTier: body.serviceTier, appliedTier: body.serviceTier, echoed: true });
+    }
+  }
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
@@ -5330,6 +5354,32 @@ function VoicePanelScene() {
     </div>
   );
 }
+/* The seat's speed control (`service-tier&speed=1`): a structured Codex seat on GPT-6.1-Sol, on Account B
+   (whose catalog lists ultrafast) or `&account=d` Account D (priority only), at the standard tier or
+   `&tier=ultrafast` already applied. `&draft=create|rotate` is a launch draft with Ultra chosen. */
+const SPEED_PARAMS = new URLSearchParams(location.search);
+function SpeedSeatScene() {
+  const onD = SPEED_PARAMS.get("account") === "d";
+  const tier = SPEED_PARAMS.get("tier");
+  const file: FileEntry = {
+    ...searchVer2, engine: "codex", root: "codex-sessions", durableLineage: undefined,
+    path: onD ? "/fixture/accounts/codex/account-d/sessions/seat.jsonl" : searchVer2.path,
+    model: "gpt-6.1-sol", effort: "high", fast: tier === "ultrafast", serviceTier: tier,
+  };
+  return <RuntimePill file={file} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />;
+}
+function SpeedDraftScene({ mode }: { mode: string }) {
+  /* `&inherit=1`: a rotation the operator left untouched, so no speed is chosen and the incumbent's tier carries over. */
+  const seeded: Record<string, string> = { engine: "codex", model: "gpt-6.1-sol", effort: "high", speed: SPEED_PARAMS.has("inherit") ? "" : "ultrafast", accountId: SPEED_PARAMS.get("account") === "d" ? "account-d" : "default" };
+  const launch = useAgentLaunchDraft({ storage: { read: (name) => seeded[name] ?? "", write: () => {} } });
+  return (
+    <div className="flex max-w-[640px] flex-col gap-3" data-speed-draft={mode}>
+      {mode === "create" ? <RunsOnRow draft={launch} phone={innerWidth < 640} /> : <AgentLaunchControls draft={launch} stacked inheritSpeed />}
+      <div><DraftRuntimePill launch={launch} /></div>
+    </div>
+  );
+}
+
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
@@ -5345,7 +5395,9 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
 ) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
-  new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
+  SPEED_PARAMS.has("draft") ? <div className="p-6"><SpeedDraftScene mode={SPEED_PARAMS.get("draft")!} /></div>
+  : SPEED_PARAMS.has("speed") ? <div className="p-6" style={{ paddingTop: 400 }}><SpeedSeatScene /></div>
+  : new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
 ) : <Viewer />);
