@@ -35,6 +35,9 @@ Intent is persisted before delivery. Lost acknowledgements replay the same
 delivery key, using the existing registry and runtime-journal receipts. Unknown
 delivery outcomes keep their identity. A native continuation that was positively
 refused before execution uses the delivery layer's existing fenced retry path.
+Unavailable runtime, session or journal evidence, and a recipient that has not
+become idle yet, retain the submitted obligation. A failed reservation alone
+cannot prove its continuation is terminal.
 The seat obligation grants no new turn for another failure of its own follow-up.
 A distinct delivered request establishes its own native turn boundary. It can
 replace a cancelled obligation even when both requests ended in quota errors
@@ -54,6 +57,9 @@ authority check into the host's pre-write callback. Dead-host recovery receives
 the same authority fence before publication. Transcript evidence is cached for
 at most 64 identities and reused only while its file signature agrees; quota,
 account bindings and designation are read again at the effect boundary.
+An unreadable designation store defers both ticker recovery and dispatch,
+including the final pre-write check. Confirmed absence or rotation cancels the
+obligation; a restored unchanged designation keeps its original delivery key.
 
 Focused checks are `src/lib/monitor/seatQuotaRecovery.test.ts`,
 `src/lib/monitor/seatTickController.delivery.test.ts`,

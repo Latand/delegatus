@@ -8,6 +8,8 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestrat
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "@/lib/runtime/engineHost";
 import { setSystemTime } from "bun:test";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 const phase = process.argv[2];
 const cut = Date.parse("2026-10-26T10:00:00Z");
@@ -23,9 +25,12 @@ async function nativeQuotaReplay() {
   const transcript = path.join(directory, "33333333-3333-\x34333-8333-333333333333.jsonl");
   const later = reset + 3_600_000;
   const positive = scenario === "positive";
+  const retry = phase.startsWith("native-retry-");
+  const authority = phase.startsWith("native-authority-");
   const sampleAt = positive ? cut + 1000 : reset + 1;
   let now = phase === "native-persist" ? cut - 1000 : positive ? cut + 361_001 : reset + 360_001;
   if (phase === "native-release") now = positive ? reset : later;
+  if (retry || authority) now = later;
   setSystemTime(now);
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
   setAgentRegistryForTests(registry);
@@ -36,8 +41,52 @@ async function nativeQuotaReplay() {
       plan: "max", capturedAt: Math.floor(at / 1000) } });
   let count = 0;
   let refused = false;
-  const ports: SeatQuotaRecoveryPorts = { ...defaultSeatQuotaRecoveryPorts(), held: () => false, stopped: async () => false,
+  const journal = retry ? new RuntimeJournal(path.join(directory, "runtime.sqlite"), { now: () => now, structuredHosts: true }) : null;
+  const conversation = retry ? registry.conversationForPath(transcript)! : null;
+  const generation = conversation?.generations.at(-1);
+  const publish = () => journal!.append({ scope: { type: "session", id: conversation!.id }, kind: "session-status", payload: {
+    conversationId: conversation!.id, sessionKey: { engine: "claude", sessionId: generation!.id },
+    hostKind: "claude-broker", host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "fixture:1",
+    artifactPath: transcript, capabilities: { steer: false, structuredAttention: true },
+  } });
+  if (phase === "native-retry-submit") {
+    registry.upsert({ key: { engine: "claude", sessionId: generation!.id }, artifactPath: transcript,
+      cwd: directory, accountId: "account-a", launchProfile: generation!.launchProfile, status: "idle", host: null,
+      structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: null, eventCursor: 1,
+        protocolVersion: "v1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null });
+    publish();
+  }
+  const client = journal ? {
+    readSession: async () => journal.readSession({ conversationId: conversation!.id }),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      if (phase === "native-retry-submit") publish();
+      let result = journal.executeOperation(command);
+      if (result.receipt.status === "queued") {
+        result = journal.transitionOperation(result.operationId, "delivering");
+        if (result.receipt.status === "delivering") {
+          journal.append({ scope: { type: "session", id: conversation!.id }, kind: "fixture-execution", payload: {},
+            effect: { id: `execution-${result.operationId}`, kind: "fixture.execution", payload: {} } });
+          result = journal.transitionOperation(result.operationId, "delivered");
+        }
+      }
+      return result;
+    },
+  } as unknown as RuntimeHostClient : null;
+  const clientFor = () => phase === "native-retry-outage" ? null : client;
+  const ports: SeatQuotaRecoveryPorts = { ...defaultSeatQuotaRecoveryPorts(clientFor), held: () => false, stopped: async () => false,
     send: async (_request, allowed) => { if (await allowed()) count++; } };
+  if (retry) ports.send = async (request, allowed) => {
+    const guard = await seatQuotaDispatchGuard("fixture", ports);
+    const result = await enqueueStructuredMessage({ ...request, admissionGuard: guard, recoveryAuthorityGuard: guard }, {
+      enabled: () => true, registry: () => registry, client: clientFor, idleContinuationAllowed: allowed,
+      kick: () => {}, requestMigrationTick: () => {},
+    });
+    if (phase === "native-retry-submit" && (!result || !("receipt" in result)
+      || result.receipt?.reason !== "idle-continuation-cancelled")) throw new Error("expected pre-execution refusal");
+    if (phase !== "native-retry-submit" && !result?.ok) throw new Error("retry did not deliver");
+  };
   try {
     if (phase === "native-persist") {
       fs.writeFileSync(transcript, [
@@ -59,6 +108,22 @@ async function nativeQuotaReplay() {
       await recoverSeatQuota("fixture", ports);
       // No recovery observes this sample until another process opens it after aging.
       sample(sampleAt, positive ? 20 : 100);
+    } else if (phase === "native-authority-denied") {
+      const file = path.join(directory, "orchestrator-seats.json");
+      const original = fs.readFileSync(file);
+      const mode = fs.statSync(file).mode;
+      const finalGuard = await seatQuotaDispatchGuard("fixture", ports);
+      if (scenario === "permission") fs.chmodSync(file, 0);
+      else fs.writeFileSync(file, "{");
+      try {
+        for (const check of [async () => finalGuard(), () => seatQuotaDispatchGuard("fixture", ports), () => recoverSeatQuota("fixture", ports)]) {
+          try { await check(); throw new Error("unreadable authority admitted recovery"); }
+          catch (error) { if (!(error instanceof StructuredDispatchDeferredError)) throw error; }
+        }
+        refused = true;
+      } finally { fs.chmodSync(file, mode); fs.writeFileSync(file, original); }
+    } else if (retry || authority) {
+      await recoverSeatQuota("fixture", ports);
     } else {
       // Replacing the sample after retention proves the hold is in the obligation.
       if (phase === "native-replay") sample(cut + 1000, 20);
@@ -73,8 +138,9 @@ async function nativeQuotaReplay() {
     }
     const row = readSeatQuotaObligation("fixture");
     console.log(JSON.stringify({ id: row?.id, state: row?.state, resetsAt: row?.resetsAt,
-      capacityObservedAt: row?.capacityObservedAt, count, refused }));
-  } finally { registry.close(); setAgentRegistryForTests(null); setSystemTime(); }
+      capacityObservedAt: row?.capacityObservedAt, count: journal ? journal.effectBatch(100, ["fixture.execution"]).length : count, refused,
+      ...(retry && row ? { delivery: await ports.delivery!(row), admission: registry.deliveryAdmissionForKey(row.seat.conversationId, row.id) } : {}) }));
+  } finally { journal?.close(); registry.close(); setAgentRegistryForTests(null); setSystemTime(); }
 }
 
 const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "runtime.sqlite"), { now: () => reset });

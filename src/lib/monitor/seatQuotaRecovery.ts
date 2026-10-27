@@ -4,7 +4,7 @@ import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { canonicalProject, projectAliasKeys } from "@/lib/projects/aliases";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
-import { orchestratorSeatFor, orchestratorSeatIdentityForConversation } from "@/lib/orchestrator/seats";
+import { orchestratorSeatFor, orchestratorSeatForOrUnknown, orchestratorSeatIdentityForConversation } from "@/lib/orchestrator/seats";
 import { agentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
@@ -14,7 +14,7 @@ import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvide
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
-import { enqueueStructuredMessage, idleContinuationDeliveryRetryable, type StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
+import { enqueueStructuredMessage, idleContinuationDeliveryRetryEvidence, type StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
 import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "@/lib/runtime/engineHost";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "@/lib/runtime/recoveryNotices";
@@ -342,10 +342,12 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
   return true;
 }
 
-export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
+export function defaultSeatQuotaRecoveryPorts(clientFor = runtimeHostClient): SeatQuotaRecoveryPorts {
   const registry = agentRegistry();
   const seatFor = (project: string): Seat | null => {
-    const seat = orchestratorSeatFor(project).active;
+    const authority = orchestratorSeatForOrUnknown(project);
+    if (!authority) throw new StructuredDispatchDeferredError("seat quota designation unreadable");
+    const seat = authority.active;
     return seat?.conversationId && seat.path && seat.state === "active"
       ? { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, designatedAt: seat.designatedAt } : null;
   };
@@ -417,7 +419,7 @@ export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
         } };
     },
     stopped: async (conversationId, since, cursor) => {
-      const client = runtimeHostClient();
+      const client = clientFor();
       if (!client) throw new Error("runtime control evidence unavailable");
       // The existing retained stop intents survive receipt compaction. Advance
       // one durable page per check instead of re-reading global stop history.
@@ -428,13 +430,16 @@ export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
       const admission = registry.deliveryAdmissionForKey(row.seat.conversationId, row.id);
       if (admission.outcome === "not-executed") return "absent";
       if (admission.outcome !== "admitted") return "unknown";
-      if (admission.state === "failed" && await idleContinuationDeliveryRetryable(row.seat.conversationId, row.id)) return "absent";
-      return admission.state === "delivered" ? "delivered" : admission.state === "failed" ? "failed" : "pending";
+      if (admission.state === "failed") {
+        const retry = await idleContinuationDeliveryRetryEvidence(row.seat.conversationId, row.id, { client: clientFor });
+        return retry === null ? "unknown" : retry ? "absent" : "failed";
+      }
+      return admission.state === "delivered" ? "delivered" : "pending";
     },
     send: async (request, allowed) => {
       const authority = await seatQuotaDispatchGuard(request.origin!.project!);
       const result = await enqueueStructuredMessage({ ...request, admissionGuard: authority, recoveryAuthorityGuard: authority },
-        { idleContinuationAllowed: allowed });
+        { idleContinuationAllowed: allowed, client: clientFor });
       if (!result?.ok) throw new Error(result?.error ?? "seat quota structured delivery unavailable");
     },
   };

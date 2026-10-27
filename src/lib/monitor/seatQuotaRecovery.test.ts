@@ -349,6 +349,38 @@ test.each([
   expect(released.count).toBe(1);
 });
 
+test.each(["authority", ...(process.platform !== "win32" && process.getuid?.() !== 0 ? ["authority-permission"] : []), "retry"])("native %s uncertainty preserves the obligation across restart", async scenario => {
+  const directory = path.join(root, `uncertain-${++ordinal}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const fixture = path.join(import.meta.dir, "fixtures/seatQuotaReplay.ts");
+  const run = async (phase: string) => {
+    const child = Bun.spawn([process.execPath, fixture, `native-${phase}`, scenario === "authority-permission" ? "permission" : "later"], {
+      env: { ...process.env, LLV_STATE_DIR: directory }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit, error).toBe(0);
+    return JSON.parse(output.trim().split("\n").at(-1)!);
+  };
+  const before = await run("persist");
+  expect(before.state).toBe("owed");
+  if (scenario.startsWith("authority")) {
+    expect(await run("authority-denied")).toMatchObject({ id: before.id, state: "owed", refused: true, count: 0 });
+    expect(await run("authority-release")).toMatchObject({ id: before.id, state: "submitted", count: 1 });
+  } else {
+    expect(await run("retry-submit")).toMatchObject({ id: before.id, state: "submitted", count: 0,
+      delivery: "absent", admission: { outcome: "admitted", state: "failed" } });
+    const unavailable = await run("retry-outage");
+    expect(unavailable).toMatchObject({ id: before.id, state: "submitted", count: 0, delivery: "unknown" });
+    expect(await run("retry-outage")).toEqual(unavailable);
+    const released = await run("retry-release");
+    expect(released).toMatchObject({ id: before.id, state: "submitted", count: 1, delivery: "delivered",
+      admission: { outcome: "admitted", state: "delivered" } });
+    expect(released.admission.operationId).not.toBe(unavailable.admission.operationId);
+    expect(await run("retry-replay")).toMatchObject({ id: before.id, state: "settled", count: 1 });
+    expect(await run("retry-replay")).toMatchObject({ id: before.id, state: "settled", count: 1 });
+  }
+});
+
 test("a distinct delivered request gets its own native recovery boundary after two quota cuts", async () => {
   const directory = path.join(root, `replacement-${++ordinal}`);
   fs.mkdirSync(directory, { recursive: true }); process.env.LLV_STATE_DIR = directory;
