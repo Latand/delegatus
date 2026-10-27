@@ -10,7 +10,7 @@ import { EventEmitter } from "node:events";
 import type WebSocket from "ws";
 import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
 import { stageDigest } from "./stageDigest";
-import { composeStageText } from "./stageInput";
+import { composeStageInput, composeStageText } from "./stageInput";
 import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
 import { spawn, spawnSync } from "node:child_process";
@@ -102,6 +102,25 @@ test("runtime turn metadata retains credential scrubbing", async () => {
   const { h, submits } = await fixture({ deliveryBranch: `refs/heads/pipeline/${secret}` });
   await submitted(h);
   expect(submits[0]!.prompt).not.toContain(secret);
+});
+
+test("Cloud keeps an activated empty relay instead of recovering an older output", async () => {
+  const { h, submits } = await fixture({ stages: [{ ...stage, id: "earlier", next: "review" }, stage] });
+  await submitted(h);
+  await step(h); await step(h);
+  const record = lane();
+  expect(record.cursor?.stageId).toBe("review");
+  expect(record.runs[0]!.attempts[0]!.output).toBe("All checked.");
+  // Retained activations can carry no relay even though an earlier run has output.
+  record.cursor!.input = null;
+  savePipelines([record]);
+  for (let index = 0; index < 4 && submits.length < 2; index++) await step(h);
+  expect(submits).toHaveLength(2);
+  const current = lane().runs[1]!.attempts.at(-1)!;
+  expect(current.input).toBeNull();
+  expect(current.activatedBy).not.toBeNull();
+  const local = await composeStageInput(lane(), lane().stages[1]!, current.effectiveRole, "", lane().worktreeDir, h.ports.exec);
+  expect(submits[1]!.prompt.slice(0, local.length)).toBe(local);
 });
 
 test.each(["default", "priority", "ultrafast"])("cloud admission refuses an explicit %s tier before any submission", async serviceTier => {

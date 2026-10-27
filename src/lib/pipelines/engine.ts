@@ -8312,8 +8312,9 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) return;
         const prepareCloudPrompt = async (threadId?: string) => {
+          const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
           const prompt = (await composeCloudStageInput(pipeline, bound, attempt.effectiveRole,
-            attempt.input ?? normalizedOutput(pipeline), undefined, threadId ? {
+            previousOutput, undefined, threadId ? {
               engine: "codex", conversationId: threadId, cwd: pipeline.worktreeDir, nativeMemoryEnabled: false,
               attempt: { pipelineId: pipeline.id, stageId: stage.id, attempt: n },
             } : undefined)).join("");
