@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -164,32 +164,59 @@ describe("LogTailStreamSession", () => {
     const events: LogTailStreamEvent[] = [];
     let reads = 0;
     let notifyGrowth: () => void = () => undefined;
-    const heartbeat = Promise.withResolvers<void>();
+    const pumpCallbacks: Array<() => void> = [];
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const nativeSetTimeout = globalThis.setTimeout;
+    // Hold pump callbacks so a queued retry is visible even if timer delivery
+    // stalls. Native handles let close() exercise its normal cancellation path.
+    const schedule = spyOn(globalThis, "setTimeout").mockImplementation((callback, _delay, ...args) => {
+      const timer = nativeSetTimeout(() => undefined, 60_000);
+      timers.add(timer);
+      pumpCallbacks.push(() => {
+        clearTimeout(timer);
+        timers.delete(timer);
+        callback(...args);
+      });
+      return timer;
+    });
+    let received = Promise.withResolvers<void>();
     const session = new LogTailStreamSession([{ id: "log", path: file, offset: 0 }], {
       restatMs: 60_000,
-      heartbeatMs: 50,
+      heartbeatMs: 60_000,
       readTailChunk: (...args) => { reads += 1; return readTailChunk(...args); },
       watchFile: (_pathname, onChange) => {
         notifyGrowth = onChange;
         return { close: () => undefined };
       },
-      onEvent: event => events.push(event),
-      onComment: () => { if (events.length > 0) heartbeat.resolve(); },
+      onEvent: event => { events.push(event); received.resolve(); },
     });
     try {
       session.start();
-      await Promise.race([heartbeat.promise, new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error("no heartbeat after initial read")), 2500);
-        void heartbeat.promise.then(() => clearTimeout(timer));
-      })]);
+      expect(pumpCallbacks).toHaveLength(1);
+      pumpCallbacks.shift()!();
+      // pump() finishes its synchronous finally block after onEvent, before
+      // this continuation observes whether it scheduled another catch-up.
+      await received.promise;
       expect(reads).toBe(1);
       expect(events.map(asChunk)).toEqual([{ start: 0, offset: 0, size: 2, data: "" }]);
+      expect(pumpCallbacks).toHaveLength(0);
+      expect(schedule.mock.calls.map(([, delay]) => delay)).toEqual([0]);
+
+      received = Promise.withResolvers<void>();
       fs.appendFileSync(file, character.subarray(2));
       notifyGrowth();
-      await waitFor(() => events.length === 2);
+      expect(pumpCallbacks).toHaveLength(1);
+      pumpCallbacks.shift()!();
+      await received.promise;
+      expect(reads).toBe(2);
+      expect(events).toHaveLength(2);
       expect(asChunk(events[1])).toEqual({ start: 0, offset: 4, size: 4, data: "😀" });
+      expect(pumpCallbacks).toHaveLength(0);
+      expect(schedule.mock.calls.map(([, delay]) => delay)).toEqual([0, 0]);
     } finally {
       session.close();
+      schedule.mockRestore();
+      for (const timer of timers) clearTimeout(timer);
     }
   });
 
