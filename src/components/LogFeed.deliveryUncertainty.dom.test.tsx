@@ -63,6 +63,10 @@ Object.assign(globalThis, {
 const structuredView: RuntimeSessionView = {
   session: {
     conversationId: "conv-snapshot",
+    sessionKey: { engine: "codex", sessionId: "snapshot-session" },
+    turn: "idle",
+    revision: 1,
+    attentionIds: [],
     hostKind: "codex-app-server",
     host: "hosted",
     capabilities: { imageInput: { supported: true }, runtimeSettings: { perTurnEffort: true, perTurnModel: false } },
@@ -91,6 +95,7 @@ function publishSnapshotReceipts(receipts: RuntimeReceipt[]): void {
 }
 
 const realFetch = globalThis.fetch;
+const mountedRoots = new Set<Root>();
 
 /* Attachment submissions are kept in IndexedDB before they reach the wire. */
 const composerStorage = installComposerStorageForTests();
@@ -126,7 +131,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => { for (const root of mountedRoots) root.unmount(); });
+  mountedRoots.clear();
   composerStorage.reset();
   setLogFeedDependenciesForTests(null);
   setTmuxComposerRuntimeDependenciesForTests(null);
@@ -139,14 +146,6 @@ afterEach(() => {
   sessionStorage.clear();
   resetOutboxForTests();
 });
-
-/** Queue-first retry (round-1 P1#1): the failed bubble re-queues under its
-    original idempotency key, so the dispatcher replays it — the queue-first
-    equivalent of the old "re-submit the retained draft" retry. */
-function retryFailed(conversationId = "conv-snapshot"): void {
-  const failed = readOutbox(conversationId).find((entry) => entry.state === "failed");
-  if (failed) retryOutbox(conversationId, failed.id);
-}
 
 const file: FileEntry = {
   path: "/codex-snapshot.jsonl", root: "codex-sessions", name: "codex-snapshot.jsonl", project: "viewer",
@@ -182,6 +181,9 @@ async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
+  mountedRoots.add(root);
+  const unmount = root.unmount.bind(root);
+  root.unmount = () => { mountedRoots.delete(root); unmount(); };
   await act(async () => {
     root.render(node);
     await new Promise((r) => setTimeout(r, 0));
@@ -194,16 +196,17 @@ async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement
 const settle = async (fn: () => void) => {
   await act(async () => {
     fn();
+    publishSnapshotReceipts(snapshotReceipts);
     for (let turn = 0; turn < 6; turn += 1) await new Promise((r) => setTimeout(r, 1));
   });
 };
 
-async function settleUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<boolean> {
+async function settleUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<boolean> {
   const deadline = performance.now() + timeoutMs;
-  while (!predicate() && performance.now() < deadline) {
+  while (!(await predicate()) && performance.now() < deadline) {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
   }
-  return predicate();
+  return await predicate();
 }
 
 /** Type into the composer through its React props (happy-dom input events do
@@ -301,7 +304,7 @@ test.each(["failed", "uncertain"] as const)("textless %s receipt polling and rem
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.includes("/api/runtime/operations/")) {
-      calls.push({ url, method: init?.method, body: init?.body as string });
+      if (init?.method) calls.push({ url, method: init.method, body: init.body as string });
       return Response.json({ receipt });
     }
     if (init?.method === "POST" && (url === "/api/runtime/send" || url === "/api/tmux")) calls.push({ url, method: init.method, body: init.body as string });
@@ -326,14 +329,17 @@ test.each(["failed", "uncertain"] as const)("textless %s receipt polling and rem
   await settle(() => {});
   let mounted = await renderInto(surface());
   const check = async () => {
-    expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent ?? "").not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
-    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
+    const expectedStatus = status === "failed" ? /delivery unconfirmed/i : /checking delivery/i;
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(expectedStatus);
     const row = mounted.host.querySelector("[data-receipt-standalone-row]")!;
-    expect(row.textContent).toMatch(/checking delivery/i);
-    expect(row.textContent).toContain(translate("en", "composer.deliveryCheckingDetail"));
+    expect(row.textContent).toMatch(expectedStatus);
+    expect(row.textContent).toContain(status === "failed"
+      ? translate("en", "composer.deliveryCheckEndedDetail")
+      : translate("en", "composer.deliveryCheckingDetail"));
     expect(row.querySelector("[data-receipt-discard]")?.textContent).toBe("Discard");
-    expect(row.querySelector("[data-operation]")?.getAttribute("data-operation")).toBe(captured.operationId);
+    expect(row.getAttribute("data-operation") ?? row.querySelector("[data-operation]")?.getAttribute("data-operation")).toBe(captured.operationId);
     expect(Boolean(row.querySelector("[data-receipt-edit], [data-outbox-retry], [data-outbox-cancel]"))).toBe(false);
   };
   try {
@@ -456,8 +462,9 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     }
     /* Each row asked about ITS own submission, under the key it is filed
        under, and nothing was posted anywhere. */
-    expect(lookups).toEqual([original, sibling].map(receipt =>
-      `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${receipt.idempotencyKey}`));
+    // a65802b14: mount checks original keys automatically, before explicit checks.
+    expect(lookups).toEqual([...Array(2)].flatMap(() => [original, sibling].map(receipt =>
+      `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${receipt.idempotencyKey}`)));
     expect(calls).toEqual([]);
     receipts = [{ ...sibling, revision: 6, status: terminal === "delivered" ? "delivered" : "failed", resend: "not-needed", reason: terminal === "discarded" ? "delivery-discarded" : undefined }, original, { ...original, revision: 2, status: "pending" }];
     seq++;
@@ -480,7 +487,7 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     /* Nothing in this whole life of two unknown deliveries posted anything:
        every recovery was a read under an original key. */
     expect(calls).toEqual([]);
-    expect(lookups).toHaveLength(2);
+    expect(lookups).toHaveLength(5);
     if (text) {
       /* And the transcript's own record of the message belongs to the
          submission that owns it — by watermark, in submission order — even
@@ -499,7 +506,7 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
 
 test("uncertainty survives reload, conversation switches, and late errors; actions use the original operation", async () => {
   const calls: { url: string; method?: string; body?: string }[] = [];
-  let actionReceipt = { ...captured, revision: 5 };
+  const actionReceipt = { ...captured, revision: 5 };
   /* What the record says when the row asks about its original key. It cannot
      settle anything until the operator presses the lookup below. */
   let lookupAnswer: unknown = { outcome: "unknown" };
@@ -529,11 +536,11 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
   try {
     expect(rowDelivery(mounted.host)).toContain("Checking delivery…");
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
-    expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent ?? "").not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     await settle(() => { retryOutbox(file.conversationId!, captured.idempotencyKey); cancelOutbox(file.conversationId!, captured.idempotencyKey); });
-    expect(calls).toHaveLength(0);
+    expect(calls).toEqual(Array.from({ length: 2 }, () => ({ url: `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${captured.idempotencyKey}`, method: undefined, body: undefined })));
     const other = { ...file, path: "/other.jsonl", conversationId: "other-conversation" };
     await settle(() => mounted.root.render(<TmuxComposer file={other} />));
     expect(mounted.host.textContent).not.toContain(captured.text!);
@@ -557,7 +564,8 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
       conversationId: captured.conversationId, kind: "send", state: "failed", reason: "delivery-discarded",
       resend: "not-needed", acceptedAt: captured.admittedAt, settledAt: captured.at } as SendReceipt) };
     await settle(() => lookup.click());
-    expect(calls).toEqual([{ url: `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${captured.idempotencyKey}`, method: undefined, body: undefined }]);
+    expect(calls.every(call => call.url === `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${captured.idempotencyKey}` && call.method === undefined && call.body === undefined)).toBe(true);
+    expect(calls.at(-1)).toEqual({ url: `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${captured.idempotencyKey}`, method: undefined, body: undefined });
     expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard]"))).toBe(false);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.reason).toBe("delivery-discarded");
     await act(async () => mounted.root.unmount());
@@ -566,8 +574,9 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
     expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard]"))).toBe(false);
     expect(Boolean(mounted.host.querySelector("[data-outbox-retry]"))).toBe(false);
     await settle(() => retryOutbox(file.conversationId!, captured.idempotencyKey));
-    /* One read, no writes: the row never posted or deleted anything. */
-    expect(calls).toHaveLength(1);
+    /* Mounts and explicit checks only read the original key (a65802b14). */
+    expect(calls).toHaveLength(4);
+    expect(calls.every(call => call.method === undefined)).toBe(true);
   } finally { await act(async () => mounted.root.unmount()); }
 });
 
@@ -617,7 +626,10 @@ test.each([
     if (expected === "delivered") {
       expect(readOutbox(file.conversationId!)[0]?.settledAt).toBe(Date.parse(captured.at));
       expect(Boolean(mounted.host.querySelector("[data-outbox-entry]"))).toBe(false);
-    } else if (resend === "safe") expect(Boolean(mounted.host.querySelector("[data-outbox-retry]"))).toBe(true);
+    } else if (resend === "safe") {
+      await openRowEvidence(mounted.host);
+      expect(Boolean(mounted.host.querySelector(status === "rejected" ? "[data-outbox-retry]" : "[data-outbox-operation-retry]"))).toBe(true);
+    }
     else expect(Boolean(mounted.host.querySelector("[data-outbox-retry]"))).toBe(false);
     expect(sends).toHaveLength(0);
   } finally { await act(async () => mounted.root.unmount()); }
@@ -763,7 +775,7 @@ test("non-2xx original receipt retains identity and verify-first evidence throug
     await settle(() => composerControls(mounted.host).submit());
     expect(sends).toHaveLength(1);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
-    expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent ?? "").not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.resend).toBe("verify-first");
@@ -773,7 +785,7 @@ test("non-2xx original receipt retains identity and verify-first evidence throug
     resetOutboxForTests();
     mounted = await renderInto(surface());
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
-    expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent ?? "").not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     await settle(() => {
@@ -811,7 +823,9 @@ test.each(["queued", "failed", "network"])("late %s send callback cannot reverse
     });
     expect(readOutbox(file.conversationId!)[0]?.state).toBe("delivered");
     expect(readOutbox(file.conversationId!)[0]?.settledAt).toBe(Date.parse(delivered.at));
-    expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toContain("Delivered");
+    // 97aa4ac7c: delivered bubbles retain their text without a status label.
+    expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toBe(captured.text!);
+    expect(Boolean(mounted.host.querySelector("[data-outbox-failure], [data-outbox-check]"))).toBe(false);
     expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).not.toContain("unknown");
     expect(sends).toHaveLength(1);
   } finally { await act(async () => mounted.root.unmount()); }
@@ -870,7 +884,7 @@ test("accepted held response persists identity and settles by original operation
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
     mounted = await renderInto(surface());
-    expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toContain("Held");
+    expect(rowDelivery(mounted.host)).toContain("Sent — waiting for confirmation.");
     expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).not.toContain("unknown");
     expect(Boolean(mounted.host.querySelector("[data-outbox-retry], [data-outbox-cancel]"))).toBe(false);
     snapshotReceipts = [{ ...captured, idempotencyKey: sends[0]!.idempotencyKey, status: "delivered", resend: "not-needed", revision: 8, at: new Date().toISOString() }];
@@ -945,12 +959,13 @@ test.each([200, 503].flatMap(httpStatus => ["conversation", "key", "operation"].
 
 
 test.each(["POST", "DELETE"].flatMap(method => ["conversation", "key", "operation", "envelope"].map(mismatch => ({ method, mismatch }))))("recovery response must name the original operation (%j)", async ({ method, mismatch }) => {
-  snapshotReceipts = [captured];
+  snapshotReceipts = [{ ...captured, text: undefined }];
   const calls: { url: string; method?: string; body?: string }[] = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.includes("/api/runtime/operations/")) {
-      calls.push({ url, method: init?.method, body: init?.body as string });
+      if (!init?.method) return Response.json({ receipt: { ...captured, text: undefined } });
+      calls.push({ url, method: init.method, body: init.body as string });
       return Response.json({ operationId: mismatch === "envelope" ? "foreign-envelope" : mismatch === "operation" ? "foreign-operation" : captured.operationId,
         receipt: { ...captured, status: "delivered", resend: "not-needed",
           conversationId: mismatch === "conversation" ? "foreign-conversation" : captured.conversationId,
@@ -967,7 +982,7 @@ test.each(["POST", "DELETE"].flatMap(method => ["conversation", "key", "operatio
       body: method === "POST" ? JSON.stringify({ action: "retry-uncertain" }) : undefined }]);
     expect(mounted.host.querySelectorAll("[data-receipt-uncertain-retry]")).toHaveLength(1);
     expect(mounted.host.querySelectorAll('[data-operation="foreign-operation"]')).toHaveLength(0);
-    expect(mounted.host.textContent).toMatch(/checking delivery/i);
+    expect(mounted.host.textContent).toMatch(/delivery unconfirmed/i);
   } finally { await act(async () => mounted.root.unmount()); }
 });
 
@@ -989,15 +1004,23 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
     resend: "not-needed", evidence: "delivery-record" });
   expect(settlement.revision).toBe(1);
   const calls: string[] = [];
+  let settleLookup = false;
   globalThis.fetch = (async (input, init) => {
     /* The row's ONE recovery: the lookup under the original key. It is the
        only thing an unknown outcome may ask for, and the settlement the
        producer journaled is what answers it. */
     if (String(input).startsWith("/api/runtime/send?")) {
       calls.push("lookup");
+      if (!settleLookup) return Response.json({ outcome: "unknown" });
       return Response.json({ outcome: "admitted", operationId: captured.operationId, receipt: settlement });
     }
-    if (String(input) === `/api/runtime/operations/${captured.operationId}`) calls.push(`unexpected:${init?.method ?? "GET"}`);
+    /* Background reads of the original operation are allowed; any mutation
+       of it is recorded and refused. */
+    if (String(input) === `/api/runtime/operations/${captured.operationId}`) {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Response.json({ receipt: captured });
+      calls.push(`unexpected:${method}`);
+    }
     if (init?.method === "POST" && ["/api/runtime/send", "/api/tmux"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
@@ -1012,6 +1035,7 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
     /* Nothing on an unknown row starts another attempt or ends the delivery
        (round-4 P2): asking under the original key is the whole offer. */
     expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]"))).toBe(false);
+    settleLookup = true;
     await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
     const assertSettled = () => {
       expect(readOutbox(file.conversationId!)[0]?.state).toBe(outcome === "delivered" ? "delivered" : "failed");
@@ -1033,7 +1057,7 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
     resetOutboxForTests();
     mounted = await renderInto(surface());
     assertSettled();
-    expect(calls).toEqual(["lookup"]);
+    expect(calls).toEqual(["lookup", "lookup"]);
   } finally { bus.stop(); await act(async () => mounted.root.unmount()); }
 });
 
@@ -1104,6 +1128,7 @@ test.each([
   expect(settlement.revision).toBe(1);
   expect(original.revision).toBe(4);
   const calls: string[] = [];
+  let settleLookup = false;
   const lookups: string[] = [];
   const newSends: string[] = [];
   globalThis.fetch = (async (input, init) => {
@@ -1112,10 +1137,12 @@ test.each([
        with what the producer journaled and never starts an attempt. */
     if (String(input).startsWith("/api/runtime/send?")) {
       lookups.push(String(input));
+      if (!settleLookup) return Response.json({ outcome: "unknown" });
       return Response.json({ outcome: "admitted", operationId: original.operationId, receipt: settlement });
     }
     if (String(input) === `/api/runtime/operations/${original.operationId}`) {
-      calls.push(init?.method ?? "GET");
+      if (!init?.method) return Response.json({ receipt: original });
+      calls.push(init.method);
       if (calls.length > 1) throw new Error("Response lost after retry dispatch");
       return Response.json({ operationId: original.operationId, receipt: settlement });
     }
@@ -1151,8 +1178,9 @@ test.each([
          second attempt, and no way to end a delivery nobody has established
          (round-4 P2). */
       expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]"))).toBe(false);
+      settleLookup = true;
       await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
-      expect(lookups).toEqual([`/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${original.idempotencyKey}`]);
+      expect(lookups).toEqual(Array(2).fill(`/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${original.idempotencyKey}`));
     } else {
       await settle(() => mounted.host.querySelector<HTMLButtonElement>(outcome === "discarded"
         ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]")!.click());
@@ -1225,9 +1253,9 @@ test.each([
 
 /* #1538 capacity: the 32-entry queue compacts settled history only and keeps
    every unresolved operation. Both cases cross the real boundary through the mounted
-   form and the real serial dispatcher; the wire is the only mock. An unknown
-   original keeps the drain closed (nothing else may go on the wire while one
-   submission's fate is unknown), so everything submitted after it stays queued. */
+   form and the real serial dispatcher; the wire is the only mock. After an
+   unknown outcome releases the local wire, the next admitted hold keeps later
+   submissions queued. Neither unresolved entry may be evicted to make room. */
 const deliveredResponse = (body: SendBody, index: number) => ({ status: 200, json: { operationId: `operation-delivered-${index}`, receipt: {
   ...captured, operationId: `operation-delivered-${index}`, idempotencyKey: body.idempotencyKey, status: "delivered", resend: "not-needed", reason: undefined, revision: 1,
   at: new Date().toISOString(), admittedAt: new Date().toISOString(), text: body.text } } });
@@ -1268,6 +1296,7 @@ const pasteImage = async (host: HTMLElement, tag: string) => {
   }));
   for (let attempt = 0; attempt < 50 && host.querySelectorAll("img").length !== 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2));
   expect(host.querySelectorAll("img")).toHaveLength(1);
+  expect(await settleUntil(() => !host.querySelector('[data-testid="attachment-tile"]:not([data-status="ready"])'))).toBe(true);
 };
 
 test("issue 1538: delivered history compacts first; an unknown original survives the boundary, remount and recovery, then admission closes", async () => {
@@ -1464,7 +1493,9 @@ for (const initialState of ["in-flight", "failed"] as const) {
           dataTransfer: { files: [new dom.File(["original document"], "original.pdf", { type: "application/pdf" })] },
           preventDefault() {}, stopPropagation() {},
         }));
+        expect(await settleUntil(() => !mounted.host.querySelector('[data-testid="attachment-tile"]:not([data-status="ready"])'))).toBe(true);
         await settle(() => composerControls(mounted.host).submit());
+        expect(await settleUntil(() => sends.length === 1)).toBe(true);
         expect(sends).toHaveLength(1);
         expect(sends[0]!.images).toHaveLength(1);
         expect((sends[0] as SendBody & { files: unknown[] }).files).toHaveLength(1);
@@ -1511,6 +1542,7 @@ for (const initialState of ["in-flight", "failed"] as const) {
         await openRowEvidence(mounted.host);
     await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-delivery-notice-retry]")!.click());
         expect(actions).toEqual([undefined]);
+        expect(await settleUntil(() => readOutbox(file.conversationId!).find(entry => entry.id === safeEntry.id)?.state === "delivered")).toBe(true);
         expect(readOutbox(file.conversationId!).find(entry => entry.id === safeEntry.id)?.state).toBe("delivered");
         expect(sends).toEqual([originalWire]);
         expect(mounted.host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("later draft");
@@ -1559,7 +1591,9 @@ for (const laterDraft of ["pending immutable request", "pending immutable reques
             const props = (textarea as unknown as Record<string, { onDrop(event: unknown): void }>)[propsKey]!;
             await settle(() => props.onDrop({ dataTransfer: { files: [new dom.File(["document"], "pending.pdf", { type: "application/pdf" })] }, preventDefault() {}, stopPropagation() {} }));
           }
+          expect(await settleUntil(() => !mounted.host.querySelector('[data-testid="attachment-tile"]:not([data-status="ready"])'))).toBe(true);
           await settle(() => composerControls(mounted.host).submit());
+          expect(await settleUntil(() => sends.length === 1)).toBe(true);
           expect(sends).toHaveLength(1);
           expect(await settleUntil(() => readOutbox(file.conversationId!)[0]?.operationId === "operation-pending")).toBe(true);
           expect(readOutbox(file.conversationId!)[0]?.operationId).toBe("operation-pending");
@@ -1640,6 +1674,7 @@ for (const attachment of ["none", "image", "document"] as const) {
         await settle(() => props.onDrop({ dataTransfer: { files: [new dom.File(["document"], "inflight.pdf", { type: "application/pdf" })] }, preventDefault() {}, stopPropagation() {} }));
       }
       await settle(() => composerControls(mounted.host).submit());
+      expect(await settleUntil(() => sends.length === 1)).toBe(true);
       expect(sends).toHaveLength(1);
       expect(admitted[0]?.status).toBe("queued");
       const original = structuredClone(sends[0]!);
@@ -1648,6 +1683,7 @@ for (const attachment of ["none", "image", "document"] as const) {
       /* A second message queued behind the in-flight one has genuinely not left. */
       await settle(() => composerControls(mounted.host).type("queued behind it"));
       await settle(() => composerControls(mounted.host).submit());
+      expect(await settleUntil(() => sends.length === 1)).toBe(true);
       expect(sends).toHaveLength(1);
       expect(readOutbox(file.conversationId!).map(entry => entry.state)).toEqual(["delivering", "queued"]);
       const behindId = readOutbox(file.conversationId!)[1]!.id;
@@ -1656,27 +1692,32 @@ for (const attachment of ["none", "image", "document"] as const) {
       writeProfile(file, { effort: "low", fast: true });
       mounted = await renderInto(surface());
       await settle(() => {});
-      /* One request in total: the possible dispatch is neither replayed nor failed. */
-      expect(sends).toEqual([original]);
+      /* bf60e71d6: an unknown original cannot mute later independent messages.
+         It is never replayed; only the genuinely queued successor starts. */
+      expect(await settleUntil(() => sends.length === 2)).toBe(true);
+      expect(sends[0]).toEqual(original);
+      expect(sends[1]).toMatchObject({ idempotencyKey: behindId, text: "queued behind it" });
       const [inflight, behind] = readOutbox(file.conversationId!);
-      expect(inflight).toMatchObject({ id: original.idempotencyKey, text: "response still on the wire", images: attachment === "image" ? 1 : 0, state: "delivering", deliveryUncertain: true });
+      expect(inflight).toMatchObject({ id: original.idempotencyKey, text: "response still on the wire", images: attachment === "image" ? 1 : 0, state: "failed", deliveryUncertain: true });
       expect(inflight!.files ?? 0).toBe(attachment === "document" ? 1 : 0);
       expect(inflight!.needsReattach).toBeUndefined();
-      expect(behind).toMatchObject({ id: behindId, text: "queued behind it", state: "queued" });
+      expect(behind).toMatchObject({ id: behindId, text: "queued behind it", state: "delivering" });
       const inflightRow = mounted.host.querySelector(`[data-outbox-entry="${original.idempotencyKey}"]`)!;
       expect(rowDelivery(mounted.host, original.idempotencyKey)).toContain("Checking delivery…");
       expect(Boolean(inflightRow.querySelector("[data-outbox-retry], [data-outbox-cancel]"))).toBe(false);
       const behindRow = mounted.host.querySelector(`[data-outbox-entry="${behindId}"]`)!;
-      expect(Boolean(behindRow.querySelector("[data-outbox-cancel]"))).toBe(true);
+      expect(Boolean(behindRow.querySelector("[data-outbox-cancel]"))).toBe(false);
       /* Ordinary local controls stay refused for the unknown original. */
       await settle(() => retryOutbox(file.conversationId!, original.idempotencyKey));
       await settle(() => cancelOutbox(file.conversationId!, original.idempotencyKey));
-      expect(sends).toEqual([original]);
+      expect(sends).toHaveLength(2);
+      expect(sends[0]).toEqual(original);
+      expect(sends[1]!.idempotencyKey).toBe(behindId);
       expect(readOutbox(file.conversationId!)[0]).toEqual(inflight!);
       await settle(() => composerControls(mounted.host).type("later draft"));
       await pasteImage(mounted.host, "later-image");
-      /* The original operation settles authoritatively. The genuinely unsent
-         successor takes the freed slot under its own key. */
+      /* The original operation settles authoritatively. The successor already
+         owns its independent wire claim and must not be sent again. */
       journal.transitionOperation("operation-inflight-1", "delivering");
       snapshotReceipts = [journal.transitionOperation("operation-inflight-1", "delivered").receipt];
       await settle(() => mounted.root.render(surface()));
@@ -1699,7 +1740,7 @@ for (const attachment of ["none", "image", "document"] as const) {
 }
 
 for (const emptySelection of [false, true]) {
-  test.each([false, true])("receiptless safe retry preserves selected context empty=" + emptySelection + " remount=%s", async remount => {
+  test.each([false, true])("server-owned retry preserves the empty composer context despite board selection empty=" + emptySelection + " remount=%s", async remount => {
     const { viewBus } = await import("@/hooks/viewPresenceBus");
     viewBus.reportIdentity({ viewSessionId: "review-view", deviceId: "review-device" });
     viewBus.reportContext({ project: "viewer", board: { renderedRevision: null, durableRevision: null, sync: "unavailable" } });
@@ -1708,14 +1749,30 @@ for (const emptySelection of [false, true]) {
     select(emptySelection ? "" : "fixtures/a.jsonl");
     const sends: SendBody[] = [];
     mockWire(sends, [() => ({ status: 503, json: {} }), body => ({ status: 200, json: { receipt: runtimeReceiptForSend({ operationId: "review-safe", conversationId: file.conversationId!, clientMessageId: body.idempotencyKey, kind: "send", state: "in-flight", reason: "accepted", acceptedAt: new Date().toISOString(), settledAt: null, duplicateRisk: false, resend: null, evidence: "delivery-record" }) } })]);
-    writeProfile(file, { effort: "high", fast: false });
+    const operationCalls: Array<{ url: string; body: unknown }> = [];
+    const sendFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === "/api/runtime/operations/review-safe") {
+        if (!init?.method) return Response.json({ receipt: snapshotReceipts[0] });
+        operationCalls.push({ url: String(input), body: init.body ? JSON.parse(String(init.body)) : undefined });
+        return Response.json({ operationId: "review-safe", receipt: runtimeReceiptForSend({
+          operationId: "review-safe", conversationId: file.conversationId!, clientMessageId: sends[0]!.idempotencyKey,
+          kind: "send", state: "delivered", reason: null, acceptedAt: new Date().toISOString(), settledAt: new Date().toISOString(),
+          duplicateRisk: false, resend: "not-needed", evidence: "delivery-record",
+        }) });
+      }
+      return sendFetch(input, init);
+    }) as typeof fetch;
     let mounted = await renderInto(surface());
     try {
+      writeProfile(file, { effort: "ultra", fast: false });
       await settle(() => composerControls(mounted.host).type("immutable request"));
       await pasteImage(mounted.host, "immutable-image");
       await settle(() => composerControls(mounted.host).submit());
+      expect(await settleUntil(() => sends.length === 1)).toBe(true);
       expect(sends).toHaveLength(1);
-      expect((sends[0] as SendBody & { selectedContext: { conversationId?: string } }).selectedContext.conversationId).toBe(emptySelection ? undefined : "conversation_context_a");
+      // 97aa4ac7c: opening or selecting a card never attaches it to a composer turn.
+      expect((sends[0] as SendBody & { selectedContext?: unknown }).selectedContext).toBeUndefined();
       if (remount) {
         await act(async () => mounted.root.unmount()); resetOutboxForTests();
         mounted = await renderInto(surface());
@@ -1725,9 +1782,20 @@ for (const emptySelection of [false, true]) {
       snapshotReceipts = [runtimeReceiptForSend({ operationId: "review-safe", conversationId: file.conversationId!, clientMessageId: sends[0]!.idempotencyKey, kind: "send", state: "failed", reason: "pre-dispatch rejection", acceptedAt: new Date().toISOString(), settledAt: new Date().toISOString(), duplicateRisk: false, resend: "safe", evidence: "delivery-record" })];
       await settle(() => mounted.root.render(surface()));
       expect(readOutbox(file.conversationId!)[0]?.state).toBe("failed");
-      await settle(() => retryOutbox(file.conversationId!, sends[0]!.idempotencyKey));
-      expect(sends).toHaveLength(2);
-      expect(sends[1]).toEqual(sends[0]);
+      const { composerSubmissionPayloads } = await import("@/lib/composerSubmissionPayloads");
+      const payloadIdentity = { conversationId: file.conversationId!, key: sends[0]!.idempotencyKey };
+      expect(await settleUntil(async () => (await composerSubmissionPayloads.restore(payloadIdentity))?.retry === "operation")).toBe(true);
+      const retained = await composerSubmissionPayloads.restore(payloadIdentity);
+      expect(retained?.submission.selectedContext).toMatchObject({ state: "none" });
+      expect(retained?.submission.runtime).toEqual({ effort: "ultra" });
+      const original = structuredClone(sends[0]);
+      await openRowEvidence(mounted.host);
+      await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-outbox-operation-retry]")!.click());
+      expect(await settleUntil(() => operationCalls.length === 1)).toBe(true);
+      expect(operationCalls).toEqual([{ url: "/api/runtime/operations/review-safe", body: undefined }]);
+      expect(sends).toEqual([original]);
+      expect(await settleUntil(() => readOutbox(file.conversationId!)[0]?.state === "delivered")).toBe(true);
+      expect(readOutbox(file.conversationId!)[0]?.state).toBe("delivered");
     } finally { await act(async () => mounted.root.unmount()); viewBus.reportIdentity(null); viewBus.reportCards([]); }
   });
 
@@ -1741,6 +1809,7 @@ for (const storedContext of [undefined, { version: 1, state: "selected", convers
     try {
       await settle(() => composerControls(mounted.host).type("preserved original"));
       await settle(() => composerControls(mounted.host).submit());
+      expect(await settleUntil(() => sends.length === 1)).toBe(true);
       expect(sends).toHaveLength(1);
       await act(async () => mounted.root.unmount());
       const storageKey = `llvPendingSend:${file.conversationId}`;

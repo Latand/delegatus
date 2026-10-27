@@ -30,7 +30,7 @@ export class CodexUpdateProbeFailure extends Error {
   constructor(readonly check: "app-server schema" | "native queue fixture", cause?: unknown) { super(check, { cause }); }
 }
 export class CodexUpdateReportPending extends Error {
-  constructor(cause: unknown) { super("Codex update seat report pending recovery", { cause }); }
+  constructor(cause: unknown, readonly beforeCheck = false) { super("Codex update seat report pending recovery", { cause }); }
 }
 
 function readState(file: string): UpdateState {
@@ -49,6 +49,13 @@ function readState(file: string): UpdateState {
 function save(file: string, state: UpdateState): void {
   writeJsonDurably(file, state, { space: 0 });
 }
+
+/** Durable work must keep retrying even if an earlier location failure put
+ * the scheduler on cooldown before an explicit check prepared this job. */
+export function hasPendingCodexUpdate(binary: string): boolean {
+  const state = readState(path.join(updateDirectory(binary), "state.json"));
+  return state.pending !== null || state.notice !== null;
+}
 export function newer(candidate: string, installed: string): boolean {
   if (![candidate, installed].every(value => /^\d+\.\d+\.\d+$/.test(value))) throw new Error("invalid CLI version");
   const a = candidate.split(".").map(Number), b = installed.split(".").map(Number);
@@ -58,24 +65,25 @@ export function newer(candidate: string, installed: string): boolean {
 
 /** Durable daily budget, candidate and report outbox survive process replacement.
  * Preparation never holds the launch lock. Only idle observation and rename do. */
-export async function updateCodex(binary: string, ports: UpdatePorts, rollback = false): Promise<void> {
+export async function updateCodex(binary: string, ports: UpdatePorts, rollback = false, requested = false): Promise<void> {
   const directory = updateDirectory(binary);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   await withFileTransaction(path.join(directory, "job"), "Codex update already running", async () => {
     const file = path.join(directory, "state.json"), state = readState(file);
-    const publish = async () => {
+    const publish = async (beforeCheck = false) => {
       if (!state.notice) return;
-      try { await ports.report(state.notice); }
-      catch (error) { throw new CodexUpdateReportPending(error); }
-      state.notice = null; save(file, state);
+      try {
+        await ports.report(state.notice);
+        state.notice = null; save(file, state);
+      } catch (error) { throw new CodexUpdateReportPending(error, beforeCheck); }
     };
     const notice = (version: string, line: string, failed: boolean) => {
       state.notice = { id: `${ports.now()}:${version}:${line}`, at: ports.now(), version, line: `Codex CLI ${version}: ${line}`, failed };
       save(file, state);
     };
-    await publish();
+    await publish(true);
     if (!ports.current()) return;
-    if (!rollback && !state.pending && ports.now() < state.nextCheck) return;
+    if (!rollback && !requested && !state.pending && ports.now() < state.nextCheck) return;
     let version = state.pending?.version ?? "unknown", check = "installed location";
     let switched = false;
     const previous = state.previous;

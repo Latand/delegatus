@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
+import { useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
@@ -166,4 +167,53 @@ test("a resumed chunk drops the carried partial and the half record it begins wi
   deliver(subscriber, { data: '{"mess', offset: from + 6, size: 400, start: from });
   deliver(subscriber, { data: 'age":"two"}\n', offset: from + 6 + 12, size: 400, start: from + 6 });
   expect(dom.document.querySelector("output")?.textContent).toBe('{"message":"one"}|{"message":"live"}|{"message":"two"}');
+});
+
+
+test("an unchanged stream heartbeat does not render its reader again", async () => {
+  const file = entry("fixtures/idle-heartbeat.jsonl");
+  let renders = 0;
+  function IdleReader() {
+    useLayoutEffect(() => { renders += 1; });
+    const tail = useLogTail(file);
+    return <output data-error={tail.error ?? ""}>{tail.lines.join("|")}</output>;
+  }
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  roots.push(root);
+  flushSync(() => root.render(<IdleReader />));
+  const subscriber = await waitForSubscriber(file.path);
+  flushSync(() => subscriber.onChunk({ data: "first\n", start: 0, offset: 6, size: 6 }));
+  const before = renders;
+  flushSync(() => subscriber.onChunk({ data: "", start: 6, offset: 6, size: 6 }));
+  expect(renders).toBe(before);
+  flushSync(() => subscriber.onChunk({ transportError: true }));
+  expect(host.querySelector("output")?.getAttribute("data-error")).not.toBe("");
+  flushSync(() => subscriber.onChunk({ data: "", start: 6, offset: 6, size: 6 }));
+  expect(host.querySelector("output")?.getAttribute("data-error")).toBe("");
+  expect(host.querySelector("output")?.textContent).toBe("first");
+});
+
+test("a catalog catch-up during idle heartbeats still rejects a later truncated transcript before paint", async () => {
+  const path = "fixtures/idle-catalog-catch-up.jsonl";
+  const data = '{"message":"one"}\n{"message":"two"}\n';
+  const size = data.length;
+  const at = (catalogSize: number): FileEntry => ({ ...entry(path), size: catalogSize });
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Probe file={at(1)} />));
+  const subscriber = await waitForSubscriber(path);
+  deliver(subscriber, { data, start: 0, offset: size, size });
+  expect(host.querySelector("output")?.textContent).toBe('{"message":"one"}|{"message":"two"}');
+
+  /* The catalog catches up while the transcript is idle: only heartbeats arrive. */
+  flushSync(() => root.render(<Probe file={at(size)} />));
+  deliver(subscriber, { data: "", start: size, offset: size, size });
+  flushSync(() => root.unmount());
+  host.remove();
+
+  mount(at(size - 1));
+  expect(dom.document.querySelector("output")?.textContent).toBe("");
 });
