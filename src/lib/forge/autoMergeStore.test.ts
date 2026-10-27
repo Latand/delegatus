@@ -131,6 +131,64 @@ function completedLane(id: string): Pipeline {
   } as unknown as Pipeline;
 }
 
+test.each(["OPEN", "MERGED", "CLOSED", "read-error"])("a real closed merge record reconciles %s after a fresh process reads it", async terminal => {
+  resetAutoMergeForTests();
+  savePipelines([completedLane("retained-owner")]);
+  let clock = T0;
+  const view = { state: "OPEN", isDraft: false, headRefOid: HEAD, baseRefName: "main",
+    mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+    statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] };
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, cachedState: () => null, pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }), log: () => undefined,
+    run: async args => {
+      if (args[0] === "pr" && args[1] === "view") return JSON.stringify(view);
+      if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+      if (args[1]?.includes("/reviews")) return "";
+      if (args[1]?.includes("/branches/")) return "[]";
+      throw new Error("unexpected forge read");
+    },
+    write: async () => "",
+  });
+  await sweepAutoMerge(ports);
+  clock += MERGE_SETTLE_MS;
+  await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge?.state).toBe("merging");
+  const closed = await patchPipeline("retained-owner", { action: "close" }, { now: () => iso(clock) } as never);
+  expect(closed.error).toBeUndefined();
+  expect(loadPipelines()[0]!).toMatchObject({ state: "closed", merge: { state: "merging" } });
+  const script = `
+    const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    let reads = 0, writes = 0;
+    const ports = productionAutoMergePorts({ now: () => ${clock + MERGE_POLL_MS}, loadPipelines,
+      cachedState: () => null, log: () => undefined,
+      run: async args => {
+        if (args[0] === "api" && args[1]?.includes("/comments")) return "";
+        if (args[0] !== "pr" || args[1] !== "view") throw new Error("unexpected forge read");
+        reads += 1;
+        if (${JSON.stringify(terminal)} === "read-error") throw new Error("landing read unavailable");
+        return JSON.stringify({ ...${JSON.stringify(view)}, state: ${JSON.stringify(terminal)}, mergeStateStatus: "UNKNOWN" });
+      },
+      write: async () => { writes += 1; throw new Error("landing reconciliation must not dispatch"); },
+    });
+    await sweepAutoMerge(ports);
+    await sweepAutoMerge(ports);
+    console.log(JSON.stringify({ reads, writes, state: loadPipelines()[0].state, merge: loadPipelines()[0].merge }));
+  `;
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, error).toBe(0);
+  const result = JSON.parse(output);
+  expect(result).toMatchObject({ reads: 1, writes: 0, state: "closed", merge: {
+    state: terminal === "MERGED" ? "merged" : terminal === "CLOSED" ? "blocked" : "merging",
+    readAt: iso(clock + MERGE_POLL_MS),
+  } });
+  expect(loadPipelines()[0]!.merge).toEqual(result.merge);
+});
+
 test("merge mutations yield after releasing the selected lane and recover after a refused change", async () => {
   const first = completedLane("bounded-merge-first"), second = completedLane("bounded-merge-second");
   savePipelines([first, second]);

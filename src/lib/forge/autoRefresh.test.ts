@@ -1182,6 +1182,170 @@ test("an unresolved repository merge holds dispatch across polling windows and p
   expect(exit, `${stdout}\n${stderr}`).toBe(0);
 });
 
+/** Rebuild ports in a fresh interpreter from the records the sweep wrote. */
+async function mergeOwnerRestart(name: string, prepare: () => Promise<ReturnType<typeof harness>>, verify: (h: ReturnType<typeof harness>) => Promise<void>) {
+  if (process.env.MERGE_OWNER_RESTART) {
+    const stored = JSON.parse(fs.readFileSync(process.env.MERGE_OWNER_RESTART, "utf8")) as { lanes: Pipeline[]; prs: PullRequest[] };
+    await verify(harness(stored));
+    return;
+  }
+  const h = await prepare();
+  const fixture = path.join(sandbox, `${name.replaceAll(" ", "-")}.json`);
+  fs.writeFileSync(fixture, JSON.stringify({ lanes: h.ports.loadPipelines(), prs: h.ports.loadPipelines().map(lane => h.prs.get(lane.delivery!.target.pr!)!), required: ["ci"] }));
+  await verify(harness(JSON.parse(fs.readFileSync(fixture, "utf8"))));
+  const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", `^${name}$`], {
+    env: { ...process.env, MERGE_OWNER_RESTART: fixture }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, `${stdout}\n${stderr}`).toBe(0);
+}
+
+function settledMerge(h: ReturnType<typeof harness>, id: string, state: PipelineMerge["state"]) {
+  Object.assign(h.merge(id)!, { state, head: HEAD_A, headSeenAt: iso(T0 - MERGE_SETTLE_MS),
+    lastChecks: ["ci"], seenChecks: ["ci"], nextReadAt: null });
+}
+
+test.each(["unknown", "pending", "clean", "red", "read-error"])("accepted merge retains ownership through %s polls and restart", async mode => {
+  await mergeOwnerRestart(`accepted merge retains ownership through ${mode} polls and restart`, async () => {
+    const h = queuedRefreshes(["ci"], 3);
+    await h.sweep();
+    settledMerge(h, "queued-1", "merging");
+    settledMerge(h, "queued-2", "queued");
+    Object.assign(h.prs.get(12)!, { mergeStateStatus: mode === "unknown" ? "UNKNOWN" : "CLEAN",
+      checks: mode === "pending" ? [{ name: "ci", status: "IN_PROGRESS" }] : [mode === "red" ? red("ci") : green("ci")] });
+    h.prs.get(13)!.mergeStateStatus = "CLEAN";
+    return h;
+  }, async h => {
+    const run = h.ports.run;
+    let ownerReads = 0;
+    h.ports.run = async args => {
+      if (args[0] === "pr" && args[1] === "view" && args[2] === "12") {
+        ownerReads += 1;
+        if (mode === "read-error") throw new Error("read unavailable");
+      }
+      return run(args);
+    };
+    await h.run(mode === "read-error" ? MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS : 3 * MERGE_POLL_MS);
+    await h.sweep();
+    const reads = ownerReads;
+    await h.sweep();
+    await h.sweep();
+    expect(ownerReads).toBe(reads);
+    expect(h.merge("queued-1")!.state).toBe("merging");
+    expect(h.merges()).toEqual([]);
+    expect(h.creates).toEqual([]);
+    h.ports.run = run;
+    h.prs.get(12)!.state = "MERGED";
+    await h.run(4 * MERGE_POLL_MS, () => h.merge("queued-2")!.state === "merged");
+    expect(h.merge("queued-1")).toMatchObject({ state: "merged", by: "auto-merge", postMergeWatch: true });
+    expect(h.merges().map(args => args[2])).toEqual(["13"]);
+  });
+});
+
+test.each(["completed", "closed"] as const)("a %s mirrored refresh parent preserves its child merge through polls and restart", async lifecycle => {
+  await mergeOwnerRestart(`a ${lifecycle} mirrored refresh parent preserves its child merge through polls and restart`, async () => {
+    const h = queuedRefreshes(undefined, 3);
+    await h.sweep();
+    h.pipeline("refresh-1").state = "completed";
+    h.prs.get(11)!.mergeStateStatus = "CLEAN";
+    await h.sweep(); // Admit the completed child and start an unrelated refresh.
+    settledMerge(h, "refresh-1", "merging");
+    settledMerge(h, "queued-2", "queued");
+    h.prs.get(13)!.mergeStateStatus = "CLEAN";
+    await h.sweep(); // Persist the parent's mirrored merging state.
+    h.pipeline("queued-0").state = lifecycle;
+    return h;
+  }, async h => {
+    await h.run(3 * MERGE_POLL_MS);
+    expect(h.merge("queued-0")!.state).toBe("merging");
+    expect(h.merge("refresh-1")!.state).toBe("merging");
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(5 * MERGE_POLL_MS, () => h.merge("queued-2")!.state === "merged");
+    if (lifecycle === "completed") expect(h.merge("queued-0")!.state).toBe("merged");
+    expect(h.merge("refresh-1")!.state).toBe("merged");
+    expect(h.merges().map(args => args[2])).toEqual(["13"]);
+  });
+});
+
+test.each(["closed", "hidden", "needs-decision", "paused"])("a retained %s merge owner reconciles landing after restart", async lifecycle => {
+  await mergeOwnerRestart(`a retained ${lifecycle} merge owner reconciles landing after restart`, async () => {
+    const h = queuedRefreshes(undefined, 2);
+    for (const pr of h.prs.values()) pr.mergeStateStatus = "CLEAN";
+    await h.sweep();
+    settledMerge(h, "queued-0", "merging");
+    settledMerge(h, "queued-1", "queued");
+    const owner = h.pipeline("queued-0");
+    if (lifecycle === "hidden") owner.hiddenAt = iso(T0);
+    else owner.state = lifecycle === "needs-decision" ? "needs_decision" : lifecycle as Pipeline["state"];
+    return h;
+  }, async h => {
+    const before = structuredClone(h.pipeline("queued-0"));
+    await h.run(3 * MERGE_POLL_MS);
+    expect(h.merge("queued-0")!.state).toBe("merging");
+    expect(h.merge("queued-0")!.readAt).toBe(iso(h.now() - MERGE_POLL_MS));
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(5 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+    expect(h.merge("queued-0")!.state).toBe("merged");
+    expect(h.pipeline("queued-0").state).toBe(before.state);
+    expect(h.pipeline("queued-0").hiddenAt).toBe(before.hiddenAt);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+  });
+});
+
+test.each(["MERGED", "CLOSED", "read-error"])("a paused refresh merge owner reconciles %s without dispatch", async terminal => {
+  const h = queuedRefreshes(undefined, 2);
+  await h.sweep();
+  h.pipeline("refresh-1").state = "completed";
+  h.prs.get(11)!.mergeStateStatus = "CLEAN";
+  await h.sweep();
+  settledMerge(h, "refresh-1", "merging");
+  h.pipeline("refresh-1").state = "paused";
+  settledMerge(h, "queued-1", "queued");
+  h.prs.get(12)!.mergeStateStatus = "CLEAN";
+  const run = h.ports.run;
+  if (terminal === "read-error") h.ports.run = async args => {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "11") throw new Error("landing unavailable");
+    return run(args);
+  };
+  else h.prs.get(11)!.state = terminal;
+  await h.run(4 * MERGE_POLL_MS);
+  expect(h.pipeline("refresh-1").state).toBe("paused");
+  if (terminal === "read-error") {
+    expect(h.merge("refresh-1")!.state).toBe("merging");
+    expect(h.writes).toEqual([]);
+    h.ports.run = run;
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(4 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+  } else expect(h.merge("refresh-1")!.state).toBe(terminal === "MERGED" ? "merged" : "blocked");
+  expect(h.merges().map(args => args[2])).toEqual(["12"]);
+});
+
+test("a failed landing persistence preserves an expired merge owner", async () => {
+  const h = queuedRefreshes(undefined, 2);
+  for (const pr of h.prs.values()) pr.mergeStateStatus = "CLEAN";
+  await h.sweep();
+  settledMerge(h, "queued-0", "merging");
+  settledMerge(h, "queued-1", "queued");
+  h.merge("queued-0")!.headSeenAt = iso(T0 - MERGE_WAIT_LIMIT_MS);
+  h.prs.get(11)!.state = "MERGED";
+  const mutate = h.ports.mutate;
+  let refused = false;
+  h.ports.mutate = async (id, change) => {
+    if (id === "queued-0") { refused = true; throw new Error("landing persistence unavailable"); }
+    return mutate(id, change);
+  };
+  await h.sweep();
+  expect(refused).toBe(true);
+  expect(h.merge("queued-0")!.state).toBe("merging");
+  expect(h.writes).toEqual([]);
+  h.ports.mutate = mutate;
+  await h.run(4 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+  expect(h.merge("queued-0")!.state).toBe("merged");
+  expect(h.merges().map(args => args[2])).toEqual(["12"]);
+});
+
 test.each(["read", "method", "reservation", "dispatch"])("repository merge ownership is reread at %s", async seam => {
   const h = queuedRefreshes(undefined, 3);
   await h.sweep();
