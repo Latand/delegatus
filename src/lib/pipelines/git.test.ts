@@ -3462,6 +3462,26 @@ test("the publication's dependency install and its push run without the Viewer's
   }
 });
 
+test.each([undefined, "", "--max-old-space-size=2048 --no-warnings", "--max-old-space-size=16384"])("publication hands its hook a heap and memory cap, preserving caller options: %s", async (options) => {
+  const box = await publishSandbox();
+  const previous = { NODE_OPTIONS: process.env.NODE_OPTIONS, LLV_GATE_MEM: process.env.LLV_GATE_MEM };
+  try {
+    const head = await box.commit("stage.txt", "stage work\n");
+    const hooks = path.join(box.root, "hooks");
+    fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "%s\\n" "$NODE_OPTIONS" "$LLV_GATE_MEM" > hook-memory.txt\n', { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    if (options === undefined) { delete process.env.NODE_OPTIONS; delete process.env.LLV_GATE_MEM; }
+    else { process.env.NODE_OPTIONS = options; process.env.LLV_GATE_MEM = "24G"; }
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "hook-memory.txt"), "utf8"))
+      .toBe(`${options ?? "--max-old-space-size=11264"}\n${options === undefined ? "14G" : "24G"}\n`);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
 test("publishPipelineBranch reports a repo with no origin as unavailable rather than a failure", async () => {
   const box = (await publishSandbox(false));
   try {

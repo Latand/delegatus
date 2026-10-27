@@ -1,5 +1,5 @@
 import { effortScale } from "./efforts";
-import { ENGINE_MODELS, claudeCatalogModelId, isCodexLaunchModel, validateLaunchModel, type AgentModelOption } from "./models";
+import { launchModelIds, claudeCatalogModelId, isCodexLaunchModel, validateLaunchModel } from "./models";
 
 export interface AgentReconfiguration {
   model: string;
@@ -22,7 +22,7 @@ export function reconfigurationFromBody(
         })();
   const known = engine === "copilot"
     ? validModel !== null
-    : (ENGINE_MODELS[engine] as readonly AgentModelOption[]).some((option) => option.id === validModel);
+    : validModel !== null && launchModelIds(engine).includes(validModel);
   if (!validModel || !known) return { error: `model is not supported by ${engine}` };
 
   const effort = typeof body.effort === "string" ? body.effort.trim() : "";

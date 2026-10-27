@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { cachedJsonFile } from "@/lib/state/cachedJsonFile";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { statePath } from "@/lib/configDir";
 import { FileTransactionBusyError, withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
@@ -15,8 +16,8 @@ import { assertAgentMemoryMax, validAgentMemoryMax } from "@/lib/runtime/agentMe
  * Two settings: "merge when the review passes", absent reading as off, and
  * "bridge reports" (#2146), absent reading as on. Their own file, because the
  * other per-project stores each own something else (`project-curation.json`
- * crowns and manual projects, `seat-tick-settings.json` the monitor). Same
- * shape as `curation.ts`: an mtime-cached read and an atomic write.
+ * crowns and manual projects, `seat-tick-settings.json` the monitor). Settings
+ * retain a file snapshot read and an atomic write.
  *
  * Keyed by the canonical project key and read through `canonicalProject`, so a
  * folder whose key moved (AGENTS.md, succession) keeps its setting. An absent
@@ -97,9 +98,7 @@ interface ProjectSettingsFile {
 
 const DEFAULTS: Record<ProjectSwitchName, boolean> = { mergeOnReview: false, bridgeReports: true };
 
-type SettingsCache = { file: string; mtimeMs: number; size: number; projects: Record<string, ProjectSettingsEntry> };
-
-let cache: SettingsCache | null = null;
+const cache = cachedJsonFile(decodeProjects);
 
 function settingsFile(): string {
   return statePath("project-settings.json");
@@ -145,19 +144,10 @@ function entryOf(value: unknown): ProjectSettingsEntry | null {
   return entry;
 }
 
-function readProjects(): Record<string, ProjectSettingsEntry> {
-  const file = settingsFile();
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    cache = { file, mtimeMs: -1, size: -1, projects: Object.create(null) };
-    return cache.projects;
-  }
-  if (cache && cache.file === file && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) return cache.projects;
+function decodeProjects(raw: string | null): Record<string, ProjectSettingsEntry> {
   let projects: Record<string, ProjectSettingsEntry> = Object.create(null);
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectSettingsFile>;
+    const parsed = JSON.parse(raw ?? "") as Partial<ProjectSettingsFile>;
     if (parsed.schemaVersion === 1 && parsed.projects && typeof parsed.projects === "object" && !Array.isArray(parsed.projects)) {
       /* A malformed entry reads as off for its project only; the others keep theirs. */
       for (const [project, value] of Object.entries(parsed.projects)) {
@@ -168,8 +158,11 @@ function readProjects(): Record<string, ProjectSettingsEntry> {
   } catch {
     projects = Object.create(null);
   }
-  cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, projects };
   return projects;
+}
+
+function readProjects(): Record<string, ProjectSettingsEntry> {
+  return cache.read(settingsFile());
 }
 
 function switchSetting(project: string, name: ProjectSwitchName): ProjectSwitchSetting {
@@ -230,7 +223,7 @@ export async function reserveCloudStageAccount(project: string, eligible: readon
   const ids = [...new Set(eligible)].sort();
   if (!ids.length || ids.some(id => !id || id.length > 100)) return null;
   try { return await withFileTransaction(settingsFile(), "Cloud account reservation is busy", () => {
-    cache = null;
+    cache.invalidate();
     const key = canonicalProject(project.trim());
     if (!key) return null;
     const projects: Record<string, ProjectSettingsEntry> = Object.assign(Object.create(null), readProjects());
@@ -261,7 +254,7 @@ function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean 
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     writeJsonDurably(file, { schemaVersion: 1, projects } satisfies ProjectSettingsFile);
-    cache = null;
+    cache.invalidate();
     readProjects();
     return true;
   } catch {
@@ -272,7 +265,7 @@ function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean 
 /** Each read-modify-write holds the file's lock, which an install transfer
     holds while it writes the same file, so neither loses the other's entry. */
 function underFileLock<T>(operation: () => T, refused: T): T {
-  try { return withFileTransactionSync(settingsFile(), "project settings are busy", () => { cache = null; return operation(); }); }
+  try { return withFileTransactionSync(settingsFile(), "project settings are busy", () => { cache.invalidate(); return operation(); }); }
   catch (error) { if (error instanceof FileTransactionBusyError) return refused; throw error; }
 }
 
@@ -391,7 +384,7 @@ export function reportHeaderName(project: string, locale: Locale = "en"): string
 }
 
 export function resetProjectSettingsForTests(): void {
-  cache = null;
+  cache.invalidate();
 }
 
 /** Null inherits the installation cap. Writes use the canonical project key. */
