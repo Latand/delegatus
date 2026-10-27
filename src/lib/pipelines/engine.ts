@@ -145,8 +145,9 @@ import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
-import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
+import { isStagePromptContext, pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
+import { composeCloudStageInput } from "./cloudStageInput";
 import { createStageInputExec } from "./stageInputExec";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
@@ -8281,7 +8282,12 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (!selected) throw new Error("Codex Cloud account reservation could not be persisted");
         account = selected;
       }
-      const assertCurrent = guardAccount(account);
+      const accountGuard = guardAccount(account);
+      let privacyRevision: string | undefined;
+      const assertCurrent = () => {
+        accountGuard();
+        if (privacyRevision !== undefined && storedLessonRevision() !== privacyRevision) throw new Error("Codex Cloud input privacy changed");
+      };
       if (cloud.phase === "reserved") {
         // Persist before submission. A crash after this point is ambiguous and
         // must never silently submit the same paid work a second time.
@@ -8305,18 +8311,28 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         }
         if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) return;
-        const prompt = renderStagePrompt(pipeline, bound, attempt.effectiveRole,
-          attempt.input ?? normalizedOutput(pipeline), effectiveWorkerLimit(pipeline.project).value,
-          resolveStageTestGuidance());
-        const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
-          branch: cloud.branch, headSha: cloud.headSha, prompt: hardenedRedact([prompt,
+        const prepareCloudPrompt = async (threadId?: string) => {
+          const prompt = (await composeCloudStageInput(pipeline, bound, attempt.effectiveRole,
+            attempt.input ?? normalizedOutput(pipeline), undefined, threadId ? {
+              engine: "codex", conversationId: threadId, cwd: pipeline.worktreeDir, nativeMemoryEnabled: false,
+              attempt: { pipelineId: pipeline.id, stageId: stage.id, attempt: n },
+            } : undefined)).join("");
+          privacyRevision = storedLessonRevision();
+          assertCurrent();
+          const runtime = hardenedRedact([
             "Cloud runtime instructions (override local host, scratch and MCP mechanics above):",
             `Start from exactly commit ${cloud.headSha} on branch ${cloud.branch}; report a failure if the checkout differs.`,
             bound.effectiveRole.access === "read-write"
               ? "Use this cloud checkout and its installed tools. Implement the stage here. Leave all changes, including new files, uncommitted. The lane controller applies the diff and commits with repository hooks. Never push. No local Delegatus MCP server is available."
               : "Use this cloud checkout and its installed tools. Remain read-only. No local Delegatus MCP server is available.",
             'End with one fenced JSON verdict: {"status":"pass|fail|needs_decision","findings":["P1 — file:line and defect"]}. Use the same findings and verdict contract as a local stage. A pass has no findings.',
-          ].join("\n\n")), model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+          ].join("\n\n"));
+          return [prompt, runtime].join("\n\n");
+        };
+        const prompt = await prepareCloudPrompt();
+        const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
+          branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
+          model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
           account, signal: abort.signal, assertCurrent }); }, abort.signal));
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
           || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error("Codex Cloud transport returned an invalid task reference; submission outcome unknown");
@@ -13459,6 +13475,7 @@ export async function createPipelineFromRequest(
   const task = typeof req.task === "string" ? req.task.trim() : "";
   if (!task) violations.push({ field: "task", message: "task is required", expected: `non-empty string up to ${MAX_TASK_LENGTH} characters` });
   else if (task.length > MAX_TASK_LENGTH) violations.push({ field: "task", message: `task exceeds ${MAX_TASK_LENGTH} characters`, expected: `non-empty string up to ${MAX_TASK_LENGTH} characters` });
+  if (req.inputContext !== undefined && !isStagePromptContext(req.inputContext)) violations.push({ field: "inputContext", message: "inputContext must contain optional text details, a handoff digest and repository-relative skill paths", expected: "stage prompt context" });
   const spec = typeof req.spec === "string" && req.spec.trim() ? req.spec.trim() : undefined;
   if (req.spec !== undefined && typeof req.spec !== "string") violations.push({ field: "spec", message: "spec must be a string", expected: `string up to ${MAX_SPEC_LENGTH} characters` });
   if (spec && spec.length > MAX_SPEC_LENGTH) violations.push({ field: "spec", message: `spec exceeds ${MAX_SPEC_LENGTH} characters`, expected: `string up to ${MAX_SPEC_LENGTH} characters` });
@@ -13572,6 +13589,7 @@ export async function createPipelineFromRequest(
     taskIds,
     ...(taskSpawn ? { creationIntent: { kind: "task-spawn" as const, taskId: taskSpawn.task.id, launchId: taskSpawn.params.launchId } } : {}),
     ...(spec ? { spec } : {}),
+    ...(req.inputContext ? { inputContext: req.inputContext } : {}),
     project,
     repoDir,
     stages: normalized.stages,

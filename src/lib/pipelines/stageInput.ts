@@ -2,16 +2,54 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { BEARER_TOKEN, hardenedRedact } from "@/lib/view/compactText";
 import { storedLessonRevision, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
-import { renderStagePrompt } from "./prompts";
+import { isStagePromptContext, renderStagePrompt, type StagePromptContext } from "./prompts";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import { resolveStageTestGuidance } from "./testGuidance";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
+
+// Redact bearer values before assignment redaction can consume their label
+// inside a substituted task or scaffold line.
+const scrubStageText = (text: string) => hardenedRedact(text.replace(BEARER_TOKEN, "[redacted]"));
+
+/** Full transport-independent input. Cloud sends these bytes in turns; local
+ * launches may replace oversized parts with protected worktree artifacts. */
+export async function composeStageText(
+  pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole,
+  previousOutput: string, context?: StagePromptContext,
+): Promise<string> {
+  return composeResolvedStageText(pipeline, stage, role, previousOutput, stagePromptContext(pipeline, context));
+}
+
+async function composeResolvedStageText(
+  pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole,
+  previousOutput: string, context: StagePromptContext,
+): Promise<string> {
+  if (!isStagePromptContext(context)) throw new Error("Invalid stage input context");
+  if (context.skillPaths?.length) {
+    const tracked = await realExec("git", ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", ...context.skillPaths], pipeline.repoDir, undefined, { timeoutMs: 10_000 });
+    if (tracked.code !== 0) throw new Error("Referenced skill is not tracked");
+  }
+  return withCurrentRoleMemory(() => withoutStoredLessonsAsync(renderStagePrompt(
+    pipeline, stage, role, previousOutput, effectiveWorkerLimit(pipeline.project).value,
+    resolveStageTestGuidance(), context,
+  )).then(scrubStageText));
+}
+
+function stagePromptContext(pipeline: Pipeline, context?: StagePromptContext): StagePromptContext {
+  const tasks = pipeline.taskIds.length ? loadTasksByIds(new Set(pipeline.taskIds)) : [];
+  const details = tasks.filter(task => task.project === pipeline.project && task.details).map(task => task.details).join("\n\n");
+  const resolved = { ...pipeline.inputContext, ...context };
+  resolved.taskDetails = [...new Set([details, resolved.taskDetails].filter(Boolean))].join("\n\n") || undefined;
+  return { ...resolved, handoffDigest: resolved.handoffDigest ? scrubStageText(resolved.handoffDigest) : undefined };
+}
 
 /** Compose the launch message before spawn admission. The shared UI renderer
     remains pure; this server path materializes oversized parts, falling back
@@ -27,13 +65,15 @@ export async function composeStageInput(
   worktreeDir: string = pipeline.worktreeDir,
   exec: ExecPort = realExec,
   reserveBytes = 0,
+  context?: StagePromptContext,
 ): Promise<string> {
-  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes));
+  const resolved = stagePromptContext(pipeline, context);
+  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes, resolved));
 }
 
 async function composeCurrentStageInput(
   pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole, previousOutput: string,
-  worktreeDir: string, exec: ExecPort, reserveBytes: number,
+  worktreeDir: string, exec: ExecPort, reserveBytes: number, context: StagePromptContext,
 ): Promise<string> {
   const revision = storedLessonRevision();
   const assertPrivacy = () => {
@@ -42,7 +82,7 @@ async function composeCurrentStageInput(
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
   const workerLimit = effectiveWorkerLimit(pipeline.project).value;
   const testGuidance = resolveStageTestGuidance();
-  const inline = await withoutStoredLessonsAsync(renderStagePrompt(pipeline, stage, role, previousOutput, workerLimit, testGuidance));
+  const inline = await composeResolvedStageText(pipeline, stage, role, previousOutput, context);
   if (Buffer.byteLength(inline, "utf8") <= limit) {
     await protectExistingControllerArtifacts(worktreeDir, exec);
     assertPrivacy();
@@ -55,7 +95,7 @@ async function composeCurrentStageInput(
   const artifact = async (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
     const file = path.join(directory, `${label.replaceAll(" ", "-")}-${digest}.md`);
-    const part = { label, file, text: await withoutStoredLessonsAsync(text) };
+    const part = { label, file, text: scrubStageText(await withoutStoredLessonsAsync(text)) };
     artifacts.push(part);
     return part;
   };
@@ -65,7 +105,8 @@ async function composeCurrentStageInput(
     previousFile ? artifactReference(previousFile, headBytes) : previousOutput,
     workerLimit,
     testGuidance,
-  ));
+    context,
+  )).then(scrubStageText);
   const fit = async (specFile: Awaited<ReturnType<typeof artifact>> | null) => {
     let prompt = "";
     /* Count every substituted reference, labels and UTF-8 bytes too. Tight

@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -422,12 +424,32 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const head = await command(client, environment,
         `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
       requireCloud(head.trim() === input.headSha, "published branch head mismatch");
-      turnRequested = true;
-      const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
-        approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
-        input: [{ type: "text", text: input.prompt, text_elements: [] }] }, true);
-      const turnId = text(row(accepted.turn).id, "accepted turn missing");
-      requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
+      const prompt = input.preparePrompt ? await input.preparePrompt(threadId) : input.prompt;
+      guard(scope);
+      const turns = splitCloudInput(prompt);
+      requireCloud(turns.length > 0, "submission input empty");
+      let turnId = "";
+      for (let index = 0; index < turns.length; index++) {
+        turnRequested = true;
+        const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
+          approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
+          input: [{ type: "text", text: cloudInputTurn(turns, index), text_elements: [] }] }, true);
+        turnId = text(row(accepted.turn).id, "accepted turn missing");
+        requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
+        if (index + 1 < turns.length) {
+          const access: CloudTaskAccess = { ...input, taskId: threadId,
+            thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
+          for (;;) {
+            const observed = await status(client, access);
+            requireCloud(observed.turn.error == null, "input acknowledgement failed");
+            if (observed.turn.status === "completed") break;
+            requireCloud(observed.turn.status === "inProgress", "input acknowledgement failed");
+            await delay(100, undefined, { signal: scope.signal });
+            guard(scope);
+          }
+        }
+      }
+
       return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`,
         thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
       }, true).catch(error => {

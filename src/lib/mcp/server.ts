@@ -4216,6 +4216,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     finishesTask: z.union([z.boolean(), z.array(z.string())]).optional()
       .describe("#2187: true marks every task in taskIds as one this pipeline finishes; a list marks those ids, and an id outside taskIds is dropped and named in the answer's finishesTaskDropped. A marked lane's task moves to Done when the lane completes (merge setting off) or when its PR merges (on), once no other started pipeline on the task is open. pipeline_action link-task with finishes changes it later."),
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
+    inputContext: z.object({ taskDetails: z.string().optional(), handoffDigest: z.string().optional(),
+      skillPaths: z.array(z.string()).optional() }).strict().optional()
+      .describe("Source conversation handoff summary and repository-relative tracked skill paths for every stage. Cloud stages with a source conversation require handoffDigest; supply a summary, never a raw transcript."),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     repoDir: z.string().min(1).describe("Absolute path of the project folder. A safe new folder receives a local main repository and first commit before provisioning. Existing repositories keep their remotes."),

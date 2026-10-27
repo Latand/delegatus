@@ -1134,6 +1134,8 @@ export type Pipeline = {
   creationIntent?: PipelineCreationIntent;
   /** Pinned specification and acceptance criteria, matching Flow.spec from #85. */
   spec?: string;
+  /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
+  inputContext?: import("./prompts").StagePromptContext;
   project: string;
   repoDir: string;
   worktreeDir: string;
@@ -1351,6 +1353,8 @@ export type CreatePipelineRequest = {
       and named in the answer. */
   finishesTask?: boolean | string[];
   spec?: string;
+  /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
+  inputContext?: import("./prompts").StagePromptContext;
   repoDir: string;
   /** Merge target branch; defaults to main when the pipeline starts. */
   baseBranch?: string;

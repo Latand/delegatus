@@ -1,3 +1,4 @@
+import { isStagePromptContext } from "./prompts";
 import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
@@ -962,6 +963,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     new Set(pipeline.taskIds).size === pipeline.taskIds.length &&
     (pipeline.creationIntent === undefined || isCreationIntent(pipeline.creationIntent)) &&
     (pipeline.spec === undefined || typeof pipeline.spec === "string") &&
+    (pipeline.inputContext === undefined || isStagePromptContext(pipeline.inputContext)) &&
     typeof pipeline.project === "string" &&
     typeof pipeline.repoDir === "string" &&
     typeof pipeline.worktreeDir === "string" &&
@@ -1492,6 +1494,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     taskIds: [...pipeline.taskIds],
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
+    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -2301,6 +2304,7 @@ export function buildPipeline(input: {
   taskIds?: string[];
   creationIntent?: PipelineCreationIntent;
   spec?: string;
+  inputContext?: import("./prompts").StagePromptContext;
   project: string;
   repoDir: string;
   stages: PipelineStage[];
@@ -2318,6 +2322,7 @@ export function buildPipeline(input: {
     taskIds: [...new Set(input.taskIds ?? [])],
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),
+    ...(input.inputContext ? { inputContext: structuredClone(input.inputContext) } : {}),
     project: input.project,
     repoDir: input.repoDir,
     ...identity,
