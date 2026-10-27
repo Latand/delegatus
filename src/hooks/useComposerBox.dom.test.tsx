@@ -4,7 +4,7 @@ import { useLayoutEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { cardComposerBudget, seatComposerBudget, TRANSCRIPT_FLOOR_SHARE } from "@/lib/composerScroll";
+import { cardComposerBudget, KEYBOARD_TRANSCRIPT_FLOOR_SHARE, seatComposerBudget, TRANSCRIPT_FLOOR_SHARE } from "@/lib/composerScroll";
 
 import { useComposerBox } from "./useComposerBox";
 
@@ -115,6 +115,33 @@ test("the budget is the floor's share of the conversation under the header, less
   /* The conversation is the 640 px under the header; the row beside the composer is 36. */
   expect(latest.budget).toBe(cardComposerBudget(640, 36));
   expect(latest.budget).toBe(Math.floor(640 * (1 - TRANSCRIPT_FLOOR_SHARE)) - 36);
+});
+
+test("with the on-screen keyboard up the transcript keeps a smaller floor, and the budget follows the keyboard both ways", () => {
+  pane({ header: 60, transcript: 440, row: 36, form: 164, box: 700 });
+  const closed = latest.budget;
+  expect(closed).toBe(cardComposerBudget(640, 36));
+  /* iOS shrinks only the visual viewport: it listens on `visualViewport` and the layout height stays. */
+  const listeners: (() => void)[] = [];
+  const visual = { height: 900, scale: 1, addEventListener: (_: string, fn: () => void) => { listeners.push(fn); }, removeEventListener: () => {} };
+  const windowWithViewport = window as unknown as { visualViewport?: unknown };
+  windowWithViewport.visualViewport = visual;
+  try {
+    document.body.replaceChildren();
+    roots = [];
+    pane({ header: 60, transcript: 440, row: 36, form: 164, box: 700 });
+    expect(latest.budget).toBe(closed);
+    expect(listeners.length).toBeGreaterThan(0);
+    visual.height = 500;
+    flushSync(() => { for (const fn of listeners) fn(); });
+    expect(latest.budget).toBe(cardComposerBudget(640, 36, KEYBOARD_TRANSCRIPT_FLOOR_SHARE));
+    expect(latest.budget!).toBeGreaterThan(closed!);
+    visual.height = 900;
+    flushSync(() => { for (const fn of listeners) fn(); });
+    expect(latest.budget).toBe(closed);
+  } finally {
+    delete windowWithViewport.visualViewport;
+  }
 });
 
 test("a row that appears beside the composer is measured again, through the transcript it took room from", () => {

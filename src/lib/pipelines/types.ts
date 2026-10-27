@@ -104,8 +104,8 @@ export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: Pi
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
-  /** Omitted stages keep their local runtime. Slice 1 supports read-only Codex reviews. */
-  runtime?: "codex-cloud";
+  /** Omitted stages inherit the project default when the definition is created. */
+  runtime?: "local" | "codex-cloud";
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -258,7 +258,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
-  runtime?: "codex-cloud";
+  runtime?: "local" | "codex-cloud";
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -410,6 +410,7 @@ export type PipelineStageAttempt = {
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
   cloud?: import("./cloudStage").CloudStageAttempt;
+  executionRuntime?: "local" | "cloud" | "cloud-then-local";
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
     hold?: PipelineAccountHold };
@@ -1479,6 +1480,7 @@ export type PatchPipelineRequest = {
       running the attempt. An attempt another conversation runs by then answers
       409 `STAGE_CHANGED` before any runtime or definition is changed. */
   expectedConversationId?: string;
+  runtime?: "local" | "codex-cloud";
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

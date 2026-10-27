@@ -2,13 +2,14 @@ import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./clo
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
-import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
+import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -67,7 +68,9 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   // main) has nothing a test could judge: whatever fails is already on main.
   // Privacy still reads every commit the push carries.
   if (mode === "pre-push" && changedFiles.length === 0) return steps;
-  if (mode === "pre-push" && !changedFiles.every(proseOnly)) steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
+  // Runtime builds generate Next's route/page validators before checking the
+  // full project. Their build owns the single whole-program check.
+  if (mode === "pre-push" && !env.runtime && !changedFiles.every(proseOnly)) steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
   const supplyChainChanged = changedFiles.some(file => ["package.json", "bun.lock", "security/audit-allowlist.json", "scripts/supply-chain-check.ts", "scripts/audit-with-retry.sh", ".github/workflows/supply-chain.yml"].includes(file));
   if (mode === "pre-push" && supplyChainChanged) {
     // Install the candidate graph before any later checks execute against
@@ -497,6 +500,13 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
 
 /** `cancelled`: stopped by `cancel`, never by the deadline. */
 interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean }
+/** The hook owns the verdict deadline. Leave its supervisor time to print the
+ * no-verdict line and finish containment before the supervisor stops the hook.
+ * Each nested runner receives the current remainder, never an inherited cap. */
+export const SUPERVISOR_MARGIN_MS = 30_000;
+export function supervisorTimeoutMs(until: number, env: NodeJS.ProcessEnv, now = Date.now()): number {
+  return Math.max(1, until + cpuInheritedWaitMs(env) - now) + SUPERVISOR_MARGIN_MS;
+}
 /** `log` names the file for the step's output; null discards it; absent shows
     it. `cancel` stops the step at once, as the deadline would. */
 async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, log?: string | null, cancel?: AbortSignal): Promise<Outcome> {
@@ -509,7 +519,9 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+      ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
+    }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
     const stop = new Promise<string | null>(resolve => { stopped = resolve; });
     // A child that already exited keeps nothing to stop, and its PID may be reused.
@@ -526,7 +538,9 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
     // The stop's own answer is bounded; the child's exit is not when it refuses
     // the signal, so whichever comes first ends the wait.
     const code = await Promise.race([child.exited, stop.then(() => null)]);
-    if (!stopping) return { code, stopped: false, ranMs: Date.now() - started };
+    // Owned runners reserve 124 for a deadline after their cleanup. Keep this
+    // distinct from a compiler/test refusal even if the supervisor wins a race.
+    if (!stopping) return { code, stopped: code === 124, ranMs: Date.now() - started };
     const leaked = await stop;
     // A survivor must not hold this hook open: the push ends with its report.
     if (leaked) child.unref();
@@ -651,7 +665,16 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
     // missing verdict otherwise.
     const until = deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Infinity;
     const runPrepared = async (step: Step, ready: Prepared, log: string | undefined, cancel?: AbortSignal): Promise<Outcome> => {
-      const run = (destination: string | undefined) => execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+      const run = async (destination: string | undefined) => {
+        const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+        // A runner's deadline cannot erase a refusal it already printed. Use
+        // the same full-output veto as publication, before logs are truncated.
+        if (outcome.stopped && destination && existsSync(destination)
+          && !publicationDeadlineOnly(`${readFileSync(destination, "utf8")}\nowned runner: deadline expired`)) {
+          return { ...outcome, stopped: false, cancelled: false, code: 1 };
+        }
+        return outcome;
+      };
       const first = await run(log);
       if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
         || !comparableStep(step) || !log || !existsSync(log)) return first;
@@ -695,7 +718,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       if (!step.group) {
         if (options.passes?.reused(step, until + cpuInheritedWaitMs(budget.env))) continue;
         const ready = await prepared(prepare, step, until, options.cancel, budget.env);
-        const log = mode === "pre-push" && comparableStep(step) ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
+        const log = mode === "pre-push" ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
         const outcome = isOutcome(ready) ? ready : await runPrepared(step, ready, log, options.cancel);
         if (log && existsSync(log)) {
           const output = readFileSync(log, "utf8").trimEnd();
@@ -746,7 +769,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         if (outcome?.leaked) throw new ContainmentFailed(`"${members[at]!.member.name}"`, outcome.leaked, outcome.cancelled);
       }
       if (errors.size) {
-        const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
+        const [first, error] = [...errors].find(([, error]) => !(error instanceof NoVerdict)) ?? [...errors][0]!, culprit = members[first]!.member.name;
         const reason = error instanceof Error ? error.message : String(error);
         if (!(error instanceof NoVerdict)) say(`${mode}: ${culprit}: failed (${reason})`);
         if (existsSync(members[first]!.log)) say(readFileSync(members[first]!.log, "utf8").trimEnd());
@@ -790,10 +813,11 @@ export async function runAdmittedChecks(command: string[], root: string, env: No
     const outcome = await execute(command, root, {
       ...budget.env, LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS,
       ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}),
-      LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000),
+      LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Date.now() + 15 * 60_000, env)),
     }, Infinity, undefined, cancel);
     if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
     if (outcome.cancelled) return;
+    if (outcome.stopped) throw new NoVerdict({ name: "push checks", command }, deadline ?? { startedAt: Date.now() - (outcome.ranMs ?? 0), at: Date.now() }, outcome);
     if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
   } finally {
     console.error(`pre-push: publication checks CPU wait: ${Math.round(budget.elapsed())} ms (excluded from execution budget)`);
@@ -885,6 +909,8 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
       const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
+      delete env.LLV_GATE_TYPES_CHECKED;
+      delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
@@ -909,6 +935,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       }
       const usesBuild = ["Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls"].includes(step.name);
       if (usesBuild) runtimeTree ??= createRuntimeCheckTree(root, sandbox);
+      if (step.name === "Viewer build") env.LLV_GATE_FULL_TYPES = realpathSync(runtimeTree!);
       return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
     };
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();

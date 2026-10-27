@@ -41,9 +41,8 @@ import {
   obsoleteManagedViewerContainers,
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
-  viewerCandidateTmuxEnvironment,
   viewerComposeServiceFromConfig,
-  viewerComposeServiceUid,
+  viewerComposeServiceWithExistingTmux,
   viewerRegistryBackendMode,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
@@ -441,15 +440,11 @@ async function startCandidate(candidate: ViewerReleaseIdentity): Promise<void> {
     return;
   }
   if (!await isCandidatePortAvailable(port)) throw new Error("candidate Viewer port is unavailable before start");
-  const composeService = viewerComposeServiceFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
-  const uid = viewerComposeServiceUid(composeService);
-  const tmuxEnvironment = viewerCandidateTmuxEnvironment(stateDir, uid, {
-    legacyTmuxExternal: composeService.environment.LLV_LEGACY_TMUX_EXTERNAL || "0",
-    tmuxTmpdir: composeService.environment.TMUX_TMPDIR || "/tmp",
-  });
+  const composeService = viewerComposeServiceWithExistingTmux(stateDir,
+    viewerComposeServiceFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8")));
   await command(viewerCandidateDockerArgs(candidate, composeService, {
     runtimeSocket,
-    ...tmuxEnvironment,
+    tmuxTmpdir: composeService.environment.TMUX_TMPDIR || "/tmp",
   }));
 }
 
