@@ -21,6 +21,8 @@ import { setCodexCloudEnvironmentId } from "@/lib/projects/settings";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { requestDigest } from "@/lib/mcp/server";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { mergeAdmission } from "@/lib/forge/autoMerge";
+import { mergeOnReviewSetting } from "@/lib/projects/settings";
 
 const clock = spyOn(Date, "now").mockImplementation(() => NOW);
 afterEach(() => { clock.mockImplementation(() => NOW); });
@@ -63,7 +65,16 @@ async function fixture(name: string, cloud = false, repoDir = "/repo", project =
     await tickPipelines([entry], h.ports);
     await tick();
   };
-  return { h, task, project, at, request, id, current, tick, pass, seatConversationId: seat.seat.conversationId! };
+  const complete = async () => {
+    await tick(); await pass();
+    for (const [n, role] of [[2, "builder"], [3, "reviewer"]] as const) {
+      expect((await engineModule.reportStageCompletion({ verdict: "pass" },
+        { kind: "agent", role, conversationId: `conversation_stage_${n}` }, h.ports)).error).toBeUndefined();
+      await tickPipelines([finishReported(h, `/codex/stage-${n}.jsonl`, "pass", "Checked")], h.ports);
+      await tick();
+    }
+  };
+  return { h, task, project, at, request, id, current, tick, pass, complete, seatConversationId: seat.seat.conversationId! };
 }
 
 test("an eligible unadopted outcome runs independent scope review, then dispatches implementation", async () => {
@@ -84,8 +95,10 @@ test("the orchestrator's own retained task consumes no worker slot", async () =>
   const f = await fixture("seat-capacity");
   setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
   mutateTasks(tasks => {
-    const result = createTask(tasks, { project: f.project, text: "Project coordination", status: "assigned", placement: "unplaced" }, [],
+    const created = createTask(tasks, { project: f.project, text: "Project coordination", placement: "unplaced" }, [],
       { id: () => "coordination-task", now: () => f.at });
+    if (!created.ok) throw new Error(created.error);
+    const result = patchTask(created.tasks, created.task.id, { status: "assigned" }, f.at);
     if (!result.ok) throw new Error(result.error);
     result.task.assignments = [{ conversationId: f.seatConversationId, state: "linked", path: null, panePid: null, at: f.at, error: null }];
     return { tasks: result.tasks, result: undefined };
@@ -96,13 +109,7 @@ test("the orchestrator's own retained task consumes no worker slot", async () =>
 
 test("a completed proactive outcome retains authority for its reviewed publication", async () => {
   const f = await fixture("completed-effect");
-  await f.tick(); await f.pass();
-  for (const [n, role] of [[2, "builder"], [3, "reviewer"]] as const) {
-    expect((await engineModule.reportStageCompletion({ verdict: "pass" },
-      { kind: "agent", role, conversationId: `conversation_stage_${n}` }, f.h.ports)).error).toBeUndefined();
-    await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, "pass", "Checked")], f.h.ports);
-    await f.tick();
-  }
+  await f.complete();
   expect(f.current()).toMatchObject({ state: "completed", closedAt: expect.any(String) });
   expect(() => assertProactivePipelineExecution(f.current(), "effect")).not.toThrow();
 });
@@ -159,11 +166,11 @@ test("an unadopted Cloud continuation reconciles the running model receipt after
   expect(setCodexCloudEnvironmentId(f.project, "proactive-cloud")).toBe(true);
   let submits = 0, polls = 0, completed = false;
   f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "account-limited", kind: "managed",
-    home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: {} } });
+    home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } });
   f.h.ports.cloudClient = {
     supportsModel: () => true, hasEnvironment: async () => true,
     submit: async input => { input.assertCurrent(); submits++; return { taskId: "proactive-cloud-model", taskUrl: "https://example.com/cloud/proactive-cloud-model" }; },
-    poll: async () => { polls++; return completed ? { state: "completed", model: "gpt-6.1-sol" } : { state: "running", model: "gpt-6.1-sol" }; },
+    poll: async () => { polls++; return { state: completed ? "completed" : "pending", model: "gpt-6.1-sol" }; },
     readFinalMessage: async () => ({ message: '```json\n{"status":"pass","findings":[]}\n```', model: "gpt-6.1-sol" }),
     readDiff: async () => "",
   };
@@ -236,7 +243,7 @@ test.each(["parent", "child", "wakes", "expiry", "seat", "reject", "scope", "res
     if (kind === "reject") await decideProactiveTask(f.task.id, "reject", "operator", proactiveDecisionToken(f.task));
     if (kind === "scope" || kind === "restore") {
       const edit = (text: string) => mutateTasks(tasks => {
-        const result = patchTask(tasks, f.task.id, { text });
+        const result = patchTask(tasks, f.task.id, { text }, f.at);
         if (!result.ok) throw new Error(result.error);
         return { tasks: result.tasks, result: undefined };
       });
@@ -253,7 +260,9 @@ test.each(["parent", "child", "wakes", "expiry", "seat", "reject", "scope", "res
     if (kind === "workers" || kind.startsWith("owed")) {
       mutateTasks(tasks => {
         const status = kind === "owed-resource" ? "blocked" : kind === "workers" || kind === "owed-assigned" ? "assigned" : "inbox";
-        const result = createTask(tasks, { project: f.project, text: "Accepted work", placement: "unplaced", status }, [], { id: () => `accepted-${kind}`, now: () => f.at });
+        const created = createTask(tasks, { project: f.project, text: "Accepted work", placement: "unplaced" }, [], { id: () => `accepted-${kind}`, now: () => f.at });
+        if (!created.ok) throw new Error(created.error);
+        const result = patchTask(created.tasks, created.task.id, { status }, f.at);
         if (!result.ok) throw new Error(result.error);
         if (kind === "owed-resource") result.task.hold = { kind: "resource", note: "Waiting for capacity", since: f.at, by: "operator" };
         if (kind === "workers") result.task.assignments = [{ conversationId: "conversation_accepted_worker", state: "linked", path: null, panePid: null, at: f.at, error: null }];
@@ -355,5 +364,24 @@ test("a quiescent closed outcome admits its successor in the same allowance and 
   expect(f.h.spawnInputs.at(-1)!.role.roleId).toBe("reviewer");
   const successor = loadPipelines().find(lane => lane.id === result.pipeline!.id)!;
   expect(() => assertProactivePipelineExecution(successor, "effect")).toThrow("requires independent scope review");
+  expect(readProactiveAllowance(f.project, f.at, NOW)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+});
+
+test("closing a lane cannot release its outcome while a merge receipt is in flight", async () => {
+  const f = await fixture("merge-reservation");
+  await f.complete();
+  const lane = f.current();
+  const setting = { ...mergeOnReviewSetting(f.project), enabled: true, changedAt: f.at };
+  const admitted = mergeAdmission(lane, NOW, { setting: () => setting,
+    pullRequestOf: () => ({ repository: "acme/fixture", number: 17 }), hasPublishedPrototype: () => false });
+  if (!("merge" in admitted)) throw new Error(admitted.reason);
+  lane.merge = admitted.merge; lane.merge.state = "merging";
+  savePipelines([lane]);
+  expect((await closeAndDrain(f.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
+  expect(f.current().closeReport?.status).toBe("settled");
+  const result = await createPipelineFromRequest(f.request, f.h.ports, {
+    creationRequest: { key: "pending-merge-successor", digest: requestDigest("create_pipeline", f.request) },
+  });
+  expect(result.error).toContain("reserved");
   expect(readProactiveAllowance(f.project, f.at, NOW)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
 });

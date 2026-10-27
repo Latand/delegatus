@@ -120,6 +120,7 @@ export async function reserveProactiveLane(pipeline: Pipeline, requestKey: strin
         if (previous && proactiveCandidateDecision(previous, file).adopted) return true;
         const lane = findPipelineRecord(row.laneId);
         const report = lane?.closeReport;
+        if (lane?.merge?.state === "merging") return false;
         if (lane?.runs.some(run => run.attempts.some(attempt => attempt.cloud
           && (attempt.cloud.submissionUnresolved || ["reserved", "submitting", "polling"].includes(attempt.cloud.phase))))) return false;
         return lane?.state === "closed" && lane.closeTeardown?.phase === "settled" && report?.status === "settled"

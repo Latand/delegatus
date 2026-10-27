@@ -9,6 +9,7 @@ import { loadTasks, mutateTasks } from "./store";
 import { deleteTask, patchTask } from "./commands";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { legacyDatabasePath } from "@/lib/state/legacyImport";
+import { taskRevision, type TaskWithRevision } from "./revision";
 
 const decideProactiveTask = (taskId: string, decision: "adopt" | "reject", actor: "operator" | "agent", file: string) =>
   decide(taskId, decision, actor, proactiveDecisionToken(loadTasks(file).find(task => task.id === taskId)!, file), file, () => new Date(NOW).toISOString());
@@ -218,8 +219,8 @@ test("decisions survive a fresh process and rejection races do not reset artifac
   await decideProactiveTask(task.id, "reject", "operator", file);
   expect(() => assertProactiveTaskExecution([task.id], file)).toThrow("rejected");
   const at = new Date(NOW).toISOString();
-  expect(loadTasks(file)[0]!.revision).not.toBe(artifacts[0]!.revision);
+  expect(taskRevision(loadTasks(file)[0]!)).not.toBe(taskRevision(artifacts[0]!));
   expect(loadTasks(file)).toEqual([{ ...artifacts[0]!, revision: expect.any(String), status: "done", doneAt: at, doneAdmissions: [],
     statusBy: { actor: { kind: "operator" }, from: artifacts[0]!.status, at },
-    note: { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: at } }]);
+    note: { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: at } } satisfies TaskWithRevision]);
 });
