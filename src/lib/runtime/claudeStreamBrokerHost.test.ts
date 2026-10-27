@@ -3295,7 +3295,7 @@ describe("ClaudeStreamBrokerHost", () => {
     persistence: StructuredHostPersistenceOptions = {},
     hostOptions: (tree: Awaited<ReturnType<typeof orphanWriterTree>>) => Partial<ClaudeStreamBrokerHostOptions> = () => ({}),
     prepareRegistry: (registry: AgentRegistry) => void | Promise<void> = () => {},
-    fixtureOptions: { storage?: AgentRegistryStorageOptions; sessionId?: string; pending?: boolean } = {},
+    fixtureOptions: { storage?: AgentRegistryStorageOptions; sessionId?: string; pending?: boolean; reclaimed?: boolean } = {},
   ) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-stream-tree-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, fixtureOptions.storage);
@@ -3326,8 +3326,23 @@ describe("ClaudeStreamBrokerHost", () => {
       });
       expect(registry.snapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process)
         .toEqual(fixtureOptions.pending ? null : tree.engine);
+      let claimEpoch = 1;
+      if (fixtureOptions.reclaimed) {
+        const predecessor = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        const exited = new Promise<void>(resolve => { predecessor.once("exit", () => resolve()); });
+        try {
+          const identity = captureProcessIdentity(predecessor.pid!);
+          expect(identity.startIdentity).toBeString();
+          registry.setStructuredHost(key, { ...claudeHostColumns(await host.health(), 1), process: identity });
+          registry.releaseStructuredHostClaim(key, viewer, 1);
+        } finally { predecessor.kill("SIGKILL"); await exited; }
+        const claim = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+        expect(claim?.claimOwner).toBe(viewer);
+        claimEpoch = claim!.claimEpoch;
+        expect(claimEpoch).toBe(2);
+      }
       await prepareRegistry(registry);
-      const binding = await bindClaudeHostPersistence(registry, key, host, viewer, 1, "unhosted", persistence);
+      const binding = await bindClaudeHostPersistence(registry, key, host, viewer, claimEpoch, "unhosted", persistence);
       const row = () => registry.snapshot().entries[`claude:${key.sessionId}`]!;
       /* Claims the session for a successor the moment the registry allows it
          and reads the detached writer at that moment. */
@@ -3341,7 +3356,7 @@ describe("ClaudeStreamBrokerHost", () => {
         }
         return null;
       };
-      return { host, tree, key, row, viewer, registry, binding, successorClaim, stop };
+      return { host, tree, key, row, viewer, claimEpoch, registry, binding, successorClaim, stop };
     } catch (error) {
       await stop();
       throw error;
@@ -3383,8 +3398,8 @@ describe("ClaudeStreamBrokerHost", () => {
     }
   }, 20_000);
 
-  for (const stopKind of ["release", "stream fault"] as const) {
-    test(`a deferred first checkpoint retains the pending host's detached writer through ${stopKind}`, async () => {
+  for (const reclaimed of [false, true]) for (const stopKind of ["release", "stream fault"] as const) {
+    test(`a deferred first checkpoint retains the ${reclaimed ? "reclaimed" : "pending"} host's detached writer through ${stopKind}`, async () => {
       let holder: RegistryLockHolder | undefined;
       let fixture: Awaited<ReturnType<typeof streamHostOverWriterTree>> | undefined;
       let unsubscribe = () => {};
@@ -3394,12 +3409,15 @@ describe("ClaudeStreamBrokerHost", () => {
           () => ({}), async (registry) => {
             holder = registryLockHolder(defaultRegistrySqliteFilename(registry.filename));
             await holder.hold();
-          }, { pending: true, sessionId: stopKind === "release" ? "pending-checkpoint-release" : "pending-checkpoint-fault",
+          }, { pending: true, reclaimed, sessionId: stopKind === "release" ? "pending-checkpoint-release" : "pending-checkpoint-fault",
             storage: { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 20 } });
         const { host, tree, registry, binding, key, viewer } = fixture;
         expect(tree.engineAlive()).toBe(true);
         expect(await tree.stillWriting()).toBe(true);
-        expect(fixture.row()).toMatchObject({ claimOwner: viewer, structuredHost: { process: null } });
+        const previousProcess = fixture.row().structuredHost?.process;
+        expect(previousProcess).toEqual(reclaimed ? expect.objectContaining({ pid: expect.any(Number) }) : null);
+        expect(previousProcess?.pid).not.toBe(tree.engine.pid);
+        expect(fixture.row().claimOwner).toBe(viewer);
         // With the writer still held, capture must refuse before any signal.
         await expect(host.release()).rejects.toThrow(CLAUDE_TREE_UNCAPTURED);
         expect(tree.engineAlive()).toBe(true);
@@ -3418,11 +3436,23 @@ describe("ClaudeStreamBrokerHost", () => {
         }
         await holder!.release();
         if (stopKind === "release") {
+          if (reclaimed) {
+            const original = fixture.row().structuredHost!;
+            for (const startIdentity of [captureProcessIdentity(process.pid).startIdentity, null]) {
+              const competing = { ...captureProcessIdentity(process.pid), startIdentity };
+              registry.setStructuredHost(key, { ...original, process: competing });
+              await expect(host.release()).rejects.toThrow(CLAUDE_TREE_UNCAPTURED);
+              expect(tree.engineAlive()).toBe(true);
+              expect(tree.toolAlive()).toBe(true);
+              expect(fixture.row().structuredHost?.process).toEqual(competing);
+            }
+            registry.setStructuredHost(key, original);
+          }
           const refused = spyOn(registry, "setStructuredHostClaimed").mockReturnValue(null);
           try { await expect(host.release()).rejects.toThrow(CLAUDE_TREE_UNCAPTURED); }
           finally { refused.mockRestore(); }
           expect(tree.engineAlive()).toBe(true);
-          expect(fixture.row().structuredHost?.process).toBeNull();
+          expect(fixture.row().structuredHost?.process).toEqual(previousProcess);
           await host.release();
         }
         await reaped;
@@ -3433,7 +3463,7 @@ describe("ClaudeStreamBrokerHost", () => {
         const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "sqlite" });
         try {
           const retained = reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]!;
-          expect(retained).toMatchObject({ claimOwner: viewer, claimEpoch: 1, structuredHost: { process: tree.engine } });
+          expect(retained).toMatchObject({ claimOwner: viewer, claimEpoch: fixture.claimEpoch, structuredHost: { process: tree.engine } });
           expect(retained.structuredTerminationSurvivors).toContainEqual(tree.tool);
           expect(reopened.claimStructuredHost(key, successor(), { allowUnhosted: true })).toBeNull();
         } finally { reopened.close(); }

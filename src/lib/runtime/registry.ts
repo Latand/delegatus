@@ -219,7 +219,6 @@ async function bindStructuredHostPersistence(
 ): Promise<StructuredHostPersistenceStop> {
   host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
   const initialState = await host.health();
-  let lastPersistedState = structuredClone(initialState);
   /* Whether the tree holding the row is the one this host's own stop
      captured. Another stop's capture is that stop's to finish, so this
      binding gives its terminal write up to it; its own it finishes itself. */
@@ -258,7 +257,6 @@ async function bindStructuredHostPersistence(
         console.info("[runtime] host checkpoint recovered");
         checkpointRetryDelayMs = 0;
       }
-      lastPersistedState = structuredClone(state);
       return persisted;
     } catch (error) {
       if (!(error instanceof StructuredHostClaimLost) && !(error instanceof StructuredHostWriteHeld)) {
@@ -274,6 +272,7 @@ async function bindStructuredHostPersistence(
   let stopped = false;
   let claimReleased = false;
   let pendingState: HostState | null = null;
+  let pendingMaterial = false;
   let lastQueuedState = initialState;
   let cursorTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe = () => {};
@@ -289,33 +288,31 @@ async function bindStructuredHostPersistence(
   const terminationRetryMs = Number.isFinite(options.terminationRetryMs)
     ? Math.max(0, options.terminationRetryMs!)
     : DEFAULT_TERMINATION_RETRY_MS;
-  /* The host signals nothing until this answers true (#2790). A row that
-     still records the host's child takes the tree whoever holds its claim:
-     the capture is what refuses a successor once the child is gone. Only a
-     row that records another process has no place for it, and there the stop
-     goes ahead as it always did. A capture the registry refused answers
-     false, so the child keeps running and keeps its own fence. */
+  /* The host signals nothing until its still-owned row records the tree
+     (#2790). That capture refuses a successor once the child is gone. A row
+     recording another live process cannot take it; a refusal keeps the
+     child running under its own fence. */
   host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
     let entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     let root = entry?.structuredHost?.process ?? null;
-    /* The first checkpoint may still be deferred over the spawn's pending
-       row. Retain the process we bound, even if newer health is terminal.
-       Install it only under this binding's live claim, then capture the tree
-       in the same admitted batch before allowing the host's first signal. */
-    if (entry?.structuredHost && !root && entry.claimOwner === claimOwner
+    /* The first checkpoint may still be deferred over a pending row or the
+       dead predecessor a reclaim retained. Keep the process we bound, even
+       if newer health is terminal. Install it only under this live claim,
+       then capture the tree in the same batch before its first signal. */
+    const columns = columnsFromState(initialState, writerClaimEpoch);
+    const boundRoot = columns.process;
+    if (!boundRoot || boundRoot.pid !== rootPid || !boundRoot.startIdentity || !boundRoot.bootEpoch) return false;
+    if (entry?.structuredHost && (!root || !sameRecordedProcessIdentity(root, boundRoot)) && entry.claimOwner === claimOwner
       && entry.claimEpoch === writerClaimEpoch && entry.structuredHost.writerClaimEpoch === writerClaimEpoch) {
-      const columns = columnsFromState(initialState, writerClaimEpoch);
-      const pendingRoot = columns.process;
-      if (!pendingRoot || pendingRoot.pid !== rootPid || !pendingRoot.startIdentity || !pendingRoot.bootEpoch) return false;
+      if (root && !processIdentityProvenDead(root)) return false;
       const bound = registry.setStructuredHostClaimed(key, columns, registryStatus(initialState), claimOwner, writerClaimEpoch);
       if (!bound) return false;
       entry = bound;
       root = bound.structuredHost?.process ?? null;
     }
-    if (!entry || !root || root.pid !== rootPid) return true;
+    if (!entry || !root || !sameRecordedProcessIdentity(root, boundRoot)) return false;
     if (entry.claimOwner !== claimOwner || entry.claimEpoch !== writerClaimEpoch
-      || entry.structuredHost?.writerClaimEpoch !== writerClaimEpoch
-      || root.startIdentity !== lastPersistedState.processStartIdentity) return false;
+      || entry.structuredHost?.writerClaimEpoch !== writerClaimEpoch) return false;
     if (!root.startIdentity || !root.bootEpoch) return false;
     const prior = (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
     const capture = registry.captureStructuredTerminationSurvivors(key, root, tree, HOST_STOP_SOURCE);
@@ -328,6 +325,7 @@ async function bindStructuredHostPersistence(
   }));
 
   let updates = Promise.resolve();
+  let checkpointQueued = false;
   const enqueue = (write: () => Promise<void>) => {
     const next = updates.then(write);
     updates = next.catch(() => {});
@@ -359,8 +357,9 @@ async function bindStructuredHostPersistence(
   const persistPending = async () => {
     if (failed || stopped) return;
     const state = pendingState;
-    const material = lastQueuedState;
+    const material = pendingMaterial;
     pendingState = null;
+    pendingMaterial = false;
     clearCursorTimer();
     if (!state) return;
     const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
@@ -377,10 +376,16 @@ async function bindStructuredHostPersistence(
       if (error instanceof StructuredHostClaimLost) {
         await fail();
       } else if (terminal && error instanceof StructuredHostWriteHeld) {
-        heldTerminal = state;
+        heldTerminal = pendingState ?? state;
+        pendingState = null;
+        clearCursorTimer();
         settleHeldTerminal();
-      } else if (lastQueuedState === material) {
+        // This host's durable capture owns terminal completion now. Release
+        // may acknowledge the stop while that capture still fences takeover.
+        return;
+      } else {
         pendingState ??= state;
+        pendingMaterial ||= material;
         clearCursorTimer();
         schedulePending(error instanceof StructuredHostWriteHeld ? cursorDebounceMs : checkpointRetryDelayMs);
       }
@@ -390,17 +395,33 @@ async function bindStructuredHostPersistence(
   const schedulePending = (delayMs = cursorDebounceMs) => {
     if (cursorTimer !== null) return;
     cursorTimer = setTimeout(() => {
-      void enqueue(async () => {
-        cursorTimer = null;
-        if (failed || stopped || pendingState === null) return;
-        try {
-          await persistPending();
-        } catch {
-          // persistPending retained the checkpoint and scheduled its retry.
-        }
-      }).catch(() => {});
+      cursorTimer = null;
+      queueCheckpoint();
     }, delayMs);
     cursorTimer.unref?.();
+  };
+  const continuePending = () => {
+    if (failed || stopped || pendingState === null || cursorTimer !== null) return;
+    if (checkpointRetryDelayMs > 0) schedulePending(checkpointRetryDelayMs);
+    else if (pendingMaterial) queueCheckpoint();
+    else schedulePending();
+  };
+  /* Notifications retain one newest snapshot while admission is in flight.
+     A refusal paces that snapshot and every material event superseding it. */
+  const queueCheckpoint = () => {
+    if (checkpointQueued || failed || stopped || pendingState === null) return;
+    checkpointQueued = true;
+    void enqueue(async () => {
+      try {
+        // An explicit flush ahead of us may have installed a fresh retry.
+        if (cursorTimer === null) await persistPending();
+      }
+      catch { /* persistPending retained the checkpoint and its retry. */ }
+      finally {
+        checkpointQueued = false;
+        continuePending();
+      }
+    }).catch(() => {});
   };
   const settleHeldTerminal = () => {
     if (settling || failed || heldTerminal === null) return;
@@ -474,16 +495,18 @@ async function bindStructuredHostPersistence(
 
   // Queue the initial write before subscribing; subscription emits synchronously,
   // and later states must stay behind it while admission waits.
+  checkpointQueued = true;
   const initialWrite = enqueue(async () => {
     try {
       await persist(initialState);
     } catch (error) {
       if (error instanceof StructuredHostClaimLost) throw error;
-      if (lastQueuedState === initialState) {
-        pendingState ??= initialState;
-        clearCursorTimer();
-        schedulePending(checkpointRetryDelayMs || checkpointRetryMs);
-      }
+      pendingState ??= initialState;
+      clearCursorTimer();
+      schedulePending(checkpointRetryDelayMs || checkpointRetryMs);
+    } finally {
+      checkpointQueued = false;
+      continuePending();
     }
   });
 
@@ -495,38 +518,18 @@ async function bindStructuredHostPersistence(
       if (terminal) heldTerminal = state;
       return;
     }
-    if (!terminal && sameMaterialHostState(lastQueuedState, state)) {
-      pendingState = state;
-      schedulePending();
-      return;
-    }
-    lastQueuedState = state;
-    pendingState = null;
-    clearCursorTimer();
-    void enqueue(async () => {
-      if (failed || stopped) return;
-      try {
-        await persist(state, terminal);
-        if (terminal) {
-          claimReleased = true;
-          stopped = true;
-          unsubscribe();
-        }
-      } catch (error) {
-        if (!(error instanceof StructuredHostClaimLost)) {
-          if (terminal && error instanceof StructuredHostWriteHeld) {
-            heldTerminal = state;
-            settleHeldTerminal();
-          } else if (lastQueuedState === state) {
-            pendingState ??= state;
-            clearCursorTimer();
-            schedulePending(error instanceof StructuredHostWriteHeld ? cursorDebounceMs : checkpointRetryDelayMs);
-          }
-          return;
-        }
-        await fail();
-      }
-    }).catch(() => {});
+    // A queued terminal checkpoint cannot be replaced by a late running state.
+    if (!terminal && (lastQueuedState.status === "unhosted"
+      || (lastQueuedState.status === "dead" && lastQueuedState.pid === null))) return;
+    const material = terminal || !sameMaterialHostState(lastQueuedState, state);
+    if (material) lastQueuedState = state;
+    pendingState = state;
+    pendingMaterial ||= material;
+    if (checkpointQueued) return;
+    if (material && checkpointRetryDelayMs === 0) {
+      clearCursorTimer();
+      queueCheckpoint();
+    } else continuePending();
   });
   try {
     await initialWrite;

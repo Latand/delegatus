@@ -11,6 +11,7 @@ import type { CodexAppServerHost } from "./codexAppServerHost";
 import type { HostState } from "./engineHost";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, DEFAULT_CURSOR_DEBOUNCE_MS, type StructuredHostPersistenceOptions, type StructuredHostPersistenceStop } from "./registry";
 import { beginLegacySpawnReceiptFixture } from "@/lib/agent/registryTestFixtures";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const KEY = { engine: "codex" as const, sessionId: "coalesced-host" };
 
@@ -187,6 +188,59 @@ function checkpointClock() {
 }
 
 for (const [engine, bind] of binders) {
+  for (const outcome of ["busy", "success"] as const) {
+    for (const terminal of [false, true]) {
+      test(`${engine} coalesces queued material checkpoints after ${outcome} admission with terminal=${terminal}`, async () => {
+        const registry = new RecordingRegistry();
+        const host = new RecordingHost();
+        const clock = checkpointClock();
+        let stop: StructuredHostPersistenceStop | undefined;
+        try {
+          stop = await bind(registry as unknown as AgentRegistry, host, { checkpointRetryMs: 1_000 });
+          const gate = registry.pauseNextWrite();
+          host.emit({ eventCursor: 1, status: "active", activeTurnRef: "turn-1" });
+          await gate.entered;
+          for (let cursor = 2; cursor <= 101; cursor += 1) {
+            host.emit({ eventCursor: cursor, activeTurnRef: `turn-${cursor}` });
+          }
+          if (terminal) {
+            host.emit({ eventCursor: 102, status: "unhosted", pid: null, processStartIdentity: null });
+            host.emit({ eventCursor: 103, status: "active", pid: 4242, processStartIdentity: "4242:100" });
+          }
+          registry.checkpointError = outcome === "busy" ? new RegistryWriterBusyError("registry.host-checkpoint") : null;
+          gate.release();
+          await clock.advance(0);
+          expect(host.releaseCalls).toBe(0);
+          expect(registry.checkpointTimes).toHaveLength(outcome === "busy" ? 2 : 3);
+          if (outcome === "busy") {
+            expect(registry.releases).toEqual([]);
+            await clock.advance(999);
+            expect(registry.checkpointTimes).toEqual([0, 0]);
+            // Further material notifications during the retry wait share its bound.
+            if (!terminal) host.emit({ eventCursor: 103, activeTurnRef: "turn-newest" });
+            await clock.advance(0);
+            expect(registry.checkpointTimes).toEqual([0, 0]);
+            registry.checkpointError = null;
+            await clock.advance(1);
+          }
+          const cursor = terminal ? 102 : outcome === "busy" ? 103 : 101;
+          expect(registry.writes.map(write => write.columns.eventCursor))
+            .toEqual(outcome === "busy" ? [0, cursor] : [0, 1, cursor]);
+          expect(registry.writes.at(-1)?.releaseClaim).toBe(terminal);
+          await stop();
+          expect(registry.releases).toEqual(terminal ? [] : [7]);
+          const count = registry.checkpointTimes.length;
+          await clock.advance(30_000);
+          expect(registry.checkpointTimes).toHaveLength(count);
+        } finally {
+          registry.checkpointError = null;
+          await stop?.();
+          clock.restore();
+        }
+      });
+    }
+  }
+
   for (const trigger of ["initial", "cursor", "material", "terminal"] as const) {
     test(`${engine} backs off ${trigger} refusals to the cap, logs each streak once and resets after recovery`, async () => {
       const registry = new RecordingRegistry();
@@ -250,7 +304,7 @@ for (const [engine, bind] of binders) {
     });
   }
 
-  test(`${engine} material changes bypass the retry wait and cursor updates retain it`, async () => {
+  test(`${engine} material and cursor changes share the retry wait`, async () => {
     const registry = new RecordingRegistry();
     const host = new RecordingHost();
     const clock = checkpointClock();
@@ -267,9 +321,15 @@ for (const [engine, bind] of binders) {
         expect(registry.checkpointTimes).toHaveLength(count + 1);
       }
       expect(registry.checkpointTimes).toEqual([0, 1_000, 3_000, 7_000, 15_000, 31_000, 61_000, 91_000]);
+      const beforeRecovery = registry.checkpointTimes.length;
       registry.checkpointError = null;
       host.emit({ eventCursor: 99, status: "active", activeTurnRef: "urgent" });
       await clock.advance(0);
+      expect(registry.checkpointTimes).toHaveLength(beforeRecovery);
+      expect(registry.writes).toEqual([]);
+      await clock.advance(29_999);
+      expect(registry.checkpointTimes).toHaveLength(beforeRecovery);
+      await clock.advance(1);
       expect(registry.writes.at(-1)?.columns).toMatchObject({ eventCursor: 99, activeTurnRef: "urgent" });
       const count = registry.checkpointTimes.length;
       await clock.advance(30_000);
@@ -465,8 +525,9 @@ for (const [engine, bind] of binders) {
     const registry = new RecordingRegistry();
     const host = new RecordingHost();
     const key = { ...KEY, engine: engine === "Codex" ? "codex" as const : "claude" as const };
-    const root = { pid: 4242, startIdentity: "4242:100", bootEpoch: "fixture-boot" };
+    const root = captureProcessIdentity(4242, undefined, "4242:100");
     let captureSettling = false;
+    let captured = false;
     Object.assign(registry, {
       startupHostSnapshot: () => {
         if (captureSettling) throw new Error("captured tree settlement is temporarily unavailable");
@@ -478,7 +539,8 @@ for (const [engine, bind] of binders) {
     });
     const stop = await bind(registry as unknown as AgentRegistry, host, { checkpointRetryMs: 30_000, terminationRetryMs: 20 });
     try {
-      expect(await host.terminationCapture!(4242, [root])).toBe(true);
+      captured = await host.terminationCapture!(4242, [root]);
+      expect(captured).toBe(true);
       registry.checkpointError = new RegistryWriterBusyError("registry.host-checkpoint");
       host.emit({ eventCursor: 5, status: "unhosted", pid: null, processStartIdentity: null });
       await registry.waitForCheckpoint(2);
@@ -495,7 +557,7 @@ for (const [engine, bind] of binders) {
       registry.acceptWrites = true;
       registry.heldByTermination = false;
       captureSettling = false;
-      await registry.waitForCheckpoint(4);
+      if (captured) await registry.waitForCheckpoint(4);
       await drainCheckpoints();
       await stop();
     }
@@ -520,10 +582,10 @@ for (const [engine, bind] of binders) {
         gate.release();
         if (initial) stop = await initial;
         const prior = older === "initial" ? 0 : 1;
-        await registry.waitForCheckpoint(prior + 2);
+        await registry.waitForCheckpoint(prior + 1);
         await drainCheckpoints();
         registry.checkpointError = null;
-        await registry.waitForCheckpoint(prior + 3);
+        await registry.waitForCheckpoint(prior + 2);
         await drainCheckpoints();
         expect(registry.writes.map(write => write.columns.eventCursor)).toEqual(older === "initial" ? [2] : [0, 2]);
         expect(registry.writes.at(-1)?.columns.pendingAttention).toEqual(["latest"]);
@@ -783,9 +845,21 @@ test("production-sized ten-lane persistence coalesces cursors and orders materia
   for (let cursor = 1; cursor <= 100; cursor += 1) {
     for (const lane of lanes) lane.host.emit({ eventCursor: cursor });
   }
-  await Bun.sleep(35);
+  expect(registry.storageDiagnostics().revision).toBe(revisionBeforeEvents);
+  await Promise.all(lanes.map(lane => lane.stop.flush()));
+  expect(registry.storageDiagnostics().revision! - revisionBeforeEvents).toBe(10);
   for (const lane of lanes) lane.host.emit({ eventCursor: 101, status: "active", activeTurnRef: "turn-live" });
+  await Promise.all(lanes.map(lane => lane.stop.flush()));
+  for (const lane of lanes) {
+    expect(registry.readOnlySnapshot().entries[`${lane.key.engine}:${lane.key.sessionId}`]?.structuredHost)
+      .toMatchObject({ eventCursor: 101, activeTurnRef: "turn-live" });
+  }
   for (const lane of lanes) lane.host.emit({ eventCursor: 102, status: "attention", pendingAttention: ["approval"] });
+  await Promise.all(lanes.map(lane => lane.stop.flush()));
+  for (const lane of lanes) {
+    expect(registry.readOnlySnapshot().entries[`${lane.key.engine}:${lane.key.sessionId}`]?.structuredHost)
+      .toMatchObject({ eventCursor: 102, pendingAttention: ["approval"] });
+  }
   for (const lane of lanes) lane.host.emit({
     eventCursor: 103,
     status: "unhosted",
