@@ -13,6 +13,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { StructuredSendRefusedError } from "./engineHost";
 import type { NativeQueueSnapshot } from "./nativeCodexQueue";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { parseRuntimeCommand } from "./commands";
@@ -22,7 +23,7 @@ import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipeli
 
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 
-for (const scenario of ["small", "large", "two-image-turns", "runtime-switch", "runtime-switch-running"]) test.skipIf(!binary)(`native runtime: queue edits, canonical dispatch, lost reply and cold recovery (${scenario})`, async () => {
+for (const scenario of ["small", "large", "two-image-turns", "runtime-switch", "runtime-switch-running", "guarded", "guarded-revoked"]) test.skipIf(!binary)(`native runtime: queue edits, canonical dispatch, lost reply and cold recovery (${scenario})`, async () => {
   const largeImages = scenario === "large" || scenario === "two-image-turns";
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "nh-"));
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
@@ -275,13 +276,47 @@ plugins = false
       nativeQueueRead: async (id: string) => journal.nativeQueueRead(id),
       nativeQueueTransition: async (id: string, t: Parameters<RuntimeJournal["nativeQueueTransition"]>[1]) => journal.nativeQueueTransition(id, t),
     } as RuntimeHostClient;
-    const executor = new NativeQueueExecutor({ client, binding: () => binding, resolveHost: () => host! });
+    let authorized = true;
+    const executor = new NativeQueueExecutor({ client, binding: () => binding, resolveHost: () => host!,
+      requiresDispatchGuard: () => scenario.startsWith("guarded"),
+      authorizeDispatch: () => { if (!authorized) throw new StructuredSendRefusedError("fixture authority revoked"); },
+    });
     const admit = async (id: string, extra: Partial<NativeQueueCommand>) => {
       await publish();
       const command = parseRuntimeCommand("native-queue", { conversationId, operationId: id, idempotencyKey: id, binding, action: "add", text: "queued native input", ...extra }) as NativeQueueCommand & { operationId: string };
       expect(journal.executeOperation(command).receipt.status).toBe("queued");
       await executor.execute(command); return journal.nativeQueueRead(conversationId).find(e => e.entryId === (extra.entryId ?? id))!;
     };
+    if (scenario.startsWith("guarded")) {
+      const first = await admit("guarded-first", { images: imageRefs });
+      expect(first.state).toBe("dispatching");
+      await until(() => responses.length === 1);
+      const pending = await admit("guarded-pending", { images: imageRefs });
+      expect(pending.state).toBe("admitted");
+      expect(pending.versions[0]!.images).toEqual(imageRefs);
+      expect(requests.filter(r => r.method === "thread/queue/add")).toHaveLength(0);
+      authorized = scenario === "guarded";
+      const item = { id: "guarded-answer", type: "message", role: "assistant", status: "completed", content: [{type: "output_text", text: "Finished"}] };
+      responses[0]!.end(`event: response.completed\ndata: ${JSON.stringify({type: "response.completed", response: {id: "fixture-response", status: "completed", output: [item]}})}\n\n`);
+      await until(async () => (await host!.health()).activeTurnRef === null);
+      const recovered = new NativeQueueExecutor({ client, binding: () => binding, resolveHost: () => host!, requiresDispatchGuard: () => true,
+        authorizeDispatch: () => { if (!authorized) throw new StructuredSendRefusedError("fixture authority revoked"); },
+      });
+      await recovered.execute(parseRuntimeCommand("native-queue", { conversationId, operationId: "guarded-pending", idempotencyKey: "guarded-pending",
+        action: "add", binding, text: "queued native input", images: imageRefs }) as NativeQueueCommand & { operationId: string });
+      if (authorized) await until(() => responses.length === 2);
+      if (authorized) await until(async () => {
+        await recovered.reconcile(conversationId);
+        return journal.nativeQueueRead(conversationId).find(entry => entry.entryId === pending.entryId)?.state === "delivered";
+      });
+      else await recovered.reconcile(conversationId);
+      expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === pending.entryId)?.state).toBe(authorized ? "delivered" : "refused");
+      expect(requests.filter(r => r.method === "turn/start" && r.params.clientUserMessageId === "guarded-pending")).toHaveLength(authorized ? 1 : 0);
+      expect(responses).toHaveLength(authorized ? 2 : 1);
+      expect(requests.filter(r => r.method === "thread/queue/add")).toHaveLength(0);
+      expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === pending.entryId)?.versions[0]!.images).toEqual(imageRefs);
+      return;
+    }
     if (scenario.startsWith("runtime-switch")) {
       const runningAtAdmission = scenario === "runtime-switch-running";
       await admit("before-switch", {});

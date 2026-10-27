@@ -2174,6 +2174,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  // The receipt sweep reads the hot collection, even after closure or hiding.
+  if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;
   if (pipeline.unconfirmedHosts?.length) return false;
   if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt

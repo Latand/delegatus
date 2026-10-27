@@ -460,7 +460,7 @@ async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: Pip
   const readAt = read.merge!.updatedAt;
   let status: string | undefined;
   const changed = await ports.mutate(read.id, (live) => {
-    if (live.state !== "completed" || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
+    if ((live.state !== "completed" && !read.merge!.effectUncertain) || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
     change(live.merge, live);
     live.merge.updatedAt = iso(Math.max(ports.now(), Date.parse(readAt) + 1));
     status = mergeStatus(live.merge, Boolean(live.hiddenAt));
@@ -679,6 +679,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   const recorded = await commit(ports, read, (live) => {
     bookkeeping(live);
     live.state = "merging";
+    if (read.proactiveTaskIds?.length) live.effectUncertain = true;
     live.method = method;
     live.reason = null;
     live.nextReadAt = iso(now + MERGE_POLL_MS);
@@ -718,10 +719,15 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       live.nextReadAt = null;
       return;
     }
-    if (read.proactiveTaskIds?.length && dispatched && !after) {
-      live.effectUncertain = true;
+    if (live.effectUncertain && after?.state === "CLOSED") {
+      delete live.effectUncertain;
+      block(live, MERGE_REASONS.closed, ports.now());
+      return;
+    }
+    if (live.effectUncertain && !dispatched) delete live.effectUncertain;
+    if (live.effectUncertain) {
       live.state = "blocked";
-      live.reason = "The merge outcome is unconfirmed; waiting for its actual receipt";
+      live.reason = failure ?? "The merge outcome is unconfirmed; waiting for its actual receipt";
       live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
       return;
     }
@@ -859,10 +865,22 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   const pipelines = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
   const pending = new Set<string>();
   const retained = new Set<string>();
+  // Keep at most eight due receipts. Persisted due times rotate older work to
+  // the front across sweeps and restarts without an in-memory scan cursor.
+  const receipts: Array<{ pipeline: Pipeline; due: number }> = [];
   for await (const pipeline of mergeRows(pipelines)) {
     performanceSpans.sync("forge.auto-merge.prune", () => {
       if (pipeline.state === "completed" && !pipeline.merge) pending.add(pipeline.id);
       if (pipeline.state === "completed" && pipeline.merge) retained.add(pipeline.id);
+      if (pipeline.merge?.effectUncertain) {
+        const parsed = Date.parse(pipeline.merge.nextReadAt ?? "");
+        const due = Number.isFinite(parsed) ? parsed : -Infinity;
+        if (due <= now) {
+          receipts.push({ pipeline, due });
+          receipts.sort((a, b) => a.due - b.due || a.pipeline.id.localeCompare(b.pipeline.id));
+          if (receipts.length > 8) receipts.pop();
+        }
+      }
     });
   }
   for await (const id of mergeRows(admissionReasons.keys())) {
@@ -871,7 +889,10 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   for await (const id of mergeRows(laneReasons.keys())) {
     performanceSpans.sync("forge.auto-merge.prune", () => { if (!retained.has(id)) laneReasons.delete(id); });
   }
+  for (const { pipeline } of receipts) await stepLane(pipeline, ports, false);
   for await (const pipeline of mergeRows(pipelines)) {
+    // Custody survives lane closure and visibility changes; this path only reads.
+    if (pipeline.merge?.effectUncertain) continue;
     const { completed, hidden } = performanceSpans.sync("forge.auto-merge.admit", () => ({
       completed: pipeline.state === "completed", hidden: Boolean(pipeline.hiddenAt),
     }), 1);
@@ -883,11 +904,6 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     }
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
-    if (merge?.effectUncertain) {
-      const due = Date.parse(merge.nextReadAt ?? "");
-      if (!Number.isFinite(due) || due <= now) await stepLane(pipeline, ports, false);
-      continue;
-    }
     if (merge && (!PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.refresh?.pipelineId)) {
       laneStatus(ports, pipeline.id, mergeStatus(merge));
     }

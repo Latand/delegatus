@@ -161,6 +161,45 @@ test("the production scope launch writes a profile the engine reads as read-only
   }
 });
 
+test.each(["eligible-first", "eligible-last", "all-reserved", "stale", "missing", "revoked-in-catalog"])("Cloud candidate reserve filtering: %s", async kind => {
+  const f = await fixture(`cloud-pool-${kind}`, true);
+  expect(setCodexCloudEnvironmentId(f.project, "proactive-cloud")).toBe(true);
+  const reserve = proactiveObservation("account-reserved");
+  reserve.limits!.weekly!.usedPercent = 80;
+  if (kind === "stale") reserve.observedAt = new Date(NOW - 300_001).toISOString();
+  if (kind === "missing") reserve.limits!.weekly = null;
+  agentRegistry().recordQuotaObservation(reserve);
+  const eligible = proactiveObservation();
+  agentRegistry().recordQuotaObservation(eligible);
+  const order = kind === "eligible-first" ? ["account-limited", "account-reserved"] : ["account-reserved", "account-limited"];
+  const submitted: string[] = [];
+  f.h.ports.resolveProjectSpawn = (_engine, request) => {
+    const id = request.requestedId ?? order.find(id => !request.unavailableIds?.includes(id));
+    return id ? { kind: "available", account: { engine: "codex", accountId: id, kind: "managed",
+      home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } } : { kind: "unavailable" } as never;
+  };
+  f.h.ports.cloudClient = {
+    supportsModel: () => true,
+    hasEnvironment: async input => {
+      input.assertCurrent();
+      if (kind === "revoked-in-catalog") {
+        const settings = readSeatTickSettings(f.project); settings.autonomy!.proactive!.enabled = false;
+        writeSeatTickSettings(f.project, settings);
+      }
+      return true;
+    },
+    submit: async input => { input.assertCurrent(); submitted.push(input.account.accountId!);
+      return { taskId: "pool-model", taskUrl: "https://example.com/cloud/pool-model" }; },
+    poll: async () => ({ state: "pending", model: "gpt-6.1-sol" }),
+    readFinalMessage: async () => { throw new Error("unexpected final read"); }, readDiff: async () => "",
+  };
+  await f.tick();
+  if (kind === "all-reserved") { eligible.limits!.weekly!.usedPercent = 80; agentRegistry().recordQuotaObservation(eligible); }
+  await f.pass();
+  for (let n = 0; n < 4; n++) { await f.tick(1); await settlePipelineControllerJobs(); }
+  expect(submitted).toEqual(["all-reserved", "revoked-in-catalog"].includes(kind) ? [] : ["account-limited"]);
+});
+
 test("an unadopted Cloud continuation reconciles the running model receipt after permission ends", async () => {
   const f = await fixture("cloud-continuation", true);
   expect(setCodexCloudEnvironmentId(f.project, "proactive-cloud")).toBe(true);
@@ -388,4 +427,143 @@ test.each([["merging", false], ["blocked", true], ["blocked", false]] as const)(
     expect(() => assertProactivePipelineExecution(result.pipeline!, "effect")).toThrow("requires independent scope review");
   }
   expect(readProactiveAllowance(f.project, f.at, NOW)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+});
+
+
+test.each(["parent", "child", "expiry", "reject", "continue", "adopt"])("native pending discretionary turns retain guarded custody: %s", async kind => {
+  const f = await fixture(`native-pending-${kind}`);
+  await f.tick(); await f.pass();
+  const { migrationDeliveryFixture } = await import("@/test-helpers/migrationDelivery");
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
+  const { NativeCodexQueue } = await import("@/lib/runtime/nativeCodexQueue");
+  const delivery = migrationDeliveryFixture();
+  const registry = delivery.registry;
+  const lane = f.current();
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: delivery.root, transport: "structured", conversationId: delivery.conversation.id,
+    origin: { kind: "container", container: "pipeline", containerId: f.id, creatorConversationId: null },
+    clientAttemptId: `pending-${kind}`, taskIds: [f.task.id],
+    memberships: [{ kind: "pipeline", containerId: f.id, role: "builder", slot: "build:1", stageId: "build", stageOrder: 1, round: 1, parentConversationId: null }],
+    launchProfile: emptyLaunchProfile({ cwd: delivery.root, model: "gpt-5.6-sol", title: "Continue the reviewed filter improvement" }) });
+  if (begun.kind !== "created") throw new Error("fresh native receipt required");
+  lane.runs[1]!.attempts.at(-1)!.conversationId = delivery.conversation.id;
+  savePipelines([lane]);
+  agentRegistry().recordQuotaObservation(proactiveObservation("account-a"));
+  let active = true, adds = 0, starts = 0;
+  const host = delivery.host;
+  const health = host.health.bind(host);
+  host.health = async () => ({ ...await health(), status: active ? "active" : "idle", activeTurnRef: active ? "current-turn" : null, activeFlags: ["native-queue"] });
+  const input = [{ type: "text" as const, text: "Preserve this pending payload" }];
+  const binding = { threadId: delivery.key.sessionId, accountId: "account-a" };
+  Object.assign(host, { nativeQueue: {
+    queue: new NativeCodexQueue({ rpc: async (method, params) => {
+      if (method === "thread/queue/list") return { data: [], nextCursor: null };
+      if (method === "thread/queue/add") { adds++; return { queuedSubmission: { id: "pending-native", clientUserMessageId: params.clientUserMessageId, input } }; }
+      throw new Error(`unexpected native call ${method}`);
+    } }, binding.threadId),
+    prepare: async () => input, evidence: async () => null,
+    sendWithdrawn: async () => { if (active) throw new Error("fixture turn still active"); starts++; return { turnId: "guarded-turn" }; },
+  } });
+  delivery.client.nativeQueueRead = async id => delivery.journal.nativeQueueRead(id);
+  delivery.client.nativeQueueTransition = async (id, change) => delivery.journal.nativeQueueTransition(id, change);
+  const bind = () => bindStructuredDeliveryQueue([{ key: delivery.key, host }], { registry, client: delivery.client,
+    hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+  try {
+    if (kind === "adopt") await decideProactiveTask(f.task.id, "adopt", "operator", proactiveDecisionToken(f.task));
+    await bind();
+    expect(delivery.journal.executeOperation({ kind: "native-queue", action: "add", binding, operationId: "pending-guarded", idempotencyKey: "pending-guarded",
+      conversationId: delivery.conversation.id, text: input[0].text }).receipt.status).toBe("queued");
+    await kickStructuredDeliveryQueue();
+    expect(adds).toBe(kind === "adopt" ? 1 : 0);
+    expect(starts).toBe(0);
+    const settings = readSeatTickSettings(f.project);
+    if (kind === "parent") settings.autonomy!.enabled = false;
+    if (kind === "child") settings.autonomy!.proactive!.enabled = false;
+    if (kind === "expiry") settings.autonomy!.until = new Date(NOW - 1).toISOString();
+    writeSeatTickSettings(f.project, settings);
+    if (kind === "reject") await decideProactiveTask(f.task.id, "reject", "operator", proactiveDecisionToken(f.task));
+    // A replacement controller must recover the original durable operation.
+    await bindStructuredDeliveryQueue([], { client: null }); active = false;
+    await bind(); await kickStructuredDeliveryQueue();
+    expect(adds).toBe(kind === "adopt" ? 1 : 0);
+    expect(starts).toBe(kind === "continue" ? 1 : 0);
+    const entry = delivery.journal.nativeQueueRead(delivery.conversation.id)[0]!;
+    expect(entry.versions[0]!.text).toBe(input[0].text);
+    expect(entry.state).toBe(kind === "continue" ? "dispatching" : kind === "adopt" ? "queued" : "refused");
+  } finally { await delivery.cleanup(); }
+});
+
+test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "closed-unmerged", "closed-ack"])("unadopted merge custody survives restart: %s", async kind => {
+  const f = await fixture(`merge-custody-${kind}`);
+  await f.complete();
+  const { sweepAutoMerge, MERGE_SETTLE_MS, MERGE_POLL_MS } = await import("@/lib/forge/autoMerge");
+  const { findPipelineRecord } = await import("./store");
+  let now = NOW, writes = 0, reads = 0, state = "OPEN";
+  let boundary: ReturnType<typeof f.current> | undefined;
+  const head = f.current().lastPassedCommit!;
+  const ports: import("@/lib/forge/autoMerge").AutoMergePorts = {
+    now: () => now, loadPipelines,
+    mutate: async (id, change) => { const lanes = loadPipelines(); const lane = lanes.find(row => row.id === id); if (!lane || !change(lane)) return false; savePipelines(lanes); return true; },
+    setting: () => ({ enabled: true, changedAt: new Date(NOW - 3_600_000).toISOString(), changedBy: "operator" }),
+    pullRequestOf: () => ({ repository: "acme/widgets", number: 11 }), cachedState: () => null,
+    run: async args => {
+      if (args[0] === "pr" && args[1] === "view") { reads++; return JSON.stringify({ state, headRefOid: head, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+        statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+        mergeCommit: state === "MERGED" ? { oid: "f".repeat(40) } : null }); }
+      if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+      if (args[1]?.includes("/reviews") || args[1]?.includes("/comments")) return "";
+      if (args[1]?.includes("/branches/")) return args[1].includes("/rules/") ? "[]" : '["ci"]';
+      throw new Error(`unexpected read ${args.join(" ")}`);
+    },
+    write: async (_args, _repo, beforeDispatch) => { beforeDispatch?.(); writes++; boundary = structuredClone(findPipelineRecord(f.id)!); if (kind === "closed-ack") state = "CLOSED"; return ""; },
+    finishTask: () => "missing",
+  };
+  for (let n = 0; n < 10 && !writes; n++) { await sweepAutoMerge(ports); now += MERGE_SETTLE_MS + MERGE_POLL_MS; }
+  expect(writes).toBe(1);
+  expect(boundary?.merge).toMatchObject({ state: "merging", effectUncertain: true });
+  if (kind === "closed-ack") {
+    expect(f.current().merge).toMatchObject({ state: "blocked", nextReadAt: null });
+    expect(f.current().merge?.effectUncertain).toBeUndefined();
+    return;
+  }
+  expect(f.current().merge?.effectUncertain).toBe(true); // OPEN acknowledgement keeps custody.
+  if (kind === "write-boundary") savePipelines([boundary!]);
+  // Read the actual writer output in another interpreter, with cold module state.
+  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "pipeline-record"],
+    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code) throw new Error(err);
+    const decoded = JSON.parse(out.split("RESULT ")[1]!);
+    expect(decoded.merge.effectUncertain).toBe(true);
+    savePipelines([decoded]);
+  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
+  if (kind.startsWith("closed")) {
+    const result = await closeAndDrain(f.id, { action: "close" }, f.h.ports);
+    expect(result.error).toBeUndefined(); expect(f.current().state).toBe("closed");
+    const { archiveSettledPipelines } = await import("./store");
+    expect(await archiveSettledPipelines(NOW + 30 * 86_400_000)).toBe(0);
+    expect(f.current().merge?.effectUncertain).toBe(true);
+    const held = await createPipelineFromRequest(f.request, f.h.ports, {
+      creationRequest: { key: "held-before-merge-settles", digest: requestDigest("create_pipeline", f.request) },
+    });
+    expect(held.error).toContain("reserved");
+  }
+  if (kind === "hidden-merged") { const lane = f.current(); lane.hiddenAt = f.at; savePipelines([lane]); }
+  const before = reads;
+  now += MERGE_POLL_MS; await sweepAutoMerge(ports);
+  expect(reads).toBeGreaterThan(before); expect(writes).toBe(1);
+  expect(f.current().merge?.effectUncertain).toBe(true);
+  const paced = reads; await sweepAutoMerge(ports); expect(reads).toBe(paced);
+  state = kind === "closed-unmerged" ? "CLOSED" : "MERGED";
+  now += MERGE_POLL_MS; await sweepAutoMerge(ports);
+  expect(writes).toBe(1);
+  expect(f.current().merge?.effectUncertain).toBeUndefined();
+  expect(f.current().merge?.state).toBe(state === "MERGED" ? "merged" : "blocked");
+  if (kind.startsWith("closed")) {
+    const next = await createPipelineFromRequest(f.request, f.h.ports, {
+      creationRequest: { key: "next-after-merge", digest: requestDigest("create_pipeline", f.request) },
+    });
+    expect(next.error).toBeUndefined(); expect(next.pipeline?.id).not.toBe(f.id);
+  }
 });

@@ -1477,3 +1477,32 @@ test("merge diagnostics flatten and bound reasons, deduplicate, and evict reopen
   await h.sweep();
   expect((globalThis as typeof globalThis & { __llvAutoMergeLaneReasons?: Map<string, string> }).__llvAutoMergeLaneReasons?.size).toBe(0);
 });
+
+
+test("closed uncertain merge receipts are bounded and ordered by durable due time", async () => {
+  const records = Array.from({ length: 10 }, (_, n) => lane(`receipt-${String(n).padStart(2, "0")}`));
+  const h = harness({ lanes: records, prs: records.map((_, n) => openPr(n + 11)) });
+  await h.sweep();
+  for (const [n, record] of records.entries()) {
+    const live = h.pipeline(record.id);
+    live.state = "closed"; live.hiddenAt = iso(T0);
+    Object.assign(live.merge!, { state: "blocked", effectUncertain: true, nextReadAt: iso(T0 - (10 - n) * MERGE_POLL_MS) });
+  }
+  const initialCalls = h.calls.length;
+  const reads = () => h.calls.slice(initialCalls).filter(args => args[0] === "pr" && args[1] === "view");
+  await h.sweep();
+  expect(reads()).toHaveLength(8);
+  expect(h.merges()).toHaveLength(0);
+  expect(h.merge(records[8]!.id)!.readAt).toBeNull();
+  const before = reads().length;
+  h.advance(MERGE_POLL_MS);
+  resetAutoMergeForTests();
+  await h.sweep();
+  const resumed = reads().slice(before);
+  expect(resumed).toHaveLength(8);
+  expect(resumed.slice(0, 2).map(args => args[2])).toEqual(["19", "20"]);
+  for (const pr of h.prs.values()) pr.state = "MERGED";
+  for (let n = 0; n < 2; n++) { h.advance(MERGE_POLL_MS); await h.sweep(); }
+  expect(records.every(record => h.merge(record.id)?.state === "merged" && !h.merge(record.id)?.effectUncertain)).toBe(true);
+  expect(h.merges()).toHaveLength(0);
+});

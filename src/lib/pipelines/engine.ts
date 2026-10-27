@@ -2,7 +2,7 @@ import { reserveProactiveLane, recordProactiveScopeReview, proactiveScopeReviewE
 import { proactiveCandidateDecision } from "@/lib/tasks/proactive";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
-import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds, proactiveConversationContext, assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds, proactiveConversationContext, assertProactivePipelineExecution, proactivePipelineExecutionError, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
@@ -8298,13 +8298,23 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           if (pin) break;
         }
         const eligible: AccountContext[] = [];
+        let reserveRefusal: ProactiveExecutionFenced | undefined;
         for (const candidate of candidates) {
           const current = guardAccount(candidate);
-          const available = await boundedCloudCall(() => { current(); return client.hasEnvironment({ account: candidate,
-            environmentId: cloud.environmentId, signal: abort.signal, assertCurrent: current }); }, abort.signal);
-          current();
-          if (available) eligible.push(candidate);
+          try {
+            const available = await boundedCloudCall(() => { current(); return client.hasEnvironment({ account: candidate,
+              environmentId: cloud.environmentId, signal: abort.signal, assertCurrent: current }); }, abort.signal);
+            current();
+            if (available) eligible.push(candidate);
+          } catch (error) {
+            if (!(error instanceof ProactiveExecutionFenced)) throw error;
+            // Global authority/capacity refusals still stop the job. Only this
+            // account's reserve refusal excludes one member of the allowed pool.
+            assertLane();
+            reserveRefusal = error;
+          }
         }
+        if (!eligible.length && reserveRefusal) throw reserveRefusal;
         if (!eligible.length) throw new HostedCloudError("Codex Cloud project environment unavailable on allowed accounts", "cloud-limit");
         assertLane();
         const selectedId = await reserveCloudStageAccount(pipeline.project, eligible.map(item => item.accountId));

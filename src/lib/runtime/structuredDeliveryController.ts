@@ -10,7 +10,7 @@ import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
-import { assertProactiveTaskExecution, proactiveConversationContext, proactiveConversationTaskIds, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveConversationContext, proactiveConversationTaskIds, proactiveTasksRequireDispatchGuard, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
@@ -849,6 +849,7 @@ export async function bindStructuredDeliveryQueue(
   setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
+    requiresDispatchGuard: conversationId => proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
     authorizeDispatch: conversationId => {
       const verdict = seatRecipient(conversationId);
       if (verdict.kind === "revoked") throw new StructuredSendRefusedError(verdict.reason);

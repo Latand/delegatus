@@ -96,6 +96,15 @@ export function assertProactiveTaskExecution(taskIds: readonly string[], file = 
   if (error) throw new ProactiveExecutionFenced(error);
 }
 
+/** Native auto-dispatch cannot recheck revocable authority between turns. */
+export function proactiveTasksRequireDispatchGuard(taskIds: readonly string[], file = TASKS_FILE): boolean {
+  if (!taskIds.length) return false;
+  const tasks = loadTasksByIds(new Set(taskIds), file);
+  const present = new Set(tasks.map(task => task.id));
+  return taskIds.some(id => !present.has(id))
+    || tasks.some(task => task.proactive && !proactiveCandidateDecision(task, file).adopted);
+}
+
 export function proactivePipelineExecutionError(pipeline: Pipeline, phase: ProactiveExecutionContext["phase"] = "effect",
   account?: ProactiveExecutionContext["account"], stageId = pipeline.cursor?.stageId): string | null {
   return proactiveTaskExecutionError([...new Set([...pipeline.taskIds, ...pipeline.proactiveTaskIds ?? []])], TASKS_FILE,
