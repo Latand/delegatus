@@ -242,7 +242,7 @@ const server = http.createServer(async (request, response) => {
       const clientMessageId = String(input.clientMessageId);
       const result = recoverSeatMessage(recipient.install, clientMessageId, { project,
         text: String(input.text), caller: orchestratorSeatFor(project).active!.conversationId!,
-        claimedAt: "2026-01-01T00:00:00.000Z", admissionFence: input.seatMessageFence as string | undefined });
+        claimedAt: "2026-01-01T00:00:00.000Z", admissionFence: input.seatMessageFence as string | undefined }, Date.parse("2026-01-01T00:00:30.000Z"));
       json(response, { result, fence: seatMessageRetryFence(recipient.install, clientMessageId) }); return;
     }
     if (path === "/test/seat-send") {

@@ -39,7 +39,9 @@ function collection(create = false): SqliteStateCollection<Row> | null {
   if (create) initializeStateCollections(file, [seed]);
   const opened = new SqliteStateCollection<Row>(file, { collection: seed.collection, schemaVersion: 1,
     busyMessage: "linked seat messages busy", key: seed.key, clone: structuredClone, strictDecode: true,
-    decode: v => OBJECT(v) && typeof v.key === "string" && (v.dir === "in" || v.dir === "out") && typeof v.id === "string" ? v as Row : null });
+    decode: v => OBJECT(v) && typeof v.key === "string" && (v.dir === "in" || v.dir === "out") && typeof v.id === "string"
+      && (v.admissionFence === undefined || (v.dir === "out" && typeof v.admissionFence === "string" && UUID.test(v.admissionFence)))
+      && (v.st !== "not-delivered" || typeof v.admissionFence === "string") ? v as Row : null });
   stores.set(file, opened); return opened;
 }
 const snapshots = new WeakMap<SqliteStateCollection<Row>, { revision: number; rows: Row[] }>();
@@ -101,16 +103,16 @@ export function queueSeatMessage(link: LinkedPeer, project: string, text: string
 function seatMessageAcceptance(row: Row, machine?: string) {
   return { outcome: "accepted", operationId: `seatmsg_${row.id}`, ...(machine ? { machine } : {}), state: row.ack?.st ?? "queued", ...(row.ack?.code ? { code: row.ack.code } : {}) };
 }
-/** A retry reads the current fence only after the MCP receipt was released.
- * Old HTTP requests carry no fence (or an older one) and cannot revive it. */
+/** Explicit retries bind the current fence before atomically reclaiming their
+ * MCP receipt. Old HTTP requests cannot revive a fenced attempt. */
 export function seatMessageRetryFence(install: string, clientMessageId: string): string | undefined {
   const row = collection()?.get(`out:${install}:${sha(clientMessageId)}`);
   return row?.st === "not-delivered" ? row.admissionFence : undefined;
 }
 
 export function recoverSeatMessage(install: string, clientMessageId: string, request?: {
-  project: string; text: string; caller: string; claimedAt: string; admissionFence?: string;
-}) {
+  project: string; text: string; caller: string; claimedAt: string; admissionFence?: string; fence?: boolean;
+}, now = Date.now()) {
   const key = `out:${install}:${sha(clientMessageId)}`;
   const opened = collection();
   const row = opened?.get(key);
@@ -120,7 +122,10 @@ export function recoverSeatMessage(install: string, clientMessageId: string, req
   if (row && row.st !== "not-delivered") return seatMessageAcceptance(row);
   // Allow the original admission a bounded window. The CAS below, rather
   // than elapsed time or peer reachability, is the proof of non-delivery.
-  if (!request || !Number.isFinite(Date.parse(request.claimedAt)) || Date.now() - Date.parse(request.claimedAt) < 30_000) return null;
+  if (!request || request.fence === false || !Number.isFinite(Date.parse(request.claimedAt)) || now - Date.parse(request.claimedAt) < 30_000) return null;
+  // An absent row older than the existing retention may have been delivered
+  // and pruned. Absence then cannot prove that admission never happened.
+  if (!row && now - Date.parse(request.claimedAt) > 35 * DAY) return null;
   return collection(true)!.boundedPatch(2, tx => {
     const current = tx.get(key);
     if (current && current.digest !== digest) refuse("idempotency_conflict", "The recovery payload contradicts the outbound message.");
@@ -129,7 +134,7 @@ export function recoverSeatMessage(install: string, clientMessageId: string, req
     // before it reached the outbox. Repeated lookups keep the fence stable.
     const fence = current && current.admissionFence !== request.admissionFence ? current.admissionFence! : randomUUID();
     tx.put({ key, dir: "out", id: current?.id ?? randomUUID(), link: install, connection: "", p, k,
-      at: current?.at ?? Date.now(), digest, st: "not-delivered", admissionFence: fence });
+      at: current?.at ?? now, digest, st: "not-delivered", admissionFence: fence });
     return { outcome: "not-executed", state: "not-delivered", hop: "mcp-to-outbox", resend: "safe", duplicateRisk: false };
   });
 }

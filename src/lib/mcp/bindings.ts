@@ -5603,13 +5603,25 @@ async function sendMessageToOrchestrator(
     const link = resolveRemoteSeatMachine(machine, project, dependencies);
     if (link) {
       try {
-        return await dispatchControl(control)("/api/orchestrator/message", {
-          project, machine: link.install, text: bound?.sendPayload
-            ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-            : await orchestratorRelayEgressText(requiredMessageText(args)),
-          clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
+        const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
+          : await orchestratorRelayEgressText(requiredMessageText(args));
+        const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
+        const response = await dispatchControl(control)("/api/orchestrator/message", {
+          project, machine: link.install, text: message,
+          clientMessageId,
           ...(bound?.seatMessageFence ? { seatMessageFence: bound.seatMessageFence } : {}),
         }, callerCapabilityHeaders());
+        const sender = bound?.caller.conversationId ?? attributionOf(dependencies).conversationId;
+        let admitted: ReturnType<typeof recoverSeatMessage>;
+        try {
+          admitted = sender ? recoverSeatMessage(link.install, clientMessageId, {
+            project, caller: sender, text: message, claimedAt: bound?.claimedAt ?? new Date().toISOString(), fence: false,
+          }) : null;
+        } catch (error) {
+          throw new McpDispatchUncertainError(`the outbound admission could not be corroborated: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (!admitted || !("operationId" in admitted)) throw new McpDispatchUncertainError("the Viewer answered without a durable outbound admission");
+        return { ...response, ...admitted };
       } catch (error) {
         if (error instanceof McpDispatchVerdictError && error.details.code === "seat_message_fenced") {
           throw new McpDispatchUncertainError(error.message);
@@ -7890,6 +7902,7 @@ async function recoverSend(
   legacy: boolean,
   dependencies: ViewerMcpDomainDependencies,
   args?: McpToolArgs,
+  fenceAdmission = true,
 ): Promise<McpRecoveryEvidence> {
   /* A send carries no durable sender identity of its own, so a claim made
      before bindings existed has no evidence that establishes its owner. */
@@ -7904,7 +7917,7 @@ async function recoverSend(
       binding.sendPayload && binding.target.project && binding.caller.conversationId ? {
         project: binding.target.project, caller: binding.caller.conversationId,
         text: splitRelayMessageText(binding.sendPayload.text)?.body ?? binding.sendPayload.text,
-        claimedAt: binding.claimedAt, admissionFence: binding.seatMessageFence,
+        claimedAt: binding.claimedAt, admissionFence: binding.seatMessageFence, fence: fenceAdmission,
       } : undefined);
     if (found?.state === "not-delivered") return {
       outcome: "not-executed", evidence: "seat-message-admission-fence",
@@ -8179,12 +8192,12 @@ export function viewerMcpRecoverableTools(
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
     },
     send_message: {
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
     },
   };
 }
