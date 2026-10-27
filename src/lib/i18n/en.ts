@@ -609,6 +609,10 @@ export const en = {
   // retired with the strip controls (issue #390) — the pill auto-applies.
   "runtimeConfig.failed": "Could not change the running agent configuration",
   "runtimeConfig.pending": "switch pending",
+  "runtimeConfig.modelUnknown": "No model reported yet — pick a model to change reasoning and speed",
+  "runtimeConfig.modelUnlisted": "{model} is not in the model list — pick a model to change reasoning and speed",
+  "runtimeConfig.moveModelUnknown": "No model reported yet — pick a model before moving to another account",
+  "runtimeConfig.moveModelUnlisted": "{model} is not in the model list — pick a model before moving to another account",
   "runtimeConfig.switchHeld": "Not sent: moving to {account} failed — {reason}",
   "runtimeConfig.switchReasonSignedOut": "the account is signed out",
   "runtimeConfig.switchReasonLimit": "the account has reached its usage limit",
@@ -1195,6 +1199,7 @@ export const en = {
   "composer.speedFastTier": "Fast — priority tier",
   "composer.backTo": "Back",
   "composer.nextMessageUses": "Next message: {model} · {effort}",
+  "composer.nextMessageUsesNoModel": "Next message: {effort}",
   "composer.settingsNextResume": "applies when the conversation is next resumed",
   // composer.structured / composer.structuredHost retired with the strip badge (issue #390 §8).
   "composer.structuredImagesUnavailable": "Image delivery is unavailable for structured conversations",
@@ -4689,6 +4694,7 @@ export const en = {
   "mobile2.tasks.lastOutput": "Last output {age}",
   "mobile2.composer.sheetTitle": "Next message",
   "mobile2.composer.nextMessage": "Applies to your next message: {model} · {effort}",
+  "mobile2.composer.nextMessageNoModel": "Applies to your next message: {effort}",
   "mobile2.composer.stageSheetTitle": "Running stage",
   "mobile2.composer.stageNow": "Applies now: the turn stops, the attempt goes on.",
   "mobile2.composer.chipAtLimit": "{model} · {account} at limit",
