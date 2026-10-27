@@ -3250,7 +3250,7 @@ test.each(["before-push", "after-confirm"] as const)("operator rejection fences 
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["success", "refused"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
+test.each(["success", "refused", "unknown"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
   const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
   const box = await publishSandbox();
@@ -3283,16 +3283,24 @@ test.each(["success", "refused"] as const)("rejection during an active push pres
         watch!();
         abortedAtRejection = options?.signal?.aborted;
       }
-      if (pushes && args.includes("ls-remote")) confirmations++;
+      if (pushes && args.includes("ls-remote")) {
+        confirmations++;
+        if (outcome === "unknown") return { code: 124, stdout: "", stderr: "fixture confirmation unavailable" };
+      }
       return realExec(command, args, cwd, env, options);
     };
     const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
     expect(pushes).toBe(1);
     expect(abortedAtRejection).toBe(false);
-    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head } : { ok: false });
-    expect(confirmations).toBe(outcome === "success" ? 1 : 0);
+    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head }
+      : outcome === "unknown" ? { ok: true, remote: "unreachable", uncertain: true, sha: head } : { ok: false });
+    expect(confirmations).toBe(outcome !== "refused" ? 1 : 0);
     expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result });
-    expect(await box.originHead()).toBe(outcome === "success" ? head : "");
+    expect(await box.originHead()).toBe(outcome !== "refused" ? head : "");
+    if (outcome === "unknown") {
+      expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery")).toBeNull();
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published", sha: head } });
+    }
     expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("retained outcome\n");
     let nextEffects = 0;
     expect(await publishPipelineBranch(findPipelineRecord(box.subject.id)!, async () => {
