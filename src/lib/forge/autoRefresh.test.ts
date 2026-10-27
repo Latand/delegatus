@@ -1101,7 +1101,7 @@ test.each(["missing delivery", "active owner", "disabled", "changed during base 
   expect(h.merge("finished")?.reason).toContain("Delegatus could not start the refresh");
 });
 
-function queuedRefreshes() {
+function queuedRefreshes(required?: string[]) {
   const lanes = Array.from({ length: 12 }, (_, index) => {
     const value = finished();
     value.id = `queued-${index}`;
@@ -1110,7 +1110,7 @@ function queuedRefreshes() {
     value.delivery!.target = { ...value.delivery!.target, branch: `refs/heads/topic-${index}`, pr: index + 11 };
     return value;
   });
-  return harness({ lanes, prs: lanes.map((_, index) => openPr(index + 11, { mergeStateStatus: "BEHIND" })) });
+  return harness({ required, lanes, prs: lanes.map((_, index) => openPr(index + 11, { mergeStateStatus: "BEHIND" })) });
 }
 
 test("a main move refreshes only the queue head across repeated sweeps", async () => {
@@ -1356,7 +1356,7 @@ test("queued followers persist their FIFO head and refresh capacity holder until
 });
 
 test("a clean follower in the second polling slot retains its FIFO explanation", async () => {
-  const h = queuedRefreshes();
+  const h = queuedRefreshes(["ci"]);
   Object.assign(h.ports, { refreshConcurrency: 2 });
   h.prs.get(11)!.mergeStateStatus = "CLEAN";
   h.prs.get(11)!.checks = [{ name: "ci", status: "IN_PROGRESS" }];
@@ -1577,7 +1577,7 @@ test("a second ready slot cannot merge ahead of the refreshing head", async () =
   await h.run(5 * MERGE_POLL_MS);
   expect(h.creates).toHaveLength(1);
   expect(h.merges()).toHaveLength(0);
-  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reason: null });
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reason: "queued behind PR #11 (pipeline refresh-1)" });
   expect(h.merge("queued-2")?.head).toBeNull();
 });
 

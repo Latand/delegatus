@@ -1288,7 +1288,7 @@ describe("merge queue stall recovery", () => {
       prs: [openPr(11, { checks: [pending("ci")] }), openPr(22)] });
     await h.sweep();
     expect(h.logs.some(line => line.includes("old:") && line.includes("waiting-checks") && line.includes("ci"))).toBe(true);
-    expect(h.logs.some(line => line.includes("peer:") && line.includes("behind old"))).toBe(true);
+    expect(h.logs.some(line => line.includes("peer:") && line.includes("queued behind PR #11 (pipeline old)"))).toBe(true);
     const count = h.logs.length;
     await sweepAutoMerge({ ...h.ports });
     expect(h.logs).toHaveLength(count);
