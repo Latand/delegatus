@@ -5,6 +5,18 @@ import type { PipelinePorts } from "./engine";
 
 const WAIT = 3 * 60_000;
 
+async function saveFromPeerProcess(lane: ReturnType<typeof loadPipelines>[number]) {
+  const source = `import { savePipelines } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
+    savePipelines(JSON.parse(await Bun.stdin.text()));`;
+  const child = spawn(process.execPath, ["-e", source], { env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+  let stdout = "", stderr = "";
+  child.stdout!.on("data", chunk => { stdout += chunk; });
+  child.stderr!.on("data", chunk => { stderr += chunk; });
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  child.stdin!.end(JSON.stringify([lane]));
+  expect({ exit: await exited, stdout, stderr }).toEqual({ exit: 0, stdout: "", stderr: "" });
+}
+
 async function restoredStage() {
   const h = harness();
   const f = await idleStageHostFixture(h);
@@ -123,7 +135,7 @@ test.each(["deliver", "operator input", "operator stop", "report", "control", "i
           if (scenario === "report") attempt.report = recoveryReport(r.ports.now());
           if (scenario === "control") lane.controlGeneration = "operator-control-generation";
           if (scenario === "identity") attempt.conversationId = "conversation_replacement";
-          savePipelines([lane]);
+          await saveFromPeerProcess(lane);
         }
       }
       return journal.readSession({ conversationId: r.f.attempt.conversationId! });
@@ -447,7 +459,7 @@ test.each(["unchanged", "report", "control", "identity"] as const)("a live queue
       if (change === "report") attempt.report = recoveryReport(r.ports.now());
       if (change === "control") lane.controlGeneration = "operator-control-generation";
       if (change === "identity") attempt.conversationId = "conversation_replacement";
-      if (change !== "unchanged") savePipelines([lane]);
+      if (change !== "unchanged") await saveFromPeerProcess(lane);
       const before = loadPipelines()[0]!;
       const allowed = await input.continuationAllowed!();
       expect(allowed).toBe(change === "unchanged");
