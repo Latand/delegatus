@@ -1,13 +1,13 @@
 {
-  "capturedAt": "2026-10-26T22:57:47.969Z",
+  "capturedAt": "2026-10-27T05:01:23.490Z",
   "sourceDigests": {
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "3732cd05c6c036667e7e69cafa10dbb5d111b7e7127e0a4056fdaca795d9dd80",
-    "src/components/mobile/issue1671Evidence.browser.test.tsx": "68783c2b4c56a7f6b200f48c1e076af28c01f7dcad909b8fcaba370674ba0ed4",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "730b4ca65b76395764d10d0b7889c1a57246a0c09de615c8574bb25cdb663ab1",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "cb325d94f1c5ab7071b68c4e4659ead1b541d7307609eb41e4e14adfa09f5ddd",
     "src/components/conversation/conversationWindowEvidence.fixture.tsx": "72ec32f698ea17e0cb115b997a95467dc03a3e361b298e229bbb09208dcea767",
-    "src/components/kanban/issue1695BrowserHarness.ts": "7dea379e37cd36903cd0f51e09702b178baf8b15859e5abeddce3a120f2e2549",
-    "src/components/pipelines/StageSetupResult.tsx": "a1bbf6c28315cf6cdd00af9f720f23986306b446c0df67f7b2af0e200ab0dc1f",
+    "src/components/kanban/issue1695BrowserHarness.ts": "bec524f311b492dae303fbb42d10320efd2fa927f2346165391e5c05bf326ba4",
+    "src/components/pipelines/StageSetupResult.tsx": "bbba29ea3f14df90a580037a91c764d20d0613addab2db4a792de29c2600924b",
     "src/components/feed/cards/OutputPreview.tsx": "bb7d006527edbcbc141b4499161808d245927fb0696b66f646a0227c7fd9cea9",
-    "src/components/kanban/StagesSheet.tsx": "446f3b007006158c3df7a74e31cc3d156df4d9500f5007f171a3b4407d5f1375",
+    "src/components/kanban/StagesSheet.tsx": "e81ea9322ac7165af6127ca75b0685c1d8b5083fefabfa22431dc6170de976d3",
     "src/components/mobile/MobilePipelineScreen.tsx": "f7839e6ae62f7093503d1b125afac90e628ccc4f6140072965d9d3e8279058fd",
     "src/lib/i18n/en.ts": "e874b483c74478e3ba83bdb556ab84a7691771f57fb24886742a1d3f57172a89",
     "src/lib/i18n/uk.ts": "3369d6fda7f636c0e67a85636a63f85256c2334468712a4959cdc68e0ebf4b40"
@@ -17,7 +17,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "passed",
       "attempt": 1,
       "words": "Project setup done",
@@ -25,14 +26,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-passed.png",
-        "stages-en-light-640-passed-open.png"
+        "stages-en-light-390x844-passed.png",
+        "stages-en-light-390x844-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 335,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -41,7 +58,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Project setup done",
@@ -49,14 +67,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-passed-empty.png",
-        "stages-en-light-640-passed-empty-open.png"
+        "stages-en-light-390x844-passed-empty.png",
+        "stages-en-light-390x844-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 301,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -65,7 +99,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "failed",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -73,22 +108,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-failed.png",
-        "stages-en-light-640-failed-popover.png"
+        "stages-en-light-390x844-failed.png",
+        "stages-en-light-390x844-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 9,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 549,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 23,
-          "top": 208.9375,
-          "right": 162.421875,
-          "bottom": 238.9375
+          "left": 191.578125,
+          "top": 184.9375,
+          "right": 331,
+          "bottom": 214.9375
         },
         "inside": true,
         "covers": []
@@ -99,7 +150,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "stopped",
       "attempt": 1,
       "words": "Project setup failed",
@@ -107,13 +159,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-stopped.png"
+        "stages-en-light-390x844-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 305,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -122,7 +190,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "running",
       "attempt": 1,
       "words": "Project setup running",
@@ -130,23 +199,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-running.png",
-        "stages-en-light-640-running-open.png",
-        "stages-en-light-640-running-popover.png"
+        "stages-en-light-390x844-running.png",
+        "stages-en-light-390x844-running-open.png",
+        "stages-en-light-390x844-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 281,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 23,
-          "top": 206.9375,
-          "right": 169.140625,
-          "bottom": 236.9375
+          "left": 176.6875,
+          "top": 204.9375,
+          "right": 322.828125,
+          "bottom": 234.9375
         },
         "inside": true,
         "covers": []
@@ -157,7 +242,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "long",
       "attempt": 1,
       "words": "Project setup failed · exit 1",
@@ -165,13 +251,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-long.png"
+        "stages-en-light-390x844-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 11,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 312,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 557,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -180,7 +282,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "switch",
       "attempt": 2,
       "words": "Project setup done",
@@ -188,14 +291,122 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-640-switch-attempt-2.png",
-        "stages-en-light-640-switch-attempt-2-open.png"
+        "stages-en-light-390x844-switch-attempt-2.png",
+        "stages-en-light-390x844-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 367,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "height": 844,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-390x844-switch-attempt-1.png",
+        "stages-en-light-390x844-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 9,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 581,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 202.375,
+          "top": 241.9375,
+          "right": 341.796875,
+          "bottom": 271.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 640,
+      "height": 700,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-640x700-passed.png",
+        "stages-en-light-640x700-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 335,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -205,64 +416,7 @@
       "lang": "en",
       "theme": "light",
       "width": 640,
-      "state": "switch",
-      "attempt": 1,
-      "words": "Project setup failed · exit 7",
-      "open": true,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-light-640-switch-attempt-1.png",
-        "stages-en-light-640-switch-attempt-1-popover.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": {
-        "text": "Started 13:00 · took 38s",
-        "box": {
-          "left": 23,
-          "top": 240.9375,
-          "right": 162.421875,
-          "bottom": 270.9375
-        },
-        "inside": true,
-        "covers": []
-      },
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "light",
-      "width": 1024,
-      "state": "passed",
-      "attempt": 1,
-      "words": "Project setup done",
-      "open": false,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-light-1024-passed.png",
-        "stages-en-light-1024-passed-open.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": null,
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "light",
-      "width": 1024,
+      "height": 700,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Project setup done",
@@ -270,14 +424,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-passed-empty.png",
-        "stages-en-light-1024-passed-empty-open.png"
+        "stages-en-light-640x700-passed-empty.png",
+        "stages-en-light-640x700-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 301,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -286,7 +456,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "failed",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -294,22 +465,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-failed.png",
-        "stages-en-light-1024-failed-popover.png"
+        "stages-en-light-640x700-failed.png",
+        "stages-en-light-640x700-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 3,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 485,
+            "bottom": 677
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 177.421875,
-          "bottom": 310.9375
+          "left": 202.375,
+          "top": 209.9375,
+          "right": 341.796875,
+          "bottom": 239.9375
         },
         "inside": true,
         "covers": []
@@ -320,7 +507,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "stopped",
       "attempt": 1,
       "words": "Project setup failed",
@@ -328,13 +516,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-stopped.png"
+        "stages-en-light-640x700-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 305,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -343,7 +547,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "running",
       "attempt": 1,
       "words": "Project setup running",
@@ -351,23 +556,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-running.png",
-        "stages-en-light-1024-running-open.png",
-        "stages-en-light-1024-running-popover.png"
+        "stages-en-light-640x700-running.png",
+        "stages-en-light-640x700-running-open.png",
+        "stages-en-light-640x700-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 281,
+            "bottom": 677
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 184.140625,
-          "bottom": 308.9375
+          "left": 176.6875,
+          "top": 204.9375,
+          "right": 322.828125,
+          "bottom": 234.9375
         },
         "inside": true,
         "covers": []
@@ -378,7 +599,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "long",
       "attempt": 1,
       "words": "Project setup failed · exit 1",
@@ -386,13 +608,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-long.png"
+        "stages-en-light-640x700-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 208,
+          "content": 208
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 453,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -401,7 +639,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "switch",
       "attempt": 2,
       "words": "Project setup done",
@@ -409,14 +648,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-switch-attempt-2.png",
-        "stages-en-light-1024-switch-attempt-2-open.png"
+        "stages-en-light-640x700-switch-attempt-2.png",
+        "stages-en-light-640x700-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 367,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -425,7 +680,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "switch",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -433,22 +689,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1024-switch-attempt-1.png",
-        "stages-en-light-1024-switch-attempt-1-popover.png"
+        "stages-en-light-640x700-switch-attempt-1.png",
+        "stages-en-light-640x700-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 3,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 517,
+            "bottom": 677
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 177.421875,
-          "bottom": 342.9375
+          "left": 202.375,
+          "top": 241.9375,
+          "right": 341.796875,
+          "bottom": 271.9375
         },
         "inside": true,
         "covers": []
@@ -459,7 +731,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "passed",
       "attempt": 1,
       "words": "Project setup done",
@@ -467,14 +740,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1440-passed.png",
-        "stages-en-light-1440-passed-open.png"
+        "stages-en-light-1000x700-passed.png",
+        "stages-en-light-1000x700-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 444,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -483,7 +772,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Project setup done",
@@ -491,14 +781,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1440-passed-empty.png",
-        "stages-en-light-1440-passed-empty-open.png"
+        "stages-en-light-1000x700-passed-empty.png",
+        "stages-en-light-1000x700-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 410,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -507,7 +813,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "failed",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -515,22 +822,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1440-failed.png",
-        "stages-en-light-1440-failed-popover.png"
+        "stages-en-light-1000x700-failed.png",
+        "stages-en-light-1000x700-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 24,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 177.421875,
-          "bottom": 310.9375
+          "left": 212.578125,
+          "top": 293.9375,
+          "right": 352,
+          "bottom": 323.9375
         },
         "inside": true,
         "covers": []
@@ -541,7 +864,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "stopped",
       "attempt": 1,
       "words": "Project setup failed",
@@ -549,13 +873,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1440-stopped.png"
+        "stages-en-light-1000x700-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 414,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -564,7 +904,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "running",
       "attempt": 1,
       "words": "Project setup running",
@@ -572,22 +913,303 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-light-1440-running.png",
-        "stages-en-light-1440-running-open.png",
-        "stages-en-light-1440-running-popover.png"
+        "stages-en-light-1000x700-running.png",
+        "stages-en-light-1000x700-running-open.png",
+        "stages-en-light-1000x700-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 390,
+            "bottom": 662
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 38,
+          "left": 191.6875,
+          "top": 313.9375,
+          "right": 337.828125,
+          "bottom": 343.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 1000,
+      "height": 700,
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-1000x700-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 20,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 1000,
+      "height": 700,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-1000x700-switch-attempt-2.png",
+        "stages-en-light-1000x700-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 476,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 1000,
+      "height": 700,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-1000x700-switch-attempt-1.png",
+        "stages-en-light-1000x700-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 24,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 555,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 217.375,
+          "top": 347.9375,
+          "right": 356.796875,
+          "bottom": 377.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-1220x800-passed.png",
+        "stages-en-light-1220x800-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 407,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-1220x800-passed-empty.png",
+        "stages-en-light-1220x800-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 373,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-light-1220x800-failed.png",
+        "stages-en-light-1220x800-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 14,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 217.375,
           "top": 278.9375,
-          "right": 184.140625,
+          "right": 356.796875,
           "bottom": 308.9375
         },
         "inside": true,
@@ -599,170 +1221,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "light",
-      "width": 1440,
-      "state": "long",
-      "attempt": 1,
-      "words": "Project setup failed · exit 1",
-      "open": true,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-light-1440-long.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": null,
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "light",
-      "width": 1440,
-      "state": "switch",
-      "attempt": 2,
-      "words": "Project setup done",
-      "open": false,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-light-1440-switch-attempt-2.png",
-        "stages-en-light-1440-switch-attempt-2-open.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": null,
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "light",
-      "width": 1440,
-      "state": "switch",
-      "attempt": 1,
-      "words": "Project setup failed · exit 7",
-      "open": true,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-light-1440-switch-attempt-1.png",
-        "stages-en-light-1440-switch-attempt-1-popover.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": {
-        "text": "Started 13:00 · took 38s",
-        "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 177.421875,
-          "bottom": 342.9375
-        },
-        "inside": true,
-        "covers": []
-      },
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "dark",
-      "width": 640,
-      "state": "passed",
-      "attempt": 1,
-      "words": "Project setup done",
-      "open": false,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-dark-640-passed.png",
-        "stages-en-dark-640-passed-open.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": null,
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "dark",
-      "width": 640,
-      "state": "passed-empty",
-      "attempt": 1,
-      "words": "Project setup done",
-      "open": false,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-dark-640-passed-empty.png",
-        "stages-en-dark-640-passed-empty-open.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": null,
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "dark",
-      "width": 640,
-      "state": "failed",
-      "attempt": 1,
-      "words": "Project setup failed · exit 7",
-      "open": true,
-      "summaryHeight": 24,
-      "dotTarget": null,
-      "frames": [
-        "stages-en-dark-640-failed.png",
-        "stages-en-dark-640-failed-popover.png"
-      ],
-      "geometry": {
-        "clipped": [],
-        "covered": [],
-        "wide": 0,
-        "documentOverflow": false
-      },
-      "popover": {
-        "text": "Started 13:00 · took 38s",
-        "box": {
-          "left": 23,
-          "top": 208.9375,
-          "right": 162.421875,
-          "bottom": 238.9375
-        },
-        "inside": true,
-        "covers": []
-      },
-      "pageErrors": []
-    },
-    {
-      "host": "stages",
-      "lang": "en",
-      "theme": "dark",
-      "width": 640,
+      "width": 1220,
+      "height": 800,
       "state": "stopped",
       "attempt": 1,
       "words": "Project setup failed",
@@ -770,13 +1230,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-640-stopped.png"
+        "stages-en-light-1220x800-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 377,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -784,8 +1260,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "running",
       "attempt": 1,
       "words": "Project setup running",
@@ -793,23 +1270,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-640-running.png",
-        "stages-en-dark-640-running-open.png",
-        "stages-en-dark-640-running-popover.png"
+        "stages-en-light-1220x800-running.png",
+        "stages-en-light-1220x800-running-open.png",
+        "stages-en-light-1220x800-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 353,
+            "bottom": 762
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 23,
-          "top": 206.9375,
-          "right": 169.140625,
-          "bottom": 236.9375
+          "left": 191.6875,
+          "top": 276.9375,
+          "right": 337.828125,
+          "bottom": 306.9375
         },
         "inside": true,
         "covers": []
@@ -819,8 +1312,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "long",
       "attempt": 1,
       "words": "Project setup failed · exit 1",
@@ -828,13 +1322,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-640-long.png"
+        "stages-en-light-1220x800-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 320
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -842,8 +1352,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "switch",
       "attempt": 2,
       "words": "Project setup done",
@@ -851,14 +1362,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-640-switch-attempt-2.png",
-        "stages-en-dark-640-switch-attempt-2-open.png"
+        "stages-en-light-1220x800-switch-attempt-2.png",
+        "stages-en-light-1220x800-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 439,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -866,8 +1393,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "switch",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -875,22 +1403,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-640-switch-attempt-1.png",
-        "stages-en-dark-640-switch-attempt-1-popover.png"
+        "stages-en-light-1220x800-switch-attempt-1.png",
+        "stages-en-light-1220x800-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 14,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 595,
+            "bottom": 762
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 23,
-          "top": 240.9375,
-          "right": 162.421875,
-          "bottom": 270.9375
+          "left": 217.375,
+          "top": 310.9375,
+          "right": 356.796875,
+          "bottom": 340.9375
         },
         "inside": true,
         "covers": []
@@ -900,8 +1444,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "passed",
       "attempt": 1,
       "words": "Project setup done",
@@ -909,14 +1454,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-passed.png",
-        "stages-en-dark-1024-passed-open.png"
+        "stages-en-light-1440x900-passed.png",
+        "stages-en-light-1440x900-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 407,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -924,8 +1485,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Project setup done",
@@ -933,14 +1495,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-passed-empty.png",
-        "stages-en-dark-1024-passed-empty-open.png"
+        "stages-en-light-1440x900-passed-empty.png",
+        "stages-en-light-1440x900-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 373,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -948,8 +1526,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "failed",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -957,22 +1536,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-failed.png",
-        "stages-en-dark-1024-failed-popover.png"
+        "stages-en-light-1440x900-failed.png",
+        "stages-en-light-1440x900-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 605,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 177.421875,
-          "bottom": 310.9375
+          "left": 217.375,
+          "top": 281.9375,
+          "right": 356.796875,
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -982,8 +1577,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "stopped",
       "attempt": 1,
       "words": "Project setup failed",
@@ -991,13 +1587,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-stopped.png"
+        "stages-en-light-1440x900-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 377,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1005,8 +1617,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "running",
       "attempt": 1,
       "words": "Project setup running",
@@ -1014,23 +1627,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-running.png",
-        "stages-en-dark-1024-running-open.png",
-        "stages-en-dark-1024-running-popover.png"
+        "stages-en-light-1440x900-running.png",
+        "stages-en-light-1440x900-running-open.png",
+        "stages-en-light-1440x900-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 353,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 184.140625,
-          "bottom": 308.9375
+          "left": 191.6875,
+          "top": 276.9375,
+          "right": 337.828125,
+          "bottom": 306.9375
         },
         "inside": true,
         "covers": []
@@ -1040,8 +1669,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "long",
       "attempt": 1,
       "words": "Project setup failed · exit 1",
@@ -1049,13 +1679,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-long.png"
+        "stages-en-light-1440x900-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 272,
+          "content": 272
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 589,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1063,8 +1709,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 2,
       "words": "Project setup done",
@@ -1072,14 +1719,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-switch-attempt-2.png",
-        "stages-en-dark-1024-switch-attempt-2-open.png"
+        "stages-en-light-1440x900-switch-attempt-2.png",
+        "stages-en-light-1440x900-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 439,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1087,8 +1750,9 @@
     {
       "host": "stages",
       "lang": "en",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -1096,22 +1760,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1024-switch-attempt-1.png",
-        "stages-en-dark-1024-switch-attempt-1-popover.png"
+        "stages-en-light-1440x900-switch-attempt-1.png",
+        "stages-en-light-1440x900-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 637,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 177.421875,
-          "bottom": 342.9375
+          "left": 217.375,
+          "top": 313.9375,
+          "right": 356.796875,
+          "bottom": 343.9375
         },
         "inside": true,
         "covers": []
@@ -1122,7 +1802,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "passed",
       "attempt": 1,
       "words": "Project setup done",
@@ -1130,14 +1811,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-passed.png",
-        "stages-en-dark-1440-passed-open.png"
+        "stages-en-dark-390x844-passed.png",
+        "stages-en-dark-390x844-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 335,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1146,7 +1843,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Project setup done",
@@ -1154,14 +1852,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-passed-empty.png",
-        "stages-en-dark-1440-passed-empty-open.png"
+        "stages-en-dark-390x844-passed-empty.png",
+        "stages-en-dark-390x844-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 301,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1170,7 +1884,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "failed",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -1178,22 +1893,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-failed.png",
-        "stages-en-dark-1440-failed-popover.png"
+        "stages-en-dark-390x844-failed.png",
+        "stages-en-dark-390x844-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 9,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 549,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 177.421875,
-          "bottom": 310.9375
+          "left": 191.578125,
+          "top": 184.9375,
+          "right": 331,
+          "bottom": 214.9375
         },
         "inside": true,
         "covers": []
@@ -1204,7 +1935,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "stopped",
       "attempt": 1,
       "words": "Project setup failed",
@@ -1212,13 +1944,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-stopped.png"
+        "stages-en-dark-390x844-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 305,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1227,7 +1975,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "running",
       "attempt": 1,
       "words": "Project setup running",
@@ -1235,23 +1984,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-running.png",
-        "stages-en-dark-1440-running-open.png",
-        "stages-en-dark-1440-running-popover.png"
+        "stages-en-dark-390x844-running.png",
+        "stages-en-dark-390x844-running-open.png",
+        "stages-en-dark-390x844-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 281,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · 42s so far",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 184.140625,
-          "bottom": 308.9375
+          "left": 176.6875,
+          "top": 204.9375,
+          "right": 322.828125,
+          "bottom": 234.9375
         },
         "inside": true,
         "covers": []
@@ -1262,7 +2027,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "long",
       "attempt": 1,
       "words": "Project setup failed · exit 1",
@@ -1270,13 +2036,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-long.png"
+        "stages-en-dark-390x844-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 11,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 312,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 557,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1285,7 +2067,8 @@
       "host": "stages",
       "lang": "en",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "switch",
       "attempt": 2,
       "words": "Project setup done",
@@ -1293,14 +2076,1193 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-switch-attempt-2.png",
-        "stages-en-dark-1440-switch-attempt-2-open.png"
+        "stages-en-dark-390x844-switch-attempt-2.png",
+        "stages-en-dark-390x844-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 367,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-390x844-switch-attempt-1.png",
+        "stages-en-dark-390x844-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 9,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 581,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 202.375,
+          "top": 241.9375,
+          "right": 341.796875,
+          "bottom": 271.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-passed.png",
+        "stages-en-dark-640x700-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 335,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-passed-empty.png",
+        "stages-en-dark-640x700-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 301,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-failed.png",
+        "stages-en-dark-640x700-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 3,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 485,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 202.375,
+          "top": 209.9375,
+          "right": 341.796875,
+          "bottom": 239.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Project setup failed",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 305,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "running",
+      "attempt": 1,
+      "words": "Project setup running",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-running.png",
+        "stages-en-dark-640x700-running-open.png",
+        "stages-en-dark-640x700-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 281,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · 42s so far",
+        "box": {
+          "left": 176.6875,
+          "top": 204.9375,
+          "right": 322.828125,
+          "bottom": 234.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 208,
+          "content": 208
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 453,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-switch-attempt-2.png",
+        "stages-en-dark-640x700-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 367,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-640x700-switch-attempt-1.png",
+        "stages-en-dark-640x700-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 3,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 517,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 202.375,
+          "top": 241.9375,
+          "right": 341.796875,
+          "bottom": 271.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-passed.png",
+        "stages-en-dark-1000x700-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 444,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-passed-empty.png",
+        "stages-en-dark-1000x700-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 410,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-failed.png",
+        "stages-en-dark-1000x700-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 24,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 212.578125,
+          "top": 293.9375,
+          "right": 352,
+          "bottom": 323.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Project setup failed",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 414,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "running",
+      "attempt": 1,
+      "words": "Project setup running",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-running.png",
+        "stages-en-dark-1000x700-running-open.png",
+        "stages-en-dark-1000x700-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 390,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · 42s so far",
+        "box": {
+          "left": 191.6875,
+          "top": 313.9375,
+          "right": 337.828125,
+          "bottom": 343.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 20,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-switch-attempt-2.png",
+        "stages-en-dark-1000x700-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 476,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1000x700-switch-attempt-1.png",
+        "stages-en-dark-1000x700-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 24,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 555,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 217.375,
+          "top": 347.9375,
+          "right": 356.796875,
+          "bottom": 377.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-passed.png",
+        "stages-en-dark-1220x800-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 407,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-passed-empty.png",
+        "stages-en-dark-1220x800-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 373,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-failed.png",
+        "stages-en-dark-1220x800-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 14,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 217.375,
+          "top": 278.9375,
+          "right": 356.796875,
+          "bottom": 308.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Project setup failed",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 377,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "running",
+      "attempt": 1,
+      "words": "Project setup running",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-running.png",
+        "stages-en-dark-1220x800-running-open.png",
+        "stages-en-dark-1220x800-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 353,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · 42s so far",
+        "box": {
+          "left": 191.6875,
+          "top": 276.9375,
+          "right": 337.828125,
+          "bottom": 306.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 7,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 320
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-switch-attempt-2.png",
+        "stages-en-dark-1220x800-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 439,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1220x800-switch-attempt-1.png",
+        "stages-en-dark-1220x800-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 14,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 595,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 217.375,
+          "top": 310.9375,
+          "right": 356.796875,
+          "bottom": 340.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-passed.png",
+        "stages-en-dark-1440x900-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 407,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1310,6 +3272,272 @@
       "lang": "en",
       "theme": "dark",
       "width": 1440,
+      "height": 900,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-passed-empty.png",
+        "stages-en-dark-1440x900-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 373,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Project setup failed · exit 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-failed.png",
+        "stages-en-dark-1440x900-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 7,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 605,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · took 38s",
+        "box": {
+          "left": 217.375,
+          "top": 281.9375,
+          "right": 356.796875,
+          "bottom": 311.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Project setup failed",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 377,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "running",
+      "attempt": 1,
+      "words": "Project setup running",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-running.png",
+        "stages-en-dark-1440x900-running-open.png",
+        "stages-en-dark-1440x900-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 353,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": {
+        "text": "Started 13:00 · 42s so far",
+        "box": {
+          "left": 191.6875,
+          "top": 276.9375,
+          "right": 337.828125,
+          "bottom": 306.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "long",
+      "attempt": 1,
+      "words": "Project setup failed · exit 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 272,
+          "content": 272
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 589,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Project setup done",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-en-dark-1440x900-switch-attempt-2.png",
+        "stages-en-dark-1440x900-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 439,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 1,
       "words": "Project setup failed · exit 7",
@@ -1317,22 +3545,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-en-dark-1440-switch-attempt-1.png",
-        "stages-en-dark-1440-switch-attempt-1-popover.png"
+        "stages-en-dark-1440x900-switch-attempt-1.png",
+        "stages-en-dark-1440x900-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 637,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 177.421875,
-          "bottom": 342.9375
+          "left": 217.375,
+          "top": 313.9375,
+          "right": 356.796875,
+          "bottom": 343.9375
         },
         "inside": true,
         "covers": []
@@ -1343,7 +3587,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "passed",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -1351,14 +3596,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-passed.png",
-        "stages-uk-light-640-passed-open.png"
+        "stages-uk-light-390x844-passed.png",
+        "stages-uk-light-390x844-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 335,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1367,7 +3628,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -1375,14 +3637,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-passed-empty.png",
-        "stages-uk-light-640-passed-empty-open.png"
+        "stages-uk-light-390x844-passed-empty.png",
+        "stages-uk-light-390x844-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 301,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1391,7 +3669,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "failed",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -1399,22 +3678,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-failed.png",
-        "stages-uk-light-640-failed-popover.png"
+        "stages-uk-light-390x844-failed.png",
+        "stages-uk-light-390x844-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 9,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 549,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 23,
-          "top": 208.9375,
-          "right": 196.609375,
-          "bottom": 238.9375
+          "left": 157.390625,
+          "top": 184.9375,
+          "right": 331,
+          "bottom": 214.9375
         },
         "inside": true,
         "covers": []
@@ -1425,7 +3720,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "stopped",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася",
@@ -1433,13 +3729,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-stopped.png"
+        "stages-uk-light-390x844-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 305,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1448,7 +3760,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "running",
       "attempt": 1,
       "words": "Підготовка проєкту триває",
@@ -1456,23 +3769,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-running.png",
-        "stages-uk-light-640-running-open.png",
-        "stages-uk-light-640-running-popover.png"
+        "stages-uk-light-390x844-running.png",
+        "stages-uk-light-390x844-running-open.png",
+        "stages-uk-light-390x844-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 281,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 23,
-          "top": 206.9375,
-          "right": 192.515625,
-          "bottom": 236.9375
+          "left": 161.484375,
+          "top": 182.9375,
+          "right": 331,
+          "bottom": 212.9375
         },
         "inside": true,
         "covers": []
@@ -1483,7 +3812,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "long",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 1",
@@ -1491,13 +3821,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-long.png"
+        "stages-uk-light-390x844-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 11,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 312,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 557,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1506,7 +3852,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "switch",
       "attempt": 2,
       "words": "Підготовку проєкту виконано",
@@ -1514,14 +3861,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-switch-attempt-2.png",
-        "stages-uk-light-640-switch-attempt-2-open.png"
+        "stages-uk-light-390x844-switch-attempt-2.png",
+        "stages-uk-light-390x844-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 367,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1530,7 +3893,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 640,
+      "width": 390,
+      "height": 844,
       "state": "switch",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -1538,22 +3902,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-640-switch-attempt-1.png",
-        "stages-uk-light-640-switch-attempt-1-popover.png"
+        "stages-uk-light-390x844-switch-attempt-1.png",
+        "stages-uk-light-390x844-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 9,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 581,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 23,
-          "top": 240.9375,
-          "right": 196.609375,
-          "bottom": 270.9375
+          "left": 157.390625,
+          "top": 184.9375,
+          "right": 331,
+          "bottom": 214.9375
         },
         "inside": true,
         "covers": []
@@ -1564,7 +3944,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "passed",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -1572,14 +3953,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-passed.png",
-        "stages-uk-light-1024-passed-open.png"
+        "stages-uk-light-640x700-passed.png",
+        "stages-uk-light-640x700-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 335,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1588,7 +3985,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -1596,14 +3994,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-passed-empty.png",
-        "stages-uk-light-1024-passed-empty-open.png"
+        "stages-uk-light-640x700-passed-empty.png",
+        "stages-uk-light-640x700-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 301,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1612,7 +4026,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "failed",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -1620,22 +4035,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-failed.png",
-        "stages-uk-light-1024-failed-popover.png"
+        "stages-uk-light-640x700-failed.png",
+        "stages-uk-light-640x700-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 3,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 485,
+            "bottom": 677
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 211.609375,
-          "bottom": 310.9375
+          "left": 270.921875,
+          "top": 209.9375,
+          "right": 444.53125,
+          "bottom": 239.9375
         },
         "inside": true,
         "covers": []
@@ -1646,7 +4077,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "stopped",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася",
@@ -1654,13 +4086,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-stopped.png"
+        "stages-uk-light-640x700-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 305,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1669,7 +4117,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "running",
       "attempt": 1,
       "words": "Підготовка проєкту триває",
@@ -1677,23 +4126,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-running.png",
-        "stages-uk-light-1024-running-open.png",
-        "stages-uk-light-1024-running-popover.png"
+        "stages-uk-light-640x700-running.png",
+        "stages-uk-light-640x700-running-open.png",
+        "stages-uk-light-640x700-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 281,
+            "bottom": 677
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 207.515625,
-          "bottom": 308.9375
+          "left": 209.40625,
+          "top": 207.9375,
+          "right": 378.921875,
+          "bottom": 237.9375
         },
         "inside": true,
         "covers": []
@@ -1704,7 +4169,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "long",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 1",
@@ -1712,13 +4178,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-long.png"
+        "stages-uk-light-640x700-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 208,
+          "content": 208
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 453,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1727,7 +4209,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "switch",
       "attempt": 2,
       "words": "Підготовку проєкту виконано",
@@ -1735,14 +4218,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-switch-attempt-2.png",
-        "stages-uk-light-1024-switch-attempt-2-open.png"
+        "stages-uk-light-640x700-switch-attempt-2.png",
+        "stages-uk-light-640x700-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 367,
+            "bottom": 677
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1751,7 +4250,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1024,
+      "width": 640,
+      "height": 700,
       "state": "switch",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -1759,22 +4259,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1024-switch-attempt-1.png",
-        "stages-uk-light-1024-switch-attempt-1-popover.png"
+        "stages-uk-light-640x700-switch-attempt-1.png",
+        "stages-uk-light-640x700-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 3,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 517,
+            "bottom": 677
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 211.609375,
-          "bottom": 342.9375
+          "left": 270.921875,
+          "top": 241.9375,
+          "right": 444.53125,
+          "bottom": 271.9375
         },
         "inside": true,
         "covers": []
@@ -1785,7 +4301,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "passed",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -1793,14 +4310,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-passed.png",
-        "stages-uk-light-1440-passed-open.png"
+        "stages-uk-light-1000x700-passed.png",
+        "stages-uk-light-1000x700-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 444,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1809,7 +4342,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -1817,14 +4351,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-passed-empty.png",
-        "stages-uk-light-1440-passed-empty-open.png"
+        "stages-uk-light-1000x700-passed-empty.png",
+        "stages-uk-light-1000x700-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 410,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1833,7 +4383,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "failed",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -1841,22 +4392,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-failed.png",
-        "stages-uk-light-1440-failed-popover.png"
+        "stages-uk-light-1000x700-failed.png",
+        "stages-uk-light-1000x700-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 24,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 211.609375,
-          "bottom": 310.9375
+          "left": 178.390625,
+          "top": 293.9375,
+          "right": 352,
+          "bottom": 323.9375
         },
         "inside": true,
         "covers": []
@@ -1867,7 +4434,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "stopped",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася",
@@ -1875,13 +4443,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-stopped.png"
+        "stages-uk-light-1000x700-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 414,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1890,7 +4474,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "running",
       "attempt": 1,
       "words": "Підготовка проєкту триває",
@@ -1898,23 +4483,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-running.png",
-        "stages-uk-light-1440-running-open.png",
-        "stages-uk-light-1440-running-popover.png"
+        "stages-uk-light-1000x700-running.png",
+        "stages-uk-light-1000x700-running-open.png",
+        "stages-uk-light-1000x700-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 390,
+            "bottom": 662
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 207.515625,
-          "bottom": 308.9375
+          "left": 182.484375,
+          "top": 291.9375,
+          "right": 352,
+          "bottom": 321.9375
         },
         "inside": true,
         "covers": []
@@ -1925,7 +4526,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "long",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 1",
@@ -1933,13 +4535,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-long.png"
+        "stages-uk-light-1000x700-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 20,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1948,7 +4566,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "switch",
       "attempt": 2,
       "words": "Підготовку проєкту виконано",
@@ -1956,14 +4575,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-switch-attempt-2.png",
-        "stages-uk-light-1440-switch-attempt-2-open.png"
+        "stages-uk-light-1000x700-switch-attempt-2.png",
+        "stages-uk-light-1000x700-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 476,
+            "bottom": 662
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -1972,7 +4607,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "light",
-      "width": 1440,
+      "width": 1000,
+      "height": 700,
       "state": "switch",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -1980,22 +4616,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-light-1440-switch-attempt-1.png",
-        "stages-uk-light-1440-switch-attempt-1-popover.png"
+        "stages-uk-light-1000x700-switch-attempt-1.png",
+        "stages-uk-light-1000x700-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 24,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 555,
+            "bottom": 662
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 211.609375,
-          "bottom": 342.9375
+          "left": 285.921875,
+          "top": 350.9375,
+          "right": 459.53125,
+          "bottom": 380.9375
         },
         "inside": true,
         "covers": []
@@ -2005,8 +4657,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "passed",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -2014,14 +4667,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-passed.png",
-        "stages-uk-dark-640-passed-open.png"
+        "stages-uk-light-1220x800-passed.png",
+        "stages-uk-light-1220x800-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 407,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2029,8 +4698,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -2038,14 +4708,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-passed-empty.png",
-        "stages-uk-dark-640-passed-empty-open.png"
+        "stages-uk-light-1220x800-passed-empty.png",
+        "stages-uk-light-1220x800-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 373,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2053,8 +4739,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "failed",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -2062,22 +4749,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-failed.png",
-        "stages-uk-dark-640-failed-popover.png"
+        "stages-uk-light-1220x800-failed.png",
+        "stages-uk-light-1220x800-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 14,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 23,
-          "top": 208.9375,
-          "right": 196.609375,
-          "bottom": 238.9375
+          "left": 204.390625,
+          "top": 256.9375,
+          "right": 378,
+          "bottom": 286.9375
         },
         "inside": true,
         "covers": []
@@ -2087,8 +4790,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "stopped",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася",
@@ -2096,13 +4800,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-stopped.png"
+        "stages-uk-light-1220x800-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 377,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2110,8 +4830,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "running",
       "attempt": 1,
       "words": "Підготовка проєкту триває",
@@ -2119,23 +4840,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-running.png",
-        "stages-uk-dark-640-running-open.png",
-        "stages-uk-dark-640-running-popover.png"
+        "stages-uk-light-1220x800-running.png",
+        "stages-uk-light-1220x800-running-open.png",
+        "stages-uk-light-1220x800-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 353,
+            "bottom": 762
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 23,
-          "top": 206.9375,
-          "right": 192.515625,
-          "bottom": 236.9375
+          "left": 208.484375,
+          "top": 254.9375,
+          "right": 378,
+          "bottom": 284.9375
         },
         "inside": true,
         "covers": []
@@ -2145,8 +4882,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "long",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 1",
@@ -2154,13 +4892,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-long.png"
+        "stages-uk-light-1220x800-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 320
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2168,8 +4922,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "switch",
       "attempt": 2,
       "words": "Підготовку проєкту виконано",
@@ -2177,14 +4932,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-switch-attempt-2.png",
-        "stages-uk-dark-640-switch-attempt-2-open.png"
+        "stages-uk-light-1220x800-switch-attempt-2.png",
+        "stages-uk-light-1220x800-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 439,
+            "bottom": 762
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2192,8 +4963,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 640,
+      "theme": "light",
+      "width": 1220,
+      "height": 800,
       "state": "switch",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -2201,22 +4973,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-640-switch-attempt-1.png",
-        "stages-uk-dark-640-switch-attempt-1-popover.png"
+        "stages-uk-light-1220x800-switch-attempt-1.png",
+        "stages-uk-light-1220x800-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 14,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 595,
+            "bottom": 762
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 23,
-          "top": 240.9375,
-          "right": 196.609375,
-          "bottom": 270.9375
+          "left": 285.921875,
+          "top": 310.9375,
+          "right": 459.53125,
+          "bottom": 340.9375
         },
         "inside": true,
         "covers": []
@@ -2226,8 +5014,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "passed",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -2235,14 +5024,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-passed.png",
-        "stages-uk-dark-1024-passed-open.png"
+        "stages-uk-light-1440x900-passed.png",
+        "stages-uk-light-1440x900-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 407,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2250,8 +5055,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -2259,14 +5065,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-passed-empty.png",
-        "stages-uk-dark-1024-passed-empty-open.png"
+        "stages-uk-light-1440x900-passed-empty.png",
+        "stages-uk-light-1440x900-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 373,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2274,8 +5096,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "failed",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -2283,22 +5106,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-failed.png",
-        "stages-uk-dark-1024-failed-popover.png"
+        "stages-uk-light-1440x900-failed.png",
+        "stages-uk-light-1440x900-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 605,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 211.609375,
-          "bottom": 310.9375
+          "left": 270.390625,
+          "top": 256.9375,
+          "right": 444,
+          "bottom": 286.9375
         },
         "inside": true,
         "covers": []
@@ -2308,8 +5147,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "stopped",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася",
@@ -2317,13 +5157,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-stopped.png"
+        "stages-uk-light-1440x900-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 377,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2331,8 +5187,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "running",
       "attempt": 1,
       "words": "Підготовка проєкту триває",
@@ -2340,23 +5197,39 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-running.png",
-        "stages-uk-dark-1024-running-open.png",
-        "stages-uk-dark-1024-running-popover.png"
+        "stages-uk-light-1440x900-running.png",
+        "stages-uk-light-1440x900-running-open.png",
+        "stages-uk-light-1440x900-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 353,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 207.515625,
-          "bottom": 308.9375
+          "left": 224.40625,
+          "top": 279.9375,
+          "right": 393.921875,
+          "bottom": 309.9375
         },
         "inside": true,
         "covers": []
@@ -2366,8 +5239,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "long",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 1",
@@ -2375,13 +5249,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-long.png"
+        "stages-uk-light-1440x900-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 272,
+          "content": 272
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 589,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2389,8 +5279,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 2,
       "words": "Підготовку проєкту виконано",
@@ -2398,14 +5289,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-switch-attempt-2.png",
-        "stages-uk-dark-1024-switch-attempt-2-open.png"
+        "stages-uk-light-1440x900-switch-attempt-2.png",
+        "stages-uk-light-1440x900-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 439,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2413,8 +5320,9 @@
     {
       "host": "stages",
       "lang": "uk",
-      "theme": "dark",
-      "width": 1024,
+      "theme": "light",
+      "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -2422,22 +5330,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1024-switch-attempt-1.png",
-        "stages-uk-dark-1024-switch-attempt-1-popover.png"
+        "stages-uk-light-1440x900-switch-attempt-1.png",
+        "stages-uk-light-1440x900-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 637,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 211.609375,
-          "bottom": 342.9375
+          "left": 285.921875,
+          "top": 313.9375,
+          "right": 459.53125,
+          "bottom": 343.9375
         },
         "inside": true,
         "covers": []
@@ -2448,7 +5372,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "passed",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -2456,14 +5381,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-passed.png",
-        "stages-uk-dark-1440-passed-open.png"
+        "stages-uk-dark-390x844-passed.png",
+        "stages-uk-dark-390x844-passed-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 335,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2472,7 +5413,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "passed-empty",
       "attempt": 1,
       "words": "Підготовку проєкту виконано",
@@ -2480,14 +5422,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-passed-empty.png",
-        "stages-uk-dark-1440-passed-empty-open.png"
+        "stages-uk-dark-390x844-passed-empty.png",
+        "stages-uk-dark-390x844-passed-empty-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 301,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2496,7 +5454,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "failed",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -2504,22 +5463,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-failed.png",
-        "stages-uk-dark-1440-failed-popover.png"
+        "stages-uk-dark-390x844-failed.png",
+        "stages-uk-dark-390x844-failed-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 9,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 549,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 280.9375,
-          "right": 211.609375,
-          "bottom": 310.9375
+          "left": 157.390625,
+          "top": 184.9375,
+          "right": 331,
+          "bottom": 214.9375
         },
         "inside": true,
         "covers": []
@@ -2530,7 +5505,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "stopped",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася",
@@ -2538,13 +5514,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-stopped.png"
+        "stages-uk-dark-390x844-stopped.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 305,
+            "bottom": 821
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2553,7 +5545,8 @@
       "host": "stages",
       "lang": "uk",
       "theme": "dark",
-      "width": 1440,
+      "width": 390,
+      "height": 844,
       "state": "running",
       "attempt": 1,
       "words": "Підготовка проєкту триває",
@@ -2561,23 +5554,1242 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-running.png",
-        "stages-uk-dark-1440-running-open.png",
-        "stages-uk-dark-1440-running-popover.png"
+        "stages-uk-dark-390x844-running.png",
+        "stages-uk-dark-390x844-running-open.png",
+        "stages-uk-dark-390x844-running-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 281,
+            "bottom": 821
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · минуло 42 с",
         "box": {
-          "left": 38,
-          "top": 278.9375,
-          "right": 207.515625,
-          "bottom": 308.9375
+          "left": 161.484375,
+          "top": 182.9375,
+          "right": 331,
+          "bottom": 212.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "state": "long",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-390x844-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 11,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 312,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 557,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-390x844-switch-attempt-2.png",
+        "stages-uk-dark-390x844-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 367,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-390x844-switch-attempt-1.png",
+        "stages-uk-dark-390x844-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 9,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 304,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 834,
+          "conversation": {
+            "top": 581,
+            "bottom": 821
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 157.390625,
+          "top": 184.9375,
+          "right": 331,
+          "bottom": 214.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-passed.png",
+        "stages-uk-dark-640x700-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 335,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-passed-empty.png",
+        "stages-uk-dark-640x700-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 301,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-failed.png",
+        "stages-uk-dark-640x700-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 3,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 485,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 270.921875,
+          "top": 209.9375,
+          "right": 444.53125,
+          "bottom": 239.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 305,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "running",
+      "attempt": 1,
+      "words": "Підготовка проєкту триває",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-running.png",
+        "stages-uk-dark-640x700-running-open.png",
+        "stages-uk-dark-640x700-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 281,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · минуло 42 с",
+        "box": {
+          "left": 209.40625,
+          "top": 207.9375,
+          "right": 378.921875,
+          "bottom": 237.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "long",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 208,
+          "content": 208
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 453,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-switch-attempt-2.png",
+        "stages-uk-dark-640x700-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 367,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 640,
+      "height": 700,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-640x700-switch-attempt-1.png",
+        "stages-uk-dark-640x700-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 3,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 240,
+          "content": 282
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 690,
+          "conversation": {
+            "top": 517,
+            "bottom": 677
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 270.921875,
+          "top": 241.9375,
+          "right": 444.53125,
+          "bottom": 271.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-passed.png",
+        "stages-uk-dark-1000x700-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 444,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-passed-empty.png",
+        "stages-uk-dark-1000x700-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 410,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-failed.png",
+        "stages-uk-dark-1000x700-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 24,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 178.390625,
+          "top": 293.9375,
+          "right": 352,
+          "bottom": 323.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 414,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "running",
+      "attempt": 1,
+      "words": "Підготовка проєкту триває",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-running.png",
+        "stages-uk-dark-1000x700-running-open.png",
+        "stages-uk-dark-1000x700-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 390,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · минуло 42 с",
+        "box": {
+          "left": 182.484375,
+          "top": 291.9375,
+          "right": 352,
+          "bottom": 321.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "long",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 20,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 432
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 523,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-switch-attempt-2.png",
+        "stages-uk-dark-1000x700-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 476,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1000,
+      "height": 700,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1000x700-switch-attempt-1.png",
+        "stages-uk-dark-1000x700-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 24,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 169,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 675,
+          "conversation": {
+            "top": 555,
+            "bottom": 662
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 285.921875,
+          "top": 350.9375,
+          "right": 459.53125,
+          "bottom": 380.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-passed.png",
+        "stages-uk-dark-1220x800-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 407,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-passed-empty.png",
+        "stages-uk-dark-1220x800-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 373,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-failed.png",
+        "stages-uk-dark-1220x800-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 14,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 204.390625,
+          "top": 256.9375,
+          "right": 378,
+          "bottom": 286.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 377,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "running",
+      "attempt": 1,
+      "words": "Підготовка проєкту триває",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-running.png",
+        "stages-uk-dark-1220x800-running-open.png",
+        "stages-uk-dark-1220x800-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 353,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · минуло 42 с",
+        "box": {
+          "left": 208.484375,
+          "top": 254.9375,
+          "right": 378,
+          "bottom": 284.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "long",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 1",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-long.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 7,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 320
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 563,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "switch",
+      "attempt": 2,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-switch-attempt-2.png",
+        "stages-uk-dark-1220x800-switch-attempt-2-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 439,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1220,
+      "height": 800,
+      "state": "switch",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1220x800-switch-attempt-1.png",
+        "stages-uk-dark-1220x800-switch-attempt-1-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 14,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 247,
+          "content": 410
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 775,
+          "conversation": {
+            "top": 595,
+            "bottom": 762
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 285.921875,
+          "top": 310.9375,
+          "right": 459.53125,
+          "bottom": 340.9375
         },
         "inside": true,
         "covers": []
@@ -2589,6 +6801,232 @@
       "lang": "uk",
       "theme": "dark",
       "width": 1440,
+      "height": 900,
+      "state": "passed",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1440x900-passed.png",
+        "stages-uk-dark-1440x900-passed-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 407,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "passed-empty",
+      "attempt": 1,
+      "words": "Підготовку проєкту виконано",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1440x900-passed-empty.png",
+        "stages-uk-dark-1440x900-passed-empty-open.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 58,
+          "content": 58
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 373,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "failed",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася · код 7",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1440x900-failed.png",
+        "stages-uk-dark-1440x900-failed-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 7,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 605,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · тривало 38 с",
+        "box": {
+          "left": 270.390625,
+          "top": 256.9375,
+          "right": 444,
+          "bottom": 286.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "stopped",
+      "attempt": 1,
+      "words": "Підготовка проєкту не вдалася",
+      "open": true,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1440x900-stopped.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 60,
+          "content": 60
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 377,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": null,
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
+      "state": "running",
+      "attempt": 1,
+      "words": "Підготовка проєкту триває",
+      "open": false,
+      "summaryHeight": 24,
+      "dotTarget": null,
+      "frames": [
+        "stages-uk-dark-1440x900-running.png",
+        "stages-uk-dark-1440x900-running-open.png",
+        "stages-uk-dark-1440x900-running-popover.png"
+      ],
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "scrolled": 0,
+        "wide": 0,
+        "documentOverflow": false,
+        "scroller": {
+          "height": 38,
+          "content": 38
+        },
+        "lastLine": false,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 353,
+            "bottom": 862
+          }
+        }
+      },
+      "popover": {
+        "text": "Почато о 13:00 · минуло 42 с",
+        "box": {
+          "left": 224.40625,
+          "top": 279.9375,
+          "right": 393.921875,
+          "bottom": 309.9375
+        },
+        "inside": true,
+        "covers": []
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "stages",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "height": 900,
       "state": "long",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 1",
@@ -2596,13 +7034,29 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-long.png"
+        "stages-uk-dark-1440x900-long.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 272,
+          "content": 272
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 589,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2612,6 +7066,7 @@
       "lang": "uk",
       "theme": "dark",
       "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 2,
       "words": "Підготовку проєкту виконано",
@@ -2619,14 +7074,30 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-switch-attempt-2.png",
-        "stages-uk-dark-1440-switch-attempt-2-open.png"
+        "stages-uk-dark-1440x900-switch-attempt-2.png",
+        "stages-uk-dark-1440x900-switch-attempt-2-open.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 0,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 92,
+          "content": 92
+        },
+        "lastLine": true,
+        "commandReached": null,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 439,
+            "bottom": 862
+          }
+        }
       },
       "popover": null,
       "pageErrors": []
@@ -2636,6 +7107,7 @@
       "lang": "uk",
       "theme": "dark",
       "width": 1440,
+      "height": 900,
       "state": "switch",
       "attempt": 1,
       "words": "Підготовка проєкту не вдалася · код 7",
@@ -2643,22 +7115,38 @@
       "summaryHeight": 24,
       "dotTarget": null,
       "frames": [
-        "stages-uk-dark-1440-switch-attempt-1.png",
-        "stages-uk-dark-1440-switch-attempt-1-popover.png"
+        "stages-uk-dark-1440x900-switch-attempt-1.png",
+        "stages-uk-dark-1440x900-switch-attempt-1-popover.png"
       ],
       "geometry": {
         "clipped": [],
         "covered": [],
+        "scrolled": 7,
         "wide": 0,
-        "documentOverflow": false
+        "documentOverflow": false,
+        "scroller": {
+          "height": 288,
+          "content": 378
+        },
+        "lastLine": true,
+        "commandReached": true,
+        "dotEdge": 0,
+        "pane": {
+          "overflow": 0,
+          "bottom": 875,
+          "conversation": {
+            "top": 637,
+            "bottom": 862
+          }
+        }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 38,
-          "top": 312.9375,
-          "right": 211.609375,
-          "bottom": 342.9375
+          "left": 285.921875,
+          "top": 313.9375,
+          "right": 459.53125,
+          "bottom": 343.9375
         },
         "inside": true,
         "covers": []

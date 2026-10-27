@@ -505,9 +505,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
-      {/* The setup result belongs to the attempt the pane shows; the room
-          above it is where its dot's popover opens. */}
-      {shown ? <StageSetupResult setup={shown.setup} worktreeDir={pipeline.worktreeDir} className="mt-6" /> : null}
+      {/* The setup result belongs to the attempt the pane shows. It takes at
+          most half the pane, so the conversation below keeps its room. */}
+      {shown ? <StageSetupResult setup={shown.setup} worktreeDir={pipeline.worktreeDir} fit /> : null}
       <AgentMemoryCapNote cap={shown?.memoryCap} />
       {body}
     </section>

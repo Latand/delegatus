@@ -1466,13 +1466,13 @@ const SETUP_STATES = ["passed", "passed-empty", "failed", "stopped", "running", 
 
 /** Production setup hosts: one line per shown setup, each state in its own words. */
 export async function captureProjectSetupHosts(browser: Browser, base: string, out: string,
-  hosts: readonly ("stages" | "mobile")[], widths: readonly number[]) {
+  hosts: readonly ("stages" | "mobile")[], windows: readonly { width: number; height: number }[]) {
   const readings: unknown[] = [];
-  for (const host of hosts) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) for (const state of SETUP_STATES) {
+  for (const host of hosts) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const { width, height } of windows) for (const state of SETUP_STATES) {
     const phone = host === "mobile";
     const { context, page, pageErrors } = await openFixture(browser,
-      `${base}?case=project-setup&host=${host}&state=${state}&lang=${lang}`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
-    const where = `${host}/${lang}/${theme}/${width}/${state}`;
+      `${base}?case=project-setup&host=${host}&state=${state}&lang=${lang}`, { width, height }, theme, lang, "reduce", phone);
+    const where = `${host}/${lang}/${theme}/${width}x${height}/${state}`;
     try {
       const results = page.locator("[data-stage-setup]");
       await results.first().waitFor();
@@ -1503,7 +1503,7 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
         const summaryHeight = await summary.evaluate(element => element.getBoundingClientRect().height);
         if (phone && summaryHeight < 44) throw new Error(`${where}: summary target ${summaryHeight}px`);
         const shot = async (suffix: string) => {
-          const frame = `${host}-${lang}-${theme}-${width}-${state}${views.length > 1 ? `-attempt-${view.attempt}` : ""}${suffix}.png`;
+          const frame = `${host}-${lang}-${theme}-${width}x${height}-${state}${views.length > 1 ? `-attempt-${view.attempt}` : ""}${suffix}.png`;
           await page.screenshot({ path: path.join(out, frame) });
           return frame;
         };
@@ -1524,30 +1524,69 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
         const tail = await result.locator("pre").last().evaluate(element => element.textContent ?? "").catch(() => "");
         const last = view.kind === "failed" ? "pnpm: exited with code 7" : view.kind === "stopped" ? "setup timed out after 180 seconds" : view.kind === "long" ? "…" : view.kind === "passed" ? "Workspace ready" : "";
         if (!tail.trimEnd().endsWith(last)) throw new Error(`${where}: tail ends "${tail.slice(-40)}"`);
+        /* Every word is whole in the window. Output the setup's own scroller
+           holds out of view is not cut: no line straddles its edges, and it
+           reaches both the command and the last line. The pane around it
+           overflows nothing, so the conversation below stays in view. */
         const geometry = await result.evaluate(element => {
-          const clipped: string[] = [], covered: string[] = [];
+          const clipped: string[] = [], covered: string[] = [], scrolled: string[] = [];
+          const body = element.querySelector<HTMLElement>("[data-stage-setup-body]");
           const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
           while (walker.nextNode()) {
             const node = walker.currentNode;
             if (!node.textContent?.trim()) continue;
             const range = document.createRange(); range.selectNodeContents(node);
             for (const rect of range.getClientRects()) {
-              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight, own = false;
               for (let parent = node.parentElement; parent; parent = parent.parentElement) {
                 const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                const ownScroller = parent === body;
                 if (/hidden|auto|scroll|clip/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
-                if (/hidden|auto|scroll|clip/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                if (/hidden|auto|scroll|clip/.test(style.overflowY)) {
+                  if (ownScroller && (rect.bottom <= box.top + 1 || rect.top >= box.bottom - 1)) own = true;
+                  top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom);
+                }
               }
               if (rect.bottom < 0 || rect.top > innerHeight) continue;
+              if (own) { scrolled.push(node.textContent!.trim().slice(0, 40)); continue; }
               if (rect.left < left - 1 || rect.right > right + 1 || rect.top < top - 1 || rect.bottom > bottom + 1) clipped.push(node.textContent!);
               const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
               if (!hit || !element.contains(hit)) covered.push(node.textContent!);
             }
           }
           const wide = [...element.querySelectorAll("pre, code")].filter(child => child.scrollWidth > child.clientWidth + 1).length;
-          return { clipped, covered, wide, documentOverflow: document.documentElement.scrollWidth > innerWidth };
+          const pane = element.closest<HTMLElement>("section[data-stage]");
+          const conv = pane?.querySelector(".pane-conv")?.getBoundingClientRect();
+          const paneBox = pane?.getBoundingClientRect();
+          const whole = (target: Element | null | undefined, last = false) => {
+            if (!target) return false;
+            const range = document.createRange(); range.selectNodeContents(target);
+            const rects = [...range.getClientRects()].filter(rect => rect.width > 0), frame = body?.getBoundingClientRect();
+            return rects.length > 0 && (last ? rects.slice(-1) : rects).every(rect => rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
+              && (!frame || (rect.top >= frame.top - 0.5 && rect.bottom <= frame.bottom + 0.5)));
+          };
+          /* The output opens on its last line; scrolled to its start, the command line is whole. */
+          const lastLine = whole([...element.querySelectorAll("pre")].at(-1), true);
+          let commandReached: boolean | null = null;
+          if (body && body.scrollHeight > body.clientHeight + 1) {
+            const at = body.scrollTop;
+            body.scrollTop = -body.scrollHeight;
+            if (body.scrollTop === at) body.scrollTop = 0;
+            commandReached = whole(element.querySelector("[data-stage-setup-command]"));
+            body.scrollTop = at;
+          }
+          const dot = element.querySelector("[data-stage-setup-dot] > span")!.firstElementChild!.getBoundingClientRect();
+          return { clipped, covered, scrolled: scrolled.length, wide, documentOverflow: document.documentElement.scrollWidth > innerWidth,
+            scroller: body ? { height: body.clientHeight, content: body.scrollHeight } : null, lastLine, commandReached,
+            dotEdge: Math.round((dot.left - element.getBoundingClientRect().left) * 10) / 10,
+            pane: pane && paneBox && conv ? { overflow: pane.scrollHeight - pane.clientHeight, bottom: Math.round(paneBox.bottom),
+              conversation: { top: Math.round(conv.top), bottom: Math.round(conv.bottom) } } : null };
         });
-        if (geometry.clipped.length || geometry.covered.length || geometry.wide || geometry.documentOverflow) throw new Error(`${where}: ${JSON.stringify(geometry)}`);
+        const paneFails = geometry.pane && (geometry.pane.overflow > 1 || geometry.pane.conversation.bottom > Math.min(geometry.pane.bottom, height)
+          || geometry.pane.conversation.bottom - geometry.pane.conversation.top < 48);
+        if (geometry.clipped.length || geometry.covered.length || geometry.wide || geometry.documentOverflow || paneFails
+          || geometry.commandReached === false || Math.abs(geometry.dotEdge) > 1
+          || (["failed", "stopped", "long", "passed"].includes(view.kind) && !geometry.lastLine)) throw new Error(`${where}: ${JSON.stringify(geometry)}`);
         if (!opens) frames.push(await shot("-open"));
         /* On the phone the dot is its own 44 px target, every tap inside it (short
            of its control-radius corners) reaches the dot, and it takes no tap from
@@ -1593,9 +1632,18 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
             while (walker.nextNode()) {
               const node = walker.currentNode;
               if (!node.textContent?.trim() || bubble.contains(node)) continue;
+              /* Only the drawn part of a line counts: a scroller hides what it holds out of view. */
+              let clipLeft = -Infinity, clipTop = -Infinity, clipRight = Infinity, clipBottom = Infinity;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), frame = parent.getBoundingClientRect();
+                if (/hidden|auto|scroll|clip/.test(style.overflowX)) { clipLeft = Math.max(clipLeft, frame.left); clipRight = Math.min(clipRight, frame.right); }
+                if (/hidden|auto|scroll|clip/.test(style.overflowY)) { clipTop = Math.max(clipTop, frame.top); clipBottom = Math.min(clipBottom, frame.bottom); }
+              }
               const range = document.createRange(); range.selectNodeContents(node);
-              for (const rect of range.getClientRects())
-                if (rect.right > box.left + 1 && rect.left < box.right - 1 && rect.bottom > box.top + 1 && rect.top < box.bottom - 1) { covers.push(node.textContent!.trim().slice(0, 60)); break; }
+              for (const rect of range.getClientRects()) {
+                const left = Math.max(rect.left, clipLeft), right = Math.min(rect.right, clipRight), top = Math.max(rect.top, clipTop), bottom = Math.min(rect.bottom, clipBottom);
+                if (right > left && bottom > top && right > box.left + 1 && left < box.right - 1 && bottom > box.top + 1 && top < box.bottom - 1) { covers.push(node.textContent!.trim().slice(0, 60)); break; }
+              }
             }
             return { text: element.textContent, box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
               inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, covers };
@@ -1606,7 +1654,7 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
           await page.keyboard.press("Escape");
           if (phone) await page.mouse.click(2, 2);
         }
-        readings.push({ host, lang, theme, width, state, attempt: view.attempt, words, open: opens, summaryHeight, dotTarget, frames, geometry, popover, pageErrors });
+        readings.push({ host, lang, theme, width, height, state, attempt: view.attempt, words, open: opens, summaryHeight, dotTarget, frames, geometry, popover, pageErrors });
         if (pageErrors.length) throw new Error(`${where}: ${JSON.stringify(pageErrors)}`);
       }
     } finally { await context.close(); }

@@ -43,6 +43,7 @@ export function TooltipBubble({
   side = "top",
   align = "center",
   className,
+  place,
   children,
 }: {
   /** For the anchor's `aria-describedby`, so a screen reader reads the bubble. */
@@ -51,6 +52,9 @@ export function TooltipBubble({
   side?: "top" | "bottom";
   align?: "center" | "left" | "right";
   className: string;
+  /** Where a bubble of this size goes, in the window, for a host that knows
+      better than a fixed side; called on each measure. */
+  place?: (size: { width: number; height: number }) => { left: number; top: number };
   children: ReactNode;
 }) {
   const bubbleRef = useRef<HTMLSpanElement>(null);
@@ -61,15 +65,8 @@ export function TooltipBubble({
       const anchor = anchorRef.current;
       const bubble = bubbleRef.current;
       if (!anchor || !bubble) return;
-      setPosition(
-        tooltipPlacement(
-          anchor.getBoundingClientRect(),
-          { width: bubble.getBoundingClientRect().width, height: bubble.getBoundingClientRect().height },
-          { width: window.innerWidth, height: window.innerHeight },
-          side,
-          align,
-        ),
-      );
+      const size = { width: bubble.getBoundingClientRect().width, height: bubble.getBoundingClientRect().height };
+      setPosition(place ? place(size) : tooltipPlacement(anchor.getBoundingClientRect(), size, { width: window.innerWidth, height: window.innerHeight }, side, align));
     };
     measure();
     window.addEventListener("scroll", measure, true);
@@ -78,7 +75,7 @@ export function TooltipBubble({
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [anchorRef, side, align]);
+  }, [anchorRef, side, align, place]);
 
   if (typeof document === "undefined") return null;
   return createPortal(
