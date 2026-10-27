@@ -30,7 +30,7 @@ const stages = [
 ];
 const current = () => loadPipelines()[0]!;
 
-test.each(["recovers", "expires"])("App git 403 publication %s after waiting with its accepted content intact", async outcome => {
+test.each(["recovers", "expires", "restarts late"])("App git 403 publication %s after waiting with its accepted content intact", async outcome => {
   const f = await fixture();
   try {
     const start = Date.parse("2026-10-27T08:00:00.000Z");
@@ -57,6 +57,32 @@ test.each(["recovers", "expires"])("App git 403 publication %s after waiting wit
     `], process.cwd(), { ...process.env });
     expect(restarted.code, restarted.stderr).toBe(0);
     expect(JSON.parse(restarted.stdout)).toEqual({ since: new Date(start).toISOString(), retryAt: null });
+    if (outcome === "restarts late") {
+      const recovered = await realExec("bun", ["-e", `
+        const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+        const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+        const { realExec } = await import("./src/lib/workflows/provision.ts");
+        const ports = defaultPipelinePorts();
+        let pushes = 0;
+        ports.now = () => "2026-10-27T09:20:00.000Z";
+        ports.deferStageGit = false;
+        ports.scheduleTick = () => {};
+        ports.conversationAgentActive = async () => false;
+        ports.exec = async (command, args, cwd, env, options) => {
+          if (args.includes("push")) { pushes++; return { code: 1, stdout: "", stderr: "fatal: HTTP 403" }; }
+          return realExec(command, args, cwd, env, options);
+        };
+        await tickPipelines([], ports);
+        const pipeline = loadPipelines()[0];
+        console.log(JSON.stringify({ state: pipeline.state, detail: pipeline.stateDetail, pushes }));
+      `], process.cwd(), { ...process.env });
+      expect(recovered.code, recovered.stderr).toBe(0);
+      const result = JSON.parse(recovered.stdout);
+      expect(result.state).toBe("needs_decision");
+      expect(result.detail).toContain("the one-hour automatic retry window ended");
+      expect(result.pushes).toBe(0);
+      return;
+    }
     // Before its due time no new push is reserved, including after reload.
     const operationId = current().delivery!.operation!.id;
     clock += 59_999;
@@ -80,7 +106,7 @@ test.each(["recovers", "expires"])("App git 403 publication %s after waiting wit
       expect(result.state).toBe("needs_decision");
       expect(result.stateDetail).toContain("waiting for GitHub to accept the App push; the one-hour automatic retry window ended");
       expect(result.stateDetail).toContain("fatal: HTTP 403");
-      expect(result.publicationRecovery![accepted]!.history).toHaveLength(7);
+      expect(result.publicationRecovery![accepted]!.history).toHaveLength(6);
     }
   } finally { f.close(); }
 }, 30_000);

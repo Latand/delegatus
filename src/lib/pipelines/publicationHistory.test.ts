@@ -6,7 +6,7 @@ import { pipelineCompactRow } from "./listProjection";
 const SHA = "a".repeat(40);
 const DELAYS = [60_000, 300_000, 900_000];
 
-test("App git 403 uses a persisted one-hour window with bounded backoff and a final attempt", () => {
+test("App git 403 uses a persisted one-hour window with bounded backoff and a final deadline", () => {
   let { pipeline, attempt } = fixture();
   const start = Date.parse("2026-10-27T08:00:00.000Z");
   let clock = start;

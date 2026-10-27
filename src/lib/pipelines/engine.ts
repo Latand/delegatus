@@ -26,7 +26,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
-import { APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
@@ -4631,9 +4631,11 @@ async function retryRefusedPublication(
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
   if (!recoverable) return false;
   const recovery = pipeline.publicationRecovery![operation.sha]!;
+  const appDeadline = app403 ? unixMs(recovery.app403Since!) + APP_PUSH_RETRY_WINDOW_MS : null;
+  const appWindowEnded = appDeadline !== null && unixMs(ports.now()) >= appDeadline;
   const record = attempt.publicationRetry = { sha: operation.sha, operationId: operation.id,
     failures: Math.min(recovery.failures, PUBLICATION_RETRY_DELAYS_MS.length), retryAt: history.retryAt ?? history.at,
-    ...(history.retryAt === null ? { exhausted: true } : {}) };
+    ...(history.retryAt === null || appWindowEnded ? { exhausted: true } : {}) };
   if (record.exhausted) return false;
   const wait = unixMs(record.retryAt) - unixMs(ports.now());
   if (wait <= 0) {
@@ -4645,7 +4647,7 @@ async function retryRefusedPublication(
     ports.scheduleTick?.(0);
     return true;
   }
-  const schedule = app403 ? `next automatic retry at ${record.retryAt}` : deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
+  const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
   await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
