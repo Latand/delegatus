@@ -294,9 +294,10 @@ test("an admission winning between the preliminary read and the fence transactio
   const link = resolveSeatMessageMachine(install, project.project)!;
   const key = "admission-before-negative-cas";
   const input = { project: project.project, text: "Admission wins the race.", caller, claimedAt: "2026-01-01T00:00:00.000Z" };
-  const patch = SqliteStateCollection.prototype.boundedPatch;
+  const prototype = SqliteStateCollection.prototype as unknown as { boundedPatch: (...parameters: unknown[]) => unknown };
+  const patch = prototype.boundedPatch;
   let intervene = true, operationId = "";
-  const race = spyOn(SqliteStateCollection.prototype, "boundedPatch").mockImplementation(function (this: InstanceType<typeof SqliteStateCollection>, ...parameters) {
+  const race = spyOn(prototype, "boundedPatch").mockImplementation(function (this: object, ...parameters) {
     if (intervene) {
       intervene = false;
       operationId = queueSeatMessage(link, project.project, input.text, caller, key).operationId;
