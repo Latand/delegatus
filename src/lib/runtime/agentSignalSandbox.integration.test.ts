@@ -9,12 +9,36 @@ import { spawnSignalSandbox, spawnHeadlessSignalSandbox, spawnManagedEngine, sig
   SIGNAL_ACK_MS, SIGNAL_READINESS_MS } from "./agentSignalSandbox";
 import { CopilotAcpHost } from "./copilotAcpHost";
 import { FileRuntimeEventStore } from "./eventStore";
-import { AgentMemoryCell, GIB } from "./agentMemory";
+import { AgentMemoryCell, GIB, planAgentMemory } from "./agentMemory";
 import { killOwnedRun, type LiveRun } from "@/lib/agent/headless";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { stopTerminalStructuredOrphan } from "./registry";
 
 const kernelTest = process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST === "1" ? test : test.skip;
+
+kernelTest("the namespace supervisors retain inherited OOM priority while the native engine is scored", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-kernel-score-"));
+  const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+  const plan = planAgentMemory({ engine: "codex", sessionKey: "kernel-score", liveAgents: 1 },
+    { DELEGATUS_AGENT_MEMORY: "scope" }, { totalBytes: 8 * GIB, probe: () => 255, runner: () => "" })!;
+  // A private transient scope, with no mutation of the shared agent slice.
+  plan.slice = "app.slice"; plan.viewerUnit = null;
+  const cell = new AgentMemoryCell(plan);
+  let child: ChildProcess | undefined;
+  try {
+    child = await spawnManagedEngine("/bin/sleep", ["30"], { env: fixtureEnv(root), detached: true }, cell);
+    const domain = signalDomain(child)!;
+    expect(domain).toBeDefined();
+    const score = (pid: number) => Number(fs.readFileSync(`/proc/${pid}/oom_score_adj`, "utf8"));
+    for (const supervisor of [domain.monitor, domain.bubblewrap, domain.init]) expect(score(supervisor.pid)).toBe(inherited);
+    // The receipt precedes final exec; wait for the workload's score write.
+    const deadline = Date.now() + 5_000;
+    while (score(domain.native.pid) !== plan.score && Date.now() < deadline) await Bun.sleep(10);
+    expect(score(domain.native.pid)).toBe(plan.score);
+    expect(plan.score).toBeGreaterThanOrEqual(500);
+    expect(inherited).toBeLessThan(plan.score);
+  } finally { if (child) await close(child); cell.close(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
 
 kernelTest("a symbolic temporary root retains the physical namespace mounts and owned cleanup", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-linked-root-"));
