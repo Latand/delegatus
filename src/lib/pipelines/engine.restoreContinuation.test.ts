@@ -97,6 +97,7 @@ test.each(["deliver", "operator input", "operator stop", "lost ACK"] as const)
   type RuntimeHostClient = import("@/lib/runtime/client").RuntimeHostClient;
   const journal = new RuntimeJournal(path.join(path.dirname(r.f.transcriptPath), "delivery.sqlite"), { structuredHosts: true });
   let commands = 0, deliveries = 0, changed = false;
+  const commandInputs: Parameters<RuntimeHostClient["command"]>[0][] = [];
   const publish = () => journal.append({ scope: { type: "session", id: r.f.attempt.conversationId! }, kind: "session-status", payload: {
     conversationId: r.f.attempt.conversationId, sessionKey: r.f.key, hostKind: "claude-broker", host: "hosted", turn: "idle",
     activeTurnId: null, attentionIds: [], provenance: "structured", artifactPath: r.f.transcriptPath,
@@ -119,6 +120,7 @@ test.each(["deliver", "operator input", "operator stop", "lost ACK"] as const)
     operationStatus: async (id: string) => journal.operationResult(id),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       commands++;
+      commandInputs.push(structuredClone(command));
       let result = journal.executeOperation(command);
       if (result.receipt.status === "queued") {
         result = journal.transitionOperation(result.operationId, "delivering");
@@ -146,7 +148,8 @@ test.each(["deliver", "operator input", "operator stop", "lost ACK"] as const)
     if (scenario === "lost ACK") await tickPipelines([], r.ports);
     const allowed = scenario === "deliver" || scenario === "lost ACK";
     expect(changed).toBe(true);
-    expect({ commands, deliveries }).toEqual({ commands: allowed ? 1 : 0, deliveries: allowed ? 1 : 0 });
+    expect({ commands, deliveries }).toEqual({ commands: scenario === "lost ACK" ? 2 : allowed ? 1 : 0, deliveries: allowed ? 1 : 0 });
+    if (scenario === "lost ACK") expect(commandInputs[1]).toEqual(commandInputs[0]);
     expect(r.sends).toHaveLength(allowed ? 1 : 0);
     if (allowed) {
       const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
@@ -392,7 +395,14 @@ test.each(["prompt", "stop", "pending", "active", "native tool work", "account",
 ("restore delivery rechecks %s at the final admission callback", async change => {
   const r = await restoredStage();
   try {
+    let changed = false;
+    r.ports.allowedAccountIds = () => changed && change === "account" ? [] : null;
+    r.ports.conversationRestartCutHeld = () => changed && change === "restart hold";
+    r.ports.conversationInterruption = () => changed && change === "deploy hold" ? {
+      state: "owed", recordedAt: r.ports.now(), resolvedAt: null,
+    } : null;
     r.ports.resumeSeveredTurn = async input => {
+      changed = true;
       if (change === "prompt") {
         r.records.push({ type: "user", timestamp: new Date(Date.parse(r.cutAt) + 500).toISOString(),
           origin: { kind: "human" }, message: { role: "user", content: "Wait for my review" } });
@@ -400,14 +410,6 @@ test.each(["prompt", "stop", "pending", "active", "native tool work", "account",
       } else if (change === "stop") r.setStopped();
       else if (change === "pending") r.setOutstanding(true);
       else if (change === "active") r.setActive();
-      else if (change === "account") {
-        r.ports.accountForTranscript = () => ({ accountId: "account-a", label: "Account A" });
-        r.ports.allowedAccountIds = () => [];
-      }
-      else if (change === "restart hold") r.ports.conversationRestartCutHeld = () => true;
-      else if (change === "deploy hold") r.ports.conversationInterruption = () => ({
-        state: "owed", recordedAt: r.ports.now(), resolvedAt: null,
-      });
       else if (change === "native tool work") {
         r.advance(1000);
         r.records.push({ type: "assistant", timestamp: r.ports.now(), message: { role: "assistant", model: "claude-test",
@@ -459,22 +461,23 @@ test("a continuation reserved for an earlier conversation cannot be redirected b
 test.each(["transcript", "runtime", "operator lookup"] as const)("new input during the %s await withdraws restore admission", async step => {
   const r = await restoredStage();
   try {
+    let injecting = false, changed = false;
+    const change = () => {
+      if (!injecting || changed) return;
+      changed = true;
+      r.records.push({ type: "user", timestamp: r.ports.now(), origin: { kind: "human" },
+        message: { role: "user", content: "Hold for review" } });
+      r.write();
+    };
+    if (step === "transcript") r.ports.durableTurnEvidence = async (...args) => {
+      const evidence = await durableStageTurnEvidence(...args);
+      change();
+      return evidence;
+    };
+    if (step === "runtime") r.ports.conversationAgentActive = async () => { change(); return null; };
+    if (step === "operator lookup") r.ports.conversationOperatorStopped = async () => { change(); return false; };
     r.ports.resumeSeveredTurn = async input => {
-      let changed = false;
-      const change = () => {
-        if (changed) return;
-        changed = true;
-        r.records.push({ type: "user", timestamp: r.ports.now(), origin: { kind: "human" },
-          message: { role: "user", content: "Hold for review" } });
-        r.write();
-      };
-      if (step === "transcript") r.ports.durableTurnEvidence = async (...args) => {
-        const evidence = await durableStageTurnEvidence(...args);
-        change();
-        return evidence;
-      };
-      if (step === "runtime") r.ports.conversationAgentActive = async () => { change(); return null; };
-      if (step === "operator lookup") r.ports.conversationOperatorStopped = async () => { change(); return false; };
+      injecting = true;
       const allowed = await input.continuationAllowed!();
       if (allowed) r.sends.push(input);
       expect(changed).toBe(true);
@@ -506,8 +509,10 @@ test("a transcript append during delivery reconciliation cannot expire a newly w
 test("operator stop arriving during the final runtime lookup withdraws dispatch", async () => {
   const r = await restoredStage();
   try {
+    let injecting = false;
+    r.ports.conversationAgentActive = async () => { if (injecting) r.setStopped(); return null; };
     r.ports.resumeSeveredTurn = async input => {
-      r.ports.conversationAgentActive = async () => { r.setStopped(); return null; };
+      injecting = true;
       const allowed = await input.continuationAllowed!();
       if (allowed) r.sends.push(input);
       return allowed;
