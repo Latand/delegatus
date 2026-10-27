@@ -12,6 +12,62 @@ function fixture(spec = "Preserve every acceptance criterion.") {
 }
 afterAll(shutdownTaskPageWorker);
 
+test("skill references use the accepted checkout in both composers and the CLI", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const { composeStageText } = await import("./stageInput");
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const { loadPipelines, savePipelines } = await import("./store");
+  const priorTasks = loadTasks(), priorPipelines = loadPipelines();
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "skill-checkouts-"));
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+  };
+  try {
+    const parent = path.join(root, "parent");
+    const pipeline = buildPipeline({ id: "cloud-skills", task: "Review the change", spec: "Preserve the API", project: "fixture", repoDir: parent, stages: [stage], srcPath: null, srcConversationId: null, now: "now", taskIds: ["skill-task"] });
+    const accepted = pipeline.worktreeDir;
+    const parentSkill = ".claude/skills/parent/SKILL.md", stageSkill = ".claude/skills/stage/SKILL.md";
+    for (const [checkout, skill] of [[parent, parentSkill], [accepted, stageSkill]] as const) {
+      fs.mkdirSync(path.dirname(path.join(checkout, skill)), { recursive: true });
+      git(checkout, "init", "--initial-branch=main");
+      git(checkout, "config", "user.name", "Fixture");
+      git(checkout, "config", "user.email", "fixture");
+      fs.writeFileSync(path.join(checkout, skill), "Fixture skill.\n");
+      git(checkout, "add", skill);
+      git(checkout, "-c", "commit.gpgSign=false", "commit", "-m", "Fixture skill");
+    }
+    saveTasks([{ id: "skill-task", project: pipeline.project, text: pipeline.task, status: "inbox", placement: "unplaced", assignments: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }]);
+    savePipelines([pipeline]);
+    for (const skill of [stageSkill, `./${stageSkill}`, parentSkill]) {
+      const context = { skillPaths: [skill] };
+      const cli = spawnSync(process.execPath, ["scripts/render-cloud-input.ts", "--task", "skill-task", "--role", "reviewer", "--skill", skill], { env: process.env, encoding: "utf8" });
+      if (skill !== parentSkill) {
+        const local = await composeStageText(pipeline, stage, stage.effectiveRole, "", context);
+        expect((await composeCloudStageInput(pipeline, stage, stage.effectiveRole, "", context)).join("")).toBe(local);
+        expect(await composeStageInput(pipeline, stage, stage.effectiveRole, "", accepted, undefined, 0, context)).toBe(local);
+        expect({ status: cli.status, stderr: cli.stderr }).toMatchObject({ status: 0 });
+        expect(JSON.parse(cli.stdout).turns.join("")).toBe(local);
+      } else {
+        await expect(composeStageText(pipeline, stage, stage.effectiveRole, "", context)).rejects.toThrow("Referenced skill is not tracked");
+        await expect(composeCloudStageInput(pipeline, stage, stage.effectiveRole, "", context)).rejects.toThrow("Referenced skill is not tracked");
+        expect(cli.status).not.toBe(0);
+      }
+    }
+    // The accepted commit, rather than an unrelated staged index edit, owns delivery.
+    git(accepted, "rm", "--cached", stageSkill);
+    await composeCloudStageInput(pipeline, stage, stage.effectiveRole, "", { skillPaths: [stageSkill] });
+    savePipelines([]);
+    const preview = spawnSync(process.execPath, ["scripts/render-cloud-input.ts", "--task", "skill-task", "--role", "reviewer", "--repo", parent, "--skill", parentSkill], { env: process.env, encoding: "utf8" });
+    expect({ status: preview.status, stderr: preview.stderr }).toMatchObject({ status: 0 });
+  } finally {
+    saveTasks(priorTasks); savePipelines(priorPipelines);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Cloud receives the local composed stage, including scaffold, spec and predecessor", async () => {
   const pipeline = fixture();
   const local = await composeStageInput(pipeline, stage, stage.effectiveRole, "Prior stage findings", ".", async () => ({ code: 0, stdout: "", stderr: "" }));
@@ -166,9 +222,11 @@ test("oversized local artifact and Cloud follow-ups recover the same complete st
     const local = await composeStageInput(pipeline, stage, stage.effectiveRole, "Prior output", root);
     // This prompt is too large even when part references replace its spec.
     stage.prompt = "Review context 界🙂\n".repeat(4000);
-    const complete = await composeStageInput(pipeline, stage, stage.effectiveRole, "Prior output", root);
+    const context = { taskDetails: "Accepted detail 界🙂. ".repeat(70_000) };
+    const complete = await composeStageInput(pipeline, stage, stage.effectiveRole, "Prior output", root, undefined, 0, context);
     const file = complete.match(/Full stage prompt file: (.+)\n/)![1]!;
-    expect((await composeCloudStageInput(pipeline, stage, stage.effectiveRole, "Prior output")).join("")).toBe(fs.readFileSync(file, "utf8"));
+    expect(Buffer.byteLength(fs.readFileSync(file))).toBeGreaterThan(1024 * 1024);
+    expect((await composeCloudStageInput(pipeline, stage, stage.effectiveRole, "Prior output", context)).join("")).toBe(fs.readFileSync(file, "utf8"));
     expect(Buffer.byteLength(local)).toBeLessThanOrEqual(32000);
   } finally {
     stage.prompt = "Review {{task}}";

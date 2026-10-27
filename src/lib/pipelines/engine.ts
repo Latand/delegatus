@@ -8215,7 +8215,8 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
     if (!same(reader.read())) return;
     const remaining = unixMs(original.deadlineAt) - unixMs(ports.now());
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), Math.max(1, Math.min(30_000, remaining)));
+    const submitting = !original.taskId;
+    const timer = setTimeout(() => abort.abort(), Math.max(1, submitting ? remaining : Math.min(30_000, remaining)));
     const execute: ExecPort = async (command, args, cwd, env, options) => {
       const current = reader.read();
       if (!sameCloudIntent(current, stageId, n, expected, authority) || abort.signal.aborted) throw new Error("Codex Cloud operation superseded or timed out");

@@ -5,7 +5,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 if (!process.env.LLV_STATE_DIR) throw Error("Set LLV_STATE_DIR to the board state directory before rendering.");
 const args = process.argv.slice(2);
@@ -40,13 +39,13 @@ try {
     stage = { id: "render", kind: "run", prompt: "{{task}}", next: null, effectiveRole: role };
     pipeline = buildPipeline({ id: "cloud-preview", task: task.text, taskIds: [task.id], project: task.project,
       repoDir: path.resolve(option("--repo") ?? "."), stages: [stage], srcPath: null, srcConversationId: null, now: new Date().toISOString() });
+    // An unbound preview has no accepted stage checkout yet.
+    pipeline.worktreeDir = pipeline.repoDir;
   }
   if (!stage) throw Error("The selected pipeline has no stage with this role.");
   const skillPaths = args.flatMap((value, index) => value === "--skill" ? [args[index + 1] ?? ""] : []);
   for (const skill of skillPaths) {
     if (!skill || /^(?:[/\\]|[A-Za-z]:)/.test(skill) || skill.split(/[\\/]/).includes("..")) throw Error("Skill paths must be repository relative.");
-    const tracked = spawnSync("git", ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", skill], { cwd: pipeline.repoDir, encoding: "utf8" });
-    if (tracked.status !== 0) throw Error("Referenced skill is not tracked.");
   }
   const run = pipeline.runs.find(run => run.stageId === stage.id);
   const previous = run?.attempts.at(-1)?.input ?? (pipeline.cursor?.stageId === stage.id ? pipeline.cursor.input : "") ?? "";

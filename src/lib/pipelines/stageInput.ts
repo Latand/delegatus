@@ -31,11 +31,14 @@ export async function composeStageText(
 async function composeResolvedStageText(
   pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole,
   previousOutput: string, context: StagePromptContext,
+  checkout = !pipeline.lastPassedCommit && !fs.existsSync(pipeline.worktreeDir) ? pipeline.repoDir : pipeline.worktreeDir,
 ): Promise<string> {
   if (!isStagePromptContext(context)) throw new Error("Invalid stage input context");
   if (context.skillPaths?.length) {
-    const tracked = await realExec("git", ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", ...context.skillPaths], pipeline.repoDir, undefined, { timeoutMs: 10_000 });
-    if (tracked.code !== 0) throw new Error("Referenced skill is not tracked");
+    const skills = context.skillPaths.map(skill => path.posix.normalize(skill));
+    const tracked = await realExec("git", ["--literal-pathspecs", "ls-tree", "-z", "HEAD", "--", ...skills], checkout, undefined, { timeoutMs: 10_000 });
+    const files = new Set(tracked.stdout.split("\0").flatMap(entry => /^100(?:644|755) blob [a-f0-9]+\t/.test(entry) ? [entry.slice(entry.indexOf("\t") + 1)] : []));
+    if (tracked.code !== 0 || skills.some(skill => !files.has(skill))) throw new Error("Referenced skill is not tracked");
   }
   return withCurrentRoleMemory(() => withoutStoredLessonsAsync(renderStagePrompt(
     pipeline, stage, role, previousOutput, effectiveWorkerLimit(pipeline.project).value,
@@ -82,7 +85,7 @@ async function composeCurrentStageInput(
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
   const workerLimit = effectiveWorkerLimit(pipeline.project).value;
   const testGuidance = resolveStageTestGuidance();
-  const inline = await composeResolvedStageText(pipeline, stage, role, previousOutput, context);
+  const inline = await composeResolvedStageText(pipeline, stage, role, previousOutput, context, worktreeDir || pipeline.repoDir);
   if (Buffer.byteLength(inline, "utf8") <= limit) {
     await protectExistingControllerArtifacts(worktreeDir, exec);
     assertPrivacy();

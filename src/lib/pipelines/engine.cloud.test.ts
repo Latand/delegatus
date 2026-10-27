@@ -14,6 +14,7 @@ import { composeStageInput, composeStageText } from "./stageInput";
 import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
 import { spawn, spawnSync } from "node:child_process";
+import { spyOn } from "bun:test";
 import type { PipelineStageInput, PatchPipelineRequest } from "./types";
 
 async function create(...args: Parameters<typeof fixtureCreate>) {
@@ -1224,7 +1225,7 @@ test("creation context survives storage and invalid context is refused", async (
 });
 
 
-test("the Cloud runtime delivers the local builder input, memory and ordered parts through the hosted client", async () => {
+test.each([{ size: 4_000 }, { size: 70_000 }])("the Cloud runtime delivers complete local builder input past the operation window: $size", async ({ size }) => {
   const { h } = await fixture({ stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
   const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
   const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
@@ -1237,21 +1238,32 @@ test("the Cloud runtime delivers the local builder input, memory and ordered par
       source: { project: lane().project, pipelineId: lane().id, stageId: "review", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
       createdAt: "2026-10-14T00:00:00Z", changedAt: "2026-10-14T00:00:00Z" });
   });
+  const timers: { ms: number; fire: () => void }[] = [];
+  const realTimer = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+    if (ms >= 30_000) timers.push({ ms, fire: callback });
+    return realTimer(callback, ms);
+  }) as typeof setTimeout);
   try {
     const record = lane();
     record.spec = "Acceptance 界🙂\n".repeat(4000);
-    record.inputContext = { taskDetails: rule, handoffDigest: "Keep the accepted API stable." };
+    record.inputContext = { taskDetails: rule + "\n" + "Accepted detail 界🙂. ".repeat(size), handoffDigest: "Keep the accepted API stable." };
     savePipelines([record]);
     setCodexCloudEnvironmentId(record.project, "asenvcfg_fixture");
-    const threadId = "00000000-0000-0000-0000-000000000073";
+    const threadId = `00000000-0000-0000-0000-${String(size).padStart(12, "0")}`;
     const environment = { environmentId: "ccarenv_fixture", environmentConfigId: "asenvcfg_fixture", cwd: "/workspace/project" };
     const frames: { method?: string; params?: { input?: { text: string }[] } }[] = [];
     let turnNumber = 0;
+    let crossed = false;
     class Socket extends EventEmitter {
       readyState = 1;
       send(value: string, done?: (error?: Error) => void) {
         const frame = JSON.parse(value); frames.push(frame); done?.();
         if (frame.id === undefined) return;
+        if (frame.method === "thread/turns/list" && !crossed) {
+          crossed = true;
+          for (const timer of timers) if (timer.ms <= 30_000) timer.fire();
+        }
         const turn = { id: `input_${turnNumber}`, status: "completed", model: stage.model };
         const result = frame.method === "thread/start" || frame.method === "thread/read"
           ? { model: stage.model, thread: { id: threadId, ephemeral: false, environments: [environment] } }
@@ -1271,6 +1283,8 @@ test("the Cloud runtime delivers the local builder input, memory and ordered par
     expect(sent.length).toBeGreaterThan(1);
     expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
     const body = sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("");
+    expect(crossed).toBe(true);
+    if (size === 70_000) expect(Buffer.byteLength(body)).toBeGreaterThan(1024 * 1024);
     const local = await composeStageText(lane(), lane().stages[0]!, attempt().effectiveRole, attempt().input ?? "");
     expect(local).not.toContain(rule);
     const memory = await learnedRulesForLaunchProfile({ learnedRules: { project: record.project, roleId: "builder" } });
@@ -1280,6 +1294,7 @@ test("the Cloud runtime delivers the local builder input, memory and ordered par
     expect(receipt).toBeDefined();
     expect(receipt!.delivery.attempt).toEqual({ pipelineId: record.id, stageId: "review", attempt: 1 });
   } finally {
+    timer.mockRestore();
     collection.boundedPatch(2, tx => {
       if (scope) tx.put(scope); else tx.delete("s:machine");
       if (existing) tx.put(existing); else tx.delete("r:r_cloud_runtime_fixture");
