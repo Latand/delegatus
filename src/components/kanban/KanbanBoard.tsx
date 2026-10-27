@@ -1603,7 +1603,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return [{ ...base, why: pending, disabled: true, onSelect: () => {} }];
     }
     if (attempt?.phase === "unknown") {
-      return [{ ...base, why: pending, warn: t("kanban.fromConversation.unknownRow"), onSelect: () => { void conversationDrafts.retry(task.id); } }];
+      /* The resend opens the card the same way the first send did, so its
+         preparing notice and any refusal are drawn where the operator looks. */
+      return [{ ...base, why: pending, warn: t("kanban.fromConversation.unknownRow"), onSelect: () => {
+        setCardFolds((current) => withCardOpen(current, card.id, true));
+        void conversationDrafts.retry(task.id);
+      } }];
     }
     if (!state || state.kind === "pending") return [{ ...base, why: t("kanban.fromConversation.checking", { title: fileTitle }), disabled: true, onSelect: () => {} }];
     if (state.kind === "failed") {

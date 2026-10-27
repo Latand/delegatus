@@ -40281,9 +40281,13 @@ describe("start a pipeline from a conversation", () => {
       const lostKey = posted.at(-1)!.clientRequestId;
       read = { branch: `${BRANCH}-v2`, revision: "rev-2", hold: false };
       const cardMenu = '.card[data-id="task:t-csv-export"] [data-menu]';
+      const desktopCard = page.locator('.card[data-id="task:t-csv-export"]').first();
       let again: Locator;
       if (phone(combo)) again = await openMenu();
       else {
+        /* Folded, the card hides its notices: asking again opens it, so the preparing notice and the refusal show. */
+        await desktopCard.locator(".tools .fold").click();
+        expect(await desktopCard.getAttribute("data-collapsed")).toBe("1");
         /* By keyboard: ⋯ with Enter, the row with Enter. */
         await page.locator(cardMenu).first().focus();
         await page.keyboard.press("Enter");
@@ -40303,6 +40307,7 @@ describe("start a pipeline from a conversation", () => {
       }
       await page.locator('[data-conversation-draft="refused"][data-conversation-draft-code="SOURCE_CHANGED"]').waitFor();
       expect(posted.slice(-2).map((entry) => entry.clientRequestId)).toEqual([lostKey, lostKey]);
+      if (!phone(combo)) expect(await desktopCard.getAttribute("data-collapsed")).toBe("0");
       /* Keyboard focus is back on the card's ⋯, beside the notice. */
       const focus = () => page.evaluate(() => {
         const active = document.activeElement as HTMLElement | null;

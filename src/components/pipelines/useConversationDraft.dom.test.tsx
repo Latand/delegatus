@@ -323,6 +323,28 @@ test("a create with no answer: the row names the request's own source and asks f
   expect(card(host).querySelector('[data-conversation-draft="creating"]')).toBeTruthy();
 });
 
+test("on a folded card, the no-answer row opens the card and shows the resend being prepared and then its refusal", async () => {
+  route.preview = { status: 200, body: source() };
+  const { host } = mount();
+  await openMenu(host);
+  click(row(host));
+  await tick();
+  route.release.shift()!(json(502, {}));
+  await tick(20);
+  click(card(host).querySelector(".tools .fold"));
+  expect(card(host).getAttribute("data-collapsed")).toBe("1");
+  await openMenu(host);
+  click(row(host));
+  await tick();
+  expect(route.posts.map((post) => post.clientRequestId)).toEqual(["key-1", "key-1"]);
+  expect(card(host).getAttribute("data-collapsed")).toBe("0");
+  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry…");
+  route.release.shift()!(json(409, { error: "card no longer holds source", code: "SOURCE_NOT_ON_TASK" }));
+  await tick(20);
+  expect(card(host).getAttribute("data-collapsed")).toBe("0");
+  expect(card(host).querySelector('[data-conversation-draft="refused"] .msg-text')?.textContent).toBe("Pipeline not created. This card no longer holds the conversation.");
+});
+
 test("a card that already holds this conversation's draft opens it instead of making another", async () => {
   route.preview = { status: 200, body: source() };
   const { host } = mount({ pipelines: [draft()] });
