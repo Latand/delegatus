@@ -297,3 +297,20 @@ test("startup does not attempt to insert receipts that already exist", () => {
     reopened.close();
   }
 });
+
+test("warm startup skips the completed receipt migration and preserves its index", () => {
+  const { filename } = legacyFixture();
+  new RuntimeJournal(filename).close();
+
+  const exec = spyOn(Database.prototype, "exec");
+  const query = spyOn(Database.prototype, "query");
+  try {
+    new RuntimeJournal(filename).close();
+
+    expect(exec.mock.calls.some(([sql]) => /DROP\s+INDEX[^;]*events_producer_key/i.test(String(sql)))).toBe(false);
+    expect(query.mock.calls.some(([sql]) => /FROM\s+events\s+INDEXED\s+BY\s+events_producer_key/i.test(String(sql)))).toBe(false);
+  } finally {
+    query.mockRestore();
+    exec.mockRestore();
+  }
+});

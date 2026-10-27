@@ -4046,7 +4046,7 @@ const workerAnswer = (project: string | null) => ({
   project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
-const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/memory/source", "/api/asks-you/key", "/api/team"];
+const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/memory/source", "/api/asks-you/key", "/api/team", "/api/stop-all"];
 /* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
    projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
    Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
