@@ -47,6 +47,8 @@ test.each((["send", "native"] as const).flatMap(mode => (["accepted", "before di
   const binding = { threadId: f.key.sessionId, accountId: "account-a" };
   const input = [{ type: "text" as const, text: "Continue retained work" }];
   if (mode === "native") {
+    const health = f.host.health.bind(f.host);
+    f.host.health = async () => ({ ...await health(), activeFlags: ["native-queue"] });
     Object.assign(f.host, { nativeQueue: {
       queue: new NativeCodexQueue({ rpc: async (method, params) => {
         if (method === "thread/queue/list") return { data: [], nextCursor: null };
@@ -75,6 +77,7 @@ test.each((["send", "native"] as const).flatMap(mode => (["accepted", "before di
     if (phase === "before dispatch") await reject();
     await kickStructuredDeliveryQueue();
     expect(mode === "send" ? f.host.ledger.writes.length : nativeCalls).toBe(phase === "accepted" ? 1 : 0);
+    if (mode === "native" && phase === "accepted") expect(f.journal.operationResult("proactive-queued")?.receipt.status).toBe("applied");
     if (phase !== "accepted") expect(f.journal.operationResult("proactive-queued")?.receipt)
       .toMatchObject({ status: "failed", reason: expect.stringContaining("rejected by the operator") });
   } finally { await f.cleanup(); }
