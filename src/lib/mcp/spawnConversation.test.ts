@@ -8,7 +8,7 @@ import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRed
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { loadTasks, loadTasksFile, mutateTasksFile } from "@/lib/tasks/store";
-import { productionDomainDependencies, viewerMcpBindings } from "./bindings";
+import { productionDomainDependencies, viewerMcpBindings, type CallerAttribution, type ViewerMcpDomainDependencies } from "./bindings";
 
 const now = "2026-10-26T22:30:00.000Z";
 const retryAt = "2026-10-26T22:31:00.000Z";
@@ -27,29 +27,44 @@ afterEach(() => {
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
-function fixture(mode: "off" | "sqlite") {
+function fixture(mode: "off" | "sqlite", options: { alias?: boolean; parent?: boolean } = {}) {
   setSystemTime(new Date(now));
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-conversation-"));
   directories.push(directory);
   const priorTasks = loadTasksFile();
   restoreTasks = () => mutateTasksFile(() => ({ state: priorTasks, result: undefined }));
   const filename = path.join(directory, "registry.json");
+  const aliasId = "conversation_accepted_alias";
+  if (options.alias) {
+    const seed = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "off" });
+    const document = seed.readOnlySnapshot();
+    seed.close();
+    fs.writeFileSync(filename, JSON.stringify({ ...document,
+      conversationAliases: { ...document.conversationAliases, [aliasId]: "conversation_accepted_spawn" },
+    }));
+  }
   const open = () => {
     registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: mode });
     setAgentRegistryForTests(registry);
     return registry;
   };
   open();
+  const parentConversationId = options.parent === false ? null : "conversation_owner";
   const begun = registry!.beginSpawnRequest({
     engine: "codex", cwd: directory, transport: "structured", accountId: "account-a", accountPin: true,
     conversationId: "conversation_accepted_spawn", clientAttemptId: "accepted-spawn",
-    launchProfile: { cwd: directory, title: "Read accepted launch", project: "fixture" },
+    parentConversationId,
+    launchProfile: { cwd: directory, title: "Read accepted launch", project: "fixture", parentConversationId },
   });
   if (begun.kind !== "created") throw new Error("fixture launch was not created");
   const receipt = begun.receipt;
   const transcriptPath = path.join(process.env.LLV_CODEX_HOME!, "sessions", path.basename(directory), "accepted.jsonl");
-  const bindings = viewerMcpBindings(undefined, undefined, {
+  let caller: CallerAttribution = { kind: "agent", conversationId: "conversation_owner", role: "builder" };
+  let project: string | null = "fixture";
+  const dependencies: ViewerMcpDomainDependencies = {
     ...productionDomainDependencies,
+    callerAttribution: () => caller,
+    callerProject: () => project,
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
     listFiles: async () => { throw new Error("unexpected corpus scan"); },
     livenessSources: () => ({
@@ -58,13 +73,17 @@ function fixture(mode: "off" | "sqlite") {
       selectInventory: async () => { throw new Error("unexpected inventory scan"); },
     }),
     refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
-  });
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, dependencies);
   const settle = (launchId = receipt.launchId) => registry!.settleSpawn(launchId, {
     key: { engine: "codex", sessionId: "accepted-native-session" }, artifactPath: transcriptPath,
     cwd: directory, accountId: "account-a", status: "unhosted", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
-  return { directory, receipt, bindings, transcriptPath, settle, restart: () => { registry!.close(); open(); } };
+  return { directory, receipt, bindings, transcriptPath, settle, aliasId,
+    useRegistryProject: () => { delete dependencies.callerProject; },
+    as: (next: CallerAttribution, nextProject: string | null) => { caller = next; project = nextProject; },
+    restart: () => { registry!.close(); open(); } };
 }
 
 for (const mode of ["off", "sqlite"] as const) {
@@ -102,6 +121,95 @@ for (const mode of ["off", "sqlite"] as const) {
     expect(registry!.readOnlySnapshot()).toEqual(before);
   });
 
+  test.each(["absent", "recorded"] as const)(`receipt reads enforce caller and project ownership with artifact=%s (${mode})`, async artifact => {
+    const f = fixture(mode, { alias: true });
+    if (artifact === "recorded") f.settle();
+    else expect(registry!.failSpawn(f.receipt.launchId, failure)).toBe(true);
+    const expected = artifact === "recorded" ? { state: "launched", reason: null } : { state: "failed", reason: failure };
+    f.restart();
+    for (const [kind, conversationId, project] of [
+      ["agent", "conversation_other", "fixture"],
+      ["agent", "conversation_other", "other-project"],
+      ["agent", "conversation_owner", "other-project"],
+      ["agent", "conversation_owner", null],
+      ["unidentified", null, "fixture"],
+    ] as const) {
+      f.as({ kind, conversationId, role: null }, project);
+      for (const target of [f.receipt.conversationId, f.aliasId]) {
+        await expect(f.bindings.get_conversation({ conversationId: target })).rejects.toThrow("conversation not found");
+        await expect(f.bindings.get_conversation({ conversationId: target, tailLines: 10 })).rejects.toThrow();
+        expect(await f.bindings.agent_activity({ conversationId: target })).toMatchObject({ count: 0, conversations: [] });
+      }
+    }
+    f.as({ kind: "agent", conversationId: "conversation_owner", role: "builder" }, "fixture");
+    for (const target of [f.receipt.conversationId, f.aliasId]) {
+      expect(await f.bindings.get_conversation({ conversationId: target })).toMatchObject(expected);
+      expect(await f.bindings.get_conversation({ conversationId: target, tailLines: 10 })).toMatchObject(expected);
+      expect(await f.bindings.agent_activity({ conversationId: target })).toMatchObject({ count: 1, conversations: [expected] });
+    }
+    expect(await f.bindings.agent_activity({ conversationId: f.receipt.conversationId, project: "other-project" })).toMatchObject({ count: 0, conversations: [] });
+    f.as({ kind: "gateway", conversationId: "conversation_owner", role: null }, "other-project");
+    expect(await f.bindings.get_conversation({ conversationId: f.receipt.conversationId })).toMatchObject(expected);
+    expect(await f.bindings.agent_activity({ conversationId: f.receipt.conversationId })).toMatchObject({ count: 1, conversations: [expected] });
+  });
+
+  test(`caller project is read from the durable registry (${mode})`, async () => {
+    const f = fixture(mode);
+    const parent = registry!.beginSpawnRequest({
+      engine: "codex", cwd: f.directory, conversationId: "conversation_owner",
+      explicitProject: "fixture",
+      launchProfile: { cwd: f.directory, project: "fixture", title: "Launch owner" },
+    });
+    if (parent.kind !== "created") throw new Error("fixture owner was not created");
+    registry!.settleSpawn(parent.receipt.launchId, {
+      key: { engine: "codex", sessionId: "owner-native-session" }, artifactPath: path.join(f.directory, "owner.jsonl"),
+      cwd: f.directory, accountId: null, status: "unhosted", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+    });
+    f.restart();
+    f.useRegistryProject();
+    expect(await f.bindings.get_conversation({ conversationId: f.receipt.conversationId })).toMatchObject({ state: "starting" });
+    expect(await f.bindings.agent_activity({ conversationId: f.receipt.conversationId })).toMatchObject({ count: 1 });
+  });
+
+  test(`parentless receipts require the identified gateway (${mode})`, async () => {
+    const f = fixture(mode, { parent: false });
+    f.restart();
+    for (const caller of [
+      { kind: "unidentified", conversationId: null, role: null },
+      { kind: "agent", conversationId: "conversation_other", role: "builder" },
+    ] as const) {
+      f.as(caller, "fixture");
+      await expect(f.bindings.get_conversation({ conversationId: f.receipt.conversationId })).rejects.toThrow("conversation not found");
+      await expect(f.bindings.get_conversation({ conversationId: f.receipt.conversationId, tailLines: 10 })).rejects.toThrow();
+      expect(await f.bindings.agent_activity({ conversationId: f.receipt.conversationId })).toMatchObject({ count: 0, conversations: [] });
+    }
+    f.as({ kind: "gateway", conversationId: "conversation_operator", role: null }, null);
+    expect(await f.bindings.get_conversation({ conversationId: f.receipt.conversationId })).toMatchObject({ state: "starting" });
+    expect(await f.bindings.agent_activity({ conversationId: f.receipt.conversationId })).toMatchObject({ count: 1 });
+  });
+
+  test(`default activity retains an oversized redacted failure after restart (${mode})`, async () => {
+    const f = fixture(mode);
+    const sensitive = ["oversized", "provider", "credential"].join("-");
+    retainProviderRedactionSecrets([sensitive]);
+    const prefix = "Diagnostic detail. ".repeat(1800);
+    registry!.failSpawn(f.receipt.launchId, `${prefix}${sensitive} DECISIVE FINAL CAUSE`);
+    const taskIds = registry!.readOnlySnapshot().receipts[f.receipt.launchId]!.failureReporting!.taskIds;
+    f.restart();
+    const conversation = await f.bindings.get_conversation({ conversationId: f.receipt.conversationId });
+    expect(String(conversation.reason)).toStartWith(prefix);
+    expect(String(conversation.reason)).toEndWith(" DECISIVE FINAL CAUSE");
+    expect(String(conversation.reason)).not.toContain(sensitive);
+    for (const options of [{}, { full: true }]) {
+      const activity = await f.bindings.agent_activity({ conversationId: f.receipt.conversationId, ...options });
+      expect(activity).toMatchObject({ count: 1, conversations: [{
+        conversationId: f.receipt.conversationId, state: "failed", reason: conversation.reason, taskIds,
+      }] });
+      expect(JSON.stringify(activity)).not.toContain(sensitive);
+    }
+  });
+
   test(`a transcript takes over both reads unchanged (${mode})`, async () => {
     const f = fixture(mode);
     f.settle();
@@ -114,6 +222,7 @@ for (const mode of ["off", "sqlite"] as const) {
       { type: "response_item", timestamp: now, payload: { type: "message", role: "assistant",
         content: [{ type: "output_text", text: "Transcript is ready." }] } },
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    f.as({ kind: "agent", conversationId: "conversation_other", role: "builder" }, "other-project");
     const answer = await f.bindings.get_conversation({ conversationId: f.receipt.conversationId });
     expect(answer.messages).toMatchObject([{ text: "Transcript is ready." }]);
     expect(answer).not.toHaveProperty("evidence");

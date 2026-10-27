@@ -3315,9 +3315,20 @@ function conversationTailAnswer(
   };
 }
 
+function spawnConversationForCaller(conversationId: string, args: McpToolArgs,
+  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "callerProject">) {
+  return spawnConversation(conversationId, () => {
+    const caller = attributionOf(dependencies);
+    const project = dependencies.callerProject ? dependencies.callerProject()
+      : caller.conversationId ? callerProjectFromSnapshot(agentRegistry().livenessConversationSnapshot(caller.conversationId), caller.conversationId)
+        : null;
+    return { caller, project, requestedProject: text(args.project) || undefined };
+  });
+}
+
 async function getConversation(
   args: McpToolArgs,
-  dependencies: Pick<ViewerMcpDomainDependencies, "listFiles" | "completedFileScan" | "targetedFileEntry" | "selectedContext">,
+  dependencies: Pick<ViewerMcpDomainDependencies, "listFiles" | "completedFileScan" | "targetedFileEntry" | "selectedContext" | "callerAttribution" | "attentionAuthority" | "callerProject">,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
   throwIfCallEnded(context);
@@ -3351,7 +3362,7 @@ async function getConversation(
         "selected_context_unresolved", "selected_conversation_has_no_transcript",
         "selected_conversation_transcript_absent", "selected_conversation_unreadable",
       ].includes(text(error.details.code))) {
-        const launch = spawnConversation(requestedId);
+        const launch = spawnConversationForCaller(requestedId, args, dependencies);
         if (launch && (!launch.transcriptPath || !fs.existsSync(launch.transcriptPath))) {
           throwIfCallEnded(context);
           return redactPayload({ ...launch, ...selectedContextEcho(selected.target) });
@@ -3373,7 +3384,7 @@ async function getConversation(
   const conversation = requestedId
     ? agentRegistry().conversation(requestedId as `conversation_${string}`)
     : agentRegistry().conversationForPath(requestedPath);
-  const pendingLaunch = requestedId && !conversation?.generations.length ? spawnConversation(requestedId) : null;
+  const pendingLaunch = requestedId && !conversation?.generations.length ? spawnConversationForCaller(requestedId, args, dependencies) : null;
   const transcriptPath = conversation?.generations.at(-1)?.path ?? pendingLaunch?.transcriptPath ?? requestedPath;
   if (!transcriptPath && requestedId) {
     throwIfCallEnded(context);
@@ -3389,7 +3400,7 @@ async function getConversation(
   });
   const entry = targeted?.entry;
   if (!entry && requestedId) {
-    const launch = spawnConversation(requestedId);
+    const launch = spawnConversationForCaller(requestedId, args, dependencies);
     if (launch) {
       throwIfCallEnded(context);
       return redactPayload({ ...launch, ...selectedContextEcho(selected.target) });
@@ -7008,7 +7019,7 @@ async function agentActivity(
         : {}),
     }, sources);
     if (text(args.conversationId) && snapshot.conversations.length === 0) {
-      const launch = spawnConversation(text(args.conversationId));
+      const launch = spawnConversationForCaller(text(args.conversationId), args, dependencies);
       throwIfCallEnded(context);
       if (launch) return redactPayload({
         ...snapshot, count: 1, conversations: [launch], journaled: 0,
@@ -8356,7 +8367,17 @@ export function viewerMcpBindings(
         return JSON.stringify({ caller, scope });
       },
     }),
-    agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context)),
+    agent_activity: async (args, context) => {
+      if (text(args.conversationId) && !text(args.cursor)) {
+        const payload = await reads.agent_activity(args, context);
+        const rows = payload.conversations as Record<string, unknown>[] | undefined;
+        // One authorized receipt is the complete targeted answer. Its durable
+        // failure reason must survive the ordinary list-page byte budget.
+        if (rows?.length === 1 && rows[0]?.evidence === "spawn-receipt") return payload;
+        return budgeted("agent_activity", args, 24_000, async () => payload);
+      }
+      return budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context));
+    },
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
