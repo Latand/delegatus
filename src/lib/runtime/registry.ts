@@ -1,3 +1,4 @@
+import { recordedAgentScope, sameAgentScope } from "./agentScope";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
@@ -65,6 +66,7 @@ function registryStatus(state: HostState): AgentHostStatus {
 
 function registryProcess(state: HostState): ProcessIdentity | null {
   if (state.signalDomain && (state.pid !== null || state.signalDomain.retired !== true)) return { ...state.signalDomain.native };
+  if (state.pid === null && state.scope && state.exitProcess) return { ...state.exitProcess };
   return state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity);
 }
 
@@ -80,6 +82,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     activeFlags: state.activeFlags,
@@ -102,6 +105,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     ...(state.pendingToolUses?.length ? { pendingToolUses: state.pendingToolUses } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     ...(state.ended ? { ended: state.ended } : {}),
@@ -121,6 +125,7 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     activeFlags: state.activeFlags,
@@ -185,6 +190,7 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && left.processStartIdentity === right.processStartIdentity
     && isDeepStrictEqual(left.signalDomain, right.signalDomain)
     && isDeepStrictEqual(left.signalBoundary, right.signalBoundary)
+    && isDeepStrictEqual(left.scope, right.scope)
     && left.protocolVersion === right.protocolVersion
     && left.activeTurnRef === right.activeTurnRef
     && sameStrings(left.pendingAttention, right.pendingAttention)
@@ -774,6 +780,7 @@ async function endRecordedStructuredTree(
   if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
   const { terminateStructuredHostTree } = await import("./structuredHostControl");
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
+  const targetScope = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
   const recordedDomain = startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
   const domainProcesses = recordedDomain ? verifiedSignalDomainProcesses(recordedDomain) : [];
   if (!domainProcesses || (recordedDomain && !sameRecordedProcessIdentity(recordedDomain.native, root))) return false;
@@ -784,6 +791,7 @@ async function endRecordedStructuredTree(
     if (!current || !recorded || !sameRecordedProcessIdentity(recorded, root)) {
       return { status: 409, error: "the row no longer records this process" };
     }
+    if (!sameAgentScope(recordedAgentScope(current.structuredHost), targetScope)) return { status: 409, error: "agent scope target changed" };
     if (!mayEnd(current)) return { status: 409, error: "a live writer claim owns this process" };
     return null;
   };
@@ -792,6 +800,7 @@ async function endRecordedStructuredTree(
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
     stopOrigin: { path: source, operationId: sessionKeyId(key) },
+    scope: targetScope,
     retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
@@ -805,10 +814,10 @@ async function endRecordedStructuredTree(
     withdrawCapturedTree: () => registry.deliveryWriteOrBusy({ label: "registry.orphan-withdraw" }, () => {
       if (capture) registry.withdrawStructuredTerminationSurvivors(key, root, capture, source);
     }),
-    retireRegistryEntry: (target, expected, confirmed) =>
+    retireRegistryEntry: (target, expected, confirmed, _custody, confirmedScope) =>
       registry.deliveryWriteOrBusy({ label: "registry.orphan-settle" }, () => {
         if (authorize()) return false;
-        return registry.settleStructuredTerminationSurvivors(target, expected, confirmed, source);
+        return registry.settleStructuredTerminationSurvivors(target, expected, confirmed, source, confirmedScope);
       }),
     ...dependencies,
   });

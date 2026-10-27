@@ -1,3 +1,4 @@
+import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -1333,10 +1334,13 @@ export async function bindStructuredDeliveryQueue(
         const built = read();
         if (!built.ok || built.ref.conversationId !== conversationId) return false;
         const ref = built.ref;
+        const targetScope = recordedAgentScope(registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredHost);
+        const targetClaimEpoch = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.claimEpoch;
         const authorize = (): { status: 409; error: string } | null => {
           const current = read();
           const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
-          if (!current.ok || entry?.host || current.ref.conversationId !== conversationId
+          if (!current.ok || entry?.host || entry?.claimEpoch !== targetClaimEpoch
+            || !sameAgentScope(recordedAgentScope(entry?.structuredHost), targetScope) || current.ref.conversationId !== conversationId
             || current.ref.pid !== ref.pid || current.ref.startIdentity !== ref.startIdentity
             || current.ref.bootEpoch !== ref.bootEpoch) {
             return { status: 409, error: "structured kill target changed before termination" };
@@ -1354,11 +1358,12 @@ export async function bindStructuredDeliveryQueue(
           claimEpoch: retirementEntry.claimEpoch,
           claimOwner: retirementEntry.claimOwner,
           writerClaimEpoch: retirementEntry.structuredHost?.writerClaimEpoch ?? null,
-          process: retirementEntry.structuredHost?.process ?? null,
+          process: recordedScopeProcess(retirementEntry.structuredHost),
         } : null;
         const outcome = await terminateStructuredHostTree(ref, {
           stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
           retainedSurvivors,
+          scope: targetScope,
           registryCustody: retirementCustody,
           authorize,
           ...(onlyIfIdle ? { authorizeAsync: async () => await durableAuthority()
@@ -1392,8 +1397,8 @@ export async function bindStructuredDeliveryQueue(
             controllerCapture = null;
             capturedRetirement = null;
           },
-          retireRegistryEntry: (key, expected, confirmed, custody) =>
-            registry.deliveryWriteOrBusy({ label: "registry.controller-stop-settle" }, () => registry.terminateStructuredHost(key, expected, confirmed, custody)),
+          retireRegistryEntry: (key, expected, confirmed, custody, confirmedScope) =>
+            registry.deliveryWriteOrBusy({ label: "registry.controller-stop-settle" }, () => registry.terminateStructuredHost(key, expected, confirmed, custody, confirmedScope)),
         });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {

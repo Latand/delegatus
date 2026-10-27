@@ -1,3 +1,4 @@
+import { recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
 
@@ -175,7 +176,7 @@ export function structuredHostKillRefFromRegistry(
     status: ownerIdentity ? processIdentityStatus(ownerIdentity, dependencies.identityProbe) : "unrecorded",
   };
   if (!entry) return { ok: false, error: "the registry has no row for this session", owner };
-  const process = entry.structuredHost?.process ?? null;
+  const process = recordedScopeProcess(entry.structuredHost);
   if (!process) return { ok: false, error: "the registry row names no host process", owner };
   if (key.engine !== "claude" && key.engine !== "codex") {
     return { ok: false, error: `a ${key.engine} session has no structured host to end`, owner };
@@ -372,9 +373,11 @@ export interface StructuredHostTerminationDependencies {
       comparing them against what it observed beforehand stops comparing. */
   onFirstEffect?(): void;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
-  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null): boolean | void | Promise<boolean | void>;
+  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null, confirmedScope?: AgentScopeIdentity | null): boolean | void | Promise<boolean | void>;
   /** Captured from the caller's registry before this termination can await. */
   registryCustody?: StructuredHostCustody | null;
+  scope?: AgentScopeIdentity | null;
+  stopScope?: typeof stopAgentScope;
   /** Previously captured descendants whose root may have exited between retries. */
   retainedSurvivors?: readonly ProcessIdentity[];
   protectedPids?(): Set<number>;
@@ -450,13 +453,17 @@ export async function terminateStructuredHostTree(
         const entry = defaultRegistry.readOnlySnapshot().entries[sessionKeyId(key)];
         return entry ? { claimEpoch: entry.claimEpoch, claimOwner: entry.claimOwner,
           writerClaimEpoch: entry.structuredHost?.writerClaimEpoch ?? null,
-          process: entry.structuredHost?.process ?? null } : null;
+          process: recordedScopeProcess(entry.structuredHost) } : null;
       })()
       : null;
-  const retire = dependencies.retireRegistryEntry
-    ?? ((target: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null) =>
+  const scope = dependencies.scope !== undefined ? dependencies.scope
+    : key && defaultRegistry ? recordedAgentScope(defaultRegistry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost) : null;
+  const retireRegistry = dependencies.retireRegistryEntry
+    ?? ((target: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null, confirmedScope?: AgentScopeIdentity | null) =>
       defaultRegistry!.deliveryWriteOrBusy({ label: "termination.retire" },
-        () => defaultRegistry!.terminateStructuredHost(target, expected, confirmed, custody)));
+        () => defaultRegistry!.terminateStructuredHost(target, expected, confirmed, custody, confirmedScope)));
+  const retire = (target: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null) =>
+    scope ? retireRegistry(target, expected, confirmed, custody, scope) : retireRegistry(target, expected, confirmed, custody);
   const terminateOwned = dependencies.terminateOwnedHost ?? terminateStructuredDeliveryHost;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const graceMs = dependencies.graceMs ?? TERMINATION_GRACE_MS;
@@ -474,10 +481,49 @@ export async function terminateStructuredHostTree(
   }
   const expected: ProcessIdentity = { pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch };
 
+  if (scope?.bootEpoch && scope.bootEpoch !== expected.bootEpoch) {
+    return { ok: false, status: 409, error: "agent scope and host boot identities disagree", remaining: [], survivors: [] };
+  }
+  if (scope && defaultRegistry && (!registryCustody?.process
+    || !sameRecordedProcessIdentity(registryCustody.process, expected))) {
+    return { ok: false, status: 409, error: "structured scope belongs to a different host", remaining: [], survivors: [], stale: true };
+  }
+  let scopeEnded = false;
+  const endScope = async (): Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null> => {
+    if (!scope || scopeEnded) return null;
+    try {
+      const denied = await dependencies.authorizeAsync?.();
+      if (denied) throw new Error(denied.error);
+      await (dependencies.stopScope ?? stopAgentScope)(scope, { authorizeAsync: async () => {
+        const denied = await dependencies.authorizeAsync?.();
+        if (denied) throw new Error(denied.error);
+      }, authorize: () => {
+        const refusal = dependencies.authorize?.();
+        if (refusal) throw new Error(refusal.error);
+        if (defaultRegistry && key) {
+          const entry = defaultRegistry.readOnlySnapshot().entries[sessionKeyId(key)];
+          const currentProcess = recordedScopeProcess(entry?.structuredHost);
+          if (!entry || entry.claimEpoch !== registryCustody?.claimEpoch
+            || entry.structuredHost?.writerClaimEpoch !== registryCustody?.writerClaimEpoch
+            || !currentProcess || !sameRecordedProcessIdentity(currentProcess, expected)
+            || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) throw new Error("structured scope target changed");
+        }
+      } });
+      scopeEnded = true;
+      const refused = await dependencies.authorizeAsync?.() ?? dependencies.authorize?.();
+      if (refused) throw new Error(refused.error);
+      return null;
+    } catch (error) {
+      return { ok: false, status: 409, error: error instanceof Error ? error.message : "agent scope termination failed", remaining: [], survivors: [] };
+    }
+  };
+
   const initialStatus = processIdentityStatus(expected, identityProbe);
   if (initialStatus === "dead" && !alive(pid)) {
     const retained = dependencies.retainedSurvivors ?? [];
     if (retained.length === 0) {
+      const refused = await endScope();
+      if (refused) return refused;
       if (key && await retire(key, expected, [], registryCustody) === false) {
         return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
       }
@@ -488,6 +534,8 @@ export async function terminateStructuredHostTree(
       catch { return true; }
     });
     if (stillUnresolved.length === 0) {
+      const refused = await endScope();
+      if (refused) return refused;
       if (key && await retire(key, expected, retained, registryCustody) === false) {
         return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
       }
@@ -770,6 +818,8 @@ export async function terminateStructuredHostTree(
     /* The runtime can release its root before detached descendants are gone.
        Retire only after the full captured tree has passed identity checks, and
        require the registry to accept that exact evidence on every path. */
+    const scopeRefusal = await endScope();
+    if (scopeRefusal) return scopeRefusal;
     if (key && await retire(key, expected, [...identities.values()], registryCustody) === false) {
       return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
     }

@@ -1,3 +1,4 @@
+import { recordedAgentScope, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -213,6 +214,8 @@ export interface StructuredHostRetirementSubject {
   cwd: string;
   transcriptPath: string;
   process: ProcessIdentity;
+  scope?: AgentScopeIdentity | null;
+  observedProcessDead?: boolean;
   status: AgentHostStatus;
   activeTurnRef: string | null;
   /** Undetermined when no conversation record establishes a turn state. */
@@ -422,6 +425,8 @@ const CLAUSE_CHECKS: Record<
     if (!recordedStart.determined) return recordedStart;
     const recordedBoot = recordedBootEpoch(subject);
     if (!recordedBoot.determined) return recordedBoot;
+    if (subject.scope && subject.observedProcessDead && subject.observedBootEpoch.determined
+      && subject.scope.bootEpoch === subject.observedBootEpoch.value) return PASSES;
     if (!subject.observedStartIdentity.determined) return subject.observedStartIdentity;
     if (!subject.observedBootEpoch.determined) return subject.observedBootEpoch;
     const observedStartIdentity = subject.observedStartIdentity.value;
@@ -949,7 +954,7 @@ interface RetirementReaders {
 /** Candidate rows: registry-recorded structured hosts only. */
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
-    .filter((entry) => Boolean(entry.structuredHost?.process)
+    .filter((entry) => Boolean(entry.structuredHost?.process || (recordedAgentScope(entry.structuredHost) && entry.structuredHost?.exitProcess))
       && (entry.key.engine === "claude" || entry.key.engine === "codex")
       /* A pane-hosted entry belongs to the tmux lifecycle, not to this one. */
       && entry.host === null)
@@ -995,7 +1000,7 @@ function retirementSubject(
   readers: RetirementReaders,
 ): StructuredHostRetirementSubject {
   const columns = entry.structuredHost!;
-  const hostProcess = columns.process!;
+  const hostProcess = (columns.process ?? columns.exitProcess)!;
   const key = entry.key as SessionKey & { engine: "claude" | "codex" };
   const keyId = sessionKeyId(key);
   const conversation = inputs.conversationsBySession.get(keyId) ?? null;
@@ -1016,6 +1021,8 @@ function retirementSubject(
     cwd: entry.cwd || generation?.launchProfile.cwd || "",
     transcriptPath: entry.artifactPath || "",
     process: hostProcess,
+    scope: recordedAgentScope(columns),
+    observedProcessDead: !procBackend.pidAlive(hostProcess.pid),
     status: entry.status,
     activeTurnRef: columns.activeTurnRef,
     turnBusy: conversation === null
@@ -1158,7 +1165,20 @@ export async function runStructuredHostRetirementSweep(
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
     const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
+    const scope = recordedAgentScope(observed?.structuredHost);
     return terminateStructuredHostTree(ref, {
+    ...(scope ? { authorize: () => {
+      if (publicationState() !== "ready") return { status: 409 as const, error: "scope retirement publication changed" };
+      const inputs = retirementInputs(sources, now());
+      const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
+      if (!entry || entry.claimEpoch !== observed?.claimEpoch || entry.claimOwner !== observed?.claimOwner
+        || entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch
+        || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
+        || !structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers), { now: now(), idleMs }).retire) {
+        return { status: 409 as const, error: "scope retirement target changed" };
+      }
+      return null;
+    } } : {}),
     stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
     graceMs,
     deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
@@ -1167,7 +1187,7 @@ export async function runStructuredHostRetirementSweep(
         if (publicationState() !== "ready") return false;
         const inputs = retirementInputs(sources, now());
         const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
-        if (!entry?.structuredHost?.process || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
+        if (!entry?.structuredHost || !(entry.structuredHost.process ?? entry.structuredHost.exitProcess) || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
           || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
         const subject = retirementSubject(entry, inputs, readers);
         if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
@@ -1238,7 +1258,7 @@ export async function runStructuredHostRetirementSweep(
        path). A row that vanished in the meantime is nothing to retire. */
     const current = retirementInputs(sources, now());
     const fresh = current.file.entries[planning.keyId] ?? null;
-    if (fresh === null || !fresh.structuredHost?.process) {
+    if (fresh === null || !(fresh.structuredHost?.process ?? (recordedAgentScope(fresh.structuredHost) && fresh.structuredHost?.exitProcess))) {
       report.refused.push({
         key: planning.keyId,
         conversationId: planning.conversationId,

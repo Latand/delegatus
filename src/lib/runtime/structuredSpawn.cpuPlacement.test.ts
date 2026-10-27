@@ -1,3 +1,4 @@
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,7 @@ import { CpuContainmentUnavailable, setCpuPortsForTests } from "./cpuPlacement";
 import { CpuPressureGate } from "./cpuPressure";
 import { startupAdoptionCell } from "./fixtures/startupAdoptionCell";
 import { adoptCodexRegistryHosts } from "./registry";
-import { defaultStartHost } from "./structuredSpawn";
+import { structuredHostCell, defaultStartHost } from "./structuredSpawn";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-spawn-cpu-"));
 const previous = { cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
@@ -148,4 +149,38 @@ test("the real host launch uses the stage cap and retains its budget-clamped rec
   expect(plan.cap).toMatchObject({ requestedBytes: 40 * GIB, limitBytes: 12 * GIB, source: "stage", clamped: true, enforced: true });
   expect(plan.budgetBytes).toBe(12 * GIB);
   expect(plan.reserveBytes).toBe(4 * GIB);
+});
+
+
+test.each([["off", false], ["scope", false], ["off", true], ["scope", true]] as const)("native reconnect retains its scope with memory %s and refuses a foreign boot=%s", (memory, foreignBoot) => {
+  process.env.LLV_AGENT_CPU = "auto";
+  process.env.LLV_AGENT_MEMORY = memory;
+  setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), cpus: 24,
+    agentSlice: "test-agents.slice", workSlice: "test-agents-work.slice", runner: () => "" });
+  setAgentMemoryPortsForTests({ totalBytes: 64 * GIB, probe: () => 255, runner: () => "" });
+  const root = fs.mkdtempSync(path.join(sandbox, "retained-scope-"));
+  const filename = path.join(root, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const identity = captureProcessIdentity(process.pid);
+  const key = { engine: "codex" as const, sessionId: "retained-scope" };
+  const scope = { unit: "delegatus-agent-retained.scope", bootEpoch: foreignBoot ? "prior-boot" : identity.bootEpoch! };
+  try {
+    registry.upsert({ key, artifactPath: "", cwd: root, accountId: null, status: "live", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: identity, scope,
+        writerClaimEpoch: 1, eventCursor: 0, protocolVersion: null, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: null, pendingAction: null });
+    registry.close();
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    try {
+      if (foreignBoot) {
+        expect(() => structuredHostCell(reopened, "codex", `codex:${key.sessionId}`, null)).toThrow("retained agent scope boot identity");
+        expect(reopened.readOnlySnapshot().entries[`codex:${key.sessionId}`]?.structuredHost?.scope).toEqual(scope);
+      } else {
+        const cell = structuredHostCell(reopened, "codex", `codex:${key.sessionId}`, null)!;
+        expect(cell.scopeState()).toEqual(scope);
+        expect(cell.plan.unit).toBe(scope.unit);
+        cell.close();
+      }
+    } finally { reopened.close(); }
+  } finally { registry.close(); }
 });

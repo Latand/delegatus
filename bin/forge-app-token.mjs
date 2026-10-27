@@ -377,13 +377,18 @@ export function classifyGh(args, env = {}) {
 
 /** Runs `gh` for an agent. Returns the exit status. */
 export async function runGh(args, ports) {
+  if (ports.env.LLV_FORGE_GH_DELEGATED) {
+    ports.stderr("Delegatus: gh shim re-entry refused; a downstream gh command points back to the forge shim.\n");
+    return 1;
+  }
+  const delegatedEnv = { ...ports.env, LLV_FORGE_GH_DELEGATED: "1" };
   const gh = ports.findGh();
   if (!gh) {
     ports.stderr("Delegatus: the gh command line tool was not found on PATH.\n");
     return 127;
   }
-  /* Nothing declared: the command as typed, in the environment it was typed in. */
-  if (declaredRepositories(ports.env).length === 0) return ports.exec(gh, args, ports.env);
+  /* Keep the marker even when nothing is declared: wrappers can re-enter here. */
+  if (declaredRepositories(ports.env).length === 0) return ports.exec(gh, args, delegatedEnv);
   const decision = classifyGh(args, ports.env);
   if (decision.kind === "refuse") {
     ports.stderr(`${refusalMessage(null, decision.reason)}\n`);
@@ -405,7 +410,7 @@ export async function runGh(args, ports) {
   /* Not a covered kind, or not a declared repository: the command as typed,
      in the environment it was typed in. A named repository that reads as
      nothing is one `gh` reads as nothing on github.com either. */
-  if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, ports.env);
+  if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, delegatedEnv);
   let issued;
   try {
     issued = await mintInstallationToken(named, ports);
@@ -416,7 +421,7 @@ export async function runGh(args, ports) {
   /* The App token and nothing else: no inherited token of either spelling, and
      a configuration directory that holds no account. `gh` is never started for
      a covered write without the token in place. */
-  const env = { ...ports.env, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: ports.emptyGhConfigDir() };
+  const env = { ...delegatedEnv, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: ports.emptyGhConfigDir() };
   for (const name of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete env[name];
   try {
     const status = await ports.exec(gh, args, env);

@@ -1,3 +1,5 @@
+import { systemBootEpoch } from "@/lib/processIdentity";
+import type { AgentScopeIdentity } from "./agentScope";
 import { hostExitProcess, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import path from "node:path";
@@ -299,6 +301,10 @@ export class AgentMemoryCell {
   }
   /** Null when the scope carries only CPU placement. */
   memoryState(): HostMemoryState | null { return this.state.mechanism === "none" ? null : this.snapshot(); }
+  scopeState(): AgentScopeIdentity | null {
+    const bootEpoch = systemBootEpoch();
+    return this.plan.unit && bootEpoch ? { unit: this.plan.unit, bootEpoch } : null;
+  }
   onChange(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private notify() { for (const listener of this.listeners) listener(); }
   launchFailure(): string | null {

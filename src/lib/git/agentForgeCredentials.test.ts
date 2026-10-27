@@ -478,3 +478,38 @@ test.skipIf(!posix)("no token, key or identifier is written into the launch dire
   expect(fs.readdirSync(path.join(directory, "gh-config"))).toEqual([]);
   expect(fs.statSync(directory).mode & 0o077).toBe(0);
 });
+
+(posix ? test : test.skip)("a changed HOME and a downstream wrapper cannot re-enter the generated gh shim", () => {
+  const fixture = fs.mkdtempSync(path.join(root, "reentry-"));
+  const tools = path.join(fixture, "bin");
+  fs.mkdirSync(tools);
+  const count = path.join(fixture, "launches");
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  // A hard launch cap bounds old-code recursion across fresh interpreter processes.
+  fs.writeFileSync(path.join(tools, "bun"), `#!/bin/sh
+n=0
+if [ -f ${quote(count)} ]; then read -r n < ${quote(count)}; fi
+n=$((n + 1))
+printf '%s\\n' "$n" > ${quote(count)}
+if [ "$n" -ge 4 ]; then echo fixture-launch-cap >&2; exit 92; fi
+exec ${quote(process.execPath)} "$@"
+`, { mode: 0o700 });
+  const inherited = { ...source, HOME: fixture, PATH: `${tools}:${source.PATH}` };
+  const launch = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
+  const capturedGh = path.join(launch.LLV_AGENT_FORGE_DIR!, "gh");
+  fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\nexec ${quote(capturedGh)} repo set-default --view\n`, { mode: 0o700 });
+  const changedHome = path.join(fixture, "changed-home");
+  fs.mkdirSync(changedHome);
+  const changed = { ...launch, HOME: changedHome, PATH: `${tools}:${launch.PATH}` };
+  for (const declared of ["acme/widgets", ""]) {
+    fs.rmSync(count, { force: true });
+    const result = Bun.spawnSync(["gh", "pr", "list"], {
+      cwd: repo, env: { ...changed, LLV_AGENT_FORGE_REPOSITORIES: declared },
+      stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("gh shim re-entry refused");
+    expect(result.stderr.toString()).not.toContain("fixture-launch-cap");
+    expect(fs.readFileSync(count, "utf8").trim()).toBe("2");
+  }
+}, 25_000);
