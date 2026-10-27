@@ -30,7 +30,7 @@ async function restoredStage() {
   write();
   const sends: Parameters<NonNullable<PipelinePorts["resumeSeveredTurn"]>>[0][] = [];
   let outstanding = false;
-  let completed: boolean | undefined = true;
+  let completed = true;
   let active: boolean | null = null;
   let interrupted: "idle" | "dead" | null = "idle";
   let stopped = false;
@@ -41,7 +41,7 @@ async function restoredStage() {
     conversationTurnInterrupted: async () => interrupted,
     conversationOperatorStopped: async () => stopped,
     conversationDeliveryOutstanding: () => outstanding,
-    conversationDeliveryCompleted: async () => completed,
+    conversationDeliveryCompleted: () => completed,
     resumeSeveredTurn: async input => {
       if (input.continuationAllowed && !await input.continuationAllowed()) return false;
       sends.push(input);
@@ -73,7 +73,7 @@ test("native restore bookkeeping keeps its cut and continues the same Claude sta
     r.ports.conversationTurnInterrupted = production.conversationTurnInterrupted;
     expect(await production.conversationHostUnavailableSince!(r.f.attempt.conversationId!)).toBe(new Date(Date.parse(r.cutAt) + 300).toISOString());
     await withRuntimeSnapshot({ sessions: [{ conversationId: r.f.attempt.conversationId, host: "unhosted", turn: "idle", attentionIds: [] }] },
-      () => tickPipelines([], r.ports));
+      async () => { await tickPipelines([], r.ports); });
     const lane = loadPipelines()[0]!;
     expect({ state: lane.state, error: lane.runs[0]!.attempts[0]!.error, sendCount: r.sends.length })
       .toEqual({ state: "running", error: null, sendCount: 1 });
@@ -204,7 +204,7 @@ test("fresh controller processes retain the delivery budget and its exhaustion",
         conversationRestartCutHeld: () => false, conversationInterruption: () => null,
         conversationRestartCut: () => ({recordedAt: ${JSON.stringify(r.cutAt)}}),
         conversationOperatorStopped: async () => false, conversationDeliveryOutstanding: () => false,
-        conversationDeliveryCompleted: async () => true,
+        conversationDeliveryCompleted: () => true,
         durableTurnEvidence: durableStageTurnEvidence,
         resumeSeveredTurn: async input => {
           if (!await input.continuationAllowed()) return false;
@@ -269,7 +269,7 @@ test.each(["missing", "failed"] as const)("%s delivery proof cannot admit a seco
   try {
     await tickPipelines([], r.ports);
     if (proof === "missing") delete r.ports.conversationDeliveryCompleted;
-    else r.ports.conversationDeliveryCompleted = async () => { throw new Error("receipt read refused"); };
+    else r.ports.conversationDeliveryCompleted = () => { throw new Error("receipt read refused"); };
     r.advance(WAIT);
     await tickPipelines([], r.ports);
     expect(r.sends).toHaveLength(1);
@@ -350,6 +350,7 @@ test("real Claude tool work keeps the idle-host quiet bound after restore", asyn
     await tickPipelines([], r.ports);
     expect(r.sends).toHaveLength(1);
     expect(loadPipelines()[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation?.count).toBe(1);
     r.advance(12 * 60_000);
     await tickPipelines([], r.ports);
     expect(r.sends).toHaveLength(2);
@@ -493,7 +494,7 @@ test("a transcript append during delivery reconciliation cannot expire a newly w
   try {
     await tickPipelines([], r.ports);
     r.advance(3 * WAIT);
-    r.ports.conversationDeliveryCompleted = async () => {
+    r.ports.conversationDeliveryCompleted = () => {
       r.records.push({ type: "assistant", timestamp: r.ports.now(), message: { role: "assistant", model: "claude-test",
         content: [{ type: "tool_use", id: "recheck", name: "Bash", input: { command: "check" } }] } });
       r.write();
