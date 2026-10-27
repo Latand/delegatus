@@ -7,9 +7,9 @@
     "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
     "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
     "src/components/kanban/kanbanBoard.css": "c0127fb5bb0058dd9c7c5f1a0625cb6842af94de24df9aa47204c8509dac5445",
-    "src/lib/i18n/en.ts": "505b8a61f59f0104a79cc4bf2787ac49098491a46c2ee670de33ce48ac6d800f",
-    "src/lib/i18n/uk.ts": "8bced401e21c78dfad2827b61424713f52ac9762445b89fcd04ed9a56f643070",
-    "src/components/kanban/issue1695BrowserHarness.ts": "dc89acec3e4d03a12ed8ff7931c334dbbb08b23b68239cd89d7b6cdbe17a27b2"
+    "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
+    "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
+    "src/components/kanban/issue1695BrowserHarness.ts": "b6b5b2680a56afbbb1ffdf6db2e789c17370b6a9e86ed72f7cde4ec707f01a33"
   },
   "readings": [
     {
