@@ -61,7 +61,7 @@ export interface ConversationDraftPorts {
   registry: ReturnType<typeof agentRegistry>;
   exec: ExecPort;
   open(pathname: string): Promise<PinnedTranscript | undefined>;
-  metadata(pathname: string, signal: AbortSignal): Promise<{ cwd?: string; title?: string | null } | undefined>;
+  metadata(pathname: string, signal: AbortSignal): Promise<{ cwd?: string | null; title?: string | null } | undefined>;
   pipeline: PipelinePorts;
   now(): string;
 }
