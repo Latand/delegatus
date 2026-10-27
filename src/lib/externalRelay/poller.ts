@@ -126,6 +126,8 @@ const ownerRecoveries = new Set<string>();
 export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Promise<void> {
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
   for (const run of readRunLedger().runs) {
+    // Process death and local host receipts say nothing about remote execution.
+    if (run.cloudExecution && (run.cloudExecution === "uncertain" || !run.completionAccepted)) continue;
     if (ownerRecoveries.has(run.requestId)) continue;
     // /complete may already have posted the answer. Neither restarting execution
     // nor /send can reconcile that request-scoped delivery without duplicating it.

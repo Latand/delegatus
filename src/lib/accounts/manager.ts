@@ -11,7 +11,7 @@ import type { AccountContext, AccountEngineName, AccountManager, AccountSummary,
 import { unavailableLimits } from "./contracts";
 import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
-import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
+import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
 import { creditGuardBlock } from "./creditGuard";
 import { turboCreditExemptFor } from "./turboCreditExemption";
@@ -265,6 +265,7 @@ export async function resolveHealthySpawnAccount(
       named !== null && requestedExists,
       active,
       model,
+      fallbackAccountIdsForProject(project, engine, bindings),
     );
     return {
       ...contextForSpawn(engine, selected.account.id, project),

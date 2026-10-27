@@ -1,5 +1,7 @@
-import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
-import type { Flow, Round } from "@/lib/flows/types";
+import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
+import type { DirectReviewGroup } from "./reviewGroup";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Round } from "@/lib/flows/types";
 import { groupDirectReviewers } from "@/lib/review/directReviewGrouping";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -10,31 +12,9 @@ import { collapseContext, collapseExempt, conversationSettled, workerCollapseIdl
 
 import { isActiveFlow } from "./flowModel";
 
-/*
- * Direct one-shot review groups (issue #325).
- *
- * Viewer-managed reviewers spawned straight through /api/spawn carry a durable
- * `role=reviewer` edge plus `reviewsConversationId`, but no flow or pipeline
- * membership. Repeated rounds for one board task or review subject used to land
- * as separate full-size cards; this module projects them into SYNTHETIC
- * review-loop flows so the entire existing deck grammar — folding, round
- * spines, verdict chips, loop placement, worker-collapse, mobile deck chips,
- * minimap rects — applies unchanged.
- *
- * Group membership and round order come from the shared grouping core in
- * lib/flows/directReviewGrouping (task first, alias-resolved review subject
- * second, managed flow/pipeline ownership excluded) — the same core the
- * server's role-title projection numbers review rounds with, so a deck spine
- * and its card title can never disagree.
- *
- * The projection is a pure function of the scan + tasks + alias map, so
- * restart, migration, generation changes and project relocation follow the
- * durable registry data with no stored state of their own.
- */
-
-/** Synthetic flow id namespace. These flows exist only in the client read
-    model: no /api/flows PATCH may ever target them, so every action surface
-    (FlowStrip, FlowHub, group-override halos) is gated on this predicate. */
+/** Independent reviewers share a read-only deck. Membership and ordering come
+ * from durable task/subject identity, including aliases and transcript generations.
+ * The prefix remains stable for existing disclosure preferences and board keys. */
 export const DIRECT_REVIEW_FLOW_PREFIX = "direct-review::";
 
 export function isDirectReviewFlow(flow: Pick<Flow, "id">): boolean {
@@ -42,7 +22,7 @@ export function isDirectReviewFlow(flow: Pick<Flow, "id">): boolean {
 }
 
 /**
- * Split direct review groups into the ones that still carry an actionable
+ * Split direct review groups into the ones that still carry an unfinished
  * latest round (they place a deck + loop beside the reviewed conversation)
  * and terminal HISTORY groups — every round ended with a verdict or an aged
  * failure. Since #289 + #325 a terminal group is still a board citizen: it
@@ -83,8 +63,10 @@ export interface DirectReviewGroupsInput {
 
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 
-export function directReviewFlows(input: DirectReviewGroupsInput): Flow[] {
-  const groups = groupDirectReviewers(input);
+export function directReviewFlows(input: DirectReviewGroupsInput): DirectReviewGroup[] {
+  const groups = groupDirectReviewers({ ...input, flows: input.flows.filter((group): group is ArchivedReview =>
+    group.template === "implement-review-loop" && typeof group.baseRef === "string" && group.mode !== undefined && group.baseMode !== undefined
+    && group.reviewerMode !== undefined && group.roundLimit !== undefined) });
   if (!groups.length) return [];
   const visible = withoutArchivedPredecessors([...input.files]);
   const nowMs = input.nowMs ?? Date.now();
@@ -109,7 +91,7 @@ export function directReviewFlows(input: DirectReviewGroupsInput): Flow[] {
   const activeImplementerPaths = new Set<string>();
   for (const flow of input.flows) if (isActiveFlow(flow)) activeImplementerPaths.add(flow.implementerPath);
 
-  const out: Flow[] = [];
+  const out: DirectReviewGroup[] = [];
   for (const { key, members } of groups) {
     const latest = members[members.length - 1]!;
     /* The deck anchors beside the reviewed conversation of the newest round,
@@ -158,7 +140,7 @@ export function directReviewFlows(input: DirectReviewGroupsInput): Flow[] {
     };
     out.push({
       id: DIRECT_REVIEW_FLOW_PREFIX + key,
-      template: "implement-review-loop",
+      kind: "direct-review",
       project: projectKey(anchor),
       cwd: anchor.cwd ?? "",
       implementerPath: anchor.path,
@@ -167,14 +149,7 @@ export function directReviewFlows(input: DirectReviewGroupsInput): Flow[] {
         implementer: { engine: (anchor.engine === "codex" ? "codex" : "claude") as "claude" | "codex", model: anchor.model, effort: anchor.effort ?? null },
         reviewer: reviewerRole,
       },
-      baseRef: "",
-      baseMode: "head",
-      mode: "manual",
-      /* Pane semantics keep the front card's composer usable on a still-open
-         reviewer; finished rounds drop it via the deck's own `finished` gate. */
-      reviewerMode: "pane",
-      roundLimit: DEFAULT_REVIEW_ROUNDS,
-      /* An unfinished latest round is actionable. Verdict, terminal evidence,
+      /* An unfinished latest round is visible. Verdict, terminal evidence,
          or W-idle settlement parks the group as compact history. */
       state: last.verdict === null && last.error === null ? "reviewing" : "done_comment",
       stateDetail: null,

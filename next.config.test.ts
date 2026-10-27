@@ -51,7 +51,7 @@ test("the production config gives Next's TypeScript child enough heap", () => {
         console.log(JSON.stringify({ configPath: config.typescript.tsconfigPath, workers: config.experimental.cpus, ...JSON.parse(child.stdout) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `;
-    for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=8192"]) {
+    for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=16384"]) {
       const result = spawnSync("node", ["-e", script, child], {
         cwd: import.meta.dir,
         env: { ...process.env, NODE_OPTIONS: `${heap} --no-warnings` },
@@ -62,7 +62,7 @@ test("the production config gives Next's TypeScript child enough heap", () => {
       expect(observed.configPath).toBe("tsconfig.production.json");
       expect(observed.workers).toBe(2);
       expect(observed.warnings).toBe(true);
-      expect(observed.limit).toBeGreaterThanOrEqual((heap.includes("8192") ? 8192 : 6144) * 1024 * 1024);
+      expect(observed.limit).toBeGreaterThanOrEqual((heap.includes("16384") ? 16384 : 11264) * 1024 * 1024);
     }
   } finally {
     fs.rmSync(probe, { recursive: true, force: true });

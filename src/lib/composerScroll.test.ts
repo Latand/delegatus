@@ -9,6 +9,7 @@ import {
   COMPOSER_ACCESSORY_WINDOW_PX,
   COMPOSER_MAX_PX,
   COMPOSER_REST_PX,
+  KEYBOARD_TRANSCRIPT_FLOOR_SHARE,
   keyboardInset,
   MOBILE_COMPOSER_CHROME_PX,
   MOBILE_COMPOSER_UNIT_CHROME_PX,
@@ -20,6 +21,7 @@ import {
   shouldPin,
   TRANSCRIPT_FLOOR_SHARE,
   visibleViewportHeight,
+  wholeLineCeiling,
 } from "./composerScroll";
 
 describe("clampHeight grows to fit then caps", () => {
@@ -246,6 +248,47 @@ describe("cardComposerBudget — the transcript keeps 60% of the conversation (2
     expect(cardComposerBudget(200)).toBe(COMPOSER_REST_PX);
     expect(cardComposerBudget(250, 36)).toBe(COMPOSER_REST_PX);
     expect(cardComposerBudget(80)).toBe(80);
+  });
+});
+
+describe("cardComposerBudget with the keyboard up — the transcript's floor drops (2026-10-26)", () => {
+  test("the field's share grows from 40% to 60% of the strip above the keyboard", () => {
+    expect(KEYBOARD_TRANSCRIPT_FLOOR_SHARE).toBeLessThan(TRANSCRIPT_FLOOR_SHARE);
+    expect(cardComposerBudget(323, 0, KEYBOARD_TRANSCRIPT_FLOOR_SHARE)).toBe(193);
+    expect(cardComposerBudget(323)).toBe(129);
+    expect(cardComposerBudget(323, 0, KEYBOARD_TRANSCRIPT_FLOOR_SHARE)).toBeGreaterThan(cardComposerBudget(323));
+  });
+
+  test("the rows beside the composer still come out of the share, and the composer at rest still never yields", () => {
+    expect(cardComposerBudget(323, 36, KEYBOARD_TRANSCRIPT_FLOOR_SHARE)).toBe(157);
+    expect(cardComposerBudget(150, 0, KEYBOARD_TRANSCRIPT_FLOOR_SHARE)).toBe(COMPOSER_REST_PX);
+  });
+
+  test("an iPhone 11 keyboard strip leaves a long draft five whole lines, as against three", () => {
+    const strip = 380 - 57;
+    const field = (floorShare: number) => mobileComposerCeiling(380, 896, 0, cardComposerBudget(strip, 0, floorShare));
+    expect(wholeLineCeiling(field(TRANSCRIPT_FLOOR_SHARE), 22, 10)).toBeLessThan(10 + 3 * 22 + 1);
+    expect(wholeLineCeiling(field(KEYBOARD_TRANSCRIPT_FLOOR_SHARE), 22, 10)).toBeGreaterThanOrEqual(10 + 5 * 22);
+  });
+});
+
+describe("wholeLineCeiling — the field stops at a whole line", () => {
+  test("snaps down to whole lines inside the field's own padding and border", () => {
+    expect(wholeLineCeiling(128, 22, 10)).toBe(120);
+    expect(wholeLineCeiling(120, 22, 10)).toBe(120);
+    expect(wholeLineCeiling(170, 22, 10)).toBe(164);
+  });
+
+  test("never snaps below the one-row floor, nor above the ceiling", () => {
+    expect(wholeLineCeiling(44, 22, 10)).toBe(44);
+    expect(wholeLineCeiling(76, 22, 10)).toBe(76);
+    expect(wholeLineCeiling(100, 200, 10)).toBe(44);
+  });
+
+  test("a line height the browser does not report leaves the ceiling alone", () => {
+    expect(wholeLineCeiling(128, Number.NaN, 10)).toBe(128);
+    expect(wholeLineCeiling(128, 0, 10)).toBe(128);
+    expect(wholeLineCeiling(128, 22, Number.NaN)).toBe(128);
   });
 });
 

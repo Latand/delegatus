@@ -1,0 +1,613 @@
+{
+  "capturedAt": "2026-10-26T10:43:18.457Z",
+  "sourceDigests": {
+    "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx": "a53d47a9aa71bc9dc8938322b934da430e3f525c3613de03b01db99ab7a58198",
+    "docs/design/task-timeline/prototype-v2/prototype.styles.ts": "4853f6374a0091c952f44cbfb16d27538a4e4665f7ef55267299eafe61220204"
+  },
+  "readings": [
+    {
+      "name": "variant-1-390-uk-light",
+      "variant": 1,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2041
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 208,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 216,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-1-390-uk-light-folded",
+      "variant": 1,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1704
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 208,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        1,
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 216,
+      "timelineHeight": 428
+    },
+    {
+      "name": "variant-1-390-uk-dark",
+      "variant": 1,
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2041
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 208,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 216,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-1-390-en-light",
+      "variant": 1,
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1994
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 215.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 216,
+      "timelineHeight": 711
+    },
+    {
+      "name": "variant-1-390-en-dark",
+      "variant": 1,
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1994
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 215.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 216,
+      "timelineHeight": 711
+    },
+    {
+      "name": "variant-2-390-uk-light",
+      "variant": 2,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1934
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        3,
+        2,
+        3,
+        2,
+        3,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 199,
+      "timelineHeight": 675
+    },
+    {
+      "name": "variant-2-390-uk-light-folded",
+      "variant": 2,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1633
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 199,
+      "timelineHeight": 374
+    },
+    {
+      "name": "variant-2-390-uk-dark",
+      "variant": 2,
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1934
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        3,
+        2,
+        3,
+        2,
+        3,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 199,
+      "timelineHeight": 675
+    },
+    {
+      "name": "variant-2-390-en-light",
+      "variant": 2,
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1934
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        3,
+        2,
+        3,
+        2,
+        3,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 199,
+      "timelineHeight": 675
+    },
+    {
+      "name": "variant-2-390-en-dark",
+      "variant": 2,
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1934
+      },
+      "first": {
+        "summaryTop": 156,
+        "cardTop": 88,
+        "firstLineBottom": 246,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        3,
+        2,
+        3,
+        2,
+        3,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 199,
+      "timelineHeight": 675
+    },
+    {
+      "name": "variant-3-390-uk-light",
+      "variant": 3,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2020
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 188,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-3-390-uk-light-folded",
+      "variant": 3,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1683
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        1,
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 188,
+      "timelineHeight": 428
+    },
+    {
+      "name": "variant-3-390-uk-dark",
+      "variant": 3,
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 2020
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 188,
+      "timelineHeight": 765
+    },
+    {
+      "name": "variant-3-390-en-light",
+      "variant": 3,
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1967
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 171,
+      "timelineHeight": 729
+    },
+    {
+      "name": "variant-3-390-en-dark",
+      "variant": 3,
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "folded": false,
+      "viewport": {
+        "width": 390,
+        "height": 1967
+      },
+      "first": {
+        "summaryTop": 163.359375,
+        "cardTop": 95.359375,
+        "firstLineBottom": 212.359375,
+        "innerHeight": 844,
+        "innerWidth": 390
+      },
+      "noteLines": [
+        2,
+        2,
+        3,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "saidOnce": {
+        "chunk": 1,
+        "pauses": 1,
+        "format": 1
+      },
+      "summaryHeight": 171,
+      "timelineHeight": 729
+    },
+    {
+      "name": "today-390-uk-light",
+      "variant": 0,
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "folded": true,
+      "viewport": {
+        "width": 390,
+        "height": 1307
+      },
+      "first": null,
+      "noteLines": [],
+      "saidOnce": {
+        "chunk": 0,
+        "pauses": 0,
+        "format": 0
+      },
+      "summaryHeight": null,
+      "timelineHeight": null
+    }
+  ],
+  "failures": []
+}

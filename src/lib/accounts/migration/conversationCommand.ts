@@ -5,6 +5,8 @@ import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import {
   AccountProjectBindingsUnreadableError,
   allowedAccountIdsForProject,
+  accountProjectBindings,
+  fallbackAccountIdsForProject,
   projectAccountRefusalDetail,
 } from "@/lib/accounts/projectBindings";
 import { chooseProjectReseatTarget } from "@/lib/accounts/reseat";
@@ -160,8 +162,11 @@ export async function applyConversationMigration(
        unhandled failure: the reseat has queued nothing, and the operator is
        told which record to repair. */
     let allowedAccountIds: string[] | null;
+    let fallbackAccountIds: string[];
     try {
-      allowedAccountIds = allowedAccountIdsForProject(project, conversation.engine);
+      const bindings = accountProjectBindings();
+      allowedAccountIds = allowedAccountIdsForProject(project, conversation.engine, bindings);
+      fallbackAccountIds = fallbackAccountIdsForProject(project, conversation.engine, bindings);
     } catch (error) {
       if (!(error instanceof AccountProjectBindingsUnreadableError)) throw error;
       return { status: 409, body: { error: error.message, project } };
@@ -173,6 +178,7 @@ export async function applyConversationMigration(
       allowedAccountIds,
       Date.now(),
       source.launchProfile.model,
+      fallbackAccountIds,
     );
     if (selection.kind === "none") {
       return { status: 409, body: { error: "no healthy account with fresh quota headroom is available" } };

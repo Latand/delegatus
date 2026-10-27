@@ -19,7 +19,7 @@ import { structuredContentDigest, type StructuredImageRef } from "./structuredCo
 
 import { sendReceiptFor } from "./sendSettlement";
 import { DeliveryProgressStore } from "./deliveryProgress";
-import { deliverHeldStructuredMessage, enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "./structuredMessageDelivery";
+import { deliverHeldStructuredMessage, enqueueStructuredMessage, idleContinuationDeliveryRetryable, idleContinuationDeliveryRetryEvidence } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
 const artifactPath = "/sessions/11111111-1111-\x34111-8111-111111111111.jsonl";
@@ -4861,9 +4861,41 @@ test.each(["unchanged", "writer", "generation", "active", "missing-proof", "exec
     if (change === "missing-proof") state.statusUnavailable = true;
     expect(await idleContinuationDeliveryRetryable(conversation.id, "provider-stable-cut", { registry: () => new AgentRegistry(registry.filename), client: () => client }))
       .toBe(change === "unchanged");
+    expect(await idleContinuationDeliveryRetryEvidence(conversation.id, "provider-stable-cut", { registry: () => new AgentRegistry(registry.filename), client: () => client }))
+      .toBe(change === "unchanged" ? true : ["active", "missing-proof", "queued-uncertain"].includes(change) ? null : false);
     state.eligible = false;
     expect(await send()).toMatchObject({ ok: false, admission: "refused" });
     expect(state.deliveries).toBe(0);
+  } finally { journal.close(); }
+});
+
+test.each(["runtime", "session", "session-error", "journal", "journal-error", "same-revision", "unhosted"] as const)("continuation retry waits for %s evidence and delivers its logical key once", async outage => {
+  const { registry, conversation, journal, session, publish, send, state, client } = idleContinuationFixture({ republication: true });
+  try {
+    expect(await send()).toMatchObject({ ok: false, receipt: { status: "rejected" } });
+    const admission = registry.deliveryAdmissionForKey(conversation.id, "provider-stable-cut");
+    if (admission.outcome !== "admitted") throw new Error("missing continuation reservation");
+    const captured = registry.conversationDeliverySnapshot({ conversationId: conversation.id }).heldDeliveries[admission.deliveryId]!.command.onlyIfIdle!;
+    const unavailable = { ...client,
+      readSession: async () => {
+        if (outage === "session-error") throw new Error("session unavailable");
+        const current = journal.readSession({ conversationId: conversation.id })!;
+        return outage === "session" ? null : outage === "same-revision" ? { ...current, revision: captured.revision }
+          : outage === "unhosted" ? { ...current, host: "unhosted" as const, writerClaim: null } : current;
+      },
+      operationStatus: async () => { if (outage === "journal-error") throw new Error("journal unavailable"); return null; },
+    } as RuntimeHostClient;
+    const dependencies = { registry: () => new AgentRegistry(registry.filename), client: () => outage === "runtime" ? null : unavailable };
+    expect(await idleContinuationDeliveryRetryEvidence(conversation.id, "provider-stable-cut", dependencies)).toBeNull();
+    expect(await idleContinuationDeliveryRetryable(conversation.id, "provider-stable-cut", dependencies)).toBe(false);
+    expect(state.commands).toBe(1); expect(state.deliveries).toBe(0);
+    publish();
+    expect(session.writerClaim).toBe(captured.writerClaim);
+    expect(await idleContinuationDeliveryRetryEvidence(conversation.id, "provider-stable-cut", { registry: () => new AgentRegistry(registry.filename), client: () => client })).toBe(true);
+    expect(await send()).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(await send()).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(state.commands).toBe(2); expect(state.deliveries).toBe(1);
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
   } finally { journal.close(); }
 });
 
@@ -4884,7 +4916,8 @@ test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut 
   let missing = stateAtRestart === "missing";
   const restartedClient = { ...client, readSession: async () => missing ? null : journal.readSession({ conversationId: conversation.id }) } as RuntimeHostClient;
   const request = { path: artifactPath, conversationId: conversation.id,
-    clientMessageId: "stage-provider-second-cut", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" } };
+    clientMessageId: "stage-provider-second-cut", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" },
+    recoveryAuthorityGuard: () => { expect(state.eligible).toBe(true); } };
   const dependencies = {
     enabled: () => true, registry: () => registry, client: () => restartedClient, kick: () => {},
     idleContinuationAllowed: () => state.eligible,
@@ -4893,7 +4926,9 @@ test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut 
       if (stateAtRestart !== "republish") return false;
       Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish(); return true;
     },
-    recover: async () => {
+    recover: async (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => {
+      expect(input.authorityGuard).toBe(request.recoveryAuthorityGuard);
+      input.authorityGuard?.();
       recoveries++; missing = false;
       Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish();
       return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;

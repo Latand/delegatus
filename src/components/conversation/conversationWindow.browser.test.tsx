@@ -5809,3 +5809,252 @@ describe("owner confirmation of one Telegram file send", () => {
     fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
   }, 120_000);
 });
+
+/* docs/design/telegram-file-confirmation/prototype: three numbered variants of
+   the owner's file-send confirmation, redrawn on the product's components after
+   the visual audit ranked the page worst. The fixture lives beside the design
+   doc with a stylesheet of its own (the product's plus that directory as a
+   Tailwind source), which this block compiles and serves in place of
+   globals.css. Each frame is one variant, width, language, theme and state;
+   the opened states press the page's own controls. Frames and readings go to
+   .artifacts/telegram-file-confirmation-prototype/. Gated by
+   LLV_TELEGRAM_FILE_PROTOTYPE=1 beside the driver's own gate, so a plain driver
+   run skips it. */
+describe("telegram file confirmation prototype (docs/design/telegram-file-confirmation/prototype)", () => {
+  const prototypeTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1" && process.env.LLV_TELEGRAM_FILE_PROTOTYPE === "1");
+  prototypeTest("three variants at 390, 820 and 1440, en and uk, light and dark, pending, details, status and sent", async () => {
+    const out = path.resolve(".artifacts/telegram-file-confirmation-prototype");
+    /* LLV_PROTO_FRAMES=variant-2-390-uk,sent renders only the frames whose
+       name contains one of the terms (a fix round's re-look). */
+    const only = (process.env.LLV_PROTO_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    if (!only.length) fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const dir = "docs/design/telegram-file-confirmation/prototype";
+    const postcss = (await import("postcss")).default;
+    const tailwind = (await import("@tailwindcss/postcss")).default;
+    const css = await postcss([tailwind()]).process(fs.readFileSync(`${dir}/prototype.css`, "utf8"), { from: path.resolve(`${dir}/prototype.css`) });
+    const served = await serveEvidenceFixture(out, `${dir}/prototype.fixture.tsx`, {
+      "/style.css": () => new Response(css.css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    /* The card text that tells the variants apart, per language and state. */
+    const headings = new Map<string, Set<string>>();
+    /* Latin words a Ukrainian frame may carry: names, code tokens and units; everything else is a fallback to English. */
+    const LATIN_ALLOWED = /^(?:Telegram|Delegatus|Orbit|Reports|HTML|SHA-256|handoff|codex|json)$/;
+    const frames: Array<{ variant: 1 | 2 | 3; width: number; lang: "uk" | "en"; theme: "light" | "dark"; state: "pending" | "details" | "status" | "sent" }> = [];
+    for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) for (const variant of [1, 2, 3] as const) {
+      for (const state of ["pending", "details", "status", "sent"] as const) frames.push({ variant, width, lang, theme, state });
+    }
+    for (const lang of ["uk", "en"] as const) for (const variant of [1, 2, 3] as const) frames.push({ variant, width: 820, lang, theme: "light", state: "pending" });
+    try {
+      for (const { variant, width, lang, theme, state } of frames) {
+        const name = `variant-${variant}-${width}-${lang}-${theme}-${state}`;
+        if (!wanted(name)) continue;
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?variant=${variant}&lang=${lang}&theme=${theme}&state=${state === "sent" ? "sent" : "pending"}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.waitForSelector("body[data-proto-ready]", { timeout: 180_000, state: "attached" });
+          await page.evaluate(() => document.fonts.ready);
+          /* Before any press or scroll: the decision and both of its answers are on the first screen. */
+          const firstScreen = await page.evaluate(() => {
+            const inside = (element: Element | null) => {
+              if (!element) return null;
+              const box = element.getBoundingClientRect();
+              return { top: Math.round(box.top), bottom: Math.round(box.bottom), whole: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth };
+            };
+            return {
+              scrollTop: document.querySelector("main")!.scrollTop,
+              heading: inside(document.querySelector("[data-proto-heading]")),
+              headingText: document.querySelector("[data-proto-heading]")?.textContent?.trim() ?? "",
+              send: inside(document.querySelector("[data-proto-send]")),
+              refuse: inside(document.querySelector("[data-proto-refuse]")),
+              caption: document.querySelector("[data-proto-caption]")?.textContent?.trim() ?? "",
+              /* The file that would really go (the requested name is a link to it), whole on the first screen. */
+              realFile: (() => {
+                for (const element of document.querySelectorAll("[data-proto-real-file]")) {
+                  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const at = walker.currentNode.textContent?.indexOf("auth.json") ?? -1;
+                    if (at < 0) continue;
+                    const range = document.createRange();
+                    range.setStart(walker.currentNode, at);
+                    range.setEnd(walker.currentNode, at + "auth.json".length);
+                    const box = range.getBoundingClientRect();
+                    return { top: Math.round(box.top), bottom: Math.round(box.bottom), whole: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth };
+                  }
+                }
+                return null;
+              })(),
+              cardText: (document.querySelector("[data-proto-card]") as HTMLElement | null)?.innerText ?? "",
+            };
+          });
+          if (firstScreen.scrollTop !== 0) failures.push(`${name}: opened scrolled`);
+          if (!firstScreen.heading?.whole) failures.push(`${name}: the heading is not on the first screen`);
+          if (state !== "sent") {
+            if (!firstScreen.send?.whole || !firstScreen.refuse?.whole) failures.push(`${name}: a decision button is off the first screen (${JSON.stringify([firstScreen.send, firstScreen.refuse])})`);
+          } else if (firstScreen.send || firstScreen.refuse) failures.push(`${name}: a used-up confirmation still offers a decision`);
+          if (!firstScreen.caption.includes(String(variant))) failures.push(`${name}: the caption does not number the variant`);
+          if (!firstScreen.realFile?.whole) failures.push(`${name}: the real file (auth.json) is not named on the first screen (${JSON.stringify(firstScreen.realFile)})`);
+          /* One fact, one sentence: no sentence of the card is said twice. */
+          const sentences = firstScreen.cardText.split(/(?<=[.?!:])\s+|\n+/).map((text) => text.trim().toLowerCase()).filter((text) => text.length > 12);
+          const repeated = sentences.filter((text, index) => sentences.indexOf(text) !== index);
+          const privateKey = (firstScreen.cardText.match(lang === "uk" ? /приватний ключ/gi : /private key/gi) ?? []).length;
+          if (repeated.length || privateKey > 1) failures.push(`${name}: a fact is said twice: ${repeated.join(" | ") || `private key ×${privateKey}`}`);
+          const key = `${lang}-${state === "sent" ? "sent" : "pending"}`;
+          if (!headings.has(key)) headings.set(key, new Set());
+          headings.get(key)!.add(firstScreen.cardText);
+          if (state === "details") {
+            await page.click("[data-proto-details] button", { timeout: 60_000 });
+            await page.waitForSelector("[data-mobile2-menu-body]", { timeout: 60_000 });
+            /* The whole fold in one frame: the window grows to the page instead of scrolling it. */
+            const height = await page.evaluate(() => document.querySelector("main")!.scrollHeight);
+            await page.setViewportSize({ width, height: Math.max(viewport.height, height) });
+          }
+          if (state === "status") {
+            await page.click("[data-proto-status]", { timeout: 60_000 });
+            await page.waitForSelector("[data-proto-popover]", { timeout: 60_000 });
+          }
+          await page.waitForTimeout(250);
+          const reading = await page.evaluate((coarse) => {
+            const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+            const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+            const clipped: string[] = [];
+            const offscreen: string[] = [];
+            const cut: string[] = [];
+            const small: string[] = [];
+            const covered: string[] = [];
+            const texts: string[] = [];
+            const popover = document.querySelector("[data-proto-popover]");
+            for (const element of document.querySelectorAll<HTMLElement>("[data-proto-card], [data-proto-caption]")) {
+              const clippers: DOMRect[] = [];
+              for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clippers.push(node.getBoundingClientRect());
+              }
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const text = node.textContent?.trim();
+                if (!text) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  texts.push(text);
+                  if (!within(rect, screen)) offscreen.push(text);
+                  else if (clippers.some((box) => !within(rect, box))) clipped.push(text);
+                  /* The popover stands beside the words, never on them. */
+                  if (popover && !popover.contains(node)) {
+                    for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+                      const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+                      if (hit && popover.contains(hit)) covered.push(text);
+                    }
+                  }
+                }
+              }
+              /* No line ends in an ellipsis. */
+              for (const node of element.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) cut.push(node.textContent?.trim() ?? "");
+              /* Every control is reachable: 44 px under a finger, 24 under a pointer. */
+              for (const control of element.querySelectorAll<HTMLElement>("button")) {
+                const box = control.getBoundingClientRect();
+                if (box.width === 0 || box.height === 0) continue;
+                if (Math.min(box.width, box.height) < (coarse ? 44 : 24)) small.push(`${(control.textContent ?? control.getAttribute("aria-label") ?? "").trim()} ${Math.round(box.width)}×${Math.round(box.height)}`);
+              }
+            }
+            /* A paragraph never ends on a lone short word. */
+            const orphans: string[] = [];
+            for (const block of document.querySelectorAll<HTMLElement>("[data-proto-caption], [data-proto-card] :is(h1, p, li, dd)")) {
+              const words: Array<{ text: string; top: number }> = [];
+              const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+                  const range = document.createRange();
+                  range.setStart(node, match.index!);
+                  range.setEnd(node, match.index! + match[0].length);
+                  const rect = range.getClientRects()[0];
+                  if (rect) words.push({ text: match[0], top: Math.round(rect.top) });
+                }
+              }
+              const lines = [...new Set(words.map((word) => word.top))];
+              if (lines.length < 2) continue;
+              const last = words.filter((word) => word.top === lines.at(-1));
+              const tail = last.map((word) => word.text).join(" ");
+              if (last.length === 1 && tail.length < 10 || last.length === 2 && tail.length < 11) orphans.push(`${tail} (${block.textContent?.trim().slice(0, 40)}…)`);
+            }
+            /* A file name in a sentence stays on one line. */
+            for (const name of document.querySelectorAll("[data-proto-name]")) if (name.getClientRects().length > 1) orphans.push(`${name.textContent} broken across lines`);
+            /* Both decision labels read against their own fill: 4.5:1 or more. */
+            const channel = (value: number) => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+            const luminance = (css: string) => { const [r, g, b] = (css.match(/[\d.]+/g) ?? []).map(Number); return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b); };
+            const fill = (element: Element) => {
+              for (let node: Element | null = element; node; node = node.parentElement) {
+                const value = getComputedStyle(node).backgroundColor;
+                if (!/^rgba\(.*,\s*0\)$/.test(value) && value !== "transparent") return value;
+              }
+              return "rgb(255, 255, 255)";
+            };
+            const contrast: Record<string, number> = {};
+            for (const control of document.querySelectorAll("[data-proto-send], [data-proto-refuse]")) {
+              const [a, b] = [luminance(getComputedStyle(control).color), luminance(fill(control))].sort((x, y) => y - x);
+              contrast[(control.textContent ?? "").trim()] = Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100;
+            }
+            const main = document.querySelector("main")!;
+            const card = document.querySelector("[data-proto-card]")!.getBoundingClientRect();
+            const caption = document.querySelector("[data-proto-caption]")!.getBoundingClientRect();
+            const popoverBox = popover?.getBoundingClientRect();
+            return {
+              texts, offscreen, clipped, cut, small, covered, orphans, contrast,
+              gap: Math.round(card.top - caption.bottom),
+              popoverInCard: popoverBox ? popoverBox.top >= card.top + 4 && popoverBox.bottom <= card.bottom - 4 && popoverBox.left >= card.left + 4 && popoverBox.right <= card.right - 4 : null,
+              /* The status dot and the Details chevron share one centre line on the right. */
+              dotOffChevron: (() => {
+                const dot = document.querySelector("[data-proto-status] > span")?.getBoundingClientRect();
+                const chevron = document.querySelector("[data-proto-details] button svg")?.getBoundingClientRect();
+                return dot && chevron ? Math.round(((dot.left + dot.right) / 2 - (chevron.left + chevron.right) / 2) * 10) / 10 : null;
+              })(),
+              detailsRow: document.querySelector("[data-proto-details] button")?.textContent?.trim() ?? "",
+              overflow: main.scrollWidth - main.clientWidth,
+              cardWidth: Math.round(card.width),
+              viewport: { width: innerWidth, height: innerHeight },
+              popover: popoverBox ? { top: Math.round(popoverBox.top), bottom: Math.round(popoverBox.bottom), left: Math.round(popoverBox.left), right: Math.round(popoverBox.right), text: popover!.textContent } : null,
+              detailsOpen: Boolean(document.querySelector("[data-mobile2-menu-body]")),
+              background: getComputedStyle(main).backgroundColor,
+            };
+          }, phone);
+          if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
+          if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
+          if (reading.cut.length) failures.push(`${name}: ellipsis: ${reading.cut.join(" | ")}`);
+          if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
+          if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
+          if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
+          if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
+          if (reading.popoverInCard === false) failures.push(`${name}: the popover crosses or touches the card's edge (${JSON.stringify(reading.popover)})`);
+          if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
+          if (reading.gap > 16) failures.push(`${name}: ${reading.gap} px of empty band between the caption and the card`);
+          if (/\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row carries a number: ${reading.detailsRow}`);
+          if (reading.orphans.length) failures.push(`${name}: a line ends on a lone word: ${reading.orphans.join(" | ")}`);
+          for (const [label, ratio] of Object.entries(reading.contrast)) if (ratio < 4.5) failures.push(`${name}: «${label}» reads at ${ratio}:1`);
+          if (state === "details" && !reading.detailsOpen) failures.push(`${name}: the fold did not open`);
+          if (state === "pending" && reading.detailsOpen) failures.push(`${name}: the fold opened by itself`);
+          if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
+          /* A Ukrainian frame says everything in Ukrainian: a Latin word outside the names and code tokens is a silent English fallback. */
+          const latin = lang === "uk"
+            ? reading.texts.flatMap((text) => text.split(/[\s·,;:()?!«»"]+/)).filter((word) => /^[A-Za-z][A-Za-z-]*$/.test(word) && !LATIN_ALLOWED.test(word))
+            : [];
+          if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          await page.screenshot({ path: path.join(out, `${name}.png`) });
+          readings.push({ frame: name, variant, width, lang, theme, state, firstScreen, ...reading, texts: undefined, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    for (const [key, texts] of headings) if (texts.size < 3 && !only.length) failures.push(`${key}: two variants read the same: ${[...texts].join(" | ")}`);
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

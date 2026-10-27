@@ -861,7 +861,7 @@ test("override-stage rejects an unknown/disallowed role and an incompatible role
   const unknown = await patchPipeline(created.id, { action: "override-stage", stageId: "build", engine: "codex", model: "gpt-5.6-codex" }, ports);
   expect(unknown).toMatchObject({
     status: 400,
-    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra",
   });
 });
 
@@ -2374,6 +2374,28 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(parked.lastPassedCommit).toBe(box.passedSha);
   expect(parked.publishedCommit ?? null).toBeNull();
   expect(box.order).toEqual(["commit", "push-rejected"]);
+  expect(h.flows.size).toBe(0);
+});
+
+test("a read-write privacy gate checks the accepted committed head and leaves a rejected head unpublished (#2424)", async () => {
+  const h = harness();
+  const box = publishHarness(h, { privacyRejects: true });
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+
+  const rejected = loadPipelines()[0]!;
+  expect(box.order).toEqual(["commit", `privacy:${box.passedSha}:${box.passedSha}`]);
+  expect(rejected).toMatchObject({
+    state: "needs_decision",
+    lastPassedCommit: box.passedSha,
+    publishedCommit: null,
+    stateDetail: expect.stringContaining("privacy"),
+  });
+  expect(rejected.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
+  expect(box.remote()).toBeNull();
   expect(h.flows.size).toBe(0);
 });
 
