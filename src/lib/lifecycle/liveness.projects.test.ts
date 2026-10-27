@@ -13,7 +13,7 @@ import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import { conversationCatalogSnapshot, replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { compactLiveness } from "@/lib/mcp/compactAnswers";
 import { completedGenerationSelection } from "./inventorySelection";
-import { agentLivenessSnapshot, type AgentLivenessSources } from "./liveness";
+import { agentLivenessSnapshot, HOSTED_RECOVERY_MAX, type AgentLivenessSources } from "./liveness";
 
 const NOW = Date.parse("2026-10-26T14:29:00Z");
 const PROJECT = "repo-0123456789abcdef0123456789abcdef";
@@ -220,6 +220,88 @@ test.each([false, true])("scope resolution includes hosts beyond the prefetch li
   const read = agentLivenessSnapshot({ project: "repo-01234567", liveOnly: true, limit: 1, answerBudgetMs: 800 }, sources);
   if (colliding) await expect(read).rejects.toMatchObject({ details: { code: "ambiguous_project" } });
   else expect((await read).conversations.map(row => row.transcriptPath)).toEqual([transcript]);
+});
+
+function cataloguedHosts(currentProject = PROJECT, inventory: "generation" | "legacy" = "generation") {
+  const fixtureData = fixture(currentProject === PROJECT ? OTHER : PROJECT, true, inventory);
+  const { sources, transcript, files, row } = fixtureData;
+  const otherPath = path.join(directory, "first-host.jsonl");
+  files.unshift({ ...row, path: otherPath, project: OTHER, conversationId: "conversation_first_host" });
+  const describe = sources.describeTranscript;
+  sources.describeTranscript = async candidate => {
+    const entry = await describe(candidate);
+    return entry ? { ...entry, path: candidate, project: candidate === transcript ? currentProject : OTHER,
+      conversationId: candidate === transcript ? fixtureData.conversationId : "conversation_first_host" } : entry;
+  };
+  sources.flows = Object.assign(sources.flows!, { forLiveness: async () => [{ reviewerMode: "headless" as const,
+    rounds: [otherPath, transcript].map(reviewerPath => ({ reviewerPath, reviewerPid: 4242, reviewerIdentity: "current-start" })) }] });
+  return fixtureData;
+}
+
+test.each((["generation", "legacy"] as const).flatMap(inventory => [PROJECT, OTHER].map(currentProject => ({ inventory, currentProject }))))(
+  "catalogued hosts beyond the prefetch limit use current membership: $inventory $currentProject", async ({ inventory, currentProject }) => {
+    const { sources, conversationId, transcript } = cataloguedHosts(currentProject, inventory);
+    const request = { project: "repo-01234567", liveOnly: true, limit: 1, answerBudgetMs: 800 };
+    const targeted = await agentLivenessSnapshot({ ...request, conversationId }, sources);
+    expect(targeted.conversations).toHaveLength(1);
+    expect(targeted.conversations[0]).toMatchObject({ transcriptPath: transcript, project: currentProject, verified: true });
+    const snapshot = await agentLivenessSnapshot(request, sources);
+    expect(snapshot.conversations).toEqual(currentProject === PROJECT ? targeted.conversations : []);
+    expect(snapshot.unresolvedProjectCount ?? 0).toBe(0);
+    expect(snapshot.selection.recovered).toBe(0);
+  },
+);
+
+test.each(["pending", "missing", "refused"] as const)("unresolved current host membership never falls back to a stale catalog: %s", async outcome => {
+  const { sources, transcript } = cataloguedHosts(OTHER);
+  const describe = sources.describeTranscript;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  sources.describeTranscript = async candidate => {
+    if (candidate !== transcript) return describe(candidate);
+    if (outcome === "pending") await held;
+    if (outcome === "refused") throw new Error("description unavailable");
+    return null;
+  };
+  try {
+    const snapshot = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1, answerBudgetMs: 100 }, sources);
+    expect(snapshot.conversations).toEqual([]);
+    expect(snapshot.unresolvedProjectCount).toBe(1);
+    expect(snapshot.selection.recoveryPending).toBe(outcome === "pending" ? 1 : 0);
+  } finally { release(); }
+});
+
+test("describing catalogued owners beyond the row limit does not count them as recovered", async () => {
+  const { sources, files } = cataloguedHosts();
+  const describe = sources.describeTranscript;
+  files[0]!.project = PROJECT;
+  sources.describeTranscript = async candidate => {
+    const entry = await describe(candidate);
+    return entry ? { ...entry, project: PROJECT } : entry;
+  };
+  const snapshot = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1, answerBudgetMs: 800 }, sources);
+  expect(snapshot.conversations.map(row => row.transcriptPath)).toEqual([files[0]!.path]);
+  expect(snapshot.selection).toMatchObject({ matched: 2, selected: 1, recovered: 0 });
+});
+
+test("catalogued host identity resolution stays capped and reports hosts outside the cap", async () => {
+  const { sources, files, row } = fixture(PROJECT);
+  const paths = Array.from({ length: HOSTED_RECOVERY_MAX + 3 }, (_, i) => path.join(directory, `capped-host-${i}.jsonl`));
+  files.splice(0, files.length, ...paths.map(candidate => ({ ...row, path: candidate, conversationId: undefined })));
+  sources.flows = Object.assign(() => [], { forLiveness: async () => [{ reviewerMode: "headless" as const,
+    rounds: paths.map(reviewerPath => ({ reviewerPath, reviewerPid: 4242, reviewerIdentity: "current-start" })) }] });
+  const described: string[] = [];
+  const describe = sources.describeTranscript;
+  sources.describeTranscript = async candidate => {
+    described.push(candidate);
+    const entry = await describe(candidate);
+    return entry ? { ...entry, path: candidate, project: OTHER, conversationId: null } : entry;
+  };
+  const snapshot = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1, answerBudgetMs: 800 }, sources);
+  expect(snapshot.count).toBe(0);
+  expect(described).toEqual([paths[0], ...paths.slice(-HOSTED_RECOVERY_MAX)]);
+  expect(snapshot.unresolvedProjectCount).toBe(2);
+  expect(snapshot.selection.recoveryTruncated).toBe(true);
 });
 
 test.each([true, false])("the scanner sentinel counts once with published catalog present=%s", async present => {

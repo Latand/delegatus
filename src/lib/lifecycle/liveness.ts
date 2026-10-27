@@ -1356,22 +1356,31 @@ async function livenessSnapshotWithin(
     const prepareProjectMatches = async (catalog: ConversationSelectionCatalog) => {
       await hostedRead;
       if (signal?.aborted) throw livenessAbortError(signal.reason);
-      const seen = new Set(catalog.files.map(entry => entry.path));
-      for (const path of hostedDescriptions.keys()) seen.add(path);
+      // Catalog membership does not prove current project membership. Resolve
+      // active hosts beyond the evidence prefetch limit too, within recovery's
+      // own cap and the shared answer deadline.
+      const seen = new Set(hostedDescriptions.keys());
       preparedRecovery = await recoverHostedTranscripts(hostedPaths, seen, () => true,
         path => sources.describeTranscript(path), answer);
+      for (const entry of preparedRecovery.entries) hostedDescriptions.set(entry.path, entry);
       // Give cancellation a turn after asynchronous host recovery and before
       // compiling the request-local indexes and walking retained metadata.
       await new Promise<void>(resolve => setImmediate(resolve));
       if (signal?.aborted) throw livenessAbortError(signal.reason);
       projectSelection = livenessProjectSelection(request.project, catalog,
-        [...hostedDescriptions.values(), ...preparedRecovery.entries], answer);
+        [...hostedDescriptions.values()], answer);
+      for (const path of hostedPaths) {
+        if (!hostedDescriptions.has(path)) projectSelection.unresolved.add(path);
+      }
       prepared = true;
     };
     const selectionRequest: ConversationSelectionRequest = {
       project: request.project,
       ...(request.project ? { prepareProjectMatches } : {}),
-      projectMatches: entry => projectSelection.matches(hostedDescriptions.get(entry.path) ?? entry),
+      projectMatches: entry => {
+        if (request.project && hostedPaths.has(entry.path) && !hostedDescriptions.has(entry.path)) return false;
+        return projectSelection.matches(hostedDescriptions.get(entry.path) ?? entry);
+      },
       liveOnly: request.liveOnly,
       limit,
       hostedPaths,
@@ -1422,7 +1431,7 @@ async function livenessSnapshotWithin(
     await hostedRead;
     const prefetched = [...new Set(hostedDescriptions.values())].filter(entry => hostedPaths.has(entry.path) && !hostedSeen.has(entry.path) && projectSelection.matches(entry));
     const recovery = preparedRecovery
-      ? { ...preparedRecovery, entries: preparedRecovery.entries.filter(projectSelection.matches) }
+      ? { ...preparedRecovery, entries: preparedRecovery.entries.filter(entry => !hostedSeen.has(entry.path) && projectSelection.matches(entry)) }
       : await recoverHostedTranscripts(hostedPaths, new Set([...hostedSeen, ...prefetched.map(entry => entry.path)]), projectSelection.matches, async path => hostedDescriptions.get(path) ?? sources.describeTranscript(path), answer);
     recovery.entries.push(...prefetched);
     const known = new Set(entries.map((entry) => entry.path));
