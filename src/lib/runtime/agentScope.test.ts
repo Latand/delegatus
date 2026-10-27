@@ -69,7 +69,7 @@ test.each(["command", "authority"])("a hung %s is bounded by the whole stop dead
   })).rejects.toThrow("deadline exceeded");
 });
 
-test("CPU-only scope evidence survives every host writer and a fresh registry reader", () => {
+(process.platform === "win32" ? test.skip : test)("CPU-only scope evidence survives every host writer and a fresh registry reader", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-codec-"));
   const cpu = planAgentCpu("operator", {}, { probe: () => ({ kind: "available", systemdVersion: 252 }), runner: () => "" })!;
   const plan = planAgentMemory({ engine: "codex", sessionKey: "scope-codec", liveAgents: 1, cpu }, { DELEGATUS_AGENT_MEMORY: "off" })!;
@@ -156,7 +156,7 @@ test.each([1, 2, 3])("replacement claim at scope command %i retains the original
   } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-const realScopeTest = process.env.LLV_AGENT_MEMORY_SCOPE_TEST === "1" ? test : test.skip;
+const realScopeTest = process.platform === "linux" && process.env.LLV_AGENT_MEMORY_SCOPE_TEST === "1" ? test : test.skip;
 realScopeTest.each([
   ["memory", "controller"], ["cpu", "controller"], ["memory", "tree"], ["cpu", "tree"], ["memory", "retirement"], ["cpu", "retirement"], ["legacy", "controller"], ["legacy", "tree"], ["legacy", "retirement"], ["legacy-sqlite", "controller"], ["legacy-sqlite", "tree"], ["legacy-sqlite", "retirement"],
 ])("gone conversation removes its private %s scope through %s after restart", async (mode, route) => {
