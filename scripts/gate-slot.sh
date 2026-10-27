@@ -14,7 +14,7 @@ if [[ ! "$slots" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 if [[ $# -eq 0 ]]; then echo "usage: gate-slot.sh command [args...]" >&2; exit 2; fi
-export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=6144}"
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=11264}"
 poll=${LLV_GATE_POLL_SECONDS:-2}
 
 # CPU placement: the same defaults as src/lib/runtime/cpuPlacement.ts. Each
@@ -100,7 +100,7 @@ run() {
     unset LLV_GATE_WAIT_STARTED
   fi
   if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]] && ! user_manager; then
-    echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-8G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
+    echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-14G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
     exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
   fi
   if cpu_applies; then
