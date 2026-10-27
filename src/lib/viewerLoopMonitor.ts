@@ -4,6 +4,7 @@ import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
+import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 
 export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
@@ -46,9 +47,10 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
-/** Stall evidence stays visible even in a quiet terminal. A slow journal must
- * not grow the heap or block the loop that it measures. */
+/** A slow journal must not grow the heap or block the loop that it measures.
+ * Package terminals opt out of log output; the service keeps every line. */
 export function createLoopLogSink(write = (line: string, done: () => void) => {
+  if (startupDiagnosticsQuiet()) { done(); return; }
   process.stderr.write(`${line}\n`, done);
 }) {
   const queue: string[] = [];
