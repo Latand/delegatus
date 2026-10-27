@@ -100,6 +100,55 @@ test("a Reviewer conversation creates a remote-less, pinned draft on its held ta
   expect(JSON.parse(output).conversationSource).toEqual(p.conversationSource);
 });
 
+test.each(["fix/conversation-source", "heads/fix/conversation-source"])("a branch sharing its name with a tag retains its literal merge target: %s", async branch => {
+  const f = await fixture();
+  if (branch !== "fix/conversation-source") await f.git(f.repo, "branch", "-m", branch);
+  await f.git(f.repo, "tag", branch);
+  const before = await f.git(f.repo, "status", "--porcelain", "--untracked-files=normal");
+  const preview = await f.preview();
+  expect(preview.source).toMatchObject({ branch, head: f.head, canCreate: true });
+  const result = await createConversationDraft(f.request, {
+    ...f.input, sourceRevision: preview.source.sourceRevision, clientRequestId: "colliding-ref-draft",
+  }, f.ports);
+  expect(result.status).toBe(201);
+  expect(loadPipelines()[0]).toMatchObject({
+    baseBranch: branch, baseRef: f.head, lastPassedCommit: f.head,
+    conversationSource: { branch, head: f.head },
+  });
+  expect(await f.git(f.repo, "symbolic-ref", "HEAD")).toBe(`refs/heads/${branch}`);
+  expect(await f.git(f.repo, "rev-parse", "HEAD")).toBe(f.head);
+  expect(await f.git(f.repo, "status", "--porcelain", "--untracked-files=normal")).toBe(before);
+  expect(fs.existsSync(result.pipeline!.worktreeDir)).toBe(false);
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
+test("a colliding branch ref moved after preparation is refused by the storage admission stamp", async () => {
+  const f = await fixture();
+  await f.git(f.repo, "tag", "fix/conversation-source");
+  const input = await f.createInput();
+  const previous = await f.git(f.repo, "rev-parse", "HEAD^");
+  const create = pipelineStore.createPipelineWithDelivery;
+  let moved = false;
+  const admission = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementation((pipeline, target, comparison, options) => {
+    const prepare = options!.prepare!;
+    return create(pipeline, target, comparison, { ...options, prepare: async () => {
+      await prepare();
+      const ref = path.join(f.repo, ".git", "refs", "heads", "fix", "conversation-source");
+      fs.writeFileSync(ref + ".lock", previous + "\n");
+      fs.renameSync(ref + ".lock", ref);
+      moved = true;
+    } });
+  });
+  try { await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ code: "SOURCE_CHANGED" }); }
+  finally { admission.mockRestore(); }
+  expect(moved).toBe(true);
+  expect(loadPipelines()).toEqual([]);
+  expect(listQueuedPipelineCreations()).toEqual([]);
+  expect(await f.git(f.repo, "rev-parse", "HEAD")).toBe(previous);
+  expect(fs.readFileSync(path.join(f.repo, "tracked.txt"), "utf8")).toBe("original\nsource commit\n");
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
 test("Start uses commit A after the source advances to B, with one normal generated worktree and one Builder", async () => {
   const f = await fixture();
   const result = await createConversationDraft(f.request, await f.createInput(), f.ports);
@@ -121,12 +170,16 @@ test("Start uses commit A after the source advances to B, with one normal genera
   expect(f.spawnInputs).toHaveLength(1);
 });
 
-test.each(["tracked", "untracked", "detached", "unborn", "bare", "missing", "plain", "file"])("source refusal leaves no draft or source mutation: %s", async kind => {
+test.each(["tracked", "untracked", "detached", "unborn", "nonbranch", "bare", "missing", "plain", "file"])("source refusal leaves no draft or source mutation: %s", async kind => {
   const f = await fixture();
   if (kind === "tracked") fs.appendFileSync(path.join(f.repo, "tracked.txt"), "unfinished");
   if (kind === "untracked") fs.writeFileSync(path.join(f.repo, "new.txt"), "unfinished");
   if (kind === "detached") await f.git(f.repo, "checkout", "--detach");
   if (kind === "unborn") await f.git(f.repo, "checkout", "--orphan", "unborn");
+  if (kind === "nonbranch") {
+    await f.git(f.repo, "tag", "source-tag");
+    await f.git(f.repo, "symbolic-ref", "HEAD", "refs/tags/source-tag");
+  }
   if (kind === "bare") await f.git(f.repo, "config", "core.bare", "true");
   if (kind === "plain") fs.renameSync(path.join(f.repo, ".git"), path.join(f.root, "saved-git"));
   if (kind === "missing") fs.renameSync(f.repo, path.join(f.root, "moved-repo"));
@@ -135,7 +188,7 @@ test.each(["tracked", "untracked", "detached", "unborn", "bare", "missing", "pla
     const preview = await f.preview();
     expect(preview.source.canCreate).toBe(false);
     await expect(createConversationDraft(f.request, { ...f.input, clientRequestId: "dirty", sourceRevision: preview.source.sourceRevision }, f.ports)).rejects.toMatchObject({ code: "SOURCE_HAS_CHANGES" });
-  } else await expect(f.preview()).rejects.toMatchObject({ code: ["detached", "unborn"].includes(kind) ? "SOURCE_BRANCH_UNAVAILABLE" : "SOURCE_WORKING_COPY_UNAVAILABLE" });
+  } else await expect(f.preview()).rejects.toMatchObject({ code: ["detached", "unborn", "nonbranch"].includes(kind) ? "SOURCE_BRANCH_UNAVAILABLE" : "SOURCE_WORKING_COPY_UNAVAILABLE" });
   expect(loadPipelines()).toEqual([]);
   expect(f.spawnInputs).toHaveLength(0);
   if (kind === "plain") expect(fs.existsSync(path.join(f.repo, ".git"))).toBe(false);

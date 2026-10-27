@@ -159,12 +159,14 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
     if (!project || canonicalProject(project) !== canonicalProject(bound.task.project)) refuse("SOURCE_PROJECT_MISMATCH", "working copy and task belong to different projects");
     const git = async (...args: string[]) => exec("git", args, repoDir);
     const facts = async () => {
-      const branch = await git("symbolic-ref", "--quiet", "--short", "HEAD");
+      const symbolicRef = await git("symbolic-ref", "--quiet", "HEAD");
+      const fullRef = symbolicRef.stdout.trim();
+      const branch = fullRef.startsWith("refs/heads/") ? fullRef.slice("refs/heads/".length) : "";
       const head = await git("rev-parse", "--verify", "HEAD^{commit}");
-      if (branch.code !== 0 || !branch.stdout.trim() || pipelineBaseBranchError(branch.stdout.trim()) || head.code !== 0) refuse("SOURCE_BRANCH_UNAVAILABLE", "conversation requires a named branch with a commit");
+      if (symbolicRef.code !== 0 || !branch || pipelineBaseBranchError(branch) || head.code !== 0) refuse("SOURCE_BRANCH_UNAVAILABLE", "conversation requires a named branch with a commit");
       const status = await git("status", "--porcelain", "--untracked-files=normal");
       if (status.code !== 0) refuse("SOURCE_WORKING_COPY_UNAVAILABLE", "source status is unavailable");
-      return { branch: branch.stdout.trim(), head: head.stdout.trim(), dirty: !!status.stdout.trim() };
+      return { branch, head: head.stdout.trim(), dirty: !!status.stdout.trim() };
     };
     const initial = await facts();
     const gitDirectory = await git("rev-parse", "--absolute-git-dir");
