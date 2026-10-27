@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,6 +14,9 @@ import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
 import { beginSeatDeployment, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+import { UnixRuntimeHostClient } from "@/lib/runtime/client";
+import { serveRuntimeHost } from "@/runtime-host/socket";
+import { testEndpoint } from "@/runtime-host/fixtures/testEndpoint";
 
 /**
  * The HTTP deploy door, at parity with the MCP binding and the raw socket
@@ -93,6 +97,84 @@ test.each(["adopted", "rejected", "revoked-during-admission"] as const)("attribu
   const response = await POST(request);
   expect(response.status).toBe(phase === "adopted" ? 202 : 403);
   expect(requested).toHaveLength(phase === "adopted" ? 1 : 0);
+});
+
+test.each([false, true])("managed deployment rechecks attributable authority after socket admission: revoked %s", async revoked => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const project = `managed-queue-${revoked}`;
+  const { task } = await admitProactiveTask({ ...candidate(project), project }, { ...context(), project }, undefined, authority());
+  const adopt = () => decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task));
+  await adopt();
+  const registry = agentRegistry();
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: sandboxes[0]!, taskIds: [task.id], origin: { kind: "operator" } });
+  if (begun.kind !== "created") throw new Error("expected a fresh launch");
+  const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+  const endpoint = testEndpoint(sandboxes[0]!, "managed-queue");
+  process.env.LLV_RUNTIME_HOST_SOCKET = endpoint;
+  setDeploymentRuntimeForTests(null);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let saturated!: () => void;
+  const ready = new Promise<void>(resolve => { saturated = resolve; });
+  let reads = 0;
+  const deployments: string[] = [];
+  const sockets = new Set<net.Socket>();
+  const server = serveRuntimeHost(endpoint, { handle: async request => {
+    if (request.method === "files-revision") {
+      if (++reads === 4) saturated();
+      if (reads <= 4) await gate;
+      return { id: request.id, ok: true, result: 1 };
+    }
+    deployments.push(request.method);
+    return { id: request.id, ok: true, result: { deploymentId: "managed-queued", revision: SHA, state: "accepted", replayed: false } };
+  } });
+  server.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
+  const client = new UnixRuntimeHostClient(endpoint);
+  const active: Promise<number>[] = [];
+  let response: Promise<Response> | undefined;
+  let queued!: () => void;
+  const waiting = new Promise<void>(resolve => { queued = resolve; });
+  const original = UnixRuntimeHostClient.prototype.requestViewerDeployment;
+  const dispatch = spyOn(UnixRuntimeHostClient.prototype, "requestViewerDeployment").mockImplementation(function(request, authorize) {
+    const result = original.call(this, request, authorize);
+    queued();
+    return result;
+  });
+  const request = () => {
+    const input = deployRequest({ revision: SHA, idempotencyKey: project });
+    input.headers.set("x-llv-spawn-capability", capability);
+    return input;
+  };
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    active.push(...Array.from({ length: 4 }, () => client.filesRevision()));
+    await ready;
+    response = POST(request());
+    await waiting;
+    expect(deployments).toEqual([]);
+    if (revoked) await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+    release();
+    const answer = await response;
+    expect(answer.status).toBe(revoked ? 403 : 202);
+    if (revoked) expect(await answer.json()).toMatchObject({ error: "invented work was rejected by the operator" });
+    expect(deployments).toHaveLength(revoked ? 0 : 1);
+    await Promise.all(active);
+    expect(await client.filesRevision()).toBe(1);
+    if (revoked) {
+      await adopt();
+      expect((await POST(request())).status).toBe(202);
+      expect(deployments).toEqual(["viewer-deployment-request"]);
+    }
+  } finally {
+    release();
+    await Promise.allSettled([...active, ...(response ? [response] : [])]);
+    dispatch.mockRestore();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test("admission records the pending seat before a lost HTTP reply, including checkout installs", async () => {

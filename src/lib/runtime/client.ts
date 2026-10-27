@@ -186,7 +186,7 @@ export interface RuntimeHostClient {
       "unsupported": the receipt then expires on the ordinary compaction
       cadence, which is exactly the behaviour that predates this method. */
   acknowledgeTerminalProjection?(operationIds: readonly string[]): Promise<number>;
-  requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
+  requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt>;
   cancelViewerDeployment?(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   listViewerDeployments?(options?: ViewerDeploymentListOptions): Promise<ViewerDeploymentList>;
@@ -324,7 +324,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   acknowledgeTerminalProjection(operationIds: readonly string[]): Promise<number> {
     return this.call("operation-projection-ack", { operationIds: [...operationIds] }) as Promise<number>;
   }
-  requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
+  requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs, undefined, false, authorize) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   findViewerDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null> {
@@ -391,7 +391,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       verbatim, megabytes of it. Decoding that to a string, parsing it, and
       having a route stringify and encode it again was five passes over the
       frame on the request thread, per request. */
-  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false): Promise<unknown> {
+  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false, authorize?: () => void): Promise<unknown> {
     return withViewerOperation("runtime.rpc", () => new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, keepAlive: true, ...(params ? { params } : {}) };
       performanceSpans.request(request.id, method, timeoutMs);
@@ -506,6 +506,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       const send = () => {
         if (settled || !lease) return;
         if (!lease.reused) performanceSpans.event("rpc.connect", request.id);
+        // Connection admission and connect can wait; attributable effects need
+        // their live authority immediately before the first request byte.
+        try { authorize?.(); }
+        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); return; }
         try {
           lease.socket.write(JSON.stringify(request) + "\n");
           performanceSpans.event("rpc.send", request.id);

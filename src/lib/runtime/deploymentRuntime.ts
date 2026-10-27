@@ -14,7 +14,7 @@ import type { ViewerDeploymentReceipt, ViewerDeploymentRequest } from "./contrac
  * deploy never reaches this function at all.
  */
 
-export type DeploymentRuntime = (request: ViewerDeploymentRequest) => Promise<ViewerDeploymentReceipt>;
+export type DeploymentRuntime = (request: ViewerDeploymentRequest, authorize?: () => void) => Promise<ViewerDeploymentReceipt>;
 
 export class DeploymentRuntimeUnavailableError extends Error {
   constructor() {
@@ -23,16 +23,16 @@ export class DeploymentRuntimeUnavailableError extends Error {
   }
 }
 
-const productionRuntime: DeploymentRuntime = (request) => {
+const productionRuntime: DeploymentRuntime = (request, authorize) => {
   const client = runtimeHostClient();
   if (!client) throw new DeploymentRuntimeUnavailableError();
-  return client.requestViewerDeployment(request);
+  return client.requestViewerDeployment(request, authorize);
 };
 
 let deploymentRuntime: DeploymentRuntime = productionRuntime;
 
-export function requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> {
-  return deploymentRuntime(request);
+export function requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt> {
+  return deploymentRuntime(request, authorize);
 }
 
 /** Tests only; `null` restores the production path. */

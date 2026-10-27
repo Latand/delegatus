@@ -179,7 +179,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
       return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
     }
-    const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey });
+    const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey }, authorize);
     await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
       console.error("[deploy admission] could not record the seat wake", error);
     });
