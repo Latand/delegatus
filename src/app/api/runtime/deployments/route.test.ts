@@ -138,7 +138,7 @@ test.each([false, true])("managed deployment rechecks attributable authority aft
   let queued!: () => void;
   const waiting = new Promise<void>(resolve => { queued = resolve; });
   const original = UnixRuntimeHostClient.prototype.requestViewerDeployment;
-  const dispatch = spyOn(UnixRuntimeHostClient.prototype, "requestViewerDeployment").mockImplementation(function(request, authorize) {
+  const dispatch = spyOn(UnixRuntimeHostClient.prototype, "requestViewerDeployment").mockImplementation(function(this: UnixRuntimeHostClient, request, authorize) {
     const result = original.call(this, request, authorize);
     queued();
     return result;
