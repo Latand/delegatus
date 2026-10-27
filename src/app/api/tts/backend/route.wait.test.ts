@@ -5,27 +5,30 @@ import { expect, test } from "bun:test";
 import { configFilePath } from "@/lib/configDir";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 
-async function until(predicate: () => boolean): Promise<void> {
+async function until(predicate: () => boolean, barrier = "voice writer"): Promise<void> {
   const deadline = performance.now() + 5_000;
   while (!predicate()) {
-    if (performance.now() >= deadline) throw new Error("voice writer did not reach its barrier");
+    if (performance.now() >= deadline) throw new Error(`${barrier} did not reach its barrier`);
     await new Promise(resolve => setTimeout(resolve, 5));
   }
 }
 
 async function serve(root: string) {
   const ready = path.join(root, "ready.json");
-  fs.rmSync(ready, { force: true });
+  for (const marker of [ready, `${ready}.signal`, `${ready}.timer`]) fs.rmSync(marker, { force: true });
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "writeWait.fixture.ts"), ready], {
-    env: { ...process.env, XDG_CONFIG_HOME: root }, stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    env: { ...process.env, XDG_CONFIG_HOME: root }, stdin: "pipe", stdout: "ignore", stderr: "pipe",
   });
+  // Owned by the parent: a blocked fixture cannot run its own deadlock watchdog.
+  const watchdog = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 15_000);
   const errors = new Response(child.stderr).text();
   try {
     await until(() => fs.existsSync(ready) || child.exitCode !== null);
     if (!fs.existsSync(ready)) throw new Error(`voice fixture exited: ${await errors}`);
-  } catch (error) { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; await errors; throw error; }
+  } catch (error) { clearTimeout(watchdog); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; await errors; throw error; }
   const { port } = JSON.parse(fs.readFileSync(ready, "utf8"));
-  return { child, base: `http://127.0.0.1:${port}`, async stop() {
+  return { child, ready, base: `http://127.0.0.1:${port}`, async stop() {
+    clearTimeout(watchdog);
     if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; await errors;
   } };
 }
@@ -47,7 +50,8 @@ const choices = [
 ];
 const post = (base: string, body: unknown) => fetch(base, { method: "POST", body: JSON.stringify(body),
   headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(10_000) });
-const queued = (file: string) => fs.readdirSync(`${file}.write-locks`).filter(name => name.endsWith(".json")).length;
+const tickets = (file: string) => fs.readdirSync(`${file}.write-locks`).filter(name => name.endsWith(".json")).sort();
+const queued = (file: string) => tickets(file).length;
 
 for (const choice of choices) test(`${choice.name} lock wait serves timers, requests and SIGTERM`, async () => {
   const measurements = [];
@@ -60,20 +64,35 @@ for (const choice of choices) test(`${choice.name} lock wait serves timers, requ
     fs.writeFileSync(file, "previous\n");
     const release = await hold(file);
     let server: Awaited<ReturnType<typeof serve>> | undefined;
-    let signalTimer: ReturnType<typeof setTimeout> | undefined;
-    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
     let response: Promise<Response> | undefined;
     try {
       server = await serve(root);
       response = post(server.base, choice.body);
       await until(() => queued(file) === 2);
       expect(fs.readFileSync(file, "utf8")).toBe("previous\n");
-      let sentAt = 0;
-      signalTimer = setTimeout(() => { sentAt = Date.now(); server!.child.kill("SIGTERM"); }, 50);
-      releaseTimer = setTimeout(() => { void release(); }, 350);
+      // Delay only our fixture once: scheduling latency must not reject correct admission.
+      if (trial === 1 && process.platform !== "win32") {
+        server.child.kill("SIGSTOP");
+        resumeTimer = setTimeout(() => { server!.child.kill("SIGCONT"); }, 200);
+      }
+      server.child.stdin.write("probe\n");
+      server.child.stdin.flush();
+      const sentAt = performance.now();
+      server.child.kill("SIGTERM");
+      await until(() => fs.existsSync(`${server!.ready}.signal`), "SIGTERM before lock release");
+      const signalDelayMs = performance.now() - sentAt;
+      await until(() => fs.existsSync(`${server!.ready}.timer`), "timer before lock release");
       const pingStart = performance.now();
-      expect((await fetch(server.base, { signal: AbortSignal.timeout(10_000) })).status).toBe(200);
+      const ping = await fetch(server.base, { signal: AbortSignal.timeout(10_000) });
+      await ping.json();
+      expect(ping.status).toBe(200);
       const pingMs = performance.now() - pingStart;
+      // All three progress acknowledgements precede release of the external owner.
+      expect(fs.readFileSync(file, "utf8")).toBe("previous\n");
+      expect(fs.existsSync(`${file}.write-lock`)).toBe(true);
+      expect(queued(file)).toBe(2);
+      await release();
       const result = await (await response).json();
       expect(result.status).toBe(200);
       // The same response reader must accept the real persisted choice.
@@ -83,10 +102,11 @@ for (const choice of choices) test(`${choice.name} lock wait serves timers, requ
       expect(fs.existsSync(`${file}.write-lock`)).toBe(false);
       expect(queued(file)).toBe(0);
       measurements.push({ asyncWait: result.waits.some((wait: { site: string; synchronous: boolean; label: string }) =>
-        wait.site === "file-transaction" && !wait.synchronous && wait.label === "voice-settings.write"), timerMs: result.timerAtMs, signalDelayMs: result.signalAt - sentAt,
+        wait.site === "file-transaction" && !wait.synchronous && wait.label === "voice-settings.write"), timerMs: result.timerAtMs, signalDelayMs,
         pingMs, writeMs: result.returnedAtMs });
     } finally {
-      clearTimeout(signalTimer); clearTimeout(releaseTimer);
+      clearTimeout(resumeTimer);
+      if (server?.child.exitCode === null && process.platform !== "win32") server.child.kill("SIGCONT");
       await release(); await Promise.allSettled(response ? [response] : []); await server?.stop();
       if (savedConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = savedConfig;
       fs.rmSync(root, { recursive: true, force: true });
@@ -94,12 +114,6 @@ for (const choice of choices) test(`${choice.name} lock wait serves timers, requ
   }
   console.log(`voice-wait ${choice.name} ${JSON.stringify(measurements)}`);
   for (const sample of measurements) {
-    expect(sample.timerMs).toBeGreaterThan(0);
-    expect(sample.timerMs).toBeLessThan(100);
-    expect(sample.signalDelayMs).toBeGreaterThanOrEqual(0);
-    expect(sample.signalDelayMs).toBeLessThan(100);
-    expect(sample.pingMs).toBeLessThan(100);
-    expect(sample.timerMs).toBeLessThan(sample.writeMs);
     expect(sample.asyncWait).toBe(true);
   }
 }, 30_000);
@@ -116,18 +130,21 @@ test("queued HTTP writers keep the transfer lock's order", async () => {
   const pending: Promise<Response>[] = [];
   try {
     server = await serve(root);
+    const ownerTickets = tickets(file);
     pending.push(post(server.base, { backend: "soniox" }));
     await until(() => queued(file) === 2);
-    const lastTicketTime = Math.max(...fs.readdirSync(`${file}.write-locks`).map(name => Number(name.split("-")[0])));
-    await until(() => Date.now() > lastTicketTime);
+    const firstTicket = tickets(file).find(ticket => !ownerTickets.includes(ticket))!;
     pending.push(post(server.base, { backend: "elevenlabs" }));
     await until(() => queued(file) === 3);
+    const secondTicket = tickets(file).find(ticket => !ownerTickets.includes(ticket) && ticket !== firstTicket)!;
+    const ordered = [{ ticket: firstTicket, backend: "soniox" }, { ticket: secondTicket, backend: "elevenlabs" }]
+      .sort((a, b) => a.ticket < b.ticket ? -1 : 1);
     expect(fs.existsSync(file)).toBe(false);
     await release();
     const results = await Promise.all(pending.map(async response => (await response).json()));
     expect(results.map(result => result.status)).toEqual([200, 200]);
     expect(results.map(result => result.body.backend)).toEqual(["soniox", "elevenlabs"]);
-    expect(fs.readFileSync(file, "utf8")).toBe("elevenlabs\n");
+    expect(fs.readFileSync(file, "utf8")).toBe(`${ordered[1]!.backend}\n`);
     expect(queued(file)).toBe(0);
   } finally {
     await release(); await Promise.allSettled(pending); await server?.stop();
