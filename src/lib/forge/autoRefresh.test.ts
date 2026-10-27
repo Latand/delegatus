@@ -645,14 +645,24 @@ test("one conflict starts one visible refresh on the same task and delivery, wit
 });
 
 
-test("spent review budget with its final passed fix may refresh", async () => {
+test.each([false, true])("a spent budget's final passed fix may refresh only after a terminal re-check (terminal: %s)", async terminal => {
   const value = finished();
+  if (!terminal) {
+    value.stages[1]!.next = "ship";
+    value.stages.push({ ...value.stages[0]!, id: "ship", next: null });
+    value.runs.push({ stageId: "ship", attempts: [{ ...value.runs[0]!.attempts[0]! }] });
+  }
   value.runs[1]!.attempts[0]!.state = "failed";
   value.runs[1]!.attempts[0]!.budgetSpent = true;
   value.runs[0]!.attempts[0]!.activatedBy = { edge: "fail", budgetSpent: true, stageId: "review", attempt: 1 };
   const h = harness({ lanes: [value], prs: [conflicting()] });
   await h.sweep();
-  expect(h.creates).toHaveLength(1);
+  expect(h.creates).toHaveLength(terminal ? 0 : 1);
+  if (terminal) {
+    expect(h.merge("finished")).toBeUndefined();
+    expect(h.calls).toEqual([]);
+    expect(h.writes).toEqual([]);
+  }
 });
 
 test("a second base movement waits for the running refresh, then starts one successor", async () => {

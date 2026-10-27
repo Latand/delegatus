@@ -223,7 +223,7 @@ describe("buildSchemeLayout byPath", () => {
     /* Both endpoints must be drawable rects, or the link layer has nothing to anchor to. */
     expect(layout.byPath.has(link.from)).toBe(true);
     expect(layout.byPath.has(link.to)).toBe(true);
-    expect(link.flow).toMatchObject({ round: 1, phase: "awaiting_verdict" });
+    expect(link.flow).toMatchObject({ round: 1, phase: "done" });
   });
 
   test("a flow whose implementer is off the board derives no link", () => {

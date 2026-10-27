@@ -490,6 +490,10 @@ An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
 workers at two to fit the gate's three-CPU quota. The Viewer build and its
 runtime consumers share a private source tree with read-only dependencies;
 they neither contend on another build's `.next/lock` nor consume its output.
+The publication Viewer build checks the full repository together with fresh
+Next validators. It uses an 11 GiB Node heap floor and defaults to a 14 GiB
+gate memory cap; an explicit `LLV_GATE_MEM` remains authoritative. Other gate
+commands keep the budgets above. Production builds use the same 11 GiB heap floor.
 Checkout self-update installation and compilation have immediate admission in a high-weight scope
 beside the agent work slice. Nonempty command output renews a 30-minute silence
 bound, with total bounds of one hour for install and two hours for compilation,

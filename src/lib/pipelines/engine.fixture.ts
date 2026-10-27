@@ -975,7 +975,8 @@ const CYCLE_STAGES = [
 
 /* A spent review budget (#1868): N configured rounds mean N reviews and N+1
    builds. The last round's findings go to the fix stage once more, and that
-   fix's pass follows the reviewer's own pass edge without asking it again. */
+   fix's pass follows the reviewer's own pass edge. A terminal reviewer then
+   checks that final fix once (#3037). */
 const BUDGET_STAGES = (onFail: Record<string, unknown>, critiqueNext: string | null = "ship") => [
   { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}} from {{prev.output}}", next: "critique" },
   { id: "critique", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Critique {{prev.output}}", next: critiqueNext, onFail },
@@ -1011,7 +1012,7 @@ async function failEveryCritique(h: ReturnType<typeof harness>, reviews: number,
    for `stop-after-fix` (#1938, #2187): the lane ends in needs_review, never
    completed, and never takes the reviewer's pass edge for a head nobody
    reviewed. The operator can accept that head explicitly. Under the default the lane completes
-   instead (below). */
+   only after a terminal re-check (below). */
 const STOP_AFTER_FIX = { onExhausted: "stop-after-fix" } as const;
 const REVIEW_HEADS = ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40), "5".repeat(40), "6".repeat(40)];
 
@@ -1102,11 +1103,11 @@ async function driveWithController(
   throw new Error(`the controller left the lane ${loadPipelines()[0]!.state}`);
 }
 
-/** Reconstruct the stored cursor written by the former automatic terminal
-    re-check. The current advance policy never creates this cursor; recovery
-    tests still need to exercise old records and their explicit grants. */
+/** Reconstruct a legacy terminal cursor when absent. The current advance
+    policy creates it directly; recovery tests can use that durable cursor. */
 function seedLegacyTerminalRecheck(): void {
   const lane = loadPipelines()[0]!;
+  if (lane.cursor?.activatedBy?.budgetRecheck) return;
   expect(lane.state).toBe("completed");
   const fixRun = lane.runs.find(run => run.attempts.at(-1)?.activatedBy?.budgetSpent);
   const fix = fixRun?.attempts.at(-1);
@@ -1126,6 +1127,7 @@ async function driveLegacyTerminalRecheck(
   failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean) = new Set(["critique"]),
 ) {
   const prior = await driveWithController(h, failing);
+  if (prior.pipeline.reviewPending?.terminalRecheck) return prior;
   seedLegacyTerminalRecheck();
   // Preserve the historical park until it is written, then restore its
   // default policy so the next owner tick exercises restart reconciliation.
@@ -1162,7 +1164,7 @@ const BUILD_ONLY = [{ id: "build", kind: "run", role: { roleId: "builder" }, eng
 
 /* --- #729: the orchestrator publishes the head the review layer fences on --- */
 
-function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boolean; pushFails?: boolean; remoteReadFails?: boolean } = {}) {
+function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boolean; pushFails?: boolean; privacyRejects?: boolean; remoteReadFails?: boolean } = {}) {
   const passedSha = "7".repeat(40);
   const order: string[] = [];
   /* Oldest first. `merge-base --is-ancestor` is answered from this, so the
@@ -1210,6 +1212,12 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
       return { code: 0, stdout: remoteBranch ? `${remoteBranch}\trefs/heads/${branch}\n` : "", stderr: "" };
     }
     if (args[0] === "push") {
+      if (options.privacyRejects) {
+        const accepted = loadPipelines()[0]?.lastPassedCommit;
+        const pushed = args.find((arg) => /^[0-9a-f]{40}:/i.test(arg))?.split(":", 1)[0] ?? "missing";
+        order.push(`privacy:${accepted ?? "unaccepted"}:${pushed}`);
+        return { code: 1, stdout: "", stderr: "pre-push: privacy\nPRIVACY GATE: FAIL: accepted head fixture\npre-push: bun failed (1); gate failed" };
+      }
       if (options.pushFails || pushFails) {
         order.push("push-rejected");
         return { code: 1, stdout: "", stderr: "! [remote rejected] (shallow update not allowed)" };
@@ -1307,6 +1315,10 @@ async function interruptedPublication() {
   pipeline.stages[0]!.next = "review";
   pipeline.stages.push(reviewStage);
   pipeline.runs.push(reviewRun);
+  // The failed read above only builds the accepted-head fixture. The writer
+  // interrupted below is this scenario's first publication failure.
+  delete pipeline.publicationRecovery;
+  delete pipeline.runs[0]!.attempts[0]!.publicationRetry;
   pipeline.delivery!.operation!.state = "pending";
   delete pipeline.delivery!.operation!.result;
   savePipelines([pipeline]);

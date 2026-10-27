@@ -298,13 +298,13 @@ test("uk: the strip keeps the existing words", async () => {
    fade it in where it rests instead of swapping it in for the skeleton. A
    tail read before paints at once and is never marked. */
 describe("a first read's arrival", () => {
-  function mount() {
+  function mount(readOnly = false) {
     const host = dom.document.createElement("div");
     dom.document.body.append(host);
     const root = createRoot(host as unknown as Element);
     roots.add(root);
     const show = (feedFile: FileEntry) => flushSync(() => root.render(
-      <LogFeed file={feedFile} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow setFollow={() => undefined} compact />,
+      <LogFeed file={feedFile} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow setFollow={() => undefined} compact readOnly={readOnly} />,
     ));
     const content = () => host.querySelector("[data-feed-state]") as unknown as HTMLElement;
     return { show, content };
@@ -322,6 +322,18 @@ describe("a first read's arrival", () => {
     expect(content().dataset.feedState).toBe("items");
     expect(content().querySelector('[data-skeleton="feed"]')).toBeNull();
     expect(content().hasAttribute("data-feed-arrived")).toBe(true);
+  });
+
+  test.each([
+    { readOnly: false, loading: true, visible: false },
+    { readOnly: false, loading: false, visible: true },
+    { readOnly: true, loading: true, visible: false },
+    { readOnly: true, loading: false, visible: false },
+  ])("reply controls preserve archive and first-read guards: %j", ({ readOnly, loading, visible }) => {
+    const { show, content } = mount(readOnly);
+    tail = { lines: loading ? [] : TRANSCRIPT, loading, error: null };
+    show({ ...file, waitingInput: { since: Date.parse(AT(0)), screenTail: "Proceed? (y/n)", target: "lane5:0.0", menu: null } } as FileEntry);
+    expect(content().querySelector("#question") !== null).toBe(visible);
   });
 
   test("a read that fails after the skeleton is marked too", () => {
