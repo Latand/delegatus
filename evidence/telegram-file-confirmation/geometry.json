@@ -2,11 +2,11 @@
   "sources": [
     {
       "path": "src/components/telegram/TelegramFileConfirmation.tsx",
-      "sha256": "7cb074929e63a73d6b70fcd094805841cd5e986e87e3e7eaa8dccae35652e4f1"
+      "sha256": "e065c92b9b8b6f047b082192f509f00f119b8beecb668bc36668f3f875b0e8d8"
     },
     {
       "path": "src/lib/telegram/bot/fileConfirmationContract.ts",
-      "sha256": "af73650ccc71f3e55a61219023704568af64d53c161cfea412cdbe16ba848eb5"
+      "sha256": "894ef8ce393901a53239a6a6e96f01a291dd9a615636ecfec155d8669da82e35"
     },
     {
       "path": "src/components/conversation/conversationWindowEvidence.fixture.tsx",
@@ -14,7 +14,7 @@
     },
     {
       "path": "src/components/conversation/conversationWindow.browser.test.tsx",
-      "sha256": "289398faa4214e8677733b382acd85fcf383bdc81b06a1b9fc32eea218259d00"
+      "sha256": "40a21fce76977a883db4f14f51f9de95e0f075202508e7f8fb6c2c88fb6e17b2"
     }
   ],
   "frames": [
@@ -2477,35 +2477,6 @@
       "background": "rgb(244, 241, 236)"
     },
     {
-      "frame": "390-uk-light-pending-media",
-      "firstScreen": {
-        "scrollTop": 0,
-        "heading": true,
-        "headingText": "Один із файлів поза теками, з яких дозволено надсилати (handoff)",
-        "refuse": true,
-        "send": true,
-        "realFile": null
-      },
-      "offscreen": [],
-      "clipped": [],
-      "covered": [],
-      "cut": [],
-      "small": [],
-      "orphans": [],
-      "contrast": {
-        "Не надсилати": 12.29,
-        "Усе одно надіслати один раз": 5.56
-      },
-      "popover": null,
-      "dotOffChevron": 0,
-      "detailsRow": "Деталі",
-      "detailsOpen": false,
-      "iso": [],
-      "overflow": 0,
-      "cardWidth": 358,
-      "background": "rgb(244, 241, 236)"
-    },
-    {
       "frame": "390-uk-light-pending-long",
       "firstScreen": {
         "scrollTop": 0,
@@ -2533,6 +2504,702 @@
       "overflow": 0,
       "cardWidth": 358,
       "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-dark-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-light-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-dark-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 358,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "820-en-light-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "820-en-light-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "820-en-dark-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "820-en-dark-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "820-uk-light-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "820-uk-light-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "820-uk-dark-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "820-uk-dark-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1440-en-light-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1440-en-light-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1440-en-dark-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1440-en-dark-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1440-uk-light-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1440-uk-light-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1440-uk-dark-pending-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1440-uk-dark-details-media",
+      "firstScreen": {
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": null
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
     }
   ]
 }

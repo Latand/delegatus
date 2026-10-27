@@ -120,13 +120,13 @@ const basename = (file: string) => file.replace(/\/+$/, "").split("/").pop() || 
 const rootNames = (roots: string[]) => roots.map(basename).join(", ");
 
 export interface FileConfirmationSummary {
-  /** The pending heading: the strongest reason (a secret, then a hidden folder, then the folders outside the roots). */
+  /** The pending heading: the strongest reason (a secret, then a hidden folder, then the folders outside the roots), naming every file it holds for. */
   heading: string;
   /** Who wants to send what, where, and the file a link really points at. */
   intro: string;
   /** The sentence that introduces `reasons`; null when the heading said the only reason. */
   more: string | null;
-  /** Every other reason, in stored order, as a sentence. */
+  /** Every reason the heading does not say, in stored order, as a sentence. */
   reasons: string[];
   /** The last two segments of the resolved file when the requested name is a link to it. */
   real: string | null;
@@ -151,19 +151,35 @@ export function fileConfirmationSummary(view: Pick<FileConfirmationView, "chatTi
     ?? view.reasons.find(reason => reason.code === "document_forbidden_path")
     ?? view.reasons.find(reason => reason.code === "document_outside_roots");
   const fallback = (reason: DocumentWarning) => fileConfirmationReason(reason, locale);
+  /* Among several files, every reason that says what the lead says about another file joins the heading. */
+  const detail = (reason: DocumentWarning) => `${reason.code}\u0000${reason.segment ?? ""}\u0000${(reason.roots ?? []).join("\u0000")}`;
+  const shared = several && lead?.path ? view.reasons.filter(reason => reason.path && detail(reason) === detail(lead)) : lead ? [lead] : [];
+  const flagged = several && lead?.path ? [...new Set(shared.map(reason => basename(reason.path!)))] : [];
+  const everyFile = flagged.length === view.files.length && view.files.every(file => flagged.includes(file.filename) || flagged.includes(basename(file.resolvedPath)));
+  const list = (items: string[]) => items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} ${uk ? "і" : "and"} ${items.at(-1)}`;
+  const everyImage = () => {
+    const count = view.files.length;
+    if (uk) return count === 2 ? "Обидва зображення" : `Усі ${ukCount(count, "image", "neuter")}`;
+    return count === 2 ? "Both images" : `All ${enCount(count, "image")}`;
+  };
+  /* The heading's subject: the file, every image, the flagged files by name, or one unnamed file among several. */
+  const holders = !several ? null : everyFile ? everyImage() : flagged.length ? list(flagged) : null;
+  const plural = everyFile || flagged.length > 1;
   const headingFor = (reason: DocumentWarning | undefined): string => {
     if (!reason) return uk ? "Delegatus зупинив це надсилання" : "Delegatus paused this send";
     if (reason.code === "document_secret") return uk ? `Схоже, у цьому файлі ${secretThing(reason, locale)}` : `This file looks like it holds ${secretThing(reason, locale)}`;
     if (reason.code === "document_forbidden_path" && reason.segment) {
+      if (holders) return uk ? `${holders} ${plural ? "лежать" : "лежить"} у прихованій теці ${reason.segment}` : `${holders} ${plural ? "are" : "is"} inside the hidden folder ${reason.segment}`;
       return uk ? `${several ? "Один із файлів" : "Файл"} лежить у прихованій теці ${reason.segment}` : `${several ? "One of these files" : "This file"} is inside the hidden folder ${reason.segment}`;
     }
     if (reason.code === "document_outside_roots" && reason.roots?.length) {
+      if (holders) return uk ? `${holders} поза теками, з яких дозволено надсилати (${rootNames(reason.roots)})` : `${holders} ${plural ? "are" : "is"} outside the folders files may be sent from (${rootNames(reason.roots)})`;
       return uk ? `${several ? "Один із файлів" : "Файл"} поза теками, з яких дозволено надсилати (${rootNames(reason.roots)})` : `${several ? "One of these files" : "This file"} is outside the folders files may be sent from (${rootNames(reason.roots)})`;
     }
     return fallback(reason).replace(/\.$/, "");
   };
-  const rest = view.reasons.filter(reason => reason !== lead);
-  const names = [filename, view.chatTitle, ...(real ? [real] : [])];
+  const rest = view.reasons.filter(reason => !shared.includes(reason));
+  const names = [filename, view.chatTitle, ...(real ? [real] : []), ...(everyFile ? [] : flagged)];
   let previous: string | null | undefined;
   const reasons = rest.map((reason, index) => {
     const about = several ? reason.path ?? null : first?.path ?? null;

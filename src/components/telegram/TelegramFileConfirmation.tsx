@@ -100,7 +100,7 @@ function Details({ view, decidedAt }: { view: FileConfirmationView; decidedAt: s
   ];
   const several = view.files.length > 1;
   const roots = [...new Set(view.reasons.flatMap(reason => reason.code === "document_outside_roots" ? reason.roots ?? [] : []))];
-  const codes = view.reasons.map(reason => reason.code === "document_secret" && reason.secretClass ? `${reason.code} (${reason.secretClass}${reason.line ? `, ${words.line} ${reason.line}` : ""})` : reason.code);
+  const codes = [...new Set(view.reasons.map(reason => reason.code === "document_secret" && reason.secretClass ? `${reason.code} (${reason.secretClass}${reason.line ? `, ${words.line} ${reason.line}` : ""})` : reason.code))];
   const rows: Row[] = [
     ...(several ? [] : view.files.flatMap((file, index) => fileRows(file, index, false))),
     [words.chat, view.chatTitle],

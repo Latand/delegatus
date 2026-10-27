@@ -49,21 +49,44 @@ describe("fileConfirmationSummary", () => {
     expect(plain.approvedSubject).toBe("notes.md");
   });
 
-  test("two images name each file in their own reasons", () => {
-    const files = [
-      { path: "/srv/shots/one.png", resolvedPath: "/srv/shots/one.png", filename: "one.png", sha256: "d".repeat(64), bytes: 1 },
-      { path: "/srv/shots/two.png", resolvedPath: "/srv/shots/two.png", filename: "two.png", sha256: "e".repeat(64), bytes: 2 },
-    ];
-    const reasons: DocumentWarning[] = [
-      { code: "document_outside_roots", path: "/srv/shots/one.png", roots: ["/srv/handoff"], reason: "outside" },
-      { code: "document_outside_roots", path: "/srv/shots/two.png", roots: ["/srv/handoff"], reason: "outside" },
-    ];
-    const en = fileConfirmationSummary(view(reasons, files), "en");
-    expect(en.heading).toBe("One of these files is outside the folders files may be sent from (handoff)");
-    expect(en.intro).toBe("An agent wants to send two images to Orbit Reports.");
-    expect(en.reasons).toEqual(["two.png is outside the folders files may be sent from (handoff)."]);
-    expect(en.real).toBeNull();
-    expect(fileConfirmationSummary(view(reasons, files), "uk").intro).toBe("Агент хоче надіслати два зображення у Orbit Reports.");
+  const shots = (...names: string[]) => names.map((name, index) => ({ path: `/srv/shots/${name}`, resolvedPath: `/srv/shots/${name}`, filename: name, sha256: String(index).repeat(64), bytes: index + 1 }));
+  const away = (name: string): DocumentWarning => ({ code: "document_outside_roots", path: `/srv/shots/${name}`, roots: ["/srv/handoff"], reason: "outside" });
+  const dotted = (name: string): DocumentWarning => ({ code: "document_forbidden_path", path: `/srv/shots/${name}`, segment: ".cache", reason: "hidden" });
+
+  test("one reason every image shares is said once, for all of them", () => {
+    const files = shots("one.png", "two.png");
+    const en = fileConfirmationSummary(view([away("one.png"), away("two.png")], files), "en");
+    expect(en).toMatchObject({ heading: "Both images are outside the folders files may be sent from (handoff)", intro: "An agent wants to send two images to Orbit Reports.", more: null, reasons: [], real: null });
+    const uk = fileConfirmationSummary(view([away("one.png"), away("two.png")], files), "uk");
+    expect(uk).toMatchObject({ heading: "Обидва зображення поза теками, з яких дозволено надсилати (handoff)", intro: "Агент хоче надіслати два зображення у Orbit Reports.", more: null, reasons: [] });
+    const three = shots("a.png", "b.png", "c.png");
+    expect(fileConfirmationSummary(view(three.map(file => dotted(file.filename)), three), "en").heading).toBe("All three images are inside the hidden folder .cache");
+    expect(fileConfirmationSummary(view(three.map(file => dotted(file.filename)), three), "uk").heading).toBe("Усі три зображення лежать у прихованій теці .cache");
+  });
+
+  test("among several images the heading names the ones its reason holds for", () => {
+    const files = shots("one.png", "two.png", "three.png");
+    const single = fileConfirmationSummary(view([away("two.png")], files), "en");
+    expect(single).toMatchObject({ heading: "two.png is outside the folders files may be sent from (handoff)", more: null, reasons: [] });
+    expect(single.names).toContain("two.png");
+    expect(fileConfirmationSummary(view([away("two.png")], files), "uk").heading).toBe("two.png поза теками, з яких дозволено надсилати (handoff)");
+    const pair = fileConfirmationSummary(view([dotted("one.png"), away("one.png"), dotted("three.png")], files), "en");
+    expect(pair).toMatchObject({ heading: "one.png and three.png are inside the hidden folder .cache", more: "One more reason Delegatus paused it:", reasons: ["one.png is outside the folders files may be sent from (handoff)."], warnings: "three warnings" });
+    expect(fileConfirmationSummary(view([dotted("one.png"), away("one.png"), dotted("three.png")], files), "uk")).toMatchObject({ heading: "one.png і three.png лежать у прихованій теці .cache", more: "Ще одна причина, чому Delegatus зупинив надсилання:" });
+  });
+
+  test("the same code with another folder stays its own reason", () => {
+    const files = shots("one.png", "two.png");
+    const other: DocumentWarning = { ...dotted("two.png"), segment: ".git" };
+    const summary = fileConfirmationSummary(view([dotted("one.png"), other], files), "en");
+    expect(summary.heading).toBe("one.png is inside the hidden folder .cache");
+    expect(summary.reasons).toEqual(["two.png is inside the hidden folder .git."]);
+  });
+
+  test("a lead reason without a path among several images names no file", () => {
+    const files = shots("one.png", "two.png");
+    const bare: DocumentWarning = { code: "document_outside_roots", roots: ["/srv/handoff"], reason: "outside" };
+    expect(fileConfirmationSummary(view([bare, away("two.png")], files), "en")).toMatchObject({ heading: "One of these files is outside the folders files may be sent from (handoff)", reasons: ["two.png is outside the folders files may be sent from (handoff)."] });
   });
 
   test("a reason without its segment or roots falls back to the detector's own sentence", () => {

@@ -5747,7 +5747,7 @@ describe("owner confirmation of one Telegram file send", () => {
           await page.evaluate(() => document.fonts.ready);
           /* The decision's own words, from the stored view: the strongest reason leads. */
           const pendingHeading = data === "media"
-            ? (lang === "uk" ? "Один із файлів поза теками, з яких дозволено надсилати (handoff)" : "One of these files is outside the folders files may be sent from (handoff)")
+            ? (lang === "uk" ? "Обидва зображення поза теками, з яких дозволено надсилати (handoff)" : "Both images are outside the folders files may be sent from (handoff)")
             : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key");
           const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: words.sentTitle(chat), rejected: words.rejectedTitle(chat), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
           const asking = ["pending", "details", "status", "sending"].includes(state);
@@ -5783,6 +5783,8 @@ describe("owner confirmation of one Telegram file send", () => {
             if (firstScreen.headingText !== pendingHeading) failures.push(`${name}: heading «${firstScreen.headingText}»`);
             if (!firstScreen.refuse || !firstScreen.send) failures.push(`${name}: an answer is off the first screen (${JSON.stringify(firstScreen)})`);
             if (data !== "media" && !firstScreen.realFile) failures.push(`${name}: the real file is not whole on the first screen`);
+            /* Both images share one reason: the heading says it for both, and no list repeats it. */
+            if (data === "media" && await page.locator("[data-file-confirmation-reasons]").count() !== 0) failures.push(`${name}: a reason the heading already says is listed again`);
             if (await page.getByRole("button", { name: words.refuse, exact: true }).count() !== 1 || await page.getByRole("button", { name: words.approve, exact: true }).count() !== 1) failures.push(`${name}: the two answers are not «${words.refuse}» and «${words.approve}»`);
           } else if (firstScreen.refuse !== null || firstScreen.send !== null) failures.push(`${name}: a closed request still offers a decision`);
           if (state === "details") {
@@ -5795,6 +5797,8 @@ describe("owner confirmation of one Telegram file send", () => {
             for (const value of data === "media" ? ["/sandbox/shots/board-after.png", "1".repeat(64), "/sandbox/handoff"] : ["/sandbox/.codex/auth.json", "b".repeat(64), "a".repeat(64), "-1000000000101", "/sandbox/handoff", "document_secret (private_key"]) {
               if (!details.includes(value)) failures.push(`${name}: Details omit ${value}`);
             }
+            const codes = await page.locator("[data-mobile2-menu-body] dl > div", { has: page.locator("dt", { hasText: words.codes }) }).locator("dd").innerText();
+            if (data === "media" && codes !== "document_outside_roots") failures.push(`${name}: detector codes «${codes}»`);
           }
           if (state === "status") {
             await page.click("[data-file-confirmation-status]");
@@ -5967,12 +5971,13 @@ describe("owner confirmation of one Telegram file send", () => {
   const themed = (width: Frame["width"], lang: Frame["lang"]) => (["light", "dark"] as const).flatMap((theme) => STATES.map((state): Frame => ({ width, lang, theme, state })));
   const CASES: Array<[title: string, list: Frame[]]> = [
     ...([390, 1440] as const).flatMap((width) => (["en", "uk"] as const).map((lang): [string, Frame[]] => [`${width} px, ${lang}: every state in light and dark`, themed(width, lang)])),
-    ["820 px pending in both languages; two images and long names at 390 px", [
+    ["820 px pending in both languages; long names at 390 px", [
       { width: 820, lang: "en", theme: "light", state: "pending" },
       { width: 820, lang: "uk", theme: "light", state: "pending" },
-      { width: 390, lang: "uk", theme: "light", state: "pending", data: "media" },
       { width: 390, lang: "uk", theme: "light", state: "pending", data: "long" },
     ]],
+    /* Two images that share one reason: the heading says it for both, and Details list its code once. */
+    ["two images: pending and Details in both languages and themes, at 390, 820 and 1440 px", ([390, 820, 1440] as const).flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).flatMap((theme) => (["pending", "details"] as const).map((state): Frame => ({ width, lang, theme, state, data: "media" })))))],
   ];
   for (const [title, list] of CASES) browserTest(title, () => frames(list), 300_000);
   /* The record covers every frame or is left as committed: a filtered or failed run writes nothing. */
