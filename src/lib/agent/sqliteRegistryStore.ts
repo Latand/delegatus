@@ -1800,6 +1800,7 @@ export class SqliteAgentRegistryStore {
                 // lifetime to the view; the finalizer closes it after the last
                 // caller releases that immutable view.
                 previousReader.readOnlyCache = null;
+                previousReader.writerSnapshotCache = null;
                 // The finalizer holds this reader until the view and its
                 // collections are released. Drop the reader's own references
                 // to those objects, otherwise it keeps its own lease alive.

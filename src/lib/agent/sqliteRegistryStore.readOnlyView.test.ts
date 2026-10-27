@@ -202,6 +202,10 @@ test.skipIf(process.platform !== "linux")("retired prepared readers release thei
   await reader.prepareReadOnlySnapshot();
   const baseline = handles();
   for (let index = 0; index < 3; index++) {
+    // The second mutable snapshot installs the writer snapshot cache on the
+    // prepared reader; that cache must not pin a retired view either.
+    reader.snapshot();
+    reader.snapshot();
     writer.mutate(file => { file.receipts[kept]!.error = `peer-write-${index}`; }, false);
     await reader.prepareReadOnlySnapshot();
     await collect();
@@ -212,6 +216,22 @@ test.skipIf(process.platform !== "linux")("retired prepared readers release thei
   do { await collect(); } while (handles() > baseline + 1 && performance.now() < deadline);
   expect(handles()).toBeLessThanOrEqual(baseline + 1);
 }, 30_000);
+
+test("a held mutable snapshot survives retirement of its prepared reader", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  await reader.prepareReadOnlySnapshot();
+  const held = reader.snapshot().file;
+  reader.snapshot();
+  writer.mutate(file => { file.receipts[kept]!.error = "peer updated"; }, false);
+  const refreshed = await reader.prepareReadOnlySnapshot();
+  expect(refreshed.file.receipts[kept]?.error).toBe("peer updated");
+  expect(held.receipts[kept]?.error).toBeNull();
+  held.receipts[kept]!.error = "local edit";
+  expect(held.receipts[kept]?.error).toBe("local edit");
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("peer updated");
+});
 
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
