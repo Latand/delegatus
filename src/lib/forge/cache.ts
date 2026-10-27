@@ -1,9 +1,13 @@
 import { cachedJsonFile, type CachedJsonFile } from "@/lib/state/cachedJsonFile";
 
+import { projectAliasResolver, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { projectStoreSignature } from "@/lib/projects/persistence";
+import { WORKTREE_RECOVERY_COLLECTION } from "@/lib/projects/worktreeRecoveryStore";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 
-import type { CachedPullRequest, ForgeCacheView, ForgeRepositoryView, PullRequestState } from "./workLinks";
+import { githubRepositoryOfRemote, type CachedPullRequest, type ForgeCacheView, type ForgeRepositoryView, type PullRequestState } from "./workLinks";
 
 /*
  * The forge cache (#2059, docs/design/pr-issue-chips.md §3.3): what the Viewer
@@ -112,35 +116,56 @@ const cache = memoHost.__llvForgeFileCache ??= cachedJsonFile((raw): Snapshot =>
   return { data, view: forgeViewOf(data) };
 });
 
-/** The indexed view of a cache as stored; exported for tests and fixtures. */
-export function forgeViewOf(data: ForgeCacheFile): ForgeCacheView {
-  const views = new Map<string, ForgeRepositoryView>();
+/** Index both names of a proven rename together, retaining the freshest PR
+    when both names have stored history. Exported for tests and fixtures. */
+export function forgeViewOf(data: ForgeCacheFile, aliases: ReadonlyMap<string, string> = new Map()): ForgeCacheView {
+  const names = new Map(Object.entries(data.repositories).flatMap(([name, entry]) =>
+    entry.canonical ? [[name.toLowerCase(), entry.canonical.toLowerCase()] as const] : []));
+  for (const [source, target] of aliases) names.set(source.toLowerCase(), target.toLowerCase());
+  const canonical = (name: string) => {
+    let current = name.toLowerCase();
+    const seen = new Set<string>();
+    while (!seen.has(current)) {
+      seen.add(current);
+      const next = names.get(current);
+      if (!next || next === current) return current;
+      current = next;
+    }
+    return name.toLowerCase();
+  };
+  const groups = new Map<string, ForgeRepositoryEntry[]>();
   for (const [name, entry] of Object.entries(data.repositories)) {
+    const key = canonical(name);
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  const views = new Map<string, ForgeRepositoryView>();
+  for (const [name, entries] of groups) {
     const prs = new Map<number, CachedPullRequest>();
     const heads = new Map<string, CachedPullRequest[]>();
-    for (const [key, stored] of Object.entries(entry.prs)) {
+    for (const entry of entries) for (const [key, stored] of Object.entries(entry.prs)) {
+      const prior = prs.get(Number(key));
+      if (prior && prior.checkedAt > stored.checkedAt) continue;
       const pr: CachedPullRequest = { number: Number(key), ...stored };
       prs.set(pr.number, pr);
+    }
+    for (const pr of prs.values()) {
       const list = heads.get(pr.headRefName) ?? [];
       list.push(pr);
       heads.set(pr.headRefName, list);
     }
-    const issues = new Set(Object.keys(entry.issues).map(Number));
+    const issues = new Set(entries.flatMap(entry => Object.keys(entry.issues).map(Number)));
     const view: ForgeRepositoryView = {
-      canonical: entry.canonical ?? name,
-      completeSince: entry.completeSince,
+      canonical: name,
+      completeSince: entries.map(entry => entry.completeSince).filter((at): at is string => !!at).sort().at(-1) ?? null,
       pr: (number) => prs.get(number),
       byHead: (head) => heads.get(head) ?? [],
       isIssue: (number) => issues.has(number) && !prs.has(number),
     };
     views.set(name, view);
   }
-  /* A record may name a repository either way once it was renamed: by the old
-     name its remote still says, or by the new one a pasted URL says. */
-  for (const [name, entry] of Object.entries(data.repositories)) {
-    if (entry.canonical && !views.has(entry.canonical)) views.set(entry.canonical, views.get(name)!);
-  }
-  return { repository: (name) => views.get(name.toLowerCase()) ?? null };
+  return { repository: (name) => views.get(canonical(name)) ?? (aliases.has(name.toLowerCase())
+    ? { canonical: canonical(name), completeSince: null, pr: () => undefined, byHead: () => [], isIssue: () => false }
+    : null) };
 }
 
 /** The cache as stored, re-read only when the file changed. */
@@ -148,8 +173,40 @@ export function readForgeCache(file = forgeCacheFile()): { data: ForgeCacheFile;
   return cache.read(file);
 }
 
+// One derived snapshot and one resolved view, replaced when their inputs move.
+let aliasMemo: {
+  remotes: string;
+  projects: string;
+  recoveries: number | null;
+  aliases: ReadonlyMap<string, string>;
+} | null = null;
+let resolvedMemo: { data: ForgeCacheFile; aliases: ReadonlyMap<string, string>; view: ForgeCacheView } | null = null;
+
+function repositoryAliases(): ReadonlyMap<string, string> {
+  const remotesSignature = projectStoreSignature("project-remotes.json");
+  const projectsSignature = projectStoreSignature("project-aliases.json");
+  const recoveries = readStateCollectionRevision(statePath("state.sqlite"), WORKTREE_RECOVERY_COLLECTION);
+  if (aliasMemo?.remotes === remotesSignature && aliasMemo.projects === projectsSignature && aliasMemo.recoveries === recoveries) return aliasMemo.aliases;
+  const remotes = recordedProjectRemotes();
+  const project = projectAliasResolver();
+  const aliases = new Map<string, string>();
+  for (const [key, remote] of Object.entries(remotes)) {
+    const source = githubRepositoryOfRemote(remote);
+    const target = githubRepositoryOfRemote(remotes[project(key)]);
+    if (source && target && source !== target) aliases.set(source, target);
+  }
+  aliasMemo = { remotes: remotesSignature, projects: projectsSignature, recoveries, aliases };
+  return aliases;
+}
+
 export function forgeCacheView(file = forgeCacheFile()): ForgeCacheView {
-  return readForgeCache(file).view;
+  const { data, view } = readForgeCache(file);
+  const aliases = repositoryAliases();
+  if (!aliases.size) return view;
+  if (resolvedMemo?.data === data && resolvedMemo.aliases === aliases) return resolvedMemo.view;
+  const resolved = forgeViewOf(data, aliases);
+  resolvedMemo = { data, aliases, view: resolved };
+  return resolved;
 }
 
 /** Read, change and write the cache. The caller holds no pipeline or task lock
@@ -220,5 +277,7 @@ export function observeForgePullRequest(
 
 export function resetForgeCacheForTests(): void {
   cache.invalidate();
+  aliasMemo = null;
+  resolvedMemo = null;
   nudges.clear();
 }

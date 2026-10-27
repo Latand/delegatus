@@ -135,7 +135,9 @@ test("stopped, deferred, cancelled and failed steps never write a pass; the runt
   const base = f.git("rev-parse", "origin/main").toString().trim();
   const step: Step = { name: "types", command: ["bunx", "tsc", "--noEmit"] };
   const open = (steps = [step]) => stepPasses(f.dir, base, steps, () => {});
-  const options = { root: f.dir, logDir: f.dir, say: () => {}, prepare: () => ({ env: f.env, command: [process.execPath, "-e", "process.exit(7)"] }) };
+  // Production logs live outside the checked inputs. Keep this fixture's
+  // outputs private too, so a log cannot invalidate the pass being tested.
+  const options = { root: f.dir, logDir: path.join(f.dir, ".git"), say: () => {}, prepare: () => ({ env: f.env, command: [process.execPath, "-e", "process.exit(7)"] }) };
   await expect(runSteps("pre-push", [step], { ...options, deadline: null, passes: open() })).rejects.toThrow();
   expect(open().reused(step)).toBeFalse();
   const expired = { at: 1, startedAt: 0 };

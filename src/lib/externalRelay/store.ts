@@ -13,7 +13,8 @@ export type RelayTargetSettings = {
   answered_by: "install" | "service";
   fallback: "service" | "none";
   enabled: boolean;
-  engine: "claude" | "codex" | null;
+  engine: "claude" | "codex" | "codex-cloud" | null;
+  cloudEnvironmentId?: string | null;
   model: string | null;
   effort: string | null;
   project: string | null;
@@ -93,6 +94,9 @@ export type RelayStore = {
   pending: PendingRelay[];
 };
 export type RunRecord = {
+  /** Written before Cloud dispatch. A confirmed failure clears it for fallback;
+   * a completed turn remains fenced until its completion is accepted. */
+  cloudExecution?: "uncertain" | "completed";
   /** Execution ended; retained delivery/cleanup custody owns no target slot. */
   capacityReleased?: true;
   /** The service accepted this request's completion; recovery only cleans up. */
@@ -495,8 +499,7 @@ export async function settleRelayRequestClaimAsync(
     writeRelayFile(file, { v: 1, claims });
   }, until);
 }
-/** A target this install has not configured: no engine, so it is not
- * answered until the operator picks one (§B.9). */
+/** New targets use Cloud; existing settings are retained when targets refresh. */
 export function newTargetSettings(
   target: ExternalRelayTarget,
 ): RelayTargetSettings {
@@ -506,8 +509,8 @@ export function newTargetSettings(
     answered_by: target.answered_by,
     fallback: target.fallback,
     enabled: true,
-    engine: null,
-    model: null,
+    engine: "codex-cloud",
+    model: "gpt-6.1-sol",
     effort: null,
     project: null,
     concurrency: 1,
@@ -517,7 +520,7 @@ export function newTargetSettings(
 /**
  * The service's list, in its order, over the stored settings: a target it
  * still lists keeps the operator's settings and takes the service's name,
- * `answered_by` and `fallback`; a new one arrives unconfigured; one it no
+ * `answered_by` and `fallback`; a new one uses the Cloud default; one it no
  * longer lists is dropped.
  */
 export function mergeRelayTargets(

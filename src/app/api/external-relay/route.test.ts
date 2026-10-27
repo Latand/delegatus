@@ -79,7 +79,7 @@ test("status refreshes the targets and omits credential and poll secret", async 
     const text = await response.text();
     expect(reads).toEqual(["Bearer secret_credential"]);
     expect(JSON.parse(text).relays[0].targets).toMatchObject([
-      { id: "linked_later", name: "Linked later", engine: null },
+      { id: "linked_later", name: "Linked later", engine: "codex-cloud" },
     ]);
     expect(text).toContain("pending");
     expect(text).not.toContain("secret_credential");
@@ -277,6 +277,10 @@ test("settings this install refuses answer with local codes, never the service's
     expect(response.status).toBe(200);
     expect((await response.json()).relay.targets[0].ownerTier).toBe(value);
   }
+  const cloud = await patch(JSON.stringify({ target: { id: "bot", engine: "codex-cloud", model: "gpt-6.1-sol", cloudEnvironmentId: "answer-env" } }));
+  expect(cloud.status).toBe(200);
+  expect((await cloud.json()).relay.targets[0]).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", cloudEnvironmentId: "answer-env" });
+  expect((await patch(JSON.stringify({ target: { id: "bot", cloudEnvironmentId: 42 } }))).status).toBe(400);
 });
 test("recent answers and one exchange are read-only reads for the operator alone", async () => {
   const { answerRecorder } = await import("@/lib/externalRelay/answers");

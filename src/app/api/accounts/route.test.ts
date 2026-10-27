@@ -857,3 +857,13 @@ test("GET never reports a removed account as active, and offers a hidden Main ba
   expect(empty.codex.accounts).toEqual([]);
   expect(empty.codex.active).toBe("");
 });
+
+test("failed Codex login exposes a safe reason without provider error text", async () => {
+  const account = createManagedCodexAccount("Test");
+  const runtime = new ManagedCodexRuntime({ startClient: async () => { throw new Error("private-provider-detail"); } });
+  setManagedCodexRuntimeForTests(runtime);
+  await expect(runtime.startLogin(account)).rejects.toThrow("private-provider-detail");
+  const body = await (await GET()).json();
+  expect(body.codex.accounts.find((row: { id: string }) => row.id === account.id)).toMatchObject({ loginState: "failed", loginReason: "start-failed" });
+  expect(JSON.stringify(body)).not.toContain("private-provider-detail");
+});
