@@ -1402,6 +1402,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.speedAria": "Режим швидкості Codex",
   "draft.speedTitle": "fast = priority tier (1.5x швидкість, більша витрата лімітів)",
   "draft.speedDefault": "швидкість: дефолт",
+  "draft.speedInherited": "швидкість: успадкована",
   "draft.imagesOnly": "(картинки)",
   "draft.launched": "агент запущений у tmux {target} — чекаю, поки розмова з'явиться тут…",
   "draft.launchedStructured": "агент запущений — чекаю, поки розмова з'явиться тут…",
@@ -1424,7 +1425,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.rolePromptToggle": "Промпт ролі (EN)",
   "draft.speedFast": "швидкий",
   "draft.speedStandard": "стандартний",
-  "draft.speedUltra": "ультра",
+  "draft.speedUltra": "ultrafast",
 
   // Локалізовані назви рівнів міркувань (у CLI надсилаються оригінальні токени)
   "effortTier.none": "без міркувань",

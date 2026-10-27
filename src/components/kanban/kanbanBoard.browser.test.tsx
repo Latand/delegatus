@@ -19661,8 +19661,9 @@ describe("fast TTS header", () => {
 
 /* Ultra on the seat's speed control (2026-10-26), at 1280, 768 and 390 in both
    languages and themes: S1 offered, S2 just picked, S3 applied, S4 unavailable on a
-   priority-only account with its reason as visible text, S5 refused and rolled back,
-   S6 the create and rotate drafts with Ultra chosen. Every changed string is
+   priority-only account with its reason as visible text and reached by the arrow keys,
+   S5 refused and rolled back with the reason beside the rows it was picked in, S6 the
+   create and rotate drafts with Ultra chosen and a rotation left on the inherited tier. Every changed string is
    measured as whole text inside the window and its popover or sheet. */
 async function captureUltraSpeedStates(browser: Browser, base: string, out: string) {
   const frames: Record<string, unknown>[] = [];
@@ -19698,12 +19699,12 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
       if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
       await page.locator(ultraRow).waitFor();
       /* Settled: the catalog answered, so Ultra is enabled or carries its reason. */
-      await page.waitForFunction((selector) => !(document.querySelector(selector) as HTMLButtonElement).disabled || !!document.querySelector("[data-runtime-row-note]") || (document.querySelector(selector) as HTMLElement).getAttribute("aria-checked") === "true", ultraRow);
+      await page.waitForFunction((selector) => document.querySelector(selector)!.getAttribute("aria-disabled") !== "true" || !!document.querySelector("[data-runtime-row-note]") || document.querySelector(selector)!.getAttribute("aria-checked") === "true", ultraRow);
       if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
     };
     const facts = async (page: Page) => ({
       face: await page.locator("[data-runtime-pill]").getAttribute("aria-label"),
-      ultra: await page.locator(ultraRow).count() ? await page.locator(ultraRow).evaluate((row) => ({ text: row.textContent, disabled: (row as HTMLButtonElement).disabled, checked: row.getAttribute("aria-checked") })) : null,
+      ultra: await page.locator(ultraRow).count() ? await page.locator(ultraRow).evaluate((row) => ({ text: row.textContent, disabled: row.getAttribute("aria-disabled") === "true", checked: row.getAttribute("aria-checked") })) : null,
       note: await page.locator("[data-runtime-row-note]").count() ? await page.locator("[data-runtime-row-note]").textContent() : null,
     });
     const label = `${ultraRow} [data-runtime-row-label], ${ultraRow} > span`;
@@ -19726,8 +19727,9 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
         await page.locator(ultraRow).click();
         await page.locator("[data-runtime-switch-pending]").waitFor();
         expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).toContain("Ultrafast");
-        if (phone) expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("true");
-        await shot(page, "s2-picked", await facts(page), phone ? [label] : ["[data-runtime-pill]"]);
+        /* The rows stay open until the action answers, with Ultra checked. */
+        expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("true");
+        await shot(page, "s2-picked", await facts(page), [label]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     }
@@ -19747,6 +19749,13 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
       try {
         await openSpeed(page);
         await page.locator("[data-runtime-row-note]").scrollIntoViewIfNeeded();
+        /* The keyboard reaches it too: Standard is focused, two steps down is Ultra, and its reason is its description. */
+        if (!phone) {
+          await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+          expect(await page.evaluate((selector) => document.activeElement === document.querySelector(selector), ultraRow)).toBeTrue();
+          expect(await page.evaluate(() => document.getElementById(document.activeElement!.getAttribute("aria-describedby")!)?.textContent ?? null))
+            .toBe(await page.locator("[data-runtime-row-note]").textContent());
+        }
         const read = await facts(page);
         expect(read.ultra).toMatchObject({ disabled: true, checked: "false" });
         expect(read.note).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account D", model: "GPT\u20116.1\u2011Sol", offers: "Fast" }));
@@ -19759,33 +19768,35 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
       try {
         await openSpeed(page);
         await page.locator(ultraRow).click();
-        if (phone) {
-          await page.locator("[data-runtime-speed-error]").waitFor();
-          await page.locator("[data-runtime-speed-error]").scrollIntoViewIfNeeded();
-          expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
-        } else {
-          await page.waitForFunction(() => document.querySelector("[data-runtime-pill]")?.className.includes("text-danger"));
-          await page.locator("[data-runtime-pill]").click();
-          await page.locator("[data-runtime-popover-account]").waitFor();
-        }
-        const error = await page.locator(phone ? "[data-runtime-speed-error]" : "[data-runtime-popover-account]").textContent();
+        /* Said where the choice was made, on the desktop too: no second click on the pill. */
+        await page.locator("[data-runtime-speed-error]").waitFor();
+        await page.locator("[data-runtime-speed-error]").scrollIntoViewIfNeeded();
+        expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
+        const error = await page.locator("[data-runtime-speed-error]").textContent();
         expect(error).toBe("a runtime change is already in flight");
         expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).not.toContain("Ultrafast");
-        await shot(page, "s5-refused", { ...await facts(page), error }, [phone ? "[data-runtime-speed-error]" : "[data-runtime-popover-account]"]);
+        await shot(page, "s5-refused", { ...await facts(page), error }, ["[data-runtime-speed-error]"]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     }
-    for (const mode of ["create", "rotate"] as const) { // S6: launch drafts with Ultra chosen.
-      const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=service-tier&draft=${mode}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+    for (const mode of ["create", "rotate", "rotate-inherited"] as const) { // S6: launch drafts with Ultra chosen, and a rotation left untouched.
+      const inherited = mode === "rotate-inherited";
+      const draft = inherited ? "rotate" : mode;
+      const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=service-tier&draft=${draft}${inherited ? "&inherit=1" : ""}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
       try {
-        await page.locator(`[data-speed-draft="${mode}"]`).waitFor();
+        await page.locator(`[data-speed-draft="${draft}"]`).waitFor();
         if (mode === "create") await page.locator("[data-orchestrator-runs-on-change]").click();
         const select = page.locator('select[aria-label]').filter({ has: page.locator('option[value="ultrafast"]') });
         await select.waitFor();
         await page.waitForFunction(() => !(document.querySelector('option[value="ultrafast"]') as HTMLOptionElement).disabled);
-        expect(await select.inputValue()).toBe("ultrafast");
+        expect(await select.inputValue()).toBe(inherited ? "" : "ultrafast");
+        const shown = await select.evaluate((element) => (element as HTMLSelectElement).selectedOptions[0]?.textContent);
+        expect(shown).toBe(translate(locale, inherited ? "draft.speedInherited" : "draft.speedUltra"));
+        /* The speed choice never reads like a reasoning choice in the select beside it. */
+        const efforts = await page.locator('select[aria-label]').filter({ has: page.locator('option[value="high"]') }).evaluate((element) => [...(element as HTMLSelectElement).options].map((option) => option.textContent));
+        expect(efforts).not.toContain(translate(locale, "draft.speedUltra"));
         await select.scrollIntoViewIfNeeded();
-        await shot(page, `s6-${mode}-select`, { select: await select.evaluate((element) => (element as HTMLSelectElement).selectedOptions[0]?.textContent) }, []);
+        await shot(page, `s6-${mode}-select`, { select: shown, efforts }, []);
         if (mode === "create") {
           await page.locator("[data-runtime-pill]").click();
           if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();

@@ -5328,11 +5328,12 @@ function SpeedSeatScene() {
   return <RuntimePill file={file} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />;
 }
 function SpeedDraftScene({ mode }: { mode: string }) {
-  const seeded: Record<string, string> = { engine: "codex", model: "gpt-6.1-sol", effort: "high", speed: "ultrafast", accountId: SPEED_PARAMS.get("account") === "d" ? "account-d" : "default" };
+  /* `&inherit=1`: a rotation the operator left untouched, so no speed is chosen and the incumbent's tier carries over. */
+  const seeded: Record<string, string> = { engine: "codex", model: "gpt-6.1-sol", effort: "high", speed: SPEED_PARAMS.has("inherit") ? "" : "ultrafast", accountId: SPEED_PARAMS.get("account") === "d" ? "account-d" : "default" };
   const launch = useAgentLaunchDraft({ storage: { read: (name) => seeded[name] ?? "", write: () => {} } });
   return (
     <div className="flex max-w-[640px] flex-col gap-3" data-speed-draft={mode}>
-      {mode === "create" ? <RunsOnRow draft={launch} phone={innerWidth < 640} /> : <AgentLaunchControls draft={launch} stacked />}
+      {mode === "create" ? <RunsOnRow draft={launch} phone={innerWidth < 640} /> : <AgentLaunchControls draft={launch} stacked inheritSpeed />}
       <div><DraftRuntimePill launch={launch} /></div>
     </div>
   );

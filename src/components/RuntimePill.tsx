@@ -196,6 +196,9 @@ export function RuntimePill({
   const [version, setVersion] = useState(0);
 
   const [open, setOpen] = useState(false);
+  /* Read when a speed answer lands: a refusal with no panel open to say it goes to a toast. */
+  const openRef = useRef(open);
+  useEffect(() => { openRef.current = open; }, [open]);
   /* Where the popover goes when it opens, measured off the pill: it renders
      through a portal, because the composer's own box is bounded and scrolls its
      content (#1629) and an in-flow popover is clipped by exactly that. */
@@ -433,8 +436,9 @@ export function RuntimePill({
   /* A Codex conversation's speed is a thread setting changed in place: no host
      restarts and no turn is cut. The rows show the choice at once; a refusal
      returns the face to what the conversation runs and says why. Applied means
-     the tier the next poll reads back. */
-  const applySpeed = useCallback(async (tier: SpeedTier, patch: Partial<RuntimeDraft>) => {
+     the tier the next poll reads back. The answer says whether the choice took,
+     or whether a later choice superseded it. */
+  const applySpeed = useCallback(async (tier: SpeedTier, patch: Partial<RuntimeDraft>): Promise<"applied" | "refused" | "superseded"> => {
     revisionRef.current += 1;
     const revision = revisionRef.current;
     const next = { ...liveDraftRef.current, ...patch };
@@ -461,17 +465,20 @@ export function RuntimePill({
     } catch (cause) {
       failure = cause instanceof Error ? cause.message : t("runtimeConfig.failed");
     }
-    if (revision !== revisionRef.current) return;
+    if (revision !== revisionRef.current) return "superseded";
     if (failure) {
       liveDraftRef.current = defaults(file);
       setLiveDraft(liveDraftRef.current);
       setError(failure);
       setSpeedError(failure);
       setApplyState("error");
-      return;
+      /* The speed rows say it while they are open; closed, it must still be read. */
+      if (!openRef.current) pushTaskToast("err", failure);
+      return "refused";
     }
     setApplyState("applied");
     requestFilesRefresh();
+    return "applied";
   }, [file, runtimeConversationId, t]);
 
   /* The switch this page watched settle. One that was already over when the
@@ -828,8 +835,15 @@ export function RuntimePill({
     if (speedLocked) return;
     if (faceSpeed === tier) return closePopover();
     if (tier === ULTRA_TIER && !ultraRow?.enabled) return;
-    if (pillSurface === "structured" && !stageBound) void applySpeed(tier, speedPatch(tier));
-    else commit(speedPatch(tier));
+    if (pillSurface === "structured" && !stageBound) {
+      /* The speed rows stay open until the action answers, so a refusal is said
+         beside them; a choice that took closes them as any other pick does. */
+      void applySpeed(tier, speedPatch(tier)).then((result) => {
+        if (result === "applied" && !isMobile && openRef.current) closePopover();
+      });
+      return;
+    }
+    commit(speedPatch(tier));
     if (!isMobile) closePopover();
   };
 
@@ -908,6 +922,7 @@ export function RuntimePill({
           onSelectModel={selectModel}
           onSelectSpeed={selectSpeed}
           ultra={ultraRow}
+          speedError={shownSpeedError}
           onClose={closePopover}
         />
       ) : null}
@@ -1169,7 +1184,7 @@ interface PanelProps {
 export function RuntimePopover({
   t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, onClose, at, owner,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, speedError = null, onClose, at, owner,
 }: PanelProps & {
   panel: Panel;
   setPanel: (p: Panel) => void;
@@ -1193,7 +1208,7 @@ export function RuntimePopover({
     onSelectEffort, onSelectModel, onSelectSpeed, ultra, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
-    () => rows.map((row, index) => (row.enabled ? index : -1)).filter((index) => index >= 0),
+    () => rows.map((row, index) => (row.enabled || row.unavailable ? index : -1)).filter((index) => index >= 0),
     [rows],
   );
 
@@ -1244,7 +1259,12 @@ export function RuntimePopover({
       case "ArrowLeft": if (panel !== "root") { event.preventDefault(); setPanel("root"); } break;
       case "Escape": event.preventDefault(); onClose(); break;
       case "Enter":
-      case " ": event.preventDefault(); rows[activeIndex]?.activate(); break;
+      case " ": {
+        event.preventDefault();
+        const row = rows[activeIndex];
+        if (row?.enabled) row.activate();
+        break;
+      }
       // WAI-APG menu: Tab closes and lets focus move on (the handler refocuses
       // the pill, so the un-prevented default advances past it).
       case "Tab": onClose(); break;
@@ -1295,6 +1315,7 @@ export function RuntimePopover({
           {rows.map((row, index) => (
             <MenuRow key={row.key} row={row} active={index === activeIndex} refFor={(el) => { rowRefs.current[index] = el; }} />
           ))}
+          {panel === "speed" && speedError ? <p className="break-words px-2 pb-1 pt-1 text-label leading-snug text-danger" data-runtime-speed-error>{speedError}</p> : null}
         </div>
       )}
     </div>,
@@ -1324,6 +1345,8 @@ interface Row {
   detailAction?: boolean;
   checked: boolean;
   enabled: boolean;
+  /** A choice the account cannot take, kept in the arrow-key order so its note is announced; activating it does nothing. */
+  unavailable?: boolean;
   reason?: string;
   /** Why the row cannot be chosen, as a visible line under it rather than a tooltip. */
   note?: string;
@@ -1441,7 +1464,8 @@ function buildRows({
       { key: "fast", kind: "speed", label: t("composer.speedFastTier"), checked: tier !== "default" && !(ultra && tier === ULTRA_TIER), ...lock, role: "menuitemradio", activate: () => onSelectSpeed("priority") },
       ...(ultra ? [{
         key: ULTRA_TIER, kind: "speed" as const, label: t("composer.speedUltraTier"), checked: tier === ULTRA_TIER,
-        enabled: lock.enabled && ultra.enabled, reason: lock.reason, note: lock.reason ? undefined : ultra.reason ?? undefined,
+        enabled: lock.enabled && ultra.enabled, unavailable: lock.enabled && !ultra.enabled,
+        reason: lock.reason, note: lock.reason ? undefined : ultra.reason ?? undefined,
         role: "menuitemradio" as const, activate: () => onSelectSpeed(ULTRA_TIER),
       }] : []),
     ];
@@ -1519,15 +1543,15 @@ function MenuRow({
       aria-checked={row.role === "menuitemradio" ? row.checked : undefined}
       aria-haspopup={isSubmenu ? "menu" : undefined}
       aria-disabled={!row.enabled || undefined}
-      disabled={!row.enabled}
+      disabled={!row.enabled && !row.unavailable}
       tabIndex={active ? 0 : -1}
       aria-label={row.reason ? accessibleName : row.ariaLabel}
       aria-describedby={row.note ? noteId : undefined}
       title={row.reason ?? row.hint}
-      onClick={row.activate}
+      onClick={row.enabled ? row.activate : undefined}
       data-runtime-row={row.kind}
       data-runtime-value={row.key}
-      className={`flex min-h-[28px] w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`flex min-h-[28px] w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ${
         row.checked ? "text-primary" : "text-secondary"
       }`}
     >
@@ -1688,7 +1712,8 @@ export function RuntimeSheet({
               <SheetRow
                 label={t("composer.speedUltraTier")}
                 checked={speed === ULTRA_TIER}
-                disabled={speedLocked || !ultra.enabled}
+                disabled={speedLocked}
+                unavailable={!speedLocked && !ultra.enabled}
                 reason={speedLocked ? lockReason : undefined}
                 note={speedLocked ? undefined : ultra.reason ?? undefined}
                 value={ULTRA_TIER}
@@ -1894,11 +1919,13 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
 }
 
 function SheetRow({
-  label, checked, disabled = false, reason, note, value, onSelect,
+  label, checked, disabled = false, unavailable = false, reason, note, value, onSelect,
 }: {
   label: string;
   checked: boolean;
   disabled?: boolean;
+  /** A choice the account cannot take: still reached by Tab so its note is read, and choosing it does nothing. */
+  unavailable?: boolean;
   reason?: string;
   /** Why the row cannot be chosen, as visible text under it: a phone has no tooltip. */
   note?: string;
@@ -1912,15 +1939,15 @@ function SheetRow({
       type="button"
       role="radio"
       aria-checked={checked}
-      aria-disabled={disabled || undefined}
+      aria-disabled={disabled || unavailable || undefined}
       disabled={disabled}
       aria-label={reason ? `${label} — ${reason}` : undefined}
       aria-describedby={note ? noteId : undefined}
       title={reason}
-      onClick={onSelect}
+      onClick={unavailable ? undefined : onSelect}
       data-runtime-sheet-row
       data-runtime-sheet-value={value}
-      className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 ${
+      className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 aria-disabled:opacity-50 ${
         checked ? "text-primary" : "text-secondary"
       }`}
     >

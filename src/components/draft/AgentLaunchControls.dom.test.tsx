@@ -267,7 +267,7 @@ test("ultrafast is a speed choice where the launch account's catalog lists it, a
   const select = host.querySelector('select[aria-label*="peed"]') as HTMLSelectElement;
   const ultra = select.querySelector('option[value="ultrafast"]') as HTMLOptionElement;
   expect(ultra.disabled).toBe(false);
-  expect(ultra.textContent).toBe("ultra");
+  expect(ultra.textContent).toBe("ultrafast");
   flushSync(() => draft().setSpeed("ultrafast"));
   expect(store.get("speed")).toBe("ultrafast");
   expect(speedBody(draft().engine, draft().speed)).toEqual({ serviceTier: "ultrafast" });
@@ -290,5 +290,5 @@ test("an account whose catalog lacks ultrafast offers it disabled, naming the ac
   const ultra = select.querySelector('option[value="ultrafast"]') as HTMLOptionElement;
   expect(ultra.disabled).toBe(true);
   /* A stored choice the account cannot take shows the reason as the select's own text. */
-  expect(ultra.textContent).toBe("ultra — codex-a doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
+  expect(ultra.textContent).toBe("ultrafast — codex-a doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
 });

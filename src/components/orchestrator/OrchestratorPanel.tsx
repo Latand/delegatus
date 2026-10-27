@@ -70,7 +70,7 @@ import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
 import { DecisionColumn, DecisionStripLine, defaultDecisionTab, useOpenDecisionCount, type DecisionTab } from "@/components/decisions/DecisionColumn";
 import { useDecisionSurface } from "@/components/decisions/decisionSurface";
-import { speedBody, speedChoiceOf } from "@/components/ReasoningControls";
+import { speedBody } from "@/components/ReasoningControls";
 
 /* The report log beside the chat (#2146). It first opened at a 720 px seat
    as a 300 px column, which left the chat 420 px; the chat now keeps at least
@@ -937,7 +937,6 @@ function RotateDraft({
     model: incumbent?.model ?? file?.model ?? "",
     effort: incumbent?.effort ?? "",
     accountId: incumbent?.accountId ?? "",
-    speed: speedChoiceOf(file),
   };
   const launch = useAgentLaunchDraft({
     storage: {
@@ -1145,7 +1144,7 @@ function OrchestratorDraft({
 
         {rotate ? (
           <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
-            <AgentLaunchControls draft={launch} disabled={submitting} stacked />
+            <AgentLaunchControls draft={launch} disabled={submitting} stacked inheritSpeed />
           </div>
         ) : (
           <RunsOnRow draft={launch} disabled={submitting} cwd={cwd} revealRef={launchChoices} />

@@ -18,14 +18,6 @@ export function speedBody(engine: string, speed: SpeedChoice): { fast?: boolean;
   return speed === "ultrafast" ? { serviceTier: "ultrafast" } : { fast: speed === "fast" };
 }
 
-/** The choice a running Codex conversation's applied speed is, so a draft that
-    starts its successor shows what the successor gets; standard is no choice. */
-export function speedChoiceOf(file: { engine?: string; serviceTier?: string | null; fast?: boolean | null } | null | undefined): SpeedChoice {
-  if (file?.engine !== "codex") return "";
-  if (file.serviceTier === "ultrafast") return "ultrafast";
-  return file.serviceTier === "priority" || (!file.serviceTier && file.fast) ? "fast" : "";
-}
-
 /**
  * Reasoning-effort select plus the codex-only speed (fast/standard) select —
  * the shared control strip for every "start a new agent" surface. The tier
@@ -45,6 +37,7 @@ export function ReasoningControls({
   onSpeed,
   copilotModels,
   ultra = null,
+  inheritSpeed = false,
 }: {
   engine: "claude" | "codex" | "copilot";
   model: string;
@@ -60,6 +53,8 @@ export function ReasoningControls({
   copilotModels?: readonly CopilotModelEntry[] | null;
   /** The ultrafast option, offered as the launch account's catalog says; absent, the select has none. */
   ultra?: UltraRow | null;
+  /** A rotation: no choice continues the incumbent's own tier, which the server resolves, so the empty option says so. */
+  inheritSpeed?: boolean;
 }) {
   const { t } = useLocale();
   const availableModels = engine === "copilot" && copilotModels
@@ -114,7 +109,7 @@ export function ReasoningControls({
           title={t("draft.speedTitle")}
           onChange={(event) => onSpeed(event.target.value as SpeedChoice)}
         >
-          <option value="">{t("draft.speedDefault")}</option>
+          <option value="">{t(inheritSpeed ? "draft.speedInherited" : "draft.speedDefault")}</option>
           <option value="fast">{t("draft.speedFast")}</option>
           <option value="standard">{t("draft.speedStandard")}</option>
           {/* A native option shows no tooltip, so the reason rides its own text. */}

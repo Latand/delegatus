@@ -1423,6 +1423,7 @@ export const en = {
   "draft.speedAria": "Codex speed mode",
   "draft.speedTitle": "fast = priority tier (1.5x speed, higher usage)",
   "draft.speedDefault": "speed: default",
+  "draft.speedInherited": "speed: inherited",
   "draft.imagesOnly": "(images)",
   "draft.launched": "agent launched in tmux {target} — waiting for the conversation to appear here…",
   "draft.launchedStructured": "agent launched — waiting for the conversation to appear here…",
@@ -1445,7 +1446,7 @@ export const en = {
   "draft.rolePromptToggle": "Role prompt (EN)",
   "draft.speedFast": "fast",
   "draft.speedStandard": "standard",
-  "draft.speedUltra": "ultra",
+  "draft.speedUltra": "ultrafast",
 
   // Reasoning tier display names (submitted values stay the CLI tokens)
   "effortTier.none": "none",

@@ -565,10 +565,13 @@ export function AgentLaunchControls({
   draft,
   disabled,
   stacked,
+  inheritSpeed,
 }: {
   draft: AgentLaunchDraft;
   disabled?: boolean;
   stacked?: boolean;
+  /** A rotation draft: no speed choice keeps the incumbent's tier (see {@link ReasoningControls}). */
+  inheritSpeed?: boolean;
 }) {
   const { t } = useLocale();
   const catalogAccountId = draft.launchAccountId || draft.activeAccountId;
@@ -623,6 +626,7 @@ export function AgentLaunchControls({
           onSpeed={draft.setSpeed}
           copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
           ultra={ultra}
+          inheritSpeed={inheritSpeed}
         />
       </div>
     );
@@ -651,6 +655,7 @@ export function AgentLaunchControls({
             onSpeed={draft.setSpeed}
             copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
             ultra={ultra}
+            inheritSpeed={inheritSpeed}
           />
         </div>
       </Field>
