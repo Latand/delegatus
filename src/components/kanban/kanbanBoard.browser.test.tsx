@@ -7797,6 +7797,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     activity: { desktop: "[data-rail-menu-activity]", phone: "[data-mobile2-menu-row='activity']" },
     team: { desktop: "[data-rail-menu-team]", phone: "[data-mobile2-menu-row='team']" },
     signOut: { desktop: "[data-rail-menu-sign-out]", phone: null },
+    stop: { desktop: "[data-rail-menu-stop-all]", phone: "[data-mobile2-menu-row='stop-all']" },
   };
 
   const caption = (text: string, width: number, height = 26, size = 13) => Buffer.from(
@@ -7862,6 +7863,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       },
       "/api/team": { mode: "team", me: { id: "member-1", name: "Fixture member", role: "owner", telegram: null }, members: [], methods: {} },
       "/api/telemetry": { enabled: true, locked: false, noticeDismissed: true },
+      /* «Stop Delegatus» as the route answers a confirmed stop; nothing is stopped here. */
+      "/api/stop-all": () => Response.json({ started: true, report: "stop-all.log" }, { status: 202 }),
       /* The installation's memory source row (memory-source-switch.md §3.4), before any choice: its longest resting line. */
       "/api/memory/source": { choice: null, phase: null },
     });
@@ -7967,6 +7970,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             if (!await page.locator(`${PANEL} [data-rail-menu-sign-out]`).count()) failures.push(`${tag}: no Sign out for a signed-in member`);
             await capture(page, at, "desktop", "help-member", now);
             await page.locator("[data-rail-menu-help]").click();
+            /* «Stop Delegatus» asks under its own row, and its answer stays there. */
+            await page.locator("[data-rail-menu-stop-all]").click();
+            await page.locator("[data-stop-all-go]").waitFor();
+            await capture(page, at, "desktop", "stop-ask", now);
+            await page.locator("[data-stop-all-go]").click();
+            await page.locator("[data-stop-all-text][role=status]").waitFor();
+            if ((await page.locator("[data-stop-all-text]").textContent())?.trim() !== translate(lang, "headerMenu.stopAll.started")) failures.push(`${tag}: the started stop is not told in words`);
+            await capture(page, at, "desktop", "stop-started", now);
           } else await capture(page, at, "desktop", `rest-${now}`, now);
           await page.locator("[data-rail-menu-settings]").click();
           await page.locator("[data-rail-menu-back]").waitFor();
@@ -8060,6 +8071,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          if (now === "working") {
+            /* On the phone the question is a page of Settings; Cancel returns to it. */
+            await page.locator(`${SHEET} [data-mobile2-menu-row="stop-all"]`).click();
+            await page.locator(`${SHEET} [data-stop-all-go]`).waitFor();
+            await capture(page, at, "phone", "stop-ask", now);
+            await page.locator(`${SHEET} [data-stop-all-cancel]`).click();
+            await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).waitFor();
+          }
           await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
@@ -8108,7 +8127,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         states.find((entry) => entry.surface === surface && entry.frame === frame && entry.lang === lang && entry.state === state && entry.scheme === scheme);
       for (const lang of ["en", "uk"] as const) {
         const uk = lang === "uk";
-        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-keys", "keys-invalid", "memory-capped", "keys", "keys-replace", "keys-missing"];
+        const order = ["rest", "help-member", "stop-ask", "stop-started", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-keys", "keys-invalid", "memory-capped", "keys", "keys-replace", "keys-missing"];
         const cells = [];
         for (const state of order) {
           const entry = of("desktop", "1440", lang, state);
@@ -8116,7 +8135,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         }
         await sheet(path.join(out, `sheet-built-desktop-${lang}.png`), uk ? "Меню заголовка, зібране: стани · 1440×900 · світла" : "The header's menu, built: its states · 1440×900 · light", 6, cells);
         const phoneCells = [];
-        for (const state of ["rest", "help", "settings", "memory-working", "memory-noKey-keys", "memory-capped", "keys", "rules"]) {
+        for (const state of ["rest", "help", "settings", "stop-ask", "memory-working", "memory-noKey-keys", "memory-capped", "keys", "rules"]) {
           const entry = of("phone", "390", lang, state);
           if (entry) phoneCells.push({ label: `${state} · ${Math.round(entry.box[3])} px`, ...(await crop(path.join(out, entry.file), [0, 0, 390, 844], 0)) });
         }
