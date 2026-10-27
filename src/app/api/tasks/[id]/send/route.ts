@@ -8,6 +8,7 @@ import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { agentMessageOrigin, delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
+import { admitConversationMember } from "@/lib/team/authorship";
 import { taskForResponse } from "@/lib/prototypeReview/read";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
@@ -104,6 +105,13 @@ async function postTaskSend(
   if (clientRequestId && !/^[A-Za-z0-9_-]{8,128}$/.test(clientRequestId)) {
     return NextResponse.json({ error: "clientRequestId must be 8-128 URL-safe characters" }, { status: 400 });
   }
+  // Admit the entire fan-out before the first delivery. A partial authority
+  // write may retain a fence, but must never dispatch an unfenced target.
+  try {
+    for (const targetPath of paths) admitConversationMember(actor, null, targetPath);
+  } catch {
+    return NextResponse.json({ error: "conversation authority is unavailable", code: "team_store_unavailable" }, { status: 503 });
+  }
   if (targetEntries[0] && directOperatorActivityAuthority(req).ok) {
     /* One request, however many agents it fans out to. */
     dependencies.recordOperatorRequest?.(req, {
@@ -139,6 +147,10 @@ async function postTaskSend(
   }
   const outcomes: DeliveryOutcome[] = [];
   for (const targetPath of paths) {
+    try { admitConversationMember(actor, null, targetPath); }
+    catch {
+      return NextResponse.json({ error: "conversation authority is unavailable", code: "team_store_unavailable" }, { status: 503 });
+    }
     const entry = byPath.get(targetPath);
     outcomes.push(await dependencies.deliverConversationMessage({
       pid: entry?.pid ?? null,

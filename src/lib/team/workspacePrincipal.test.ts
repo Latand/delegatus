@@ -31,7 +31,7 @@ function chain(depth: number) {
   };
 }
 
-test("one seat snapshot resolves a deep parent chain, and a later resolution rereads revocation", () => {
+test("unchanged seats reuse one parsed map across deep chains; rebinding and revocation invalidate it", () => {
   const store = teamStore();
   const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
     telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
@@ -46,10 +46,21 @@ test("one seat snapshot resolves a deep parent chain, and a later resolution rer
   const read = spyOn(fs, "readFileSync");
   try {
     expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toEqual(workspace);
+    for (const depth of [1, 4, 10]) {
+      for (let n = 0; n < 5; n++) conversationWorkspacePrincipal(chain(depth), "conversation_0", store);
+    }
     expect(read.mock.calls.filter(([name]) => name === file)).toHaveLength(1);
     const seats = JSON.parse(fs.readFileSync(file, "utf8"));
+    seats.seats["project-alpha"].workspace = { ...workspace, workspaceId: null };
+    fs.writeFileSync(`${file}.replacement`, JSON.stringify(seats));
+    fs.renameSync(`${file}.replacement`, file);
+    expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toEqual({ ...workspace, workspaceId: null });
     delete seats.seats["project-alpha"];
     fs.writeFileSync(file, JSON.stringify(seats));
+    expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toBeNull();
+    fs.writeFileSync(file, "{");
+    expect(() => conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toThrow("workspace seat authority is unavailable");
+    fs.unlinkSync(file);
     expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toBeNull();
   } finally { read.mockRestore(); }
 });
@@ -75,4 +86,22 @@ test("unreadable seat authority never becomes installation reach", () => {
     fs.writeFileSync(statePath("orchestrator-seats.json"), raw);
     expect(() => conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toThrow("workspace seat authority is unavailable");
   }
+});
+
+test("a transient read failure recovers without a file change", () => {
+  const store = teamStore();
+  const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+    telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
+  store.insertMember(owner);
+  createWorkspace(store, owner, { id: W, name: "Alpha", projects: ["project-alpha"] });
+  const file = statePath("orchestrator-seats.json");
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 1, seats: {} }));
+  const original = fs.readFileSync;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((name: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (name === file) throw new Error("transient read failure");
+    return Reflect.apply(original, fs, [name, ...args]);
+  }) as typeof fs.readFileSync);
+  try { expect(() => conversationWorkspacePrincipal(chain(1), "conversation_0", store)).toThrow("workspace seat authority is unavailable"); }
+  finally { read.mockRestore(); }
+  expect(conversationWorkspacePrincipal(chain(1), "conversation_0", store)).toBeNull();
 });

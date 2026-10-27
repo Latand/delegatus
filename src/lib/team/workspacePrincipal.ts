@@ -5,7 +5,8 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { existingTeamStore, type TeamStore } from "./store";
 import { workspaceDirectory } from "./workspaces";
 import { workspaceScope } from "./workspaceAccess";
-import { activeOrchestratorSeatsOrUnknown } from "@/lib/orchestrator/seats";
+import { orchestratorWorkspacePrincipalsOrUnknown } from "@/lib/orchestrator/seats";
+import { TeamError } from "./members";
 
 export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
 
@@ -14,16 +15,16 @@ export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
  * survives revocation and project moves; those can only remove its authority. */
 export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspacePrincipal | null {
   const seen = new Set<string>();
-  // One lazy seat snapshot per resolution. Solo installations never read it;
+  // One lazy, identity-cached seat map per resolution. Solo installations skip it;
   // persisted launch bindings still fail closed if their team store vanishes.
-  let seatPrincipals: Map<string | null, WorkspacePrincipal | undefined> | undefined;
+  let seatPrincipals: ReadonlyMap<string | null, WorkspacePrincipal | undefined> | undefined;
   const hasWorkspaces = Boolean(store?.workspaceRows().length);
   const seatPrincipal = (id: string) => {
     if (!hasWorkspaces) return undefined;
     if (!seatPrincipals) {
-      const seats = activeOrchestratorSeatsOrUnknown();
-      if (!seats) throw new Error("workspace seat authority is unavailable");
-      seatPrincipals = new Map(seats.map(seat => [seat.conversationId, seat.workspace]));
+      const principals = orchestratorWorkspacePrincipalsOrUnknown();
+      if (!principals) throw new Error("workspace seat authority is unavailable");
+      seatPrincipals = principals;
     }
     return seatPrincipals.get(id);
   };
@@ -52,6 +53,18 @@ export function memberWorkspacePrincipal(store: TeamStore, memberId: string, pro
   const member = store.member(memberId);
   if (member?.role === "owner" && member.status === "active") return null;
   return { memberId, workspaceId: project ? workspaceDirectory(store).workspaceOf(project) : null };
+}
+
+/** Server-admitted human input must never fall back to installation reach
+ * when its author or current project permission cannot be established. */
+export function requireMemberWorkspacePrincipal(memberId: string, project: string | null): WorkspacePrincipal | null {
+  const store = existingTeamStore();
+  if (!store || store.member(memberId)?.status !== "active")
+    throw new TeamError("team_store_unavailable", "member authority is unavailable", 503);
+  const principal = memberWorkspacePrincipal(store, memberId, project);
+  if (principal && !workspacePrincipalAllows(principal, project, store))
+    throw new TeamError("workspace_forbidden", "workspace access denied", 403);
+  return principal;
 }
 
 export function workspacePrincipalAllows(principal: WorkspacePrincipal, project: string | null | undefined, store = existingTeamStore()): boolean {

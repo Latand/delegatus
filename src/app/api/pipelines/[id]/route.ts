@@ -22,6 +22,8 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
+import { refuseAnonymous, teamActor } from "@/lib/team";
+import { TeamError } from "@/lib/team/members";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +33,7 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 
 type PipelineApiError = ApiError & {
-  code?: "workspace_forbidden" | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
+  code?: TeamError["code"] | "workspace_forbidden" | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
     | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "TASK_RUNS_ELSEWHERE" | "STAGE_KIND_RETIRED";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
@@ -95,6 +97,9 @@ async function workspacePATCH(
   if (rejection) return rejection;
   const admission = pipelineControlAdmission(req);
   if ("refusal" in admission) return admission.refusal;
+  const human = teamActor(req);
+  const anonymous = refuseAnonymous(human);
+  if (anonymous) return anonymous;
   let body: PatchPipelineRequest;
   try {
     const raw = await req.json();
@@ -117,7 +122,7 @@ async function workspacePATCH(
       || body.action === "publish"
       ? admission.actor
       : undefined;
-    const result = await patchPipeline(id, body, undefined, actor);
+    const result = await patchPipeline(id, body, undefined, actor, undefined, human.kind === "member" ? human.memberId : undefined);
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not update pipeline",
       /* A malformed guard names its field without a code: each travels on its own. */
@@ -147,6 +152,7 @@ async function workspacePATCH(
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),
     } : {}) });
   } catch (error) {
+    if (error instanceof TeamError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {
       return NextResponse.json({ error: error.message, code: "store_busy", retryable: true }, { status: 503 });

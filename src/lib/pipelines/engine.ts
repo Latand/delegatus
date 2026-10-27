@@ -1,4 +1,4 @@
-import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
@@ -14506,12 +14506,25 @@ export async function patchPipeline(
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
   assertAuthority?: () => void,
+  workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
   assertAuthority?.();
+  const memberInput = workspaceMemberId && ["resolve-decision", "continue-review", "update-draft", "add-stage", "override-stage"].includes(req.action);
+  const inputPrincipal = (pipelines: readonly Pipeline[]) => {
+    const pipeline = pipelines.find(item => item.id === id);
+    return memberInput && pipeline ? requireMemberWorkspacePrincipal(workspaceMemberId!, pipeline.project) : null;
+  };
   const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
     assertAuthority?.();
+    inputPrincipal(pipelines);
     return mutate(pipelines, async (records?: readonly Pipeline[]) => {
       assertAuthority?.();
+      const rows = records ?? pipelines;
+      const principal = inputPrincipal(rows);
+      const pipeline = rows.find(item => item.id === id);
+      // Keep the caller's revision guards over the original record. Authority
+      // joins the accepted edit in its transaction, before any later launch.
+      if (pipeline && principal) pipeline.workspace ??= principal;
       if (records) await persist(records); else await persist();
     });
   }, observeHold);

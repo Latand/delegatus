@@ -11,6 +11,8 @@ import { productionDeputyCommandPorts } from "@/lib/orchestrator/deputyCommandPo
 import { admitRuntimeImagePayload } from "@/lib/runtime/runtimeImageAdmission";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+import { refuseAnonymous, teamActor } from "@/lib/team";
+import { TeamError } from "@/lib/team/members";
 
 /* «Ask in parallel» (docs/design/ghost-seat.md §5): starts the orchestrator
    seat's deputy for one side ask while the seat keeps working. The composer's
@@ -28,6 +30,9 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<stri
      gateway may start one, and the gateway's ask stays an agent's. */
   const asker = deputyAskerOf(req);
   if (!asker.ok) return NextResponse.json({ error: asker.error, code: asker.code, admission: "refused" }, { status: asker.status });
+  const actor = teamActor(req);
+  const anonymous = refuseAnonymous(actor);
+  if (anonymous) return anonymous;
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -46,6 +51,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<stri
       images,
       clientRequestId: typeof body.clientRequestId === "string" ? body.clientRequestId : "",
       origin: asker.origin,
+      ...(actor.kind === "member" ? { memberId: actor.memberId } : {}),
     }, productionDeputyCommandPorts());
     if (!result.ok) {
       return NextResponse.json({ error: result.error, code: result.code, ...(result.admission ? { admission: result.admission } : {}), ...(result.askId ? { askId: result.askId } : {}) }, { status: result.status });
@@ -59,6 +65,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<stri
       ...(result.deliveryUncertain ? { deliveryUncertain: true } : {}),
     });
   } catch (thrown) {
+    if (thrown instanceof TeamError) return NextResponse.json({ error: thrown.message, code: thrown.code }, { status: thrown.status });
     const error = thrown instanceof Error ? thrown.message : String(thrown);
     console.error(`orchestrator deputy route failed: ${error}`);
     return NextResponse.json({ error, code: "deputy_failed" }, { status: 500 });

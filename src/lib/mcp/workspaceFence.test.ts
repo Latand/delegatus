@@ -20,6 +20,12 @@ import { findPipelineRecord } from "@/lib/pipelines/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { queuePipelineCreation, admitQueuedPipelineCreations, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
+import { mintSession } from "@/lib/team/sessions";
+import { POST as taskSendPOST } from "@/app/api/tasks/[id]/send/route";
+import { POST as ghostPOST } from "@/app/api/orchestrator/ghost/route";
+import * as deputyPorts from "@/lib/orchestrator/deputyCommandPorts";
+import { askOrchestratorInParallel, type DeputyCommandPorts } from "@/lib/orchestrator/deputyCommand";
+import { readDeputies, endDeputy, deputyMessageKey } from "@/lib/orchestrator/deputies";
 import { NextRequest } from "next/server";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { installSpawnCapabilityResolver } from "@/lib/agent/callerClaims";
@@ -529,4 +535,259 @@ test("an existing conversation designated for a member keeps its seat scope acro
   expect(JSON.parse(child.stdout.trim())).toEqual(workspace);
   store.removeWorkspaceMember(W1, member.id);
   expect(() => beginOrchestratorSeatIntent({ project: own, mandate: "Refused", clientRequestId: "workspace-seat-refused", mode: "existing", conversationId: "conversation_member", workspace, now: AT })).toThrow("workspace access denied");
+});
+
+
+for (const failure of [false, true, "revoke-after-first"] as const) test(`member task fan-out binds every target before delivery; authority failure=${failure}`, async () => {
+  const registry = new AgentRegistry(path.join(root, "task-send-registry.json"));
+  setAgentRegistryForTests(registry);
+  const recipients = [1, 2].map(n => registry.ensureForkedConversation("codex", path.join(root, `recipient-${n}.jsonl`), null,
+    emptyLaunchProfile({ cwd: root, project: own })));
+  const task = { ...dependencies.loadTasks()[0]!, assignments: [] };
+  const cookie = mintSession(store, member.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  let effects = 0;
+  const admit = store.admitConversationMember.bind(store);
+  const write = failure === true ? spyOn(TeamStore.prototype, "admitConversationMember").mockImplementation((id: string, memberId: string) => {
+    if (id === recipients[1]!.id) throw new Error("authority write refused");
+    // The first target can already be bound, but no target may dispatch yet.
+    admit(id, memberId);
+  }) : null;
+  try {
+    const response = await taskSendPOST.withDependencies(new NextRequest(`http://localhost/api/tasks/${task.id}/send`, {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+      body: JSON.stringify({ paths: recipients.map(row => row.generations.at(-1)!.path) }),
+    }), { params: Promise.resolve({ id: task.id }) }, {
+      loadTasks: () => [task],
+      listFiles: async () => recipients.map(row => ({ path: row.generations.at(-1)!.path, project: own, engine: "codex", pid: null })) as never,
+      deliverConversationMessage: async () => {
+        effects++;
+        for (const row of recipients) expect(store.latestConversationMember(row.id)).toBe(member.id);
+        if (failure === "revoke-after-first") store.updateMember({ ...member, status: "revoked", revokedAt: AT });
+        return { ok: true, outcome: "delivered-to-live", target: null };
+      },
+      mutateTasks: mutator => mutator([structuredClone(task)]).result,
+    });
+    expect(response.status).toBe(failure ? 503 : 200);
+    expect(effects).toBe(failure === true ? 0 : failure === "revoke-after-first" ? 1 : 2);
+    if (!failure) {
+      dependencies.workspaceConversation = id => registry.conversation(id as `conversation_${string}`);
+      for (const row of recipients) {
+        dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: row.id, role: "builder" });
+        rebuild();
+        expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+        expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
+      }
+    }
+  } finally { write?.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
+
+for (const mode of ["member", "owner", "write-refused", "revoked-during-join", "revoked-before-register"] as const) test(`parallel ask keeps its authenticated human authority: ${mode}`, async () => {
+  const registry = new AgentRegistry(path.join(root, "deputy-registry.json"));
+  setAgentRegistryForTests(registry);
+  const seatSessionId = ["0".repeat(8), "0".repeat(4), "4000", "8000", String(1).padStart(12, "0")].join("-");
+  const seatPath = path.join(root, `${seatSessionId}.jsonl`);
+  const seat = registry.ensureForkedConversation("claude", seatPath, null, emptyLaunchProfile({ cwd: root, project: own }));
+  beginOrchestratorSeatIntent({ project: own, mandate: "Run work", mode: "existing", conversationId: seat.id, clientRequestId: "deputy-seat", now: AT });
+  completeOrchestratorSeatIntent({ project: own, conversationId: seat.id, path: seatPath, clientRequestId: "deputy-seat", now: AT });
+  const actor = mode === "owner" ? owner : member;
+  const cookie = mintSession(store, actor.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const realPorts = deputyPorts.productionDeputyCommandPorts({ registry });
+  let effects = 0, deliveredId = "";
+  const ports: DeputyCommandPorts = { ...realPorts, now: () => new Date(AT), seatBusy: async () => true,
+    fork: input => ({ path: input.destination, records: 1 }),
+    registerConversation: input => {
+      if (mode === "revoked-before-register") store.removeWorkspaceMember(W1, member.id);
+      return realPorts.registerConversation(input);
+    },
+    joinSeatTask: () => { if (mode === "revoked-during-join") store.removeWorkspaceMember(W1, member.id); },
+    workContext: () => ({ openLanes: [], recentTasks: [] }), watch: () => {},
+    deliver: async input => {
+      effects++; deliveredId = input.conversationId;
+      expect(store.latestConversationMember(input.conversationId)).toBe(actor.id);
+      expect(conversationWorkspacePrincipal(id => registry.conversation(id as `conversation_${string}`), input.conversationId))
+        .toEqual(mode === "owner" ? null : { memberId: member.id, workspaceId: W1 });
+      return { ok: true };
+    },
+  };
+  const factory = spyOn(deputyPorts, "productionDeputyCommandPorts").mockReturnValue(ports);
+  const write = mode === "write-refused" ? spyOn(TeamStore.prototype, "admitConversationMember").mockImplementation(() => { throw new Error("authority write refused"); }) : null;
+  try {
+    const response = await ghostPOST(new NextRequest("http://localhost/api/orchestrator/ghost", {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+      body: JSON.stringify({ project: own, seatConversationId: seat.id, text: "Review workspace work", clientRequestId: "member-parallel" }),
+    }));
+    expect(response.status).toBe(mode === "write-refused" ? 503 : mode === "revoked-during-join" || mode === "revoked-before-register" ? 403 : 200);
+    expect(effects).toBe(mode === "write-refused" || mode === "revoked-during-join" || mode === "revoked-before-register" ? 0 : 1);
+    const saved = readDeputies()[0]!;
+    expect(saved.ask.memberId).toBe(actor.id);
+    expect(saved.workspace).toEqual(mode === "owner" ? undefined : { memberId: member.id, workspaceId: W1 });
+    if (mode === "revoked-before-register") expect(saved.deputyConversationId).toBeNull();
+    if (effects) {
+      // Parent input changing later cannot erase the deputy's own binding.
+      store.admitConversationMember(seat.id, mode === "owner" ? member.id : owner.id);
+      const reader = `import { readDeputies } from ${JSON.stringify(path.resolve("src/lib/orchestrator/deputies.ts"))}; const row = readDeputies()[0]; console.log(JSON.stringify({memberId:row.ask.memberId,workspace:row.workspace??null}));`;
+      const child = spawnSync(process.execPath, ["-e", reader], { env: process.env, encoding: "utf8" });
+      expect(child.status).toBe(0);
+      expect(JSON.parse(child.stdout.trim())).toEqual({ memberId: actor.id, workspace: mode === "owner" ? null : { memberId: member.id, workspaceId: W1 } });
+      dependencies.workspaceConversation = id => registry.conversation(id as `conversation_${string}`);
+      dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: deliveredId, role: "builder" });
+      rebuild();
+      const foreign = await call("get_task", { taskId: "task_1" });
+      if (mode === "owner") expect(foreign.ok).toBe(true); else expect(foreign).toMatchObject(REFUSED);
+      expect((await askOrchestratorInParallel({ project: own, text: "replacement", clientRequestId: "member-parallel", memberId: actor.id }, ports)).ok).toBe(true);
+      expect(effects).toBe(1);
+      endDeputy(saved.askId, { outcome: "failed", now: new Date(AT) });
+      expect((await askOrchestratorInParallel({ retryAskId: saved.askId, clientRequestId: "retry-member-parallel" }, {
+        ...ports, prepareRetry: async () => ({ ok: true }), reconcileRetryAnswer: () => null,
+      })).ok).toBe(true);
+      expect(effects).toBe(2);
+      expect(store.latestConversationMember(deliveredId)).toBe(actor.id);
+      if (mode === "member") {
+        factory.mockImplementationOnce(() => { store.removeWorkspaceMember(W1, member.id); return ports; });
+        const replay = await ghostPOST(new NextRequest("http://localhost/api/orchestrator/ghost", {
+          method: "POST", headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+          body: JSON.stringify({ project: own, clientRequestId: "member-parallel", text: "replay" }),
+        }));
+        expect(replay.status).toBe(403); expect(await replay.json()).not.toHaveProperty("deputy");
+        expect(effects).toBe(2);
+        store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+        endDeputy(saved.askId, { outcome: "failed", now: new Date(AT) });
+        const ended = readDeputies()[0]!;
+        const { RuntimeJournal } = await import("@/runtime-host/journal");
+        const clientModule = await import("@/lib/runtime/client");
+        const journal = new RuntimeJournal(path.join(root, "member-retry-journal.sqlite"));
+        const operationId = "retry-member-operation", key = deputyMessageKey(saved.askId, ended.attempt ?? 0);
+        const held = registry.holdDelivery(deliveredId as `conversation_${string}`, "Previous question", key, "text", [], null,
+          { operationId }, { recoveryIntent: "reclaimed-host" });
+        const generation = registry.conversation(deliveredId as `conversation_${string}`)!.generations.at(-1)!;
+        registry.beginDeliveryAttempt(held.id, generation.id);
+        journal.append({ scope: { type: "session", id: deliveredId }, kind: "session-status", payload: {
+          conversationId: deliveredId, sessionKey: { engine: "claude", sessionId: generation.id },
+          hostKind: "claude-broker", host: "hosted", turn: "idle", provenance: "structured", artifactPath: generation.path,
+          capabilities: { steer: false, structuredAttention: true },
+        } });
+        journal.executeOperation({ kind: "send", conversationId: deliveredId, operationId, idempotencyKey: key, text: "Previous question", policy: "queue" });
+        expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+        let cancellations = 0;
+        const client = { readSession: async () => { store.removeWorkspaceMember(W1, member.id); return null; },
+          operationStatus: async (id: string) => journal.operationResult(id),
+          transitionOperation: async (id: string, status: Parameters<typeof journal.transitionOperation>[1], options: Parameters<typeof journal.transitionOperation>[2]) => {
+            cancellations++; return journal.transitionOperation(id, status, options);
+          },
+        } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+        const transport = spyOn(clientModule, "runtimeHostClient").mockReturnValue(client);
+        try {
+          await expect(askOrchestratorInParallel({ retryAskId: saved.askId, clientRequestId: "retry-revoked-reader" },
+            { ...ports, prepareRetry: realPorts.prepareRetry })).rejects.toThrow("workspace access denied");
+          expect(cancellations).toBe(0);
+          expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+          expect(readDeputies()[0]!.attempt).toBe(ended.attempt);
+        } finally { transport.mockRestore(); journal.close(); }
+        store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+        factory.mockReturnValueOnce({ ...ports, prepareRetry: async () => {
+          store.removeWorkspaceMember(W1, member.id);
+          return { ok: true, completed: { ...ended, outcome: "done", result: { line: "Private answer", finalText: "Private workspace answer" } } };
+        } });
+        const completed = await ghostPOST(new NextRequest("http://localhost/api/orchestrator/ghost", {
+          method: "POST", headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+          body: JSON.stringify({ retryAskId: saved.askId, clientRequestId: "retry-revoked-answer" }),
+        }));
+        expect(completed.status).toBe(403);
+        expect(JSON.stringify(await completed.json())).not.toContain("Private workspace answer");
+        expect(readDeputies()[0]!.attempt).toBe(ended.attempt);
+        store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+        resetTeamStoreForTests();
+        fs.renameSync(teamStoreFile(), path.join(root, "deputy-saved-team.sqlite"));
+        expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+      }
+    }
+  } finally { write?.mockRestore(); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
+
+
+for (const action of ["update-draft", "add-stage", "override-stage"] as const) test(`a member's ${action} binds an installation pipeline in the edit transaction`, async () => {
+  expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+  placeProject(store, owner, projectForCwd(root)!, W1);
+  const created = await createPipelineFromRequest({ task: "Installation draft", repoDir: root, stages: [], autoStart: false }, undefined,
+    { allowOperatorDraftWithoutLineage: true });
+  const id = created.pipeline!.id;
+  expect(findPipelineRecord(id)?.workspace).toBeUndefined();
+  const stage = { id: "build", kind: "run" as const, role: { roleId: "builder" as const }, prompt: "Workspace work", next: null };
+  if (action === "override-stage") expect((await patchPipeline(id, { action: "add-stage", stage })).pipeline).toBeDefined();
+  const request = action === "update-draft" ? { action, task: "Member's work" }
+    : action === "add-stage" ? { action, stage }
+      : { action, stageId: "build", prompt: "Member's instructions" };
+  const result = await patchPipeline(id, request, undefined, { kind: "operator" }, undefined, member.id);
+  expect(result.error).toBeUndefined();
+  expect(findPipelineRecord(id)?.workspace).toEqual({ memberId: member.id, workspaceId: W1 });
+  store.removeWorkspaceMember(W1, member.id);
+  await expect(patchPipeline(id, request, undefined, { kind: "operator" }, undefined, member.id)).rejects.toThrow("workspace access denied");
+});
+
+
+test("parallel request keys cannot expose another workspace's in-flight or saved deputy", async () => {
+  const foreignMember = person("m_foreign", "member");
+  store.putWorkspaceMember(W2, foreignMember.id, "member", owner.id, AT);
+  const registry = new AgentRegistry(path.join(root, "parallel-key-registry.json"));
+  setAgentRegistryForTests(registry);
+  const seats = [own, other].map((project, index) => {
+    const transcript = path.join(root, `00000000-0000-4000-8000-00000000000${index + 1}.jsonl`);
+    const conversation = registry.ensureForkedConversation("claude", transcript, null, emptyLaunchProfile({ cwd: root, project }));
+    const clientRequestId = `parallel-key-seat-${index}`;
+    beginOrchestratorSeatIntent({ project, mandate: "Run work", mode: "existing", conversationId: conversation.id, clientRequestId, now: AT });
+    completeOrchestratorSeatIntent({ project, conversationId: conversation.id, path: transcript, clientRequestId, now: AT });
+    return conversation;
+  });
+  const started = Promise.withResolvers<void>(), recorded = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), secondEntered = Promise.withResolvers<void>();
+  let deliveries = 0, commands = 0;
+  const ports: DeputyCommandPorts = { ...deputyPorts.productionDeputyCommandPorts({ registry }),
+    now: () => new Date(AT), seatBusy: async project => {
+      if (project === own) { started.resolve(); await release.promise; }
+      else await recorded.promise;
+      return true;
+    },
+    fork: input => ({ path: input.destination, records: 1 }),
+    joinSeatTask: () => { recorded.resolve(); },
+    workContext: () => ({ openLanes: [], recentTasks: [] }), watch: () => {},
+    deliver: async () => { deliveries++; return { ok: true }; },
+  };
+  const factory = spyOn(deputyPorts, "productionDeputyCommandPorts").mockImplementation(() => {
+    if (++commands === 2) secondEntered.resolve();
+    return ports;
+  });
+  const request = (index: number) => {
+    const actor = index ? foreignMember : member;
+    const cookie = mintSession(store, actor.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+    return new NextRequest("http://localhost/api/orchestrator/ghost", { method: "POST",
+      headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+      body: JSON.stringify({ project: index ? other : own, seatConversationId: seats[index]!.id,
+        text: index ? "Beta question" : "Alpha private question", clientRequestId: "parallel-shared-request" }),
+    });
+  };
+  let first: Promise<Response> | undefined, collision: Promise<Response> | undefined;
+  try {
+    first = ghostPOST(request(0));
+    await Promise.race([started.promise, first.then(response => { throw new Error(`first ask ended before admission: ${response.status}`); })]);
+    expect(readDeputies()).toEqual([]);
+    collision = ghostPOST(request(1));
+    await Promise.race([secondEntered.promise, collision.then(response => { throw new Error(`second ask never reached the command: ${response.status}`); })]);
+    release.resolve();
+    expect((await first).status).toBe(200);
+    const refused = await collision;
+    expect(refused.status).toBe(409);
+    const refusedBody = await refused.json();
+    expect(refusedBody).toMatchObject({ code: "invalid_request", admission: "refused" });
+    expect(refusedBody).not.toHaveProperty("askId");
+    expect(JSON.stringify(refusedBody)).not.toContain("Alpha private question");
+    expect(deliveries).toBe(1);
+    const saved = readDeputies()[0]!;
+    endDeputy(saved.askId, { outcome: "done", result: { line: "Alpha answer", finalText: "Alpha private answer" }, now: new Date(AT) });
+    const replay = await ghostPOST(request(1));
+    expect(replay.status).toBe(403);
+    expect(JSON.stringify(await replay.json())).not.toContain("Alpha private answer");
+    expect(await askOrchestratorInParallel({ project: other, seatConversationId: seats[1]!.id, text: "Beta question",
+      memberId: foreignMember.id, clientRequestId: "parallel-shared-request" }, ports))
+      .toMatchObject({ ok: false, code: "invalid_request", status: 409 });
+    expect(deliveries).toBe(1); expect(readDeputies()).toHaveLength(1);
+  } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
 });

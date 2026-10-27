@@ -968,7 +968,16 @@ seat creation and rotation carry it too; migration and resume retain the
 profile. Pipeline and pending-seat records retain the same scope across
 restart. Existing member-directed conversations resolve their latest server-admitted
 member input, including sends without a browser message id, reused ids, queue
-edits and question answers. That per-conversation authority is persisted before
+edits, task fan-out and question answers. Parallel asks retain the authenticated
+member and workspace in their durable deputy record; registration, delivery,
+replay and retry preserve that binding independently of the seat's later inputs.
+Parallel request keys join or replay only within the same project and member;
+a collision returns no saved ask or deputy identity.
+Member decision answers and stage edits bind an installation pipeline in the
+same transaction as the accepted edit. These input routes and the project
+report route keep the admitted member identity across body and catalog waits.
+An unavailable team store refuses their writes.
+That per-conversation authority is persisted before
 dispatch and is independent of the feed's first-author attribution. Retired-seat
 redirects carry that authority to the successor before enqueueing, and refuse a
 revoked member. An uncertain
@@ -977,7 +986,11 @@ conversations fall back to their latest recorded message author. Owner
 conversations and installation-owned seats without a member binding retain
 their existing reach.
 
-Authority resolution shares one lazy seat snapshot across the parent chain.
+Authority resolution shares one lazy seat map across the parent chain. The
+process retains one map for the seats file's path and filesystem identity;
+unchanged files are never reparsed by repeated calls. Each resolution checks
+device, inode, size, modification time, change time and mode, so peer rebinding
+or revocation is visible to the next call. Failed reads are retried.
 Solo installations and teams without workspaces skip that read. Unreadable
 seat authority returns a retryable refusal.
 
@@ -1006,7 +1019,9 @@ lists), `reportChat` (chat, report name and optional topic), and
 Managers cannot select another workspace's destination, an explicit report
 destination of a project outside their workspace, or the owner's linked private
 chat; aliases, ids and usernames resolve to the same chat. The owner may select
-any postable destination. Empty account lists preserve the unrestricted shared pool.
+any postable destination. Explicit project report overrides apply the same
+reservation and recheck manager authority after Telegram verification.
+Empty account lists preserve the unrestricted shared pool.
 Per-project account bindings narrow a workspace's allowed pool; an empty
 intersection permits no account. An explicit report choice takes precedence,
 including "Log only". Defaults are inherited at the existing project

@@ -1450,6 +1450,31 @@ export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
   return file === null ? null : Object.values(file.seats);
 }
 
+// One file and one map per process, evicted on path or filesystem identity
+// changes. Every call stats the file: peer writes, revocations, permission
+// changes and atomic replacements take effect without a polling interval.
+let workspacePrincipalsCache: {
+  file: string; identity: string; principals: ReadonlyMap<string | null, OrchestratorSeat["workspace"]>;
+} | undefined;
+
+export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string | null, OrchestratorSeat["workspace"]> | null {
+  const file = seatsFile();
+  let identity: string;
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    identity = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode].join(":");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") { workspacePrincipalsCache = undefined; return null; }
+    identity = "missing";
+  }
+  if (workspacePrincipalsCache?.file === file && workspacePrincipalsCache.identity === identity)
+    return workspacePrincipalsCache.principals;
+  const seats = activeOrchestratorSeatsOrUnknown();
+  const principals = seats === null ? null : new Map(seats.map(seat => [seat.conversationId, seat.workspace]));
+  workspacePrincipalsCache = principals === null ? undefined : { file, identity, principals };
+  return principals;
+}
+
 /**
  * One project's active and pending seats, or null when the durable store could
  * not be established (a torn or future-schema file, an unreadable path). A

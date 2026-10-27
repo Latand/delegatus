@@ -12,6 +12,7 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { effectiveReportTelegram, setReportTelegram } from "@/lib/projects/settings";
 import { mintSession } from "./sessions";
 import { GET, PUT } from "@/app/api/team/workspaces/[id]/defaults/route";
+import { PUT as projectSettingsPUT } from "@/app/api/projects/settings/route";
 
 import { telegramBotService } from "@/lib/telegram/bot/service";
 let chatsSpy: ReturnType<typeof spyOn<ReturnType<typeof telegramBotService>, "listChats">>;
@@ -21,6 +22,7 @@ const chats = [
   { chat: "installation", alias: "installation", chatId: "-1000000000303", postAllowed: true, isForum: false },
   { chat: "owner-private", alias: "owner-private", chatId: "7000000101", postAllowed: true, isForum: false },
   { chat: "blocked", alias: "blocked", chatId: "-1000000000404", postAllowed: false, isForum: false },
+  { chat: "directives-beta", alias: "directives-beta", chatId: "-1000000000505", username: "beta_team", postAllowed: true, isForum: false },
 ];
 const W1 = `w_${"1".repeat(32)}`, W2 = `w_${"2".repeat(32)}`, AT = "2026-10-20T09:00:00.000Z";
 let root: string, store: TeamStore, owner: Member, manager: Member, member: Member;
@@ -122,6 +124,19 @@ test("the defaults endpoint refuses a manager's foreign and unknown report chats
   }
 });
 
+test("other workspaces' directive chats reserve every alias for managers while the owner may share them", async () => {
+  await setWorkspaceDefaults(store, owner, W2, { reportChat: { chat: "reports-beta", name: "Beta" }, directiveChats: ["DIRECTIVES-BETA"] });
+  for (const chat of ["directives-beta", "DIRECTIVES-BETA", "-1000000000505", "@beta_team"]) {
+    try {
+      await setWorkspaceDefaults(store, manager, W1, { reportChat: { chat, name: "Alpha" } });
+      throw new Error("expected chat_reserved");
+    } catch (error) { expect(error).toMatchObject({ code: "chat_reserved", status: 403 }); }
+    expect(workspaceDefaultsForProject("project-alpha")?.reportChat).toBeNull();
+    expect((await setWorkspaceDefaults(store, owner, W1, { reportChat: { chat, name: "Shared" } })).reportChat?.chat).toBe("directives-beta");
+    await setWorkspaceDefaults(store, owner, W1, {});
+  }
+});
+
 
 test("a manager removed while the bot catalog loads cannot change the destination", async () => {
   const pending = setWorkspaceDefaults(store, manager, W1, defaults);
@@ -135,4 +150,48 @@ test("the owner's linked private chat remains reserved for the installation", as
   await expect(setWorkspaceDefaults(store, manager, W1, { reportChat: { chat: "owner-private", name: "Alpha" } }))
     .rejects.toThrow("belongs to another workspace or the installation");
   expect((await setWorkspaceDefaults(store, owner, W1, { reportChat: { chat: "owner-private", name: "Owner" } })).reportChat?.chat).toBe("owner-private");
+});
+
+
+function projectReportRequest(actor: Member, reportTelegram: unknown) {
+  const cookie = mintSession(store, actor.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  return new NextRequest("http://localhost/api/projects/settings", { method: "PUT",
+    headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+    body: JSON.stringify({ project: "project-alpha", reportTelegram }),
+  });
+}
+
+test("project report overrides cannot bypass workspace chat reservations, and owner choices still work", async () => {
+  await setWorkspaceDefaults(store, owner, W2, { reportChat: { chat: "reports-beta", name: "Beta" }, directiveChats: ["DIRECTIVES-BETA"] });
+  setReportTelegram("unassigned-project", { chat: "installation", name: "Installation" }, "operator");
+  store.updateMember({ ...owner, telegram: { userId: "7000000101", username: null, firstName: null, linkedAt: AT } });
+  for (const [chat, canonical] of [["directives-beta", "directives-beta"], ["DIRECTIVES-BETA", "directives-beta"],
+    ["-1000000000505", "directives-beta"], ["@beta_team", "directives-beta"], ["reports-beta", "reports-beta"],
+    ["installation", "installation"], ["owner-private", "owner-private"]] as const) {
+    setReportTelegram("project-alpha", null, "operator");
+    const denied = await projectSettingsPUT(projectReportRequest(manager, { chat, name: "Alpha" }));
+    expect(denied.status).toBe(403); expect(await denied.json()).toMatchObject({ code: "chat_reserved" });
+    expect(effectiveReportTelegram("project-alpha")).toBeNull();
+    expect((await projectSettingsPUT(projectReportRequest(owner, { chat, name: "Shared" }))).status).toBe(200);
+    expect(effectiveReportTelegram("project-alpha")?.chat).toBe(canonical);
+  }
+  expect((await projectSettingsPUT(projectReportRequest(manager, { chat: "reports-alpha", name: "Alpha" }))).status).toBe(200);
+  expect(effectiveReportTelegram("project-alpha")?.chat).toBe("reports-alpha");
+  expect((await projectSettingsPUT(projectReportRequest(manager, null))).status).toBe(200);
+  expect(effectiveReportTelegram("project-alpha")).toBeNull();
+});
+
+for (const unavailable of [false, true]) test(`a project report choice rechecks manager authority after Telegram verification; store unavailable=${unavailable}`, async () => {
+  const add = spyOn(telegramBotService(), "addChat").mockImplementation(async () => {
+    if (unavailable) {
+      resetTeamStoreForTests();
+      fs.renameSync(teamStoreFile(), path.join(root, "saved-team.sqlite"));
+    } else store.removeWorkspaceMember(W1, manager.id);
+    return { chatId: "-1000000000101", status: { chats } } as never;
+  });
+  try {
+    const response = await projectSettingsPUT(projectReportRequest(manager, { link: "https://t.me/alpha_reports", name: "Alpha" }));
+    expect(response.status).toBe(unavailable ? 503 : 403); expect(add).toHaveBeenCalledTimes(1);
+    expect(effectiveReportTelegram("project-alpha")).toBeNull();
+  } finally { add.mockRestore(); }
 });

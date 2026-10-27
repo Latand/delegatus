@@ -4,7 +4,7 @@ import { runtimeHostClient, readRuntimeSession } from "@/lib/runtime/client";
 import { readEvidenceWithin } from "@/lib/runtime/evidence";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { applyConversationAction } from "@/lib/conversation/actions";
-import { deputyMessageKey, productionDeputyPrincipal, reconcileDeputyAnswer } from "./deputies";
+import { deputyMessageKey, productionDeputyPrincipal, readDeputies, reconcileDeputyAnswer } from "./deputies";
 import path from "node:path";
 
 import { forkClaudeHistory, HistorySecurityError } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -15,6 +15,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { commitTaskMembership } from "@/lib/tasks/membership";
 import { loadTasks } from "@/lib/tasks/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 
 import { deputyDeliveryOrigin, type DeputyCommandPorts } from "./deputyCommand";
 import type { OrchestratorDeputy } from "./deputies";
@@ -107,6 +108,9 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
     deliver: async ({ conversationId, path: artifactPath, clientMessageId, text, images, origin }) => {
       const authorityGuard = () => {
         if (!productionDeputyPrincipal(conversationId)) throw new Error("the parallel question is no longer authorized by its seat");
+        const deputy = readDeputies().find(row => row.deputyConversationId === conversationId);
+        if (deputy?.ask.memberId) requireMemberWorkspacePrincipal(deputy.ask.memberId, deputy.project);
+        if (deputy?.workspace && !workspacePrincipalAllows(deputy.workspace, deputy.project)) throw new Error("workspace access denied");
       };
       const result = await enqueueStructuredMessage({
         path: artifactPath,

@@ -432,3 +432,83 @@ test("short decision revisions are stored whole, stale reads refuse and full-for
   expect(accepted.error).toBeUndefined(); expect(accepted.decisionAnswer!.expectedRevision).toBe(full);
   expect((await patchPipeline(h.id, h.request, h.ports, manager)).replayed).toBe(true);
 });
+
+
+for (const mode of ["member", "owner", "revoked-before-persist", "store-lost-before-patch"] as const) test(`human decision on an installation pipeline carries durable workspace authority: ${mode}`, async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/pipelines/[id]/route");
+  const { teamStore, resetTeamStoreForTests, teamStoreFile } = await import("@/lib/team/store");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const previousRegistry = agentRegistry();
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-decision-"));
+  process.env.LLV_STATE_DIR = state; resetTeamStoreForTests();
+  const registry = new AgentRegistry(path.join(state, "registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const h = await parked();
+    const store = teamStore(), at = "2026-10-20T09:00:00.000Z", workspaceId = `w_${"d".repeat(32)}`;
+    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+      telegram: null, createdAt: at, createdBy: "claim", revokedAt: null };
+    const member = { ...owner, id: "m_member", name: "Member", role: "member" as const };
+    store.insertMember(owner); store.insertMember(member);
+    createWorkspace(store, owner, { id: workspaceId, name: "Workspace", projects: ["viewer"] });
+    store.putWorkspaceMember(workspaceId, member.id, "member", owner.id, at);
+    expect(current().workspace).toBeUndefined();
+    const human = mode === "owner" ? owner : member;
+    if (mode === "revoked-before-persist") {
+      const now = h.ports.now;
+      h.ports.now = () => { store.removeWorkspaceMember(workspaceId, member.id); return now(); };
+      await expect(patchPipeline(h.id, h.request, h.ports, { kind: "operator" }, undefined, member.id)).rejects.toThrow("workspace access denied");
+      expect(current().workspace).toBeUndefined();
+      expect(current().decisionAnswers ?? []).toEqual([]);
+      expect(attemptsOf("build")).toHaveLength(1);
+      return;
+    }
+    const cookie = mintSession(store, human.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+    const request = new NextRequest(`http://localhost/api/pipelines/${h.id}`, { method: "PATCH",
+      headers: { host: "localhost", "content-type": "application/json", cookie: `llv_member=${cookie}` }, body: JSON.stringify(h.request),
+    });
+    if (mode === "store-lost-before-patch") {
+      const read = request.json.bind(request);
+      request.json = async () => {
+        const value = await read(); resetTeamStoreForTests();
+        fs.renameSync(teamStoreFile(), path.join(state, "saved-team.sqlite"));
+        return value;
+      };
+    }
+    const response = await PATCH(request, { params: Promise.resolve({ id: h.id }) });
+    const answer = await response.json();
+    if (mode === "store-lost-before-patch") {
+      expect(response.status).toBe(503); expect(answer.code).toBe("team_store_unavailable");
+      expect(current().workspace).toBeUndefined(); expect(current().decisionAnswers ?? []).toEqual([]);
+      expect(attemptsOf("build")).toHaveLength(1);
+      return;
+    }
+    expect(response.status).toBe(200);
+    expect(answer.ok).toBe(true);
+    const expected = mode === "owner" ? undefined : { memberId: member.id, workspaceId };
+    expect(current().workspace).toEqual(expected);
+    const child = (await import("node:child_process")).spawnSync(process.execPath, ["-e",
+      `import { findPipelineRecord } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))}; console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(h.id)}).workspace ?? null));`],
+      { env: process.env, encoding: "utf8" });
+    expect(child.status).toBe(0); expect(JSON.parse(child.stdout.trim())).toEqual(expected ?? null);
+    const workspaces: unknown[] = [];
+    const spawn = h.ports.spawnAgent;
+    h.ports.spawnAgent = async (...args) => { workspaces.push(args[0].workspace); return spawn(...args); };
+    await tickPipelines([], h.ports);
+    expect(workspaces).toEqual([expected]);
+    expect(attemptsOf("build")[1]?.decisionAnswerId).toBe(h.request.clientRequestId);
+    if (mode === "member") {
+      store.removeWorkspaceMember(workspaceId, member.id);
+      await expect(patchPipeline(h.id, h.request, h.ports, { kind: "operator" }, undefined, member.id))
+        .rejects.toThrow("workspace access denied");
+    }
+  } finally {
+    setAgentRegistryForTests(previousRegistry); registry.close();
+    resetTeamStoreForTests(); process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});

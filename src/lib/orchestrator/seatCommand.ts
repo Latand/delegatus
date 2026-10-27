@@ -122,7 +122,8 @@ function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefin
   if (admission?.workspaceMemberId && store) return memberWorkspacePrincipal(store, admission.workspaceMemberId, project);
   if (admission?.workspace) return admission.workspace;
   if (trigger?.conversationId) return conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), trigger.conversationId);
-  return incumbent?.workspace ?? null;
+  return incumbent?.workspace ?? (incumbent?.conversationId
+    ? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), incumbent.conversationId) : null);
 }
 
 export interface SeatLaunchAdmission {
