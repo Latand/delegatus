@@ -85,7 +85,7 @@ test("a late merge after publication does not restart the twelve-hour tag gap", 
 });
 
 
-test.each(["completed", "superseded"] as const)("settling an old %s run keeps eligibility on the real tag clock", async outcome => {
+test.each(["completed", "superseded", "refused"] as const)("settling an old %s run keeps eligibility on the real tag clock", async outcome => {
   const input = ready();
   input.settled = { cut: "earlier", at: input.now, outcome };
   expect((await releaseState(input)).state).toBe("due");

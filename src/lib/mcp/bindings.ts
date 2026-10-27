@@ -29,7 +29,7 @@ import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
 import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
-import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
 import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -5320,8 +5320,8 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
  */
 async function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const action = text(args.action) || "list";
-  if (action !== "list" && action !== "add" && action !== "remove") {
-    throw new Error("action must be list, add or remove");
+  if (action !== "list" && action !== "add" && action !== "remove" && action !== "set-fallback") {
+    throw new Error("action must be list, add, remove or set-fallback");
   }
   const read = dependencies.readAccountProjectBindings ?? accountProjectBindings;
   const bind = dependencies.bindAccountToProject ?? bindAccountToProject;
@@ -5339,20 +5339,26 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
     : null;
 
   if (action !== "list") {
-    if (!project) throw new Error("project is required to add or remove a binding");
+    if (!project) throw new Error("project is required to change a binding");
     const engine = text(args.engine);
     if (engine !== "claude" && engine !== "codex") throw new Error("engine must be claude or codex");
     const accountId = text(args.accountId);
-    if (!accountId) throw new Error("accountId is required to add or remove a binding");
-    const result = action === "add" ? bind(engine, accountId, project) : unbind(engine, accountId, project);
+    if (!accountId) throw new Error("accountId is required to change a binding");
+    if (args.fallback !== undefined && typeof args.fallback !== "boolean") throw new Error("fallback must be a boolean");
+    if (action === "set-fallback" && typeof args.fallback !== "boolean") throw new Error("fallback is required for set-fallback");
+    const result = action === "remove" ? unbind(engine, accountId, project) : bind(engine, accountId, project, undefined, args.fallback as boolean | undefined, action === "set-fallback");
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
     /* #1845: a write answers the row it changed and that project's pool for
        that engine, still read AFTER the write from the store. The whole table
        is `action: "list"`. */
     const bindings = read();
     const bound = (allowedAccountIdsForProject(project, engine, bindings) ?? []).includes(accountId);
-    if (bound !== (action === "add")) {
+    if (bound !== (action !== "remove")) {
       throw new Error(`the binding store does not show the ${action} of ${engine} account ${accountId} for ${project} after the write`);
+    }
+    const fallback = bindings.find(binding => binding.engine === engine && binding.accountId === accountId && binding.project === project)?.fallback ?? false;
+    if (action !== "remove" && args.fallback !== undefined && fallback !== args.fallback) {
+      throw new Error("the binding store does not show the fallback flag after the write");
     }
     return redactPayload({
       action,
@@ -5361,6 +5367,7 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
       engine,
       accountId,
       bound,
+      fallback,
       allowed: projectEngineAccounts(project, engine, accountsFor(engine), bindings, []),
     });
   }
@@ -5614,13 +5621,29 @@ async function sendMessageToOrchestrator(
     const link = resolveRemoteSeatMachine(machine, project, dependencies);
     if (link) {
       try {
-        return await dispatchControl(control)("/api/orchestrator/message", {
-          project, machine: link.install, text: bound?.sendPayload
-            ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-            : await orchestratorRelayEgressText(requiredMessageText(args)),
-          clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
+        const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
+          : await orchestratorRelayEgressText(requiredMessageText(args));
+        const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
+        const response = await dispatchControl(control)("/api/orchestrator/message", {
+          project, machine: link.install, text: message,
+          clientMessageId,
+          ...(bound?.seatMessageFence ? { seatMessageFence: bound.seatMessageFence } : {}),
         }, callerCapabilityHeaders());
+        const sender = bound?.caller.conversationId ?? attributionOf(dependencies).conversationId;
+        let admitted: ReturnType<typeof recoverSeatMessage>;
+        try {
+          admitted = sender ? recoverSeatMessage(link.install, clientMessageId, {
+            project, caller: sender, text: message, claimedAt: bound?.claimedAt ?? new Date().toISOString(), fence: false,
+          }) : null;
+        } catch (error) {
+          throw new McpDispatchUncertainError(`the outbound admission could not be corroborated: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (!admitted || !("operationId" in admitted)) throw new McpDispatchUncertainError("the Viewer answered without a durable outbound admission");
+        return { ...response, ...admitted };
       } catch (error) {
+        if (error instanceof McpDispatchVerdictError && error.details.code === "seat_message_fenced") {
+          throw new McpDispatchUncertainError(error.message);
+        }
         if (error instanceof McpDispatchVerdictError && error.details.admission === "refused" && typeof error.details.operationId !== "string") {
           const details = { ...error.details };
           delete details.admission;
@@ -7015,6 +7038,9 @@ async function agentActivity(
         ? { evidence: "pending", unverifiedCount, ...undescribed }
         : {}),
       ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
+  } catch (error) {
+    if (error instanceof ProjectNameRefusal) throw new McpUnadmittedRefusal(error.message, error.details);
+    throw error;
   } finally {
     deadline.release();
   }
@@ -7797,6 +7823,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
+    ...(link ? { seatMessageFence: seatMessageRetryFence(link.install, orchestratorSendDownstreamKey(requestId(args))) } : {}),
   };
 }
 
@@ -7897,6 +7924,7 @@ async function recoverSend(
   legacy: boolean,
   dependencies: ViewerMcpDomainDependencies,
   args?: McpToolArgs,
+  fenceAdmission = true,
 ): Promise<McpRecoveryEvidence> {
   /* A send carries no durable sender identity of its own, so a claim made
      before bindings existed has no evidence that establishes its owner. */
@@ -7907,8 +7935,23 @@ async function recoverSend(
     return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
   }
   if (binding.toolName === "send_message_to_orchestrator" && binding.target.identity?.startsWith("machine:")) {
-    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey);
-    return found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
+    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey,
+      binding.sendPayload && binding.target.project && binding.caller.conversationId ? {
+        project: binding.target.project, caller: binding.caller.conversationId,
+        text: splitRelayMessageText(binding.sendPayload.text)?.body ?? binding.sendPayload.text,
+        claimedAt: binding.claimedAt, admissionFence: binding.seatMessageFence, fence: fenceAdmission,
+      } : undefined);
+    if (found?.state === "history-expired") return {
+      outcome: "history-expired", evidence: "seat-message-history-retention",
+      reason: "The 35-day seat-message history has expired. Check delivery manually on the destination before sending again; automatic resend is unsafe.",
+      ids: {}, facts: found,
+    };
+    if (found?.state === "not-delivered") return {
+      outcome: "not-executed", evidence: "seat-message-admission-fence",
+      reason: "The MCP-to-outbox hop did not admit this message. The old attempt is fenced; resend safely with the same clientRequestId.",
+      ids: {}, facts: { ...found, nextAction: "retry-same-key" }, seatMessageFenced: true,
+    };
+    return found && "operationId" in found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
       : { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
   }
   if (!binding.target.identity) {
@@ -8176,12 +8219,12 @@ export function viewerMcpRecoverableTools(
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
     },
     send_message: {
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
     },
   };
 }

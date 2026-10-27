@@ -1,6 +1,7 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId, defaultModelFor } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId, modelDisplayName } from "@/lib/agent/models";
+import type { TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
@@ -55,22 +56,90 @@ export function profileKey(file: FileEntry): string {
   return storageKey(file) + ":profile";
 }
 
-/** The observed/boot model id the running (or recorded) agent resolves to. */
-export function observedModelId(file: FileEntry): string | null {
-  const engine = file.engine as "claude" | "codex" | "copilot";
-  return engine === "claude"
-    ? claudeCatalogModelId(file.launchModel ?? file.model) ?? file.model ?? null
-    : file.model ?? null;
+const COPILOT_MODEL = /^[a-z0-9][a-z0-9.-]{0,127}$/;
+
+function trimmedModel(value: string | null | undefined): string | null {
+  const model = typeof value === "string" ? value.trim() : "";
+  return model ? model : null;
 }
 
-/** Engine defaults for a conversation: the observed model when it is a known
-    catalog entry, else the shipped launch fallback; the observed effort when it is
-    in that model's scale, else the scale's lowest tier. */
+/** The catalogue row an engine's model id names, or null. A Claude transcript id
+    reads as its catalogue row only when that row names the same release: a
+    versioned id the catalogue has no row for (`opus-4-1`) is not the family
+    alias row (`opus` = Opus 5.5), and picking the alias would name another model. */
+function catalogModelId(engine: "claude" | "codex" | "copilot", raw: string | null): string | null {
+  if (!raw) return null;
+  if (engine === "copilot") return COPILOT_MODEL.test(raw) ? raw : null;
+  if (engine === "codex") return ENGINE_MODELS.codex.some((item) => item.id === raw) ? raw : null;
+  const stem = raw.trim().toLowerCase().replace(/-20\d{6}$/, "");
+  const pinned = ENGINE_MODELS.claude.find((item) => item.id === `claude-${stem}`);
+  if (pinned) return pinned.id;
+  const id = claudeCatalogModelId(raw);
+  const row = ENGINE_MODELS.claude.find((item) => item.id === id);
+  if (!row) return null;
+  return row.id === stem || !/\d/.test(stem) || modelDisplayName("claude", stem) === row.label || standsForFamily(row) ? row.id : null;
+}
+
+/** An alias row whose label carries no version (`fable`) stands for every release
+    of its family when the catalogue lists no other release of that family: the
+    transcript's `fable-5-1` is that row. A family with a pinned sibling row
+    (`sonnet` next to `claude-sonnet-5-5`) or a versioned label (`opus` = Opus 5.5)
+    names one release, and another version is not it. */
+function standsForFamily(row: { id: string; label: string }): boolean {
+  if (/\d/.test(row.label)) return false;
+  return !ENGINE_MODELS.claude.some((item) => item.id !== row.id && item.id.startsWith(`claude-${row.id}-`));
+}
+
+/** The model the transcript reports, as the catalogue names it when it does and as stored otherwise. */
+export function observedModelId(file: FileEntry): string | null {
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  const reported = trimmedModel(file.model);
+  return engine === "claude" ? catalogModelId(engine, reported) ?? reported : reported;
+}
+
+/** The model the launch asked for (stage override, project or role setting), recorded before any transcript line. */
+export function launchedModelId(file: FileEntry): string | null {
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  const requested = trimmedModel(file.launchModel);
+  return engine === "claude" ? catalogModelId(engine, requested) ?? requested : requested;
+}
+
+/** The model the conversation runs on: the observed one, else the launch's, else
+    null. Never an engine default: a name nobody observed or asked for is a guess. */
+export function runningModelId(file: FileEntry): string | null {
+  return observedModelId(file) ?? launchedModelId(file);
+}
+
+/** The running model as the catalogue lists it, or "" when it is unknown or
+    outside the catalogue (the pill then names the stored id itself). */
+export function listedModelId(file: FileEntry): string {
+  return catalogModelId(file.engine as "claude" | "codex" | "copilot", runningModelId(file)) ?? "";
+}
+
+/** The running model's own name where the catalogue has no row for it (a model
+    the transcript reports that the pickers do not list), or "" when none is known. */
+export function unlistedModelName(file: FileEntry): string {
+  const id = runningModelId(file);
+  return id && !listedModelId(file) ? modelDisplayName(file.engine, id) : "";
+}
+
+/** Why a change that sends a model is held, in words: one line for a conversation
+    with no known model and another for one whose model the pickers cannot send,
+    worded for the change held (a reasoning or speed edit, or an account move).
+    Null when the conversation runs on a listed model. */
+export function modelHoldMessage(t: TFunction, file: FileEntry, held: "edit" | "move" = "edit"): string | null {
+  if (listedModelId(file)) return null;
+  const name = unlistedModelName(file);
+  if (held === "move") return name ? t("runtimeConfig.moveModelUnlisted", { model: name }) : t("runtimeConfig.moveModelUnknown");
+  return name ? t("runtimeConfig.modelUnlisted", { model: name }) : t("runtimeConfig.modelUnknown");
+}
+
+/** Engine defaults for a conversation: the running model when the catalogue lists
+    it, else "" (no model); the observed effort when it is in that model's scale,
+    else the scale's lowest tier. */
 export function defaults(file: FileEntry): RuntimeDraft {
   const engine = file.engine as "claude" | "codex" | "copilot";
-  const models = ENGINE_MODELS[engine];
-  const observed = observedModelId(file);
-  const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : defaultModelFor(engine);
+  const model = listedModelId(file);
   const efforts = effortScale(engine, model) ?? [];
   return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false, ...tierField(file.serviceTier) };
 }

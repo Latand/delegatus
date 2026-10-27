@@ -16,6 +16,9 @@ import { clearTelegramConnection } from "@/lib/telegram/sessionStore";
 // the Viewer requires a subscription account, while this local Responses
 // provider deliberately has no credentials. No operator environment is copied.
 const codexBinary = process.env.LLV_CODEX_BINARY ?? "codex";
+// Real app-server startup shares the gate's CPU and I/O budget. Keep the
+// production RPC deadline and add setup time to each case's assertion budget.
+const STARTUP_ALLOWANCE_MS = 30_000;
 async function until(predicate: () => boolean, timeout = 10_000) {
   const end = Date.now() + timeout;
   while (!predicate() && Date.now() < end) await Bun.sleep(20);
@@ -84,7 +87,6 @@ plugins = false
     model,
     sandbox: "read-only",
     approvalPolicy: "never",
-    requestTimeoutMs: 5_000,
     deliveryConfirmationTimeoutMs: 20_000,
     injectObservationTimeoutMs: 30_000,
     eventStore: new FileRuntimeEventStore(path.join(root, "events")),
@@ -114,7 +116,7 @@ plugins = false
             const m = JSON.parse(line);
             if (dropInjectAck && rpcOut.some(r => r.method === "thread/inject_items" && r.id === m.id)) continue;
             if (m.id !== undefined && accountReadIds.has(m.id) && m.result && m.result.account === null) {
-              m.result.account = { type: "chatgpt", email: "fixture@example.invalid", planType: "pro" };
+              m.result.account = { type: "chatgpt", planType: "pro" };
               line = JSON.stringify(m);
             }
           } catch {}
@@ -216,7 +218,7 @@ test("real Codex: proof after 10 seconds settles the original receipt in the sam
     await f.queue.drain();
     expect(f.rpcOut.slice(at).filter(r => r.method === "thread/inject_items")).toHaveLength(1);
   } finally { await f.stop(); }
-}, 45_000);
+}, 45_000 + STARTUP_ALLOWANCE_MS);
 
 test("real Codex: idle injection persists with no generation", async () => {
   const f = await fixture();
@@ -229,7 +231,7 @@ test("real Codex: idle injection persists with no generation", async () => {
     expect(f.notes.some(n => n.method === "turn/started")).toBe(false);
     expect(f.rpcOut.slice(at).map(r => r.method)).toEqual(["thread/inject_items"]);
   } finally { await f.stop(); }
-}, 20_000);
+}, 20_000 + STARTUP_ALLOWANCE_MS);
 
 test("real Codex: interrupt runs while observation is pending; ending without proof settles uncertain", async () => {
   const f = await fixture();
@@ -248,7 +250,7 @@ test("real Codex: interrupt runs while observation is pending; ending without pr
     await f.queue.drain();
     expect(f.rpcOut.filter(r => r.method === "thread/inject_items")).toHaveLength(1);
   } finally { await f.stop(); }
-}, 20_000);
+}, 20_000 + STARTUP_ALLOWANCE_MS);
 
 test("real Codex: writer generation drift after admission produces zero injections", async () => {
   const f = await fixture();
@@ -260,7 +262,7 @@ test("real Codex: writer generation drift after admission produces zero injectio
     expect(receipt().reason).toBe("stale-generation");
     expect(f.rpcOut.some(r => r.method === "thread/inject_items")).toBe(false);
   } finally { await f.stop(); }
-}, 20_000);
+}, 20_000 + STARTUP_ALLOWANCE_MS);
 
 for (const loss of ["child exit", "host release"] as const) {
   test(`real Codex: lost acknowledgement followed by ${loss} remains uncertain without replay`, async () => {
@@ -276,7 +278,7 @@ for (const loss of ["child exit", "host release"] as const) {
       await f.queue.drain();
       expect(f.rpcOut.filter(r => r.method === "thread/inject_items")).toHaveLength(1);
     } finally { await f.stop(); }
-  }, 20_000);
+  }, 20_000 + STARTUP_ALLOWANCE_MS);
 }
 
 test("real Codex: a resumed thread's next model request carries the Telegram notice once", async () => {
@@ -303,4 +305,4 @@ test("real Codex: a resumed thread's next model request carries the Telegram not
     await resumed?.release().catch(() => {});
     await f.stop();
   }
-}, 60_000);
+}, 60_000 + 2 * STARTUP_ALLOWANCE_MS);

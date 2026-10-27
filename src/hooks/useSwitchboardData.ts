@@ -2,14 +2,13 @@
 
 import { useMemo } from "react";
 
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { translate, type TFunction, useLocale } from "@/lib/i18n";
 import type { ActionEvent, FileEntry } from "@/lib/types";
 import { cleanTitle } from "@/lib/title";
 
 import { attentionId, stalledAttention } from "@/components/attention";
-import { isDirectReviewFlow } from "@/components/flows/directReviewGroups";
-import { claimedReviewerPaths, flowByImplementer, flowPresentation } from "@/components/flows/flowModel";
+import { claimedReviewerPaths } from "@/components/flows/flowModel";
 import { descendantCounts, isAuxTask, isConversation, isSubagent, projectKey } from "@/components/projectModel";
 import { fmtAge } from "@/components/utils";
 
@@ -87,7 +86,6 @@ export function useSwitchboardData(
   const { locale } = useLocale();
   const claimed = useMemo(() => claimedReviewerPaths(flows, files), [flows, files]);
   const counts = useMemo(() => descendantCounts(files), [files]);
-  const flowByImpl = useMemo(() => flowByImplementer(flows.filter((flow) => !isDirectReviewFlow(flow))), [flows]);
   return useMemo(() => {
     if (!enabled) return EMPTY_DATA;
     const t: TFunction = (key, params) => translate(locale, key, params);
@@ -96,11 +94,8 @@ export function useSwitchboardData(
       const prev = latestByFile.get(event.file);
       if (!prev || event.ts > prev.ts) latestByFile.set(event.file, event);
     }
-    /* Flow-aware attention: an implementer whose loop waits on a decision is
-       "yours" even while its transcript looks idle; claimed reviewer runs
-       never surface as standalone cards. Direct review groups (issue #325)
-       claim their reviewers the same way, but they are synthetic read-model
-       flows — the status-line/attention override stays with REAL flows only. */
+    /* Historical memberships keep reviewers folded. Current conversation and
+       delivery evidence alone determine attention and activity. */
     const normalized = query.trim().toLowerCase();
     const base = files
       .filter(
@@ -116,8 +111,7 @@ export function useSwitchboardData(
         const project = projectKey(file);
         const title = cleanTitle(file.title);
         const age = now - file.mtime;
-        const flow = flowByImpl.get(file.path);
-        let kind: SwitchboardCardKind =
+        const kind: SwitchboardCardKind =
           file.pendingQuestion || file.rateLimit || file.waitingInput
             ? "waiting"
             : file.activity === "live"
@@ -127,13 +121,7 @@ export function useSwitchboardData(
               : age <= DAY
                 ? "recent"
                 : "older";
-        let statusLine = timelineLabel(t, file, latestByFile);
-        if (flow) {
-          const presentation = flowPresentation(t, flow, locale);
-          if (presentation.attention) kind = "waiting";
-          else if (flow.state === "reviewing" || flow.state === "relaying" || flow.state === "spawning") kind = "working";
-          statusLine = `${t("status.flow", { label: presentation.label })}${presentation.detail ? ` — ${presentation.detail}` : ""}`;
-        }
+        const statusLine = timelineLabel(t, file, latestByFile);
         return {
           file,
           project,
@@ -155,7 +143,7 @@ export function useSwitchboardData(
     const recent = base.filter((item) => item.kind === "recent").sort(recentBucketSort);
     const older = base.filter((item) => item.kind === "older").sort(recentBucketSort);
     return { waiting, working, recent, older, livePreview: working.slice(0, 3) };
-  }, [files, events, query, now, archived, flowByImpl, claimed, counts, locale, enabled]);
+  }, [files, events, query, now, archived, claimed, counts, locale, enabled]);
 }
 
 const EMPTY_ARCHIVED: ReadonlySet<string> = new Set();

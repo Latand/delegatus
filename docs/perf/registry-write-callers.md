@@ -36,7 +36,6 @@ TypeScript resolved 387 external calls to 154 transitively mutating methods (inc
 | --- | --- | --- |
 | `scripts/benchmark-viewer-workers.ts` | `reconcileConversations` :50 | separate benchmark/fixture process; synchronous API retained |
 | `scripts/capture-board-geometry.ts` | `recordQuotaEvaluation` :2549; `recordQuotaEvaluation` :2554 | separate benchmark/fixture process; synchronous API retained |
-| `scripts/capture-issue-1418-accounts-dialog.ts` | `recordQuotaEvaluation` :128; `recordQuotaEvaluation` :149 | separate benchmark/fixture process; synchronous API retained |
 | `scripts/mcp-call-cost-benchmark.ts` | `rotateSpawnCapabilityForReceipt` :147; `settleSpawn` :342; `rotateSpawnCapabilityForReceipt` :344 | separate benchmark/fixture process; synchronous API retained |
 | `scripts/mcp-memory-benchmark.ts` | `beginSpawn` :114; `settleSpawn` :115; `rotateSpawnCapabilityForReceipt` :133 | separate benchmark/fixture process; synchronous API retained |
 | `scripts/mcp-state-writer-benchmark.ts` | `rotateSpawnCapabilityForReceipt` :61 | separate benchmark/fixture process; synchronous API retained |

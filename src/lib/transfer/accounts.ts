@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
+import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
 import type { StoredRow } from "./stores";
@@ -70,7 +71,7 @@ export interface AccountRecordValue {
   provider?: unknown;
 }
 
-export interface BindingRecordValue { engine: "claude" | "codex"; accountId: string; project: string }
+export interface BindingRecordValue { engine: "claude" | "codex"; accountId: string; project: string; fallback?: boolean }
 
 export interface AccountExportDeps {
   list?: typeof listSourceAccounts;
@@ -85,7 +86,7 @@ export function accountExporter(exportId: string, deps: AccountExportDeps = {}) 
     const engines = await (deps.list ?? listSourceAccounts)();
     const bindings = await (deps.bindings ?? (async () => {
       const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
-      return accountProjectBindings().map(binding => ({ engine: binding.engine, accountId: binding.accountId, project: binding.project }));
+      return accountProjectBindings().map(binding => ({ engine: binding.engine, accountId: binding.accountId, project: binding.project, fallback: binding.fallback === true }));
     }))();
     const reader = deps.identity ?? productionIdentityReader;
     const header: BundleAccount[] = [];
@@ -212,7 +213,8 @@ export function validAccountRecord(key: string, value: unknown): boolean {
   }
   if (key.startsWith("binding:")) {
     return (record.engine === "claude" || record.engine === "codex") && typeof record.accountId === "string" && typeof record.project === "string"
-      && key === `binding:${record.engine}:${record.accountId}:${record.project}`;
+      && key === `binding:${record.engine}:${record.accountId}:${record.project}`
+      && (record.fallback === undefined || typeof record.fallback === "boolean");
   }
   return false;
 }
@@ -301,7 +303,7 @@ export async function releaseReservation(engine: TransferEngine, id: string, dep
 /** What the commit writes for the accounts: the checklist rows and every
     binding, each naming the account it maps to here. Computed after the
     reservations, so no binding ever falls back to a source id. */
-export async function accountCommitRows(importId: string, exportId: string, records: readonly StoredRow[], plans: readonly AccountPlan[], options: { now: string; canonical: (project: string) => string; deps?: AccountTargetDeps }): Promise<{ rows: ImportedAccountRow[]; bindings: { engine: "claude" | "codex"; accountId: string; project: string; createdAt: string }[] }> {
+export async function accountCommitRows(importId: string, exportId: string, records: readonly StoredRow[], plans: readonly AccountPlan[], options: { now: string; canonical: (project: string) => string; deps?: AccountTargetDeps }): Promise<{ rows: ImportedAccountRow[]; bindings: AccountProjectBinding[] }> {
   const list = options.deps?.list ?? listTarget;
   const previous = importedAccountRows();
   const accounts = new Map(records.filter(row => row.key.startsWith("account:")).map(row => [row.key, row.value as AccountRecordValue] as const));
@@ -335,6 +337,7 @@ export async function accountCommitRows(importId: string, exportId: string, reco
     accountId: mapped.get(`${binding.engine}:${binding.accountId}`) ?? unavailableAccountId(binding.accountId),
     project: options.canonical(binding.project),
     createdAt: options.now,
+    fallback: binding.fallback === true,
   }));
   return { rows, bindings };
 }

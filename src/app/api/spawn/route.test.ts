@@ -2891,7 +2891,7 @@ test("an oversized structured spawn prompt is accepted for bounded first-message
   }
 });
 
-test("an orphan replay whose image storage fails releases its admission lease for the retry", async () => {
+test("an orphan replay reuses its durable images when image storage is unavailable", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "replay-storage-release-"));
   const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
   const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
@@ -2923,10 +2923,12 @@ test("an orphan replay whose image storage fails releases its admission lease fo
     }),
   });
   const deferred: Array<() => Promise<void>> = [];
+  let launches = 0;
   const dependencies = (storeImages: SpawnRouteTestDependencies["storeImages"]): SpawnRouteTestDependencies => ({
     ...structuredRouteDependencies(cwd),
     defer: (work) => { deferred.push(work); },
     storeImages,
+    spawnStructuredConversation: async input => { launches++; return structuredRouteDependencies(cwd).spawnStructuredConversation!(input); },
   });
   try {
     const admitted = await POST.withDependencies(request(), dependencies((images) => structuredRouteDependencies(cwd).storeImages(images)));
@@ -2938,31 +2940,29 @@ test("an orphan replay whose image storage fails releases its admission lease fo
        receipt keeps starting with no live admission owner. */
     const orphanOwner = store.snapshot().receipts[launchId]!.admissionOwner!;
     expect(store.releaseStartingStructuredSpawn(launchId, orphanOwner)).toMatchObject({ released: true });
+    deferred.splice(0);
 
-    /* The replay claims the orphan, then image storage fails before anything
-       was deferred: the claimed lease must be handed back, not kept by this
-       live process with no pending work. */
-    const failed = await POST.withDependencies(request(), dependencies(() => {
+    const originalRefs = store.snapshot().receipts[launchId].queuedPinnedSpawn!.imageRefs;
+    expect(originalRefs).toHaveLength(1);
+    let storageCalls = 0;
+    const replay = await POST.withDependencies(request(), dependencies(() => {
+      storageCalls++;
       throw new Error("runtime image storage quota exceeded");
     }));
-    expect(failed.status).toBe(503);
-    expect(await failed.json()).toEqual({ error: "runtime image storage quota exceeded" });
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toMatchObject({ launchId, state: "starting" });
+    expect(storageCalls).toBe(0);
     expect(deferred).toHaveLength(1);
-    expect(store.snapshot().receipts[launchId]).toMatchObject({ state: "starting", admissionOwner: null });
-
-    /* The retry re-claims the released lease and defers the launch. */
-    const retried = await POST.withDependencies(request(), dependencies((images) => structuredRouteDependencies(cwd).storeImages(images)));
-    expect(retried.status).toBe(202);
-    expect(await retried.json()).toMatchObject({ launchId, state: "starting" });
-    expect(deferred).toHaveLength(2);
     expect(store.snapshot().receipts[launchId]!.admissionOwner).toMatchObject({ pid: process.pid });
+    expect(store.snapshot().receipts[launchId].queuedPinnedSpawn!.imageRefs).toEqual(originalRefs);
 
     /* A concurrent replay during the retry's live claim cannot double-defer. */
     const concurrent = await POST.withDependencies(request(), dependencies((images) => structuredRouteDependencies(cwd).storeImages(images)));
     expect(concurrent.status).toBe(202);
-    expect(deferred).toHaveLength(2);
+    expect(deferred).toHaveLength(1);
 
     await Promise.all(deferred.map((work) => work()));
+    expect(launches).toBe(1);
   } finally {
     if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
     else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
@@ -4378,13 +4378,8 @@ test("the runtime-UI rollback leaves a default spawn on a transport that can sti
   }
 });
 
-/* Socket configured, host unreachable — the default path now, since the
-   transport is chosen from declared capability. The deferred launch is the only
-   owner of the receipt's outcome: the host that would project the dead spawn is
-   the one that is down, and the stale-spawn reaper reconciles through the same
-   socket. Without a terminal state the operator sees an accepted 202 that never
-   becomes a conversation. */
-test("a structured launch that dies on an unreachable host terminalizes its receipt", async () => {
+/* An accepted launch must settle once its durable admission budget expires. */
+test("a structured launch on an unreachable host terminalizes after its admission deadline", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "structured-host-down-"));
   const previous = {
     transport: process.env.LLV_SPAWN_TRANSPORT,
@@ -4400,10 +4395,12 @@ test("a structured launch that dies on an unreachable host terminalizes its rece
   process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
   const store = new AgentRegistry(path.join(cwd, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
   let deferred: (() => Promise<void>) | null = null;
+  let clock = 0;
   const dependencies = {
     ...structuredRouteDependencies(cwd),
     registry: () => store,
     defer: (work: () => Promise<void>) => { deferred = work; },
+    runtimeAdmissionRetry: { now: () => clock, deadlineMs: 750, sleep: async ms => { clock += ms; } },
     spawnStructuredConversation: async () => {
       throw new RuntimeHostUnavailableError("runtime host is unavailable");
     },

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Window as HappyWindow } from "happy-dom";
 
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import type { FocusFrameIndex } from "@/lib/attention/resolve";
@@ -1065,4 +1066,31 @@ test("an anchor that never appears is still lost, inside the wait", async () => 
      own clock it gave up after one timeout and at most one poll past it. */
   expect(clock).toBeGreaterThanOrEqual(60);
   expect(clock).toBeLessThanOrEqual(65);
+});
+
+test.each(["placed", "unplaced", "phone", "show"] as const)("opening an archived round handles a %s target independently of camera movement", async mode => {
+  const previous = new Map(["window", "CustomEvent"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const browser = new HappyWindow();
+  Object.assign(globalThis, { window: browser, CustomEvent: browser.CustomEvent });
+  const opened: unknown[] = [];
+  browser.addEventListener("llv:review-history", event => opened.push((event as unknown as CustomEvent).detail));
+  try {
+    const { bus, board, log } = harness("demo", mode === "unplaced" ? {} : { "deck::archive-round": RECT });
+    if (mode === "phone") board.moveTo = () => false;
+    const outcome = await runFocusHandoff(request({
+      target: { kind: "flowRound", flowId: "archive-round", round: 9 },
+      intent: mode === "show" ? "show" : "open",
+      frameAtCreation: { project: "demo", rect: UNREAD_FRAME_RECT, boardRevision: null },
+    }), bus, NO_WAIT);
+    expect(opened).toEqual(mode === "show" ? [] : [{ id: "archive-round", round: 9 }]);
+    expect(outcome.moved).toBe(mode === "placed" || mode === "show");
+    expect(log.placed).toEqual([]);
+    expect(log.opened).toEqual([]);
+  } finally {
+    await browser.happyDOM.abort();
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });

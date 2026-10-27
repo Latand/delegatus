@@ -29,6 +29,8 @@ export interface ManagedLoginAttempt {
 }
 
 export interface ManagedLoginSnapshot {
+  /** Allowlisted persisted failure code; never raw provider output. */
+  reason?: AttemptReason;
   state: ManagedLoginState;
   attemptState: PersistedAttemptState | null;
   deviceAuth: { url: string; code: string } | null;
@@ -387,7 +389,8 @@ export class ManagedCodexRuntime {
       return { state: "pending", attemptState: "pending", deviceAuth: { url: active.verificationUrl, code: active.userCode } };
     }
     return stored
-      ? { state: stored.state, attemptState: stored.state, deviceAuth: null }
+      ? { state: stored.state, attemptState: stored.state, deviceAuth: null,
+        ...(stored.reason && (stored.state === "failed" || stored.state === "stale") ? { reason: stored.reason } : {}) }
       : active?.state === "pending"
         ? { state: "pending", attemptState: "pending", deviceAuth: null }
       : { state: "idle", attemptState: null, deviceAuth: null };

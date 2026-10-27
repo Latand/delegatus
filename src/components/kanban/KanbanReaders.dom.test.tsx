@@ -225,6 +225,21 @@ test("a tile opens its conversation in the agent window, in the prototype's anat
   expect((await shownIn(again.host)).dataset.kanbanReader).toBe("conversation_fixture_1");
 });
 
+test("the reader header names the launch model while the transcript has reported none, and the observed model once it has", async () => {
+  const opening = conversation(1, { engine: "codex", fmt: "codex", root: "codex-sessions", model: null, launchModel: "gpt-6-luna" });
+  const first = mount({ tasks: [task("a", "assigned", "Repair old links", [opening])], files: [opening] });
+  click(cardEl(first.host, "task:a")?.querySelector(".tile"));
+  const reader = await shownIn(first.host);
+  expect(reader.querySelector(".ch-meta .ch-model span")?.textContent).toBe("gpt-6-luna");
+  first.unmount();
+  const none = conversation(2, { engine: "codex", fmt: "codex", root: "codex-sessions", model: null, launchModel: null });
+  const second = mount({ tasks: [task("b", "assigned", "Repair old links", [none])], files: [none] });
+  click(cardEl(second.host, "task:b")?.querySelector(".tile"));
+  const bare = await shownIn(second.host);
+  expect(bare.querySelector(".ch-meta .ch-model")).toBeNull();
+  second.unmount();
+});
+
 test("a draft, its caret and its focus survive a switch to another agent and back, and the card moving", async () => {
   const file = conversation(1);
   const other = conversation(2);

@@ -441,3 +441,28 @@ test("a parked stage's reconfigure that applied is announced like any conversati
   expect(pill(host).getAttribute("aria-busy")).toBeNull();
   await act(async () => root.unmount());
 });
+
+/* A pill that knows no model sends none, so the stage keeps the model it runs on; one whose transcript has not
+   reported a model yet sends the model the launch asked for. */
+for (const launchModel of [null, "gpt-6-luna"] as const) {
+  test(`an effort picked on a running stage ${launchModel ? "launched on Luna before its transcript names a model sends that model" : "with no known model sends no model"}`, async () => {
+    const codexFile = { ...file, engine: "codex", fmt: "codex", root: "codex-sessions", path: "/state/accounts/codex/acct-a/sessions/stage.jsonl", model: null, launchModel, effort: "high", fast: false } as FileEntry;
+    const lane = pipeline();
+    lane.stages[0]!.effectiveRole = { ...lane.stages[0]!.effectiveRole, engine: "codex", model: "gpt-6-luna" };
+    lane.runs[0]!.attempts[0]!.effectiveRole = lane.stages[0]!.effectiveRole;
+    await publish(lane);
+    answerPatch = () => json({ ok: true, pipeline: lane });
+    const { root } = await openSheet(codexFile);
+    try {
+      await choose("xhigh");
+      expect(writes()).toHaveLength(1);
+      const body = writes()[0]!.body!;
+      expect(body).toMatchObject({ action: "override-stage", stageId: "build", applyNow: true, engine: "codex", effort: "xhigh" });
+      if (launchModel) expect(body.model).toBe(launchModel);
+      else expect("model" in body).toBe(false);
+      expect(calls.some((call) => call.url === "/api/tmux")).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
