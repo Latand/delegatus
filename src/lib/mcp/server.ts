@@ -2761,7 +2761,9 @@ export function createMcpToolService(
         });
         return result;
       };
-      try { effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context)); }
+      // Activity resolves project scope after recovering verified host identities;
+      // the generic directory can still be missing a newly launched project.
+      try { if (typedTool !== "agent_activity") effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context)); }
       catch (error) {
         const rawDetails = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
         const details = isRecord(rawDetails) ? rawDetails : {};

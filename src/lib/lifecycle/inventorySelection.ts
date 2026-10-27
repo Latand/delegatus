@@ -1,4 +1,4 @@
-import { completedFileScan, lastScannedFiles, type CachedFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type CachedFileScan, type FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
 /**
@@ -42,8 +42,15 @@ import type { FileEntry } from "@/lib/types";
 
 export type ConversationEngine = "claude" | "codex";
 
+export interface ConversationSelectionCatalog {
+  files: readonly FileEntry[];
+  projectCatalog: readonly FileScanSnapshot["projectCatalog"][number][];
+}
+
 export interface ConversationSelectionRequest {
   project?: string;
+  /** Resolve scope from the exact retained generation before filtering rows. */
+  prepareProjectMatches?(catalog: ConversationSelectionCatalog): Promise<void>;
   /** A caller with canonical project resolution shares it with selection. */
   projectMatches?(entry: Pick<FileEntry, "project" | "path">): boolean;
   /** Restrict to rows the scan projects as live or a verified owner hosts. */
@@ -219,6 +226,8 @@ export async function completedGenerationSelection(
   if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
   if (scan === BUDGET_SPENT) {
     const completed = (dependencies.lastCompletedFiles ?? lastScannedFiles)();
+    await request.prepareProjectMatches?.({ files: completed ?? [], projectCatalog: lastScannedProjectCatalog() ?? [] });
+    if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
     return {
       ...selectConversationEntries(completed ?? [], request),
       generation: null,
@@ -227,6 +236,8 @@ export async function completedGenerationSelection(
       selectionMs: performance.now() - startedAt,
     };
   }
+  await request.prepareProjectMatches?.(scan.snapshot);
+  if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
   const selected = selectConversationEntries(scan.snapshot.files, request);
   return {
     ...selected,
