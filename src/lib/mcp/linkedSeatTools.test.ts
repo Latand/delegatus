@@ -512,7 +512,8 @@ for (const backend of ["memory", "file", "sqlite"] as const) for (const acknowle
       expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject(expired);
       expect(await create().callTool("send_message_to_orchestrator", { ...args, text: "Changed words" })).toMatchObject({ code: "idempotency_conflict" });
       const foreignDomain = { ...domain, callerAttribution: () => ({ kind: "agent", conversationId: "conversation_foreign", role: "orchestrator" }),
-        attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_foreign" }) } as unknown as ViewerMcpDomainDependencies;
+        attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_foreign" }),
+        authorizedSeats: () => [{ project: project.project, conversationId: "conversation_foreign", path: null }] } as unknown as ViewerMcpDomainDependencies;
       const foreign = createMcpToolService(viewerMcpBindings(undefined, control, foreignDomain), receipts, undefined, { recovery: viewerMcpRecoverableTools(foreignDomain) });
       expect(await foreign.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "recovery_not_permitted" });
       const row = (await receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`))!;
