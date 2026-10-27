@@ -90,7 +90,7 @@ describe("minting", () => {
     try {
       const file = path.join(directory, "state", "forge-app-tokens.ndjson");
       const p = ports();
-      const writer = productionPorts({ LLV_STATE_DIR: path.dirname(file) });
+      const writer = productionPorts({ NODE_ENV: "test", LLV_STATE_DIR: path.dirname(file) });
       p.audit = writer.audit;
       if (purpose === "gh") await runGh(["pr", "merge", "5"], p);
       else if (purpose === "git push") await gitCredential("get", `protocol=https\nhost=github.com\npath=${REPO}.git\n`, p);
