@@ -416,3 +416,29 @@ for (const side of ["caller", "receiver"] as const) {
     expect((await request(currentReceiver, "/test/seat-delivery")).body.commands).toBe(0);
   }, 30_000);
 }
+
+for (const reachable of [true, false]) {
+  test(`absent outbox fence survives sender restart with peer ${reachable ? "reachable" : "unreachable"}`, async () => {
+    const names = [`absent-${reachable}-a`, `absent-${reachable}-b`];
+    let a = await install(names[0]!); let b = await install(names[1]!);
+    const id = await link(a, b);
+    for (const base of [a, b]) await request(base, "/test/seat", "POST", { project: key });
+    if (!reachable) await stopInstall(b);
+    const input = { project: key, machine: id, text: "Exactly one instruction after recovery.", clientMessageId: "absent-original" };
+    const fenced = await request(a, "/test/seat-recover", "POST", input);
+    expect(fenced.body.result).toMatchObject({ state: "not-delivered", resend: "safe", duplicateRisk: false, hop: "mcp-to-outbox" });
+    await stopInstall(a); a = await install(names[0]!);
+    expect((await request(a, "/test/seat-recover", "POST", input)).body.fence).toBe(fenced.body.fence);
+    expect((await request(a, "/test/seat-send", "POST", input)).body.code).toBe("seat_message_fenced");
+    expect((await request(a, "/test/seat-send", "POST", { ...input, seatMessageFence: "invalid" })).body.code).toBe("seat_message_fenced");
+    if (!reachable) b = await install(names[1]!);
+    const retry = await request(a, "/test/seat-send", "POST", { ...input, seatMessageFence: fenced.body.fence });
+    expect(retry.status).toBe(200);
+    const late = await request(a, "/test/seat-send", "POST", input);
+    expect(late.body.operationId).toBe(retry.body.operationId);
+    await sync(a, id); await sync(a, id);
+    expect((await request(b, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(1);
+    expect((await request(a, `/test/seat-receipt?operationId=${retry.body.operationId}`)).body).toMatchObject({ state: "accepted" });
+    expect((await request(a, "/test/seat-recover", "POST", input)).body.result).toMatchObject({ state: "accepted", operationId: retry.body.operationId });
+  }, 30_000);
+}

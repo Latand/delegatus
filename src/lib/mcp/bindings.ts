@@ -29,7 +29,7 @@ import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
 import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
-import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
 import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -5608,8 +5608,12 @@ async function sendMessageToOrchestrator(
             ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
             : await orchestratorRelayEgressText(requiredMessageText(args)),
           clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
+          ...(bound?.seatMessageFence ? { seatMessageFence: bound.seatMessageFence } : {}),
         }, callerCapabilityHeaders());
       } catch (error) {
+        if (error instanceof McpDispatchVerdictError && error.details.code === "seat_message_fenced") {
+          throw new McpDispatchUncertainError(error.message);
+        }
         if (error instanceof McpDispatchVerdictError && error.details.admission === "refused" && typeof error.details.operationId !== "string") {
           const details = { ...error.details };
           delete details.admission;
@@ -7785,6 +7789,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
+    ...(link ? { seatMessageFence: seatMessageRetryFence(link.install, orchestratorSendDownstreamKey(requestId(args))) } : {}),
   };
 }
 
@@ -7895,8 +7900,18 @@ async function recoverSend(
     return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
   }
   if (binding.toolName === "send_message_to_orchestrator" && binding.target.identity?.startsWith("machine:")) {
-    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey);
-    return found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
+    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey,
+      binding.sendPayload && binding.target.project && binding.caller.conversationId ? {
+        project: binding.target.project, caller: binding.caller.conversationId,
+        text: splitRelayMessageText(binding.sendPayload.text)?.body ?? binding.sendPayload.text,
+        claimedAt: binding.claimedAt, admissionFence: binding.seatMessageFence,
+      } : undefined);
+    if (found?.state === "not-delivered") return {
+      outcome: "not-executed", evidence: "seat-message-admission-fence",
+      reason: "The MCP-to-outbox hop did not admit this message. The old attempt is fenced; resend safely with the same clientRequestId.",
+      ids: {}, facts: { ...found, nextAction: "retry-same-key" }, seatMessageFenced: true,
+    };
+    return found && "operationId" in found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
       : { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
   }
   if (!binding.target.identity) {

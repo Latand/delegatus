@@ -45,7 +45,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
-import { seatMessageReceipt } from "./seatMessages";
+import { seatMessageReceipt, recoverSeatMessage, seatMessageRetryFence } from "./seatMessages";
 import { setForgeLookupForTests, forgeRenamesSettledForTests } from "@/lib/projects/forgeRename";
 import { setLinkedSeatEnqueueForTests } from "./seatMessageDelivery";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -232,6 +232,16 @@ const server = http.createServer(async (request, response) => {
       completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: receipt.conversationId, path: null });
       }
       json(response, { designated: path === "/test/seat" }); return;
+    }
+    if (path === "/test/seat-recover") {
+      const input = body();
+      const project = String(input.project);
+      const recipient = (await import("./linked")).linkedContext().links.find(link => link.id === input.machine)!;
+      const clientMessageId = String(input.clientMessageId);
+      const result = recoverSeatMessage(recipient.install, clientMessageId, { project,
+        text: String(input.text), caller: orchestratorSeatFor(project).active!.conversationId!,
+        claimedAt: "2026-01-01T00:00:00.000Z", admissionFence: input.seatMessageFence as string | undefined });
+      json(response, { result, fence: seatMessageRetryFence(recipient.install, clientMessageId) }); return;
     }
     if (path === "/test/seat-send") {
       const input = body();

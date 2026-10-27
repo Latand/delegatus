@@ -15,10 +15,11 @@ const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
 const { recordProjectRemote } = await import("@/lib/projects/aliases");
 const { atomicWrite, linkFile, setShared } = await import("@/lib/links/state");
 const { updateRemoteProjects, recordSeatMessages } = await import("@/lib/links/boardLinks");
-const { queueSeatMessage, resolveSeatMessageMachine } = await import("@/lib/links/seatMessages");
+const { queueSeatMessage, resolveSeatMessageMachine, recoverSeatMessage, seatMessageRetryFence, drainSeatMessages } = await import("@/lib/links/seatMessages");
 const { acceptAgents, dropAgents } = await import("@/lib/links/agentFeed");
 const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("./bindings");
-const { createMcpToolService, MemoryMcpReceiptStore, McpDispatchUncertainError } = await import("./server");
+const { createMcpToolService, MemoryMcpReceiptStore, FileMcpReceiptStore, SqliteMcpReceiptStore, McpDispatchUncertainError } = await import("./server");
+import type { McpRequestBinding, McpToolResult, McpRecoveryReceiptStore } from "./server";
 import type { ViewerMcpDomainDependencies } from "./bindings";
 
 afterAll(async () => {
@@ -91,6 +92,236 @@ test("remote relay binds and dispatches withheld lesson text; local binding stay
     expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" })).toMatchObject({ ok: false, code: "LESSON_PRIVACY_UNAVAILABLE" });
     expect(posts).toHaveLength(1);
   } finally { read.mockRestore(); }
+});
+
+for (const backend of ["memory", "file", "sqlite"] as const) {
+  test(`absent remote outbox reaches a retained negative fence and same-key retry on ${backend}`, async () => {
+    const file = path.join(root, `negative-${backend}`);
+    let receipts = backend === "memory" ? new MemoryMcpReceiptStore() : backend === "file" ? new FileMcpReceiptStore(file) : new SqliteMcpReceiptStore(file);
+    const posts: Record<string, unknown>[] = [];
+    const control = { post: async (_path: string, body: Record<string, unknown>) => {
+      posts.push(body);
+      if (posts.length === 1) throw new McpDispatchUncertainError("connection lost before outbox admission");
+      const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!;
+      return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId), body.seatMessageFence as string | undefined);
+    } };
+    const create = () => createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+    const args = { project: project.project, machine: "Other", text: "Retry one instruction.", clientRequestId: `absent-${backend}` };
+    const receiptKey = `send_message_to_orchestrator:${args.clientRequestId}`;
+    let restoreClock: (() => void) | undefined;
+    try {
+      expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: false, code: "outcome_unknown" });
+      const claimed = (await receipts.lookup(receiptKey))!;
+      const clock = spyOn(Date, "now").mockReturnValue(Date.parse(claimed.binding!.claimedAt) + 29_999);
+      restoreClock = () => clock.mockRestore();
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "outcome_unknown" });
+      clock.mockReturnValue(Date.parse(claimed.binding!.claimedAt) + 30_000);
+      const answer = await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true });
+      expect(answer).toMatchObject({ ok: false, code: "not_executed", details: {
+        outcome: "not-executed", state: "not-delivered", evidence: "seat-message-admission-fence",
+        nextAction: "retry-same-key", resend: "safe", duplicateRisk: false, hop: "mcp-to-outbox",
+      } });
+      expect(posts).toHaveLength(1);
+      if (receipts instanceof SqliteMcpReceiptStore) { receipts.close(); receipts = new SqliteMcpReceiptStore(file); }
+      if (receipts instanceof FileMcpReceiptStore) receipts = new FileMcpReceiptStore(file);
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toEqual({ ...answer, replayed: true });
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, text: "Changed" })).toMatchObject({ code: "idempotency_conflict" });
+      const foreign = { ...domain, callerAttribution: () => ({ kind: "agent", conversationId: "conversation_foreign", role: "orchestrator" }),
+        attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_foreign" }),
+        authorizedSeats: () => [{ project: project.project, conversationId: "conversation_foreign", path: null }] } as unknown as ViewerMcpDomainDependencies;
+      expect(await createMcpToolService(viewerMcpBindings(undefined, control, foreign), receipts, undefined, { recovery: viewerMcpRecoverableTools(foreign) })
+        .callTool("send_message_to_orchestrator", args)).toMatchObject({ code: "recovery_not_permitted" });
+      const link = resolveSeatMessageMachine(install, project.project)!;
+      expect(() => queueSeatMessage(link, project.project, String(posts[0]!.text), caller, String(posts[0]!.clientMessageId))).toThrow("fenced");
+      const retry = await create().callTool("send_message_to_orchestrator", args);
+      expect(retry).toMatchObject({ ok: true, state: "queued" });
+      if (!retry.ok) throw new Error("same-key retry failed");
+      const operationId = String(retry.operationId);
+      expect(posts).toHaveLength(2);
+      expect(posts[1]!.seatMessageFence).toBeString();
+      if (receipts instanceof SqliteMcpReceiptStore) { receipts.close(); receipts = new SqliteMcpReceiptStore(file); }
+      if (receipts instanceof FileMcpReceiptStore) receipts = new FileMcpReceiptStore(file);
+      expect((await receipts.lookup(receiptKey))!.binding!.seatMessageFence).toBe(String(posts[1]!.seatMessageFence));
+      // A late original after retry admission resolves to the SAME peer id.
+      expect(queueSeatMessage(link, project.project, String(posts[0]!.text), caller, String(posts[0]!.clientMessageId)).operationId).toBe(operationId);
+      expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject({ operationId });
+      expect(posts).toHaveLength(2);
+    } finally { restoreClock?.(); if (receipts instanceof SqliteMcpReceiptStore) receipts.close(); }
+  });
+}
+
+for (const backend of ["memory", "file", "sqlite"] as const) {
+  test(`late terminal writes cannot settle a newer retry on ${backend}`, async () => {
+    const file = path.join(root, `attempt-cas-${backend}`);
+    const store = backend === "memory" ? new MemoryMcpReceiptStore() : backend === "file" ? new FileMcpReceiptStore(file) : new SqliteMcpReceiptStore(file);
+    const binding: McpRequestBinding = { version: 1, toolName: "send_message_to_orchestrator", clientRequestId: "cas-key",
+      caller: { kind: "worker", conversationId: caller, project: project.project }, target: { project: project.project, identity: `machine:${install}` },
+      downstreamKey: "cas-downstream", owner: { pid: process.pid, startIdentity: null }, claimedAt: "2026-10-01T00:00:00.000Z" };
+    const key = "send_message_to_orchestrator:cas-key", digest = "a".repeat(64);
+    const failed: McpToolResult = { ok: false, toolName: "send_message_to_orchestrator", clientRequestId: "cas-key", replayed: false,
+      code: "not_executed", error: "Fenced before admission", retryable: true,
+      details: { outcome: "not-executed", evidence: "seat-message-admission-fence", nextAction: "retry-same-key" } };
+    const next = { ...binding, seatMessageFence: ["00112233", "4455", "4677", "8899", "aabbccddeeff"].join("-") };
+    try {
+      expect(await store.claim(key, digest, "durable", binding)).toMatchObject({ kind: "fresh" });
+      expect(await store.markDispatching(key, digest)).toBe(true);
+      await store.settle(key, digest, failed, "not-executed", true, binding);
+      expect(await store.release(key, digest, next, true)).toBe(false);
+      expect(await store.release(key, digest, binding)).toBe(false);
+      expect(await store.release(key, digest, binding, true)).toBe(true);
+      expect(await store.claim(key, digest, "durable", next)).toMatchObject({ kind: "fresh" });
+      expect(await store.markDispatching(key, digest)).toBe(true);
+      await expect(Promise.resolve().then(() => store.settle(key, digest, failed, "not-executed", true, binding))).rejects.toThrow("attempt changed");
+      expect((await store.lookup(key))!.result).toBeNull();
+      expect((await store.lookup(key))!.binding!.seatMessageFence).toBe(next.seatMessageFence);
+      const accepted: McpToolResult = { ok: true, toolName: "send_message_to_orchestrator", clientRequestId: "cas-key", replayed: false, state: "queued", operationId: "seatmsg_fixture" };
+      expect(await store.settle(key, digest, accepted, "settled", false, next)).toEqual(accepted);
+      expect(await store.release(key, digest, next, true)).toBe(false);
+      await expect(Promise.resolve().then(() => store.settle(key, digest, failed, "not-executed", true, binding))).rejects.toThrow("attempt changed");
+    } finally { if (store instanceof SqliteMcpReceiptStore) store.close(); }
+  });
+}
+
+test("unreadable outbox evidence never becomes a safe retry answer", async () => {
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const receipts = new MemoryMcpReceiptStore();
+  const control = { post: async () => { throw new McpDispatchUncertainError("lost answer"); } };
+  const create = () => createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const args = { project: project.project, machine: "Other", text: "Unreadable evidence.", clientRequestId: "unreadable-outbox" };
+  await create().callTool("send_message_to_orchestrator", args);
+  const binding = (await receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`))!.binding!;
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse(binding.claimedAt) + 30_000);
+  const read = spyOn(SqliteStateCollection.prototype, "get").mockImplementation(() => { throw new Error("fixture outbox read refused"); });
+  try {
+    expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+  } finally { read.mockRestore(); clock.mockRestore(); }
+});
+
+test("an older recovery held at terminal save cannot overwrite an admitted same-key retry", async () => {
+  const receipts: McpRecoveryReceiptStore = new MemoryMcpReceiptStore();
+  let posts = 0;
+  const control = { post: async (_path: string, body: Record<string, unknown>) => {
+    if (++posts === 1) throw new McpDispatchUncertainError("lost before admission");
+    const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!;
+    return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId), body.seatMessageFence as string | undefined);
+  } };
+  const create = () => createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const args = { project: project.project, machine: "Other", text: "Race one instruction.", clientRequestId: "held-negative-save" };
+  await create().callTool("send_message_to_orchestrator", args);
+  const bound = (await receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`))!.binding!;
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse(bound.claimedAt) + 30_000);
+  let arrived!: () => void, release!: () => void;
+  const held = new Promise<void>(resolve => { arrived = resolve; });
+  const proceed = new Promise<void>(resolve => { release = resolve; });
+  const settle = receipts.settle.bind(receipts);
+  let first = true;
+  const save = spyOn(receipts, "settle").mockImplementation(async (...parameters) => {
+    if (first) { first = false; arrived(); await proceed; }
+    return settle(...parameters);
+  });
+  let older: Promise<McpToolResult> | undefined;
+  try {
+    older = create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true });
+    await held;
+    expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "not_executed" });
+    const reopen = spyOn(receipts, "release").mockImplementation(() => false);
+    try {
+      expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject({ code: "outcome_unknown" });
+      expect(posts).toBe(1);
+    } finally { reopen.mockRestore(); }
+    expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "not_executed" });
+    const retried = await create().callTool("send_message_to_orchestrator", args);
+    expect(retried).toMatchObject({ ok: true, state: "queued" });
+    if (!retried.ok) throw new Error("same-key retry failed");
+    release();
+    expect(await older).toMatchObject({ code: "outcome_unknown" });
+    expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, state: "queued", operationId: retried.operationId });
+    expect(posts).toBe(2);
+  } finally { release(); await older; save.mockRestore(); clock.mockRestore(); }
+});
+
+test("a stalled pre-dispatch owner resumes into the fence without automatically retrying", async () => {
+  const receipts: McpRecoveryReceiptStore = new MemoryMcpReceiptStore();
+  let posts = 0;
+  const control = { post: async (_path: string, body: Record<string, unknown>) => {
+    posts++;
+    const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!;
+    return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId), body.seatMessageFence as string | undefined);
+  } };
+  const create = () => createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const args = { project: project.project, machine: "Other", text: "Stalled before dispatch.", clientRequestId: "stalled-remote-marker" };
+  let entered!: () => void, release!: () => void;
+  const held = new Promise<void>(resolve => { entered = resolve; });
+  const proceed = new Promise<void>(resolve => { release = resolve; });
+  const mark = receipts.markDispatching.bind(receipts);
+  let first = true;
+  const marker = spyOn(receipts, "markDispatching").mockImplementation(async (...parameters) => {
+    if (first) { first = false; entered(); await proceed; }
+    return mark(...parameters);
+  });
+  const original = create().callTool("send_message_to_orchestrator", args);
+  await held;
+  const row = (await receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`))!;
+  expect(row.stage).toBe("claimed");
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse(row.binding!.claimedAt) + 30_000);
+  try {
+    expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "not_executed", details: { state: "not-delivered", nextAction: "retry-same-key" } });
+    release();
+    expect(await original).toMatchObject({ code: "not_executed" });
+    expect(posts).toBe(0);
+    expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, state: "queued" });
+    expect(posts).toBe(1);
+  } finally { release(); await original; marker.mockRestore(); clock.mockRestore(); }
+});
+
+test("a retry interrupted before outbox admission rotates its fence without reopening an older attempt", async () => {
+  const key = "retry-fence-rotation";
+  const input = { project: project.project, text: "One instruction.", caller, claimedAt: "2026-01-01T00:00:00.000Z" };
+  expect(recoverSeatMessage(install, key, input)).toMatchObject({ state: "not-delivered" });
+  const first = seatMessageRetryFence(install, key)!;
+  expect(recoverSeatMessage(install, key, { ...input, admissionFence: first })).toMatchObject({ state: "not-delivered" });
+  const second = seatMessageRetryFence(install, key)!;
+  expect(second).not.toBe(first);
+  recoverSeatMessage(install, key, { ...input, admissionFence: first });
+  expect(seatMessageRetryFence(install, key)).toBe(second);
+  const link = resolveSeatMessageMachine(install, project.project)!;
+  expect(() => queueSeatMessage(link, project.project, input.text, caller, key, first)).toThrow("fenced");
+  expect(queueSeatMessage(link, project.project, input.text, caller, key, second)).toMatchObject({ state: "queued" });
+});
+
+test("an admission winning between the preliminary read and the fence transaction keeps its original id", async () => {
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const link = resolveSeatMessageMachine(install, project.project)!;
+  const key = "admission-before-negative-cas";
+  const input = { project: project.project, text: "Admission wins the race.", caller, claimedAt: "2026-01-01T00:00:00.000Z" };
+  const patch = SqliteStateCollection.prototype.boundedPatch;
+  let intervene = true, operationId = "";
+  const race = spyOn(SqliteStateCollection.prototype, "boundedPatch").mockImplementation(function (this: InstanceType<typeof SqliteStateCollection>, ...parameters) {
+    if (intervene) {
+      intervene = false;
+      operationId = queueSeatMessage(link, project.project, input.text, caller, key).operationId;
+    }
+    return Reflect.apply(patch, this, parameters);
+  });
+  try {
+    expect(recoverSeatMessage(install, key, input)).toMatchObject({ state: "queued", operationId: expect.any(String) });
+    expect(recoverSeatMessage(install, key, input)).toMatchObject({ operationId });
+    expect(seatMessageRetryFence(install, key)).toBeUndefined();
+  } finally { race.mockRestore(); }
+});
+
+test("an expired negative fence never regains admission through the message pruning pass", async () => {
+  const key = "retained-negative-fence";
+  const input = { project: project.project, text: "Retained negative proof.", caller, claimedAt: "2026-01-01T00:00:00.000Z" };
+  recoverSeatMessage(install, key, input);
+  const fence = seatMessageRetryFence(install, key)!;
+  const link = resolveSeatMessageMachine(install, project.project)!;
+  const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 36 * 86_400_000);
+  try {
+    await drainSeatMessages(link);
+    expect(seatMessageRetryFence(install, key)).toBe(fence);
+    expect(() => queueSeatMessage(link, project.project, input.text, caller, key)).toThrow("fenced");
+  } finally { clock.mockRestore(); }
 });
 
 test("get_orchestrator names a linked seat, an absent seat on a capable peer, and unknown on an older peer", async () => {
