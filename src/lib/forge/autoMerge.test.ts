@@ -1506,3 +1506,17 @@ test("closed uncertain merge receipts are bounded and ordered by durable due tim
   expect(records.every(record => h.merge(record.id)?.state === "merged" && !h.merge(record.id)?.effectUncertain)).toBe(true);
   expect(h.merges()).toHaveLength(0);
 });
+
+
+test.each(["UNKNOWN", "", "UNRECOGNIZED"])("uncertain merge receipt retains paced custody for an invalid forge state: %s", async state => {
+  const record = lane("unreadable-state");
+  const h = harness({ lanes: [record], prs: [openPr(11)] });
+  await h.sweep();
+  Object.assign(h.pipeline(record.id).merge!, { state: "blocked", effectUncertain: true, nextReadAt: null });
+  Object.assign(h.prs.get(11)!, { state, mergeStateStatus: "BEHIND" });
+  const calls = h.calls.length;
+  await h.sweep();
+  expect(h.merge(record.id)).toMatchObject({ state: "blocked", effectUncertain: true, nextReadAt: iso(h.now() + MERGE_POLL_MS) });
+  expect(h.calls.slice(calls).map(args => args.slice(0, 2))).toEqual([["pr", "view"]]);
+  expect(h.writes).toHaveLength(0);
+});

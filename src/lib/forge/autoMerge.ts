@@ -521,7 +521,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
-    if (merge.effectUncertain && view.state === "OPEN") {
+    if (merge.effectUncertain && view.state !== "MERGED" && view.state !== "CLOSED") {
       await commit(ports, read, live => {
         live.state = "blocked";
         live.reason = "The merge outcome is unconfirmed; waiting for its actual receipt";
