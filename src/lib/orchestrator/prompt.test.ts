@@ -45,8 +45,8 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 62, and a v61 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(62);
+test("the default mandate is at version 63, and a v62 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(63);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -127,7 +127,8 @@ test("the default mandate is at version 62, and a v61 seat reads as stale", () =
   expect(orchestratorMandateStale(59)).toBe(true);
   expect(orchestratorMandateStale(60)).toBe(true);
   expect(orchestratorMandateStale(61)).toBe(true);
-  expect(orchestratorMandateStale(62)).toBe(false);
+  expect(orchestratorMandateStale(62)).toBe(true);
+  expect(orchestratorMandateStale(63)).toBe(false);
 });
 
 /**
@@ -196,14 +197,22 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   58: "632ee54064e12e71db96a1ed427d0fc6f59566d6983d4b659429056ca7f4fb38",
   // The terminal-review branch independently used v59 with fingerprint
   // c16c157ea7afb595eac8f1b6773c7f166771fd7c516ce7d1eb917a84136ad863.
+  // The due-date branch independently used v59 with fingerprint
+  // c47fcd928d937a62b5c0281d911849a45965e48196a1e0d49af7bd33849985b9.
   // v59 requires a lesson in the same turn as an operator correction.
   59: "ed78e7ff8d5027b1f42a2dafcfe04a1fe17574b955bb473da5930c54f34d0732",
   // v60 shortens rule 13 to preserve rotation history alongside the correction duty.
   60: "d424c6e968bb1c646b975e88e3827eff2d13513abaedaafb81ee242f69d32175",
+  // The reviewed branch independently shipped v61 for task due dates
+  // with fingerprint 7f1a773990e3f1acb7c89b04ea5ff565d7a4e08af3461be5b37617a3bb8f8c7c.
   // v61 prepares reports automatically and ends reporting on a decline.
   61: "600201a2ca27c689eb5aa190ad62fbdd94718c704d6058d633add78bf7e85c55",
-  // v62 combines terminal review with correction and reporting rules within the rotation budget.
-  62: "a6ddf23434fbfc1e4ba6eb58f54db91bafd0b025c444af8e83d99b4c51d43baf",
+  // The terminal-review branch independently used v62 with fingerprint
+  // a6ddf23434fbfc1e4ba6eb58f54db91bafd0b025c444af8e83d99b4c51d43baf.
+  // v62 combines both v61 upgrades.
+  62: "d96b1c425d22e14099845202fa03ffe8b3b09de3b2fc02fc7ddffa73e978040e",
+  // v63 combines terminal review and task due dates with correction and reporting rules.
+  63: "e1c2645372dd85556af496aadbdcc4827259d3ce9619bb92b7a121e78146f539",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -686,6 +695,24 @@ test("the delivered mandate names no Viewer, and the v29 clock heading still mar
   expect(kept.split("you never schedule yourself")).toHaveLength(2);
 });
 
+const PREPARATION_CONSENT_RULE = "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged. Publish (issue_report publish, the digest) only after the operator chooses its approving option, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.";
+
+test("the v60 status-note upgrade preserves the byte budget and is idempotent", () => {
+  const previous = "- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.";
+  const current = ORCHESTRATOR_SYSTEM_PROMPT.split("\n").find(line => line.startsWith("- Keep each task current:"))!;
+  expect(Buffer.byteLength(current) - Buffer.byteLength(previous)).toBe(17);
+  const v57 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
+  const line = (text: string, prefix: string) => text.split("\n").find(value => value.startsWith(prefix))!;
+  const outputs = line(v57, "- A stage that hands a document on");
+  const v60 = v57.replace(line(v57, "13. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "13. "))
+    .replace(line(v57, "16. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "16. "))
+    .replace(outputs, `${outputs}\n${maintenanceBullet(ORCHESTRATOR_SYSTEM_PROMPT)}`);
+  expect(createHash("sha256").update(v60).digest("hex")).toBe(PROMPT_FINGERPRINTS[60]);
+  expect(orchestratorMandateUpgraded(v60)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateWithRoleTable(v60, null)).toBe(v60);
+});
+
 test("the mandate asks every decision as a form", () => {
   for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
     expect(mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
@@ -858,7 +885,7 @@ test("a retained v59 rule 13 upgrades to the compact current rule once", () => {
 });
 
 test("delivery upgrades the previous report directive idempotently while retaining custom rules", () => {
-  const previous = "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged. Publish (issue_report publish, the digest) only after the operator chooses its approving option, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.";
+  const previous = PREPARATION_CONSENT_RULE;
   const current = ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE.split("\n")[1];
   expect(current).not.toBe(previous);
   const priorDirective = ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE.replace(current, previous);
