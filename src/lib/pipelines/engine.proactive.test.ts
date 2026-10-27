@@ -205,7 +205,7 @@ test("a scope pass grants nothing until the read-only settlement succeeds", asyn
   expect(f.current().stateDetail).toContain("requires independent scope review");
 });
 
-test.each(["parent", "child", "wakes", "expiry", "seat", "reject", "scope", "restore", "graph", "80", "stale", "windows", "workers", "owed", "owed-assigned", "owed-resource", "pool"])("prepared review refuses dispatch after %s changes at the final reservation boundary", async kind => {
+test.each(["parent", "child", "wakes", "expiry", "seat", "reject", "scope", "restore", "graph", "links", "80", "stale", "windows", "workers", "owed", "owed-assigned", "owed-resource", "pool"])("prepared review refuses dispatch after %s changes at the final reservation boundary", async kind => {
   const f = await fixture(kind);
   const spawn = f.h.ports.spawnAgent;
   f.h.ports.spawnAgent = async (input, reserved, prepare) => {
@@ -229,6 +229,7 @@ test.each(["parent", "child", "wakes", "expiry", "seat", "reject", "scope", "res
       edit("Another scope"); if (kind === "restore") edit(f.task.text);
     }
     if (kind === "graph") { const lane = f.current(); lane.stages[1]!.prompt += " changed"; savePipelines([lane]); }
+    if (kind === "links") { const lane = f.current(); lane.taskIds = []; savePipelines([lane]); }
     const sample = proactiveObservation();
     if (kind === "80") sample.limits!.weekly!.usedPercent = 80;
     if (kind === "stale") sample.observedAt = new Date(NOW - 300_001).toISOString();
@@ -255,7 +256,7 @@ test.each(["parent", "child", "wakes", "expiry", "seat", "reject", "scope", "res
   expect(f.h.spawnInputs).toHaveLength(0);
   expect(f.current().state).toBe("needs_decision");
   const cause = ["parent", "child", "wakes", "expiry"].includes(kind) ? "permission"
-    : ["scope", "restore", "graph"].includes(kind) ? "frozen"
+    : ["scope", "restore", "graph", "links"].includes(kind) ? "frozen"
     : kind.startsWith("owed") ? "precedence" : ({ "80": "80%", windows: "window", workers: "worker capacity" } as Record<string, string>)[kind] ?? kind;
   expect(f.current().stateDetail).toContain(cause);
 });

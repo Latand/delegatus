@@ -52,7 +52,7 @@ function rows(store: SqliteStateCollection<Reservation>, project: string, includ
 
 /** Includes edit history: restoring an older graph cannot revive its pass. */
 export function proactiveGraphDigest(pipeline: Pipeline): string {
-  return digest({ task: pipeline.task, spec: pipeline.spec ?? null, stages: pipeline.stages, edits: pipeline.graphEdits ?? [] });
+  return digest({ task: pipeline.task, taskIds: pipeline.taskIds, spec: pipeline.spec ?? null, stages: pipeline.stages, edits: pipeline.graphEdits ?? [] });
 }
 export function proactiveScopeReview(stage: PipelineStage | undefined): boolean {
   return !!stage && stage.kind === "run" && stage.effectiveRole.roleId === "reviewer"
