@@ -40,6 +40,7 @@ export function isKnownEffortTier(value: string): boolean {
    every new flagship has to be added here, or its top tiers vanish from the
    selector without any error to notice. */
 const CODEX_MODEL_SCALES: readonly (readonly [RegExp, readonly string[]])[] = [
+  [/^gpt-6\.1-terra\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
   [/^gpt-6(?:\.1)?-(astra|sol)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
   [/^gpt-6-luna\b/, ["low", "medium", "high", "xhigh", "max"]],
   [/^gpt-5\.6-(sol|terra)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { DurableQuotaObservation } from "./migration/contracts";
 import type { AccountProjectBinding } from "./projectBindings";
-import { selectProjectAccount } from "./projectSelection";
+import { admitAutomaticAccountTarget, placedAccountHolds, selectProjectAccount } from "./projectSelection";
 
 const NOW = Date.parse("2026-08-30T10:00:00.000Z");
 const ATLAS = "project-atlas";
@@ -250,4 +250,64 @@ test.each(["claude", "codex"] as const)("automatic %s recovery target requires c
     .toEqual({ kind: "available", accountId: RESERVED });
   expect(selectProjectAccount({ ...request, unavailableIds: [RESERVED] }).kind).toBe("unavailable");
   expect(selectProjectAccount({ ...request, bindings: [{ ...binding(SPARE), engine }] }).kind).toBe("not_allowed");
+});
+
+test("fallback binding waits for all primaries and yields when capacity returns", () => {
+  const reset = Math.floor(NOW / 1_000) + 3600;
+  const input = { project: ATLAS, engine: "claude" as const, accounts: ACCOUNTS,
+    bindings: [binding(RESERVED), { ...binding(SPARE), fallback: true }], now: NOW };
+  expect(selectProjectAccount({ ...input, observations: [observation(RESERVED, 32, reset + 3600), observation(SPARE, 70, reset)] }))
+    .toEqual({ kind: "available", accountId: RESERVED });
+  expect(selectProjectAccount({ ...input, observations: [observation(RESERVED, 100, reset), observation(SPARE, 70, reset)] }))
+    .toEqual({ kind: "available", accountId: SPARE });
+  expect(selectProjectAccount({ ...input, observations: [observation(RESERVED, 0, reset + 3600), observation(SPARE, 70, reset)] }))
+    .toEqual({ kind: "available", accountId: RESERVED });
+  for (const requestedChoice of ["explicit", "fenced"] as const) {
+    expect(selectProjectAccount({ ...input, observations: [observation(RESERVED, 0)], requestedId: SPARE, requestedChoice }))
+      .toEqual({ kind: "available", accountId: SPARE });
+  }
+});
+
+test("fallback priority covers every primary and remains scoped to engine and project", () => {
+  const third = "acct-third";
+  const reset = Math.floor(NOW / 1_000) + 3600;
+  const input = { project: ATLAS, engine: "claude" as const,
+    accounts: [...ACCOUNTS, { id: third, authPresent: true }],
+    bindings: [binding(RESERVED), binding(third), { ...binding(SPARE), fallback: true }], now: NOW };
+  const observations = [observation(RESERVED, 100, reset), observation(third, 32, reset + 3600), observation(SPARE, 70, reset)];
+  expect(selectProjectAccount({ ...input, observations })).toEqual({ kind: "available", accountId: third });
+  expect(selectProjectAccount({ ...input, observations, unavailableIds: [third] })).toEqual({ kind: "available", accountId: SPARE });
+  expect(selectProjectAccount({ ...input, observations, bindings: [binding(RESERVED), binding(third), binding(SPARE),
+    { ...binding(SPARE, "project-other"), fallback: true }] })).toEqual({ kind: "available", accountId: SPARE });
+  expect(selectProjectAccount({ ...input, engine: "codex", observations: observations.map(row => ({ ...row, engine: "codex" })) })).toEqual({ kind: "available", accountId: SPARE });
+});
+
+test("automatic migration to fallback waits for primary capacity to be exhausted", () => {
+  const input = { project: ATLAS, engine: "claude" as const, targetId: SPARE,
+    bindings: [binding(RESERVED), { ...binding(SPARE), fallback: true }], now: NOW };
+  expect(admitAutomaticAccountTarget({ ...input, observations: [observation(RESERVED, 32), observation(SPARE, 70)] }).kind).toBe("unavailable");
+  expect(admitAutomaticAccountTarget({ ...input, observations: [observation(RESERVED, 100), observation(SPARE, 70)] })).toEqual({ kind: "available", accountId: SPARE });
+});
+
+test("fallback placement keeps ongoing work while new launches return to a primary", () => {
+  const input = { project: ATLAS, engine: "claude" as const,
+    observations: [observation(RESERVED, 0), observation(SPARE, 70)],
+    bindings: [binding(RESERVED), { ...binding(SPARE), fallback: true }], now: NOW };
+  expect(placedAccountHolds({ ...input, accountId: SPARE })).toBe(true);
+  expect(selectProjectAccount({ ...input, accounts: ACCOUNTS })).toEqual({ kind: "available", accountId: RESERVED });
+});
+
+test("fallback covers blocked, limit-wait and credit-guarded primaries", () => {
+  const input = { project: ATLAS, engine: "claude" as const, accounts: ACCOUNTS,
+    bindings: [binding(RESERVED), { ...binding(SPARE), fallback: true }], now: NOW };
+  for (const primary of [{ ...observation(RESERVED, 32), authenticated: false },
+    { ...observation(RESERVED, 32), limitReached: true }]) {
+    expect(selectProjectAccount({ ...input, observations: [primary, observation(SPARE, 70)] })).toEqual({ kind: "available", accountId: SPARE });
+  }
+  const guarded = observation(RESERVED, 99);
+  guarded.limits!.credits = { hasCredits: true, balance: "10", unlimited: false };
+  expect(selectProjectAccount({ ...input, engine: "codex",
+    bindings: input.bindings.map(row => ({ ...row, engine: "codex" })),
+    observations: [guarded, observation(SPARE, 70)].map(row => ({ ...row, engine: "codex" })) }))
+    .toEqual({ kind: "available", accountId: SPARE });
 });

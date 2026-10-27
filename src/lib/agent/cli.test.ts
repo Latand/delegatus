@@ -250,6 +250,8 @@ test("Telegram grants load the connector token only into granted CLI processes",
 
     fs.rmSync(telegramSessionPath());
     fs.writeFileSync(telegramSessionPath(), validSession, { mode: 0o644 });
+    fs.chmodSync(telegramSessionPath(), 0o644);
+    expect(fs.statSync(telegramSessionPath()).mode & 0o777).toBe(0o644);
     expect(tokenIsExported()).toBe(false);
 
     fs.chmodSync(telegramSessionPath(), 0o600);

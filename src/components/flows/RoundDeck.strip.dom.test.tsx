@@ -10,19 +10,16 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 
 import type { DeckRound } from "./RoundDeck";
 
-/*
- * Finding 6 (issue #241): the REAL review-deck wrapper (`RoundDeck` →
- * `BranchPane`) must mount the control strip on its front card, classify a
- * scanner-shaped subagent as `live-subagent`, and drop the composer on a
- * finished/headless round while keeping the strip. A regression fails here
- * independently of the board and mobile wrappers.
- */
+/* Archived deck panes keep their transcript and disclosure behavior while
+ * suppressing controls and the composer, including unfinished old snapshots. */
 
 const dom = new HappyWindow();
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 function bindDomGlobals() {
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
     Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
     sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
@@ -53,6 +50,7 @@ mock.module("@/hooks/useLogTail", () => ({
   }),
 }));
 
+const realFetch = globalThis.fetch;
 const { RoundDeck } = await import("./RoundDeck");
 
 const roots = new Set<Root>();
@@ -63,6 +61,7 @@ afterAll(() => {
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  globalThis.fetch = realFetch;
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
 });
@@ -96,8 +95,8 @@ function render(rounds: DeckRound[], reviewerMode: Flow["reviewerMode"] = "pane"
   dom.document.body.append(host);
   const rootInstance = createRoot(host as unknown as HTMLElement);
   roots.add(rootInstance);
-  // active (not dormant): the strip renders; dormant suppression is covered by
-  // the scheme-node suite.
+  // Exercise the expanded pane; a collapsed deck could hide an active control.
+  dom.localStorage.setItem("llvReviewDeckCollapsed:flow-1", JSON.stringify({ v: "expanded", at: null }));
   flushSync(() => rootInstance.render(<RoundDeck flow={flow(reviewerMode)} rounds={rounds} focusRound={null} />));
   return host as unknown as HTMLElement;
 }
@@ -105,20 +104,54 @@ function render(rounds: DeckRound[], reviewerMode: Flow["reviewerMode"] = "pane"
 const surface = (host: HTMLElement) => host.querySelector("[data-agent-control-strip]")?.getAttribute("data-strip-surface") ?? null;
 const hasComposer = (host: HTMLElement) => host.querySelector("textarea") !== null;
 
-test("an in-progress round mounts the strip (live-subagent) above a composer", () => {
+test("an archived in-progress round has no agent controls or composer", () => {
   const host = render([{ key: "r1", round: round(), file: subagent }]);
-  expect(surface(host)).toBe("structured-subagent");
-  expect(hasComposer(host)).toBe(true);
+  expect(host.querySelector("[data-review-deck-collapse]")).not.toBeNull();
+  expect(surface(host)).toBeNull();
+  expect(hasComposer(host)).toBe(false);
 });
 
-test("a finished round keeps the strip but drops the composer", () => {
+test("a finished archived round has no agent controls or composer", () => {
   const host = render([{ key: "r1", round: round({ verdict: "APPROVE", reviewedAt: "2026-07-12T01:00:00Z" }), file: subagent }]);
-  expect(surface(host)).toBe("structured-subagent");
+  expect(host.querySelector("[data-review-deck-collapse]")).not.toBeNull();
+  expect(surface(host)).toBeNull();
   expect(hasComposer(host)).toBe(false);
 });
 
-test("a headless flow drops the composer even for an in-progress round", () => {
+test("a headless archive never mounts controls for an unfinished round", () => {
   const host = render([{ key: "r1", round: round(), file: subagent }], "headless");
-  expect(surface(host)).toBe("structured-subagent");
+  expect(host.querySelector("[data-review-deck-collapse]")).not.toBeNull();
+  expect(surface(host)).toBeNull();
   expect(hasComposer(host)).toBe(false);
+});
+
+
+test.each([false, true])("expanded archive has no transcript or host mutation controls (running: %s)", running => {
+  const writes: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method && init.method !== "GET") writes.push(init.method + " " + url);
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  const file = { ...subagent, activity: running ? "live" : "idle", proc: running ? "running" : null,
+    pid: running ? 123 : null, renamable: true, waitingInput: { target: "pane", since: 1, screenTail: "Retained prompt", menu: null } } as FileEntry;
+  const host = render([{ key: "r1", round: round(), file }]);
+  expect(host.querySelector("[data-link-path]")).not.toBeNull();
+  const controls = [...host.querySelectorAll("button, input, textarea")];
+  const labels = controls.map(el => [el.textContent, el.getAttribute("aria-label"), el.getAttribute("title")].join(" ")).join("\n");
+  expect(labels).not.toMatch(/Delete the conversation|Stop|Resume|Restart|Switch account|Rename|Send|Press Enter/i);
+  expect(host.querySelector("[data-agent-control-strip], textarea, [data-session-title-edit]")).toBeNull();
+  expect(writes).toEqual([]);
+});
+
+
+test("the phone can fold an expanded archive with a retained transcript", async () => {
+  dom.happyDOM.setWindowSize({ width: 390, height: 844 });
+  try {
+    const host = render([{ key: "r1", round: round(), file: subagent }]);
+    const collapse = host.querySelector<HTMLButtonElement>("nav [data-review-deck-collapse]");
+    expect(collapse).not.toBeNull();
+    flushSync(() => collapse!.click());
+    for (let n = 0; n < 1000 && !host.querySelector("[data-review-deck-collapsed]"); n++) await new Promise(resolve => setTimeout(resolve, 1));
+    expect(host.querySelector("[data-review-deck-collapsed]")).not.toBeNull();
+  } finally { dom.happyDOM.setWindowSize({ width: 1024, height: 768 }); }
 });

@@ -4,13 +4,17 @@
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
+# Recording/waiting is outside admission: a waiter must never take a slot.
+if [[ ${1:-} == --record || ${1:-} == --wait ]]; then
+  exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/gate-wait.ts" "$@"
+fi
 slots=${LLV_GATE_SLOTS:-6}
 if [[ ! "$slots" =~ ^[1-9][0-9]*$ ]]; then
   echo "LLV_GATE_SLOTS must be a positive integer" >&2
   exit 2
 fi
 if [[ $# -eq 0 ]]; then echo "usage: gate-slot.sh command [args...]" >&2; exit 2; fi
-export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=6144}"
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=11264}"
 poll=${LLV_GATE_POLL_SECONDS:-2}
 
 # CPU placement: the same defaults as src/lib/runtime/cpuPlacement.ts. Each
@@ -91,8 +95,12 @@ pre_push_parent() {
 # without a user manager does it run in a leaf of the agent's own scope, whose
 # memory cap then applies; that fallback is announced, never silent.
 run() {
+  if [[ -n ${LLV_GATE_WAIT_STARTED:-} ]]; then
+    printf 'running\n' > "$LLV_GATE_WAIT_STARTED"
+    unset LLV_GATE_WAIT_STARTED
+  fi
   if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]] && ! user_manager; then
-    echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-8G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
+    echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-14G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
     exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
   fi
   if cpu_applies; then

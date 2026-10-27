@@ -1,8 +1,8 @@
 import { expect, spyOn, test, fs, path, spawn, Database, SANDBOX, SESSIONS, SEAT_TICK_NO_SELF_SCHEDULE, reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, readSeatTickState, writeSeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, outcomeIdentity, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, ORCHESTRATOR_SHIPPED_CLOCK_OPENING, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, OVERDUE, outstandingWake, OPEN_LANE, terminalEvent, FINISHED_LANE, standingGap, MONITOR_PROMPT, PROMPT_HEADING, seatTickNoteRevisionForTest, promptSettings, LEDGER_NOTE, busyBoard, CURRENT_SEAT, REPLACEMENT_PROMPT, reservationLayer, HELD, heldWake, nextCheck, childFixture, childRig, ago, recordedWake } from "./seatTickController.fixture";
 import type { SeatTickRunRecord, AgentLivenessRecord, ConversationMessage } from "./seatTickController.fixture";
 
-function budgetLanes(long = false) {
-  return Array.from({ length: 20 }, (_, n) => ({
+function budgetLanes(long = false, count = 20) {
+  return Array.from({ length: count }, (_, n) => ({
     id: `lane${String(n).padStart(4, "0")}`,
     title: long ? `Exporter ${n} ${"title ".repeat(10)}`.slice(0, 48) : `Exporter ${n}`,
     reason: long ? `decision: ${"build stopped ".repeat(5)}`.slice(0, 48) : "decision: build stopped",
@@ -52,6 +52,55 @@ test(`a configured autonomy wake${turboEnabled ? " with Turbo" : ""} still deliv
     || /… \[summary; .+ holds the full item\]$/.test(detail)).toBe(true);
 });
 }
+
+test.each([42, 43])("%i routed lanes still wake when liveness spends its share", async count => {
+  for (const skipped of [false, true]) {
+    const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Check failed builds. ".repeat(25).slice(0, 500),
+      monitorPrompt: "Inspect the build and review queues. ".repeat(300).slice(0, 7_622),
+      autonomy: { enabled: true, startedAt: new Date(NOW).toISOString(), until: new Date(NOW + 8 * 60 * MINUTE).toISOString(),
+        endedAt: null, endReason: null, updatedAt: new Date(NOW).toISOString(),
+        setBy: { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null }, why: null, decisions: [] } };
+    const rig = harness({ state: OVERDUE, settings,
+      seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: 55 } });
+    let now = 0, next = 0;
+    const timers = new Map<number, { at: number; run: () => void }>();
+    Object.assign(rig.deps, { workBudgetMs: 800, workClock: () => now, workScheduler: {
+      setTimeout: (run: () => void, delay: number) => { const id = ++next; timers.set(id, { at: now + delay, run }); return id; },
+      clearTimeout: (id: unknown) => { timers.delete(id as number); },
+    } });
+    let reads = 0;
+    rig.deps.sources!.liveness = async () => {
+      if (skipped && ++reads === 1) {
+        now += 100;
+        for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
+      }
+      return [];
+    };
+    const lanes = budgetLanes(true, count);
+    rig.deps.sources!.workerAsks = async () => lanes.map(lane => ({ id: lane.id,
+      key: `lane:${lane.id}:decision`, label: `${lane.title}: ${lane.reason}`, sinceMs: lane.sinceMs, seatOwnedLane: lane }));
+    const result = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
+    expect(rig.sent).toHaveLength(1);
+    const text = rig.sent[0]!.text;
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text).toContain(settings.reason);
+    for (const lane of lanes) {
+      const row = text.split("\n").find(line => line.startsWith(`- ${lane.id}|`));
+      expect(row).toContain("decision:");
+      expect(row).toMatch(/decision: build stoppe(?:d|…)/);
+      const minutes = (NOW - lane.sinceMs) / MINUTE;
+      expect(row).toContain(minutes === 120 ? "2h" : `1h ${minutes - 60}m`);
+    }
+    const detail = text.split("\n").find(line => line.startsWith("- [ask] lane0000 — "))!;
+    expect(detail === `- [ask] lane0000 — ${lanes[0]!.title}: ${lanes[0]!.reason}`
+      || /… \[summary; .+ holds the full item\]$/.test(detail)).toBe(true);
+    expect(rig.written.at(-1)!.itemsShown!.length).toBeGreaterThan(0);
+    if (skipped) expect(text).toMatch(/skipped.*liveness/i);
+    expect(now).toBe(skipped ? 100 : 0);
+    expect(timers.size).toBe(0);
+  }
+});
 
 test("a full roster with unavailable sources makes detail progress and then respects cadence", async () => {
   const rig = harness({ state: OVERDUE, pullRequestsUnavailable: "command-failed",
@@ -483,7 +532,254 @@ test("a second state change during PR refresh leaves the alarm unsent", async ()
   expect(rig.written.every(state => state.lastWakeAt === OVERDUE.lastWakeAt)).toBe(true);
 });
 
-test("a canceled PR refresh keeps its outage run in durable state", async () => {
+test("lane churn during every PR refresh still wakes the seat in one check", async () => {
+  const rig = harness({ pipelines: [...FINISHED_LANE, ...OPEN_LANE], state: OVERDUE });
+  let reads = 0;
+  rig.deps.sources!.openPullRequests = async () => {
+    const current = rig.deps.sources!.pipelines();
+    const at = new Date(NOW + ++reads * MINUTE).toISOString();
+    rig.deps.sources!.pipelines = () => current.map(lane => lane.id === OPEN_LANE[0]!.id
+      ? { ...lane, updatedAt: at } : lane);
+    return { ok: true, pullRequests: [] };
+  };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+  expect(reads).toBe(1);
+  expect(rig.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+});
+
+const localGitWatchdogMode = process.env.LLV_LOCAL_GIT_WATCHDOG_MODE;
+
+test.skipIf(!localGitWatchdogMode)("local Git wake watchdog child", async () => {
+  const repo = process.env.LLV_LOCAL_GIT_WATCHDOG_REPO!;
+  const tip = process.env.LLV_LOCAL_GIT_WATCHDOG_TIP!;
+  const adapter = localGitWatchdogMode!;
+  const rig = harness({ pipelines: [...FINISHED_LANE, ...OPEN_LANE], state: OVERDUE,
+    stateFile: path.join(SANDBOX, `local-finished-${adapter}.json`) });
+  const [finished, ...others] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+  rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip }, ...others] as never;
+  rig.deps.sources!.openPullRequests = adapter === "blocked"
+    ? () => { const until = Date.now() + 5_000; while (Date.now() < until) { /* deliberate blocked-loop control */ } return { ok: false, unavailable: "command-failed" } as never; }
+    : adapter === "hung"
+      ? () => new Promise(() => {})
+      : async () => ({ ok: false, unavailable: "command-failed" });
+  rig.deps.workBudgetMs = 2_000;
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake" });
+  expect(record!.detail).toContain(adapter === "hung" ? "timed-out" : "command-failed");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("local commits");
+  expect(rig.sent[0]!.text).toContain(tip.slice(0, 12));
+  process.stdout.write(`LOCAL_GIT_WAKE:${adapter}\n`);
+});
+
+test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake under a parent watchdog", async () => {
+  const repo = path.join(SANDBOX, "local-finished-lane");
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString()}`);
+    return result.stdout.toString().trim();
+  };
+  git(["init", "-b", "main"]);
+  git(["config", "user.name", "Seat Tick Fixture"]);
+  git(["config", "user.email", "fixture"]);
+  fs.writeFileSync(path.join(repo, "work.txt"), "base\n");
+  git(["add", "work.txt"]);
+  git(["commit", "-m", "base"]);
+  const base = git(["rev-parse", "HEAD"]);
+  git(["switch", "-c", "finished-lane"]);
+  fs.writeFileSync(path.join(repo, "work.txt"), "local lane work\n");
+  git(["commit", "-am", "finished lane work"]);
+  const tip = git(["rev-parse", "HEAD"]);
+  git(["update-ref", "refs/remotes/origin/main", base]);
+  git(["update-ref", "-d", "refs/heads/main"]);
+  expect(git(["remote"])).toBe("");
+
+  for (const adapter of ["hung", "failed"] as const) {
+    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "local Git wake watchdog child"], {
+      env: { ...process.env, LLV_LOCAL_GIT_WATCHDOG_MODE: adapter, LLV_LOCAL_GIT_WATCHDOG_REPO: repo, LLV_LOCAL_GIT_WATCHDOG_TIP: tip },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk.toString(); });
+    child.stderr.on("data", chunk => { output += chunk.toString(); });
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 2_000);
+    try {
+      const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
+      expect({ ...result, timedOut, output }).toMatchObject({ code: 0, timedOut: false });
+      expect(output).toContain(`LOCAL_GIT_WAKE:${adapter}`);
+    } finally { clearTimeout(watchdog); }
+  }
+
+  const blocked = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "local Git wake watchdog child"], {
+    env: { ...process.env, LLV_LOCAL_GIT_WATCHDOG_MODE: "blocked", LLV_LOCAL_GIT_WATCHDOG_REPO: repo, LLV_LOCAL_GIT_WATCHDOG_TIP: tip },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let blockedOutput = "";
+  blocked.stdout.on("data", chunk => { blockedOutput += chunk.toString(); });
+  blocked.stderr.on("data", chunk => { blockedOutput += chunk.toString(); });
+  let blockedByWatchdog = false;
+  const watchdog = setTimeout(() => { blockedByWatchdog = true; blocked.kill("SIGKILL"); }, 2_000);
+  try {
+    const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+      blocked.once("error", reject);
+      blocked.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    expect({ ...result, blockedByWatchdog }).toMatchObject({ code: null, signal: "SIGKILL", blockedByWatchdog: true });
+    expect(blockedOutput).not.toContain("LOCAL_GIT_WAKE:blocked");
+  } finally { clearTimeout(watchdog); }
+
+  for (const merge of [
+    { state: "merged", reviewedHead: tip, chain: [tip], mergedHead: tip },
+    { state: "queued", reviewedHead: tip, chain: [tip], mergedHead: null },
+  ]) {
+    const rig = harness({ pipelines: [...FINISHED_LANE], state: { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() } });
+    const [finished] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+    rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip } as never];
+    rig.deps.sources!.openPullRequests = async () => {
+      rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip, merge } as never];
+      return { ok: true, pullRequests: [{ number: 41, title: "completed lane work", headRefName: "finished-lane",
+        createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString() }] };
+    };
+    const record = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(record).toMatchObject({ verdict: "quiet" });
+    expect(rig.sent).toHaveLength(0);
+  }
+
+  const fairRig = harness({ pipelines: [...FINISHED_LANE], state: { ...OVERDUE, lastCheckAt: null } });
+  const [template] = fairRig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+  const newerMerged = Array.from({ length: 60 }, (_, index) => ({
+    ...template!, id: `newer-merged-${String(index).padStart(2, "0")}`,
+    createdAt: new Date(NOW - index * 60_000).toISOString(), closedAt: new Date(NOW - index * 60_000).toISOString(),
+    repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: base,
+  }));
+  const olderPending = { ...template!, id: "older-pending-lane", createdAt: "2020-01-01T00:00:00.000Z",
+    closedAt: "2020-01-01T00:00:00.000Z", repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip };
+  fairRig.deps.sources!.pipelines = () => [...newerMerged, olderPending] as never;
+  fairRig.deps.sources!.archivedPipelines = () => [];
+  fairRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const { gatherSeatTickInput } = await import("./seatTickSources");
+  let scanState = fairRig.deps.readState!(PROJECT);
+  let reached = false;
+  const shim = path.join(SANDBOX, "slow-git");
+  fs.mkdirSync(shim, { recursive: true });
+  fs.writeFileSync(path.join(shim, "git"), "#!/bin/sh\nif [ \"$1\" = merge-base ]; then sleep 0.15; fi\nexec /usr/bin/git \"$@\"\n", { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${shim}${path.delimiter}${originalPath ?? ""}`;
+  try {
+    for (let check = 0; check < 8 && !reached; check++) {
+      const observation = await gatherSeatTickInput(PROJECT, scanState, DEFAULT_SEAT_TICK_POLICY, fairRig.deps.sources!);
+      reached = observation.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane");
+      scanState = observation.state;
+    }
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+  expect(reached).toBe(true);
+  const progressFile = path.join(SANDBOX, "local-scan-progress.json");
+  writeSeatTickState(PROJECT, { ...scanState, accounting: undefined }, progressFile);
+  const restartRig = harness({ pipelines: [...FINISHED_LANE], stateFile: progressFile });
+  restartRig.deps.sources!.pipelines = () => [...newerMerged, olderPending] as never;
+  restartRig.deps.sources!.archivedPipelines = () => [];
+  restartRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  let restartedState = restartRig.deps.readState!(PROJECT);
+  let recovered = false;
+  for (let check = 0; check < 8 && !recovered; check++) {
+    const observation = await gatherSeatTickInput(PROJECT, restartedState, DEFAULT_SEAT_TICK_POLICY, restartRig.deps.sources!);
+    recovered = observation.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane");
+    restartedState = observation.state;
+  }
+  expect(recovered).toBe(true);
+
+  const diagnosticRig = harness({ pipelines: [...FINISHED_LANE], state: OVERDUE });
+  const [diagnosticLane] = diagnosticRig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+  diagnosticRig.deps.sources!.pipelines = () => [{ ...diagnosticLane, repoDir: repo, branch: "finished-lane", baseBranch: "absent", lastPassedCommit: tip } as never];
+  diagnosticRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await gatherSeatTickInput(PROJECT, diagnosticRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, diagnosticRig.deps.sources!);
+    expect(errors.mock.calls.flat().join(" ")).toContain("local Git ancestry unavailable");
+  } finally { errors.mockRestore(); }
+});
+
+test("a churn wake delivered before process exit is settled once after restart and credits only named lanes", async () => {
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "churn-restart-"));
+  const stateFile = path.join(directory, "tick.json");
+  const receiptFile = path.join(directory, "receipt.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  for (const phase of ["deliver", "recover", "again"] as const) {
+    const script = path.join(directory, `${phase}.test.ts`);
+    fs.writeFileSync(script, `import { test, expect } from "bun:test";
+      const { fs, harness, runSeatTickCheck, PROJECT, NOW, MINUTE, FINISHED_LANE, OPEN_LANE, CONVERSATION,
+        defaultSeatTickSettings } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickController.fixture.ts"))});
+      test("churn restart ${phase}", async () => {
+        const phase = ${JSON.stringify(phase)};
+        const receiptFile = ${JSON.stringify(receiptFile)};
+        const own = { ...FINISHED_LANE[0], src: CONVERSATION };
+        const lanes = [own, ...OPEN_LANE];
+        if (phase === "recover") lanes.push({ ...own, id: "late-unseen-lane" });
+        const rig = harness({ stateFile: ${JSON.stringify(stateFile)}, pipelines: lanes, now: NOW,
+          settings: { ...defaultSeatTickSettings(PROJECT), enabled: phase !== "recover" } });
+        let reads = 0;
+        rig.deps.sources.openPullRequests = async () => {
+          const current = rig.deps.sources.pipelines();
+          const at = new Date(NOW + ++reads * MINUTE).toISOString();
+          rig.deps.sources.pipelines = () => current.map(lane => lane.id === OPEN_LANE[0].id
+            ? { ...lane, updatedAt: at } : lane);
+          return { ok: true, pullRequests: [] };
+        };
+        rig.deps.deliver = async message => {
+          expect(phase).toBe("deliver");
+          expect(fs.existsSync(receiptFile)).toBe(false);
+          fs.writeFileSync(receiptFile, JSON.stringify(message));
+          process.exit(23); // destination accepted; controller has not received its acknowledgement
+        };
+        rig.deps.sources.wakeState = async wake => {
+          const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+          expect(wake.clientMessageId).toBe(receipt.clientMessageId);
+          return "landed";
+        };
+        const before = rig.deps.readState(PROJECT);
+        const record = await runSeatTickCheck(PROJECT, rig.deps);
+        expect(record.verdict).toBe("quiet");
+        const after = rig.deps.readState(PROJECT);
+        expect(after.outstandingWake).toBeNull();
+        expect(after.lastWakeAt).toBe(new Date(NOW).toISOString());
+        if (phase === "recover") {
+          expect(before.outstandingWake).toBeTruthy();
+          expect(before.outstandingWake.commit.announcedLanes.length).toBeGreaterThan(0);
+          expect(after.announcedLanes).toEqual(before.outstandingWake.commit.announcedLanes);
+          expect(after.announcedLanes.some(key => key.includes("late-unseen-lane"))).toBe(false);
+        }
+      });`);
+    const child = spawn(process.execPath, ["test", script], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("close", resolve);
+    });
+    expect(code, output).toBe(phase === "deliver" ? 23 : 0);
+    if (phase === "deliver") {
+      const wake = readSeatTickState(PROJECT, stateFile).outstandingWake!;
+      const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+      expect(receipt.clientMessageId).toBe(wake.clientMessageId);
+      expect(receipt.text).toContain(FINISHED_LANE[0]!.id);
+      expect(receipt.text).not.toContain("late-unseen-lane");
+      expect(readSeatTickState(PROJECT, stateFile).lastWakeAt).toBe(OVERDUE.lastWakeAt);
+    }
+  }
+});
+
+test("lane churn keeps a real PR source failure visible in durable state", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-gap-")), "state.json");
   const running = { ...OPEN_LANE[0]!, id: "running-lane" };
   const rig = harness({ stateFile, pipelines: [...FINISHED_LANE, running], state: OVERDUE });
@@ -492,8 +788,7 @@ test("a canceled PR refresh keeps its outage run in durable state", async () => 
   let attempt = 1;
   const pipelines = rig.deps.sources!.pipelines;
   rig.deps.sources!.pipelines = () => {
-    /* Keep the running lane's attempt identity moving across every freshness
-       read, so each completed failure is canceled before it can be dispatched. */
+    // Every freshness read sees a different attempt, including preparation.
     attempt += 1;
     return pipelines().map(lane => lane.id === running.id
       ? { ...lane, runs: [{ stageId: "build", attempts: [{ n: attempt, state: "running", startedAt: new Date(NOW + attempt * MINUTE).toISOString() }] }] as never }
@@ -503,20 +798,23 @@ test("a canceled PR refresh keeps its outage run in durable state", async () => 
 
   const first = await runSeatTickCheck(PROJECT, rig.deps);
   const firstGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
-  expect(first).toMatchObject({ verdict: "error", delivery: null });
-  expect(rig.sent).toEqual([]);
+  expect(first).toMatchObject({ verdict: "wake" });
+  expect(first!.detail).toContain("command-failed");
+  expect(rig.sent).toHaveLength(1);
   expect(firstGap).toMatchObject({ gap: "command-failed", reported: false });
   const since = firstGap!.since;
 
   rig.deps.sources!.now = () => NOW + 65 * MINUTE;
   const second = await runSeatTickCheck(PROJECT, rig.deps);
   const secondGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
-  expect(second).toMatchObject({ verdict: "error", delivery: null });
-  expect(rig.sent).toEqual([]);
-  expect(secondGap).toMatchObject({ gap: "command-failed", reported: false, since });
+  expect(second).toMatchObject({ verdict: "wake" });
+  expect(second!.detail).toContain("command-failed");
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.cards.filter(entry => entry.card.kind === "source-unreadable")).toHaveLength(1);
+  expect(secondGap).toMatchObject({ gap: "command-failed", reported: true, since });
 });
 
-test("a canceled successful PR refresh clears recovered outage accounting and starts the next run fresh", async () => {
+test("a successful PR read under lane churn clears outage accounting and starts the next run fresh", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-recovery-")), "state.json");
   const running = { ...OPEN_LANE[0]!, id: "running-lane" };
   const previousSince = new Date(NOW - 3 * 60 * MINUTE).toISOString();
@@ -529,8 +827,7 @@ test("a canceled successful PR refresh clears recovered outage accounting and st
   const pipelines = rig.deps.sources!.pipelines;
   rig.deps.sources!.openPullRequests = async () => {
     reads++;
-    /* Both reads succeed, but the running lane advances during each one. The
-       second freshness fence cancels this wake after recovery was observed. */
+    // The lane advances during every PR read while the source recovers.
     const nextAttempt = ++attempt;
     const current = pipelines();
     rig.deps.sources!.pipelines = () => current.map(lane => lane.id === running.id
@@ -539,10 +836,9 @@ test("a canceled successful PR refresh clears recovered outage accounting and st
     return { ok: true, pullRequests: [] };
   };
 
-  const canceled = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(canceled).toMatchObject({ verdict: "error", delivery: null });
-  expect(reads).toBe(4);
-  expect(rig.sent).toEqual([]);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+  expect(reads).toBe(1);
+  expect(rig.sent).toHaveLength(1);
   expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toBeNull();
 
   const firstFailure = harness({ stateFile, pipelines: [...FINISHED_LANE, running], now: NOW + 65 * MINUTE,

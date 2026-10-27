@@ -111,8 +111,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-// v61 implements the report preparation and decline decision of 2026-10-24 (#3293).
-export const ORCHESTRATOR_PROMPT_VERSION = 61;
+// v62 combines task due dates with report preparation and decline handling.
+export const ORCHESTRATOR_PROMPT_VERSION = 62;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -599,7 +599,7 @@ ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
 - Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
-- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.
+- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.
 
 ## Pipeline stage contract
 Stages form a graph; array order is presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
@@ -754,6 +754,7 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
+  mandate = mandate.split("- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.").join("- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.");
   const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
   const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
   mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);

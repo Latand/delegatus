@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "./BranchPane";
+import { SpeakButton } from "./feed/SpeakButton";
 
 /*
  * Integration-level regression for the unified strip's actual mount point
@@ -99,4 +100,11 @@ test("the pending migration ribbon clears once the card already runs under the h
     />,
   );
   expect(liveHtml).toContain("Account switch pending");
+});
+
+test.each([false, true])("speech controls render with a null server snapshot (header=%s)", header => {
+  const html = renderToStaticMarkup(<SpeakButton scope="historical-render" header={header} text="Read this answer" />);
+  if (header) expect(html).toContain("<button");
+  else expect(html).toBe("");
+  expect(html).not.toContain('aria-busy="true"');
 });

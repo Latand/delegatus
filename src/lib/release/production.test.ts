@@ -4,7 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { changesSinceRelease, latestReleaseTag, releaseControllerForSources, supersedingReleaseTag } from "./production";
+import { changesSinceRelease, createReleasePipeline, latestReleaseTag, releaseControllerForSources, supersedingReleaseTag } from "./production";
+import { createPipelineFromRequest, type PipelinePorts } from "@/lib/pipelines/engine";
+import { pipelineRoleLookup } from "@/lib/pipelines/roles";
+import { loadPipelines, pipelineDeliveryLookup } from "@/lib/pipelines/store";
+import { releaseStages } from "./stages";
+import { releaseRequestDigest, ReleaseValidationRefusal } from "./run";
+import type { CreatePipelineRequest } from "@/lib/pipelines/types";
 import { releaseState } from "./policy";
 import { ready } from "./policy.fixture";
 
@@ -149,4 +155,56 @@ test("the production release task producer remains undated", async () => {
     expect(task?.text).toBe("Release fixture");
     expect(task?.dueAt).toBeUndefined(); expect(task?.dueTz).toBeUndefined();
   } finally { intercepted.mockRestore(); }
+});
+
+test("the real create validator proves an oversized refusal; admitted receipts and ambiguous errors keep their identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-create-test-")); directories.push(root);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  try {
+    const cut = "a".repeat(40);
+    const ports = { roleLookup: pipelineRoleLookup, projectForCwd: () => "release-create", sourcePathAllowed: () => true,
+      conversationIdForPath: () => "creator", now: () => "2026-10-26T12:00:00Z",
+      preflightRepo: async () => ({ ok: true, repoDir: root, gitCommonDir: path.join(root, ".git"), worktreeParent: root }),
+      exec: async (_file: string, args: string[]) => ({ code: 0, stdout: args[0] === "rev-parse" ? cut : path.join(root, "remote.git"), stderr: "" }),
+    } as unknown as PipelinePorts;
+    const create: typeof createPipelineFromRequest = (request, _ports, options) => createPipelineFromRequest(request, ports, options);
+    const request: CreatePipelineRequest = { task: "Release fixture", repoDir: root, src: "fixture", baseRef: cut, autoStart: true,
+      stages: releaseStages({ cut, lastTag: "v1.16.0", changes: [], askBeforePublish: true }) };
+    const oversized = structuredClone(request);
+    oversized.stages[0].prompt = "x".repeat(16_350);
+    let refusal: unknown;
+    try { await createReleasePipeline(oversized, "refused-key", create); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(ReleaseValidationRefusal);
+    expect((refusal as ReleaseValidationRefusal).digest).toBe(releaseRequestDigest(oversized));
+    expect(pipelineDeliveryLookup({ requestKey: "refused-key" })).toBeNull();
+    const empty = structuredClone(request); empty.stages[0].prompt = "";
+    let emptyRefusal: unknown;
+    try { await createReleasePipeline(empty, "empty-key", create); } catch (error) { emptyRefusal = error; }
+    expect(emptyRefusal).toBeInstanceOf(Error);
+    expect(emptyRefusal).not.toBeInstanceOf(ReleaseValidationRefusal);
+    const id = await createReleasePipeline(request, "accepted-key", create);
+    expect(await createReleasePipeline(request, "accepted-key", create)).toBe(id);
+    expect(pipelineDeliveryLookup({ requestKey: "accepted-key" })?.creationRequest?.digest).toBe(releaseRequestDigest(request));
+    expect(loadPipelines()).toHaveLength(1);
+    // Changing an admitted key's payload is an idempotency conflict, even if
+    // the replacement also has an oversized prompt.
+    let conflict: unknown;
+    try { await createReleasePipeline(oversized, "accepted-key", create); } catch (error) { conflict = error; }
+    expect(conflict).toBeInstanceOf(Error);
+    expect(conflict).not.toBeInstanceOf(ReleaseValidationRefusal);
+    expect(loadPipelines()).toHaveLength(1);
+    for (const result of [
+      { status: 400, error: "stage prepare prompt exceeds 8000 characters" },
+      { status: 503, error: "unavailable", violations: [{ field: "stages[0].prompt", message: "unavailable", expected: "available" }] },
+    ]) {
+      let error: unknown;
+      try { await createReleasePipeline(oversized, "ambiguous-key", async () => result); } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(ReleaseValidationRefusal);
+    }
+    await expect(createReleasePipeline(oversized, "transport-key", async () => { throw new Error("lost reply"); })).rejects.toThrow("lost reply");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
 });

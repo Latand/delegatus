@@ -1,3 +1,4 @@
+import { maintenanceWindowOpen } from "./window";
 import { statePath } from "@/lib/configDir";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchAutonomousConversation as launchMaintenanceConversation, observeSpawnedTurn } from "@/lib/agent/autonomousConversation";
@@ -140,11 +141,20 @@ function deferMaintenanceAdmission(run: MaintenanceRun, ports: BoardMaintenanceP
   if (!run.admissionDeferred) patchMaintenanceRun(run.runId, { admissionDeferred: true });
   return true;
 }
+function maintenanceScheduleHold(run: MaintenanceRun, ports: BoardMaintenancePorts): string | null {
+  if (run.conversationId || run.launchId || ports.sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId)) return null;
+  const now = ports.sources.now();
+  const settings = effectiveSeatTickSettings(ports.sources.settings(run.project), now, SEAT_TICK_WAKE_INTERVAL_MS);
+  if (!settings.maintenance.enabled) return "maintenance: paused while maintenance is off";
+  return maintenanceWindowOpen(settings.maintenance.window, now) ? null : "maintenance: outside scheduled window";
+}
 async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Promise<string> {
   if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
   // Recovered claims and launch replays obey the current switch too.
   const wakesEnabled = () => effectiveSeatTickSettings(ports.sources.settings(run.project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled;
   if (!wakesEnabled()) return "maintenance: paused while wakes are off";
+  let scheduleHold = maintenanceScheduleHold(run, ports);
+  if (scheduleHold) return scheduleHold;
   if (!run.taskId) {
     run = patchMaintenanceRun(run.runId, { taskId: createCard(run, ports) })!;
   }
@@ -165,6 +175,8 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
   }
   if (!maintenanceRunIsLive(run)) return "maintenance: already settled";
   if (!wakesEnabled()) return "maintenance: paused while wakes are off";
+  scheduleHold = maintenanceScheduleHold(run, ports);
+  if (scheduleHold) return scheduleHold;
   if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
   if (!run.launchedAt || run.admissionDeferred) {
     run = patchMaintenanceRun(run.runId, { launchedAt: new Date(ports.sources.now()).toISOString(), admissionDeferred: false })!;
@@ -217,6 +229,7 @@ export async function launchBoardMaintenanceIfDue(input: SeatTickCheckInput, por
   const setting = input.settings.maintenance;
   if (!setting.enabled) return null;
   if (!input.settings.enabled) return "maintenance: paused while wakes are off";
+  if (!maintenanceWindowOpen(setting.window, ports.sources.now())) return "maintenance: outside scheduled window";
   if (!input.seat) return "maintenance: waits for a seat";
   if (activeDrain()) return "maintenance: held for the automatic update";
   const held = readMaintenanceProject(input.project)?.currentRunId;

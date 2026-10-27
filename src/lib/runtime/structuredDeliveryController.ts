@@ -1,7 +1,7 @@
 import { withHostStopOrigin } from "./hostExit";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { registryKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { hotRegistryRows, registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -37,7 +37,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { actingOperation } from "@/lib/deliveryActuation";
-import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type StructuredTerminationCapture } from "@/lib/agent/registry";
+import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -104,6 +104,8 @@ interface HostAttachment {
   stopEvents: () => Promise<void>;
 }
 
+type PreparedStartupPublication = { registry: AgentRegistry; snapshot: RegistryFile };
+
 /* One lifecycle per host (#1191). The seat a delivery resolves the host from
    and the registration that owns its state subscription, event pump and
    projection are the same record. A host carried over from the predecessor
@@ -154,7 +156,7 @@ interface ControllerState {
   settleHostlessSessions?: (() => Promise<number>) | null;
   updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
   allowStartupRecovery?: (() => void) | null;
-  completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>) => Promise<void>) | null;
+  completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>, prepared?: PreparedStartupPublication) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
   /* Distinguishes "this process hosts the controller and is between
@@ -476,11 +478,12 @@ async function reconcileTerminalDeliveries(
   assertActive: () => void,
 ): Promise<void> {
   assertActive();
-  const snapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000));
+  const fallback = typeof registry.terminalDeliveryCandidates === "function" ? undefined
+    : await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000));
+  const unsettledDeliveries = fallback ? registryRowsMatching(fallback, "heldDeliveries", "state", ["delivery-uncertain", "failed"])
+    : registry.terminalDeliveryCandidates();
   assertActive();
   if (!isCurrent()) return;
-  const unsettledDeliveries = Object.values(snapshot.heldDeliveries)
-    .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
   const pendingAcknowledgements: string[] = [];
   const flushOutcomes = async () => {
@@ -501,6 +504,8 @@ async function reconcileTerminalDeliveries(
     const page = unsettledDeliveries.slice(offset, offset + TERMINAL_RECONCILIATION_PAGE_SIZE);
     const outcomes = (await Promise.all(page.map(async (delivery) => {
       try {
+        const snapshot = typeof registry.deliverySnapshotForOperation === "function"
+          ? registry.deliverySnapshotForOperation(delivery.command.operationId, { recipientEvidence: true }) : fallback!;
         if (delivery.error !== "delivery-discarded"
           && await confirmedSend(snapshot, delivery.command.operationId, true)) {
           const confirmed = await confirmJournalDelivery(client, delivery.command.operationId);
@@ -2127,7 +2132,7 @@ export async function bindStructuredDeliveryQueue(
   };
   const publishedFallbacks = new Map<string, string>();
   let completion = Promise.resolve();
-  const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}, deferredConversationIds: ReadonlySet<string> = new Set()) => {
+  const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}, deferredConversationIds: ReadonlySet<string> = new Set(), prepared?: PreparedStartupPublication) => {
     /* Each startup phase begins on a turn of its own, so phases that settle
        without I/O do not hold the event loop as one chain (#2761). */
     const phase = async (name: StructuredHostStartupPhase) => {
@@ -2143,7 +2148,7 @@ export async function bindStructuredDeliveryQueue(
       if (stopped || state.activeQueue !== queue) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items, progress, assertActive, deferredConversationIds);
+        await successor(items, progress, assertActive, deferredConversationIds, prepared);
         return;
       }
       /* A route-recovered structured launch can predate this controller and
@@ -2153,12 +2158,16 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       deferredStartupConversations = new Set(deferredConversationIds);
-      const markerSnapshot = await registry.prepareReadOnlySnapshot();
+      // This is a selection only. Marker repair, publication and terminal
+      // settlement still read current ownership under their existing guards.
+      const markerSnapshot = prepared?.registry === registry && registryStartupSelectionUnchanged(prepared.snapshot) === true
+        ? prepared.snapshot : await registry.prepareReadOnlySnapshot();
       assertActive();
       const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
         ["codex-app-server", "claude-broker", "copilot-acp"]);
       await forEachStartupBatch(markerKeys, async key => {
-        const entry = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
+        const selected = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
+        const entry = selected && startupHostSnapshot(registry, selected.key).entries[key];
         if (entry?.pendingAction !== "spawn") return;
         await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, () => {
           assertActive();
@@ -2172,7 +2181,7 @@ export async function bindStructuredDeliveryQueue(
       if (superseded()) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items, progress, assertActive, deferredConversationIds);
+        await successor(items, progress, assertActive, deferredConversationIds, prepared);
         return;
       }
       // Marker repair changes no membership or generation. This selection is
@@ -2192,8 +2201,19 @@ export async function bindStructuredDeliveryQueue(
       );
       await phase("publishing historical host fallbacks");
       const conversations = (function* () {
-        for (const id in startupSnapshot.conversations) {
-          yield performanceSpans.sync("runtime.startup.conversations", () => startupSnapshot.conversations[id]!);
+        const hostKeys = new Set(markerKeys);
+        // An entry with a legacy host cannot be archived. Structured rows
+        // may be cold, so retain their indexed selection from marker repair.
+        for (const [key, entry] of hotRegistryRows(startupSnapshot, "entries")) {
+          if (entry.host?.kind === "tmux") hostKeys.add(key);
+        }
+        for (const key of hostKeys) {
+          for (const conversation of registryConversationsForEntryKey(startupSnapshot, key)) {
+            const generation = conversation.generations.at(-1);
+            if (generation && sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) === key) {
+              yield performanceSpans.sync("runtime.startup.conversations", () => conversation);
+            }
+          }
         }
       })();
       await forEachStartupBatch(conversations, async (conversation) => {
@@ -2216,7 +2236,7 @@ export async function bindStructuredDeliveryQueue(
       if (superseded()) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items, progress, assertActive, deferredConversationIds);
+        await successor(items, progress, assertActive, deferredConversationIds, prepared);
         return;
       }
       await phase("reconciling terminal delivery receipts");
@@ -2420,9 +2440,10 @@ export async function completeStructuredDeliveryQueueStartup(
   progress?: (phase: StructuredHostStartupPhase) => void,
   assertActive?: () => void,
   deferredConversationIds?: ReadonlySet<string>,
+  prepared?: PreparedStartupPublication,
 ): Promise<void> {
   if (!state.completeActive) throw new StructuredDeliveryControllerUnavailableError();
-  await state.completeActive(adopted, progress, assertActive, deferredConversationIds);
+  await state.completeActive(adopted, progress, assertActive, deferredConversationIds, prepared);
 }
 
 export async function republishStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
@@ -2501,7 +2522,7 @@ export async function recordDemotionInterruption(
       the last awaited read and before the record is written. */
   evidenceStands: () => boolean = () => true,
 ): Promise<boolean> {
-  const snapshot = registry.readOnlySnapshot();
+  const snapshot = startupHostSnapshot(registry, key);
   const hostKey = sessionKeyId(key);
   const entry = snapshot.entries[hostKey];
   const conversation = registryConversationsForEntryKey(snapshot, hostKey).find((candidate) =>
@@ -2529,7 +2550,7 @@ export async function recordDemotionInterruption(
     catch (error) { controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error }); }
     // Seat discovery can observe a completion. Validate after every evidence
     // source, immediately before marking custody and recording the cut.
-    const fresh = registry.readOnlySnapshot();
+    const fresh = startupHostSnapshot(registry, key);
     const currentEntry = fresh.entries[hostKey];
     const currentConversation = fresh.conversations[conversation.id];
     if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
@@ -2592,7 +2613,7 @@ const NO_IDLE_HOST_CUT: IdleHostCut = { backgroundTasks: [], selfStartedWork: fa
  */
 async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<IdleHostCut> {
   if (key.engine !== "claude") return NO_IDLE_HOST_CUT;
-  const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
+  const conversation = registryConversationsForEntryKey(startupHostSnapshot(registry, key), sessionKeyId(key)).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   const transcriptPath = conversation && !conversation.supersededBy ? conversation.generations.at(-1)!.path : null;
   if (!transcriptPath) return NO_IDLE_HOST_CUT;
@@ -2685,11 +2706,11 @@ export async function handOverHostForDemotion(
 ): Promise<boolean> {
   if (current.pid == null || current.processStartIdentity == null) return false;
   const owner = captureProcessIdentity(current.pid, undefined, current.processStartIdentity);
-  const observed = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const observed = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   let marked = false;
   const markHandoff = () => {
     if (marked) return;
-    const latest = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const latest = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     if (!latest || latest.claimOwner !== observed?.claimOwner || latest.claimEpoch !== observed?.claimEpoch
       || latest.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
@@ -2705,7 +2726,7 @@ export async function handOverHostForDemotion(
     /* By the generation identity index: a scan of every conversation took
        long enough under retained history for a working engine's transcript
        to move between these reads on every attempt (#2761). */
-    const conversation = registryConversationsForEntryKey(registry.readOnlySnapshot(), sessionKeyId(key)).find((candidate) =>
+    const conversation = registryConversationsForEntryKey(startupHostSnapshot(registry, key), sessionKeyId(key)).find((candidate) =>
       candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
     const transcriptPath = conversation?.generations.at(-1)?.path;
     const before = transcriptPath ? idleHostEvidenceIdentity(key.sessionId, transcriptPath) : null;

@@ -7,7 +7,9 @@
  * CLI launch unless `DELEGATUS_DEBUG=1` asks for diagnostics. Journal launches
  * clear that choice. Other entry points (`bun dev`, Docker)
  * print diagnostics by default. Loop-gap and performance-summary evidence
- * bypasses this helper; the launcher keeps it in journal/debug output. Errors never go through here.
+ * bypasses this helper; the launcher keeps it in journal/debug output.
+ * Packaged installs bound its volume (`LLV_LOOP_DIAGNOSTICS`,
+ * src/lib/viewerLoopMonitor.ts). Errors never go through here.
  */
 export const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
 

@@ -1,0 +1,42 @@
+{
+  "checks": [
+    {
+      "check": "negative:before-navigation-fix",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/attention/navigate.test.ts",
+        "--test-name-pattern",
+        "opening an archived round"
+      ],
+      "exitCode": 1,
+      "baseline": "fe734876e",
+      "fixture": "Current navigation test file overlaid on the baseline export",
+      "failures": [
+        "opening an archived round handles a unplaced target independently of camera movement",
+        "opening an archived round handles a phone target independently of camera movement"
+      ]
+    },
+    {
+      "check": "negative:original-base",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/attention/navigate.test.ts",
+        "--test-name-pattern",
+        "opening an archived round"
+      ],
+      "exitCode": 1,
+      "baseline": "134a29c6",
+      "fixture": "Current navigation test file overlaid on the baseline export",
+      "failures": [
+        "opening an archived round handles a placed target independently of camera movement",
+        "opening an archived round handles a unplaced target independently of camera movement",
+        "opening an archived round handles a phone target independently of camera movement"
+      ]
+    }
+  ],
+  "recordWrittenAt": "2026-10-23T14:53:22.628058+00:00"
+}
