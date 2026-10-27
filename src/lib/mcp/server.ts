@@ -4181,8 +4181,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     appendLine: z.string().min(1).optional()
       .describe("Append one line to the stored details. Edits apply in the order replaceLine, removeLine, appendLine, atomically against the details stored at the write and under the details limit; not combined with details."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
-    placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned retains existing pos when omitted; unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
-    pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
+    placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned requires pos {x, y} when no position is stored; otherwise pos may be omitted and the stored position is kept. Unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
+    pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional().describe("Required for a first pin when no position is stored; omit to keep an existing position when pinning."),
     dueAt: z.string().nullable().optional(),
     dueTz: z.string().nullable().optional(),
     dueReason: z.string().optional().describe("Reason for moving a passed due date to a later instant: 1 to 200 characters. Validated against the current task before admission."),
