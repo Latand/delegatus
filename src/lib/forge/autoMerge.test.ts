@@ -472,10 +472,19 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
   // A retry may requeue the row between the inventory read and queue assembly.
   // Its unconfirmed receipt keeps custody without occupying accepted work's slot.
-  recovered.pipeline(completed.id).merge!.state = "queued";
-  recovered.pipeline(completed.id).merge!.nextReadAt = iso(recovered.now() + MERGE_SETTLE_MS + MERGE_POLL_MS * 10);
+  const readRows = recovered.ports.loadPipelines;
+  let snapshots = 0;
+  recovered.ports.loadPipelines = () => {
+    if (++snapshots === 2) {
+      const retry = recovered.pipeline(completed.id).merge!;
+      retry.state = "queued"; retry.attempts++; retry.reason = null; retry.blockedAt = null;
+      retry.readFailures = 0; retry.nextReadAt = null; retry.head = null; retry.headSeenAt = null;
+      retry.lastChecks = null; retry.updatedAt = iso(recovered.now() + 1);
+    }
+    return readRows();
+  };
   recovered.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
-  await recovered.sweep();
+  try { await recovered.sweep(); } finally { recovered.ports.loadPipelines = readRows; }
   expect(recovered.merges().filter(args => args[2] === "12")).toHaveLength(1);
   expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
   receipt = "unreadable"; recovered.advance(MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS);
