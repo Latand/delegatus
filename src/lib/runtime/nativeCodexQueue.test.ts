@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import {
   NativeCodexQueue, NativeQueueProtocolRefusal, NativeQueueUncertainError, NativeQueueNotSubmittedError,
@@ -21,7 +21,12 @@ const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 test.skipIf(!binary)("installed Codex: adapter pagination and mutation acknowledgements", async () => {
   if (!binary || !isAbsolute(binary)) throw new Error("An absolute fixture binary is required");
   const base = mkdtempSync(join(tmpdir(), "nq-"));
-  const env: NodeJS.ProcessEnv & Record<string, string> = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
+  // npm installs expose a Node launcher; the updater probes that same target.
+  // Carry only its interpreter directory into the credential-free child.
+  const node = Bun.which("node");
+  const env: NodeJS.ProcessEnv & Record<string, string> = {
+    PATH: [...(node ? [dirname(node)] : []), "/usr/bin", "/bin"].join(":"), LANG: "C.UTF-8", NODE_ENV: "test",
+  };
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME",
     "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
     env[key] = join(base, key.toLowerCase());

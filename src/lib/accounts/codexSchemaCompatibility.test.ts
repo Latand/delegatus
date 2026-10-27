@@ -1,11 +1,31 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
+import Ajv from "ajv";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  test.each(["stable", "experimental"])("0.164.0 reviews file-backed images while retaining inline results (%s)", name => {
+    const previous = read("0.163.0", name), current = read("0.164.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      'v2.ThreadItem.oneOf[type="imageGeneration"].result: removed',
+      'v2.ThreadItem.oneOf[type="imageGeneration"].result: became optional',
+      'v2.ThreadItem.oneOf[type="imageGeneration"].anyOf: added',
+    ]);
+    const validate = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/ThreadItem", definitions: schema.definitions,
+    });
+    const accepts = validate(current), old = validate(previous);
+    const item = { type: "imageGeneration", id: "image-item", status: "completed" };
+    expect(accepts({ ...item, fileId: "stored-image" })).toBeTrue();
+    expect(accepts({ ...item, result: "inline-image" })).toBeTrue();
+    expect(accepts({ ...item, result: "", fileId: "stored-image" })).toBeTrue();
+    expect(accepts(item)).toBeFalse();
+    expect(accepts({ ...item, fileId: 42 })).toBeFalse();
+    expect(old({ ...item, fileId: "stored-image" })).toBeFalse();
+  });
   test.each(["stable", "experimental"])("0.163.0 extends 0.162.1 additively (%s)", name => {
     expect(codexSchemaBreaks(read("0.162.1", name), read("0.163.0", name))).toEqual([]);
   });

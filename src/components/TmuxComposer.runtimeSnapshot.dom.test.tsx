@@ -10,7 +10,8 @@
  * the `/api/runtime/send` bodies that `sendRuntimeMessage` posts.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act } from "react";
+import { act, useSyncExternalStore } from "react";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -40,6 +41,7 @@ class ImmediateFileReader {
   }
 }
 Object.assign(globalThis, {
+  ResizeObserver: class { observe() {} disconnect() {} unobserve() {} },
   window: dom,
   document: dom.document,
   navigator: dom.navigator,
@@ -68,6 +70,10 @@ Object.assign(globalThis, {
 const structuredView: RuntimeSessionView = {
   session: {
     conversationId: "conv-snapshot",
+    sessionKey: { engine: "codex", sessionId: "snapshot-session" },
+    turn: "idle",
+    revision: 1,
+    attentionIds: [],
     hostKind: "codex-app-server",
     host: "hosted",
     capabilities: { imageInput: { supported: true }, runtimeSettings: { perTurnEffort: true, perTurnModel: false } },
@@ -81,12 +87,21 @@ const structuredView: RuntimeSessionView = {
 } as unknown as RuntimeSessionView;
 
 import { TmuxComposer } from "./TmuxComposer";
+import { LogFeed } from "./LogFeed";
+import { setLogFeedDependenciesForTests } from "./logFeedDependencies";
 import { writeProfile } from "./runtimeProfile";
 import { enqueueOutbox, updateOutbox, visibleOutbox, readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
 
 let snapshotReceipts: RuntimeReceipt[] = [];
+const snapshotListeners = new Set<() => void>();
+function publishSnapshotReceipts(receipts: RuntimeReceipt[]): void {
+  snapshotReceipts = receipts;
+  for (const listener of snapshotListeners) listener();
+}
 
 const realFetch = globalThis.fetch;
+const mountedRoots = new Set<Root>();
+let recoveryStorage: ReturnType<typeof installComposerStorageForTests> | null = null;
 
 beforeEach(() => {
   snapshotReceipts = [];
@@ -106,12 +121,22 @@ beforeEach(() => {
     },
     useRuntimeReceiptsForArtifact: (path, conversationId) => {
       const real = useRuntimeReceiptsForArtifact(path, conversationId);
-      return path === "/codex-snapshot.jsonl" || conversationId === "conv-snapshot" ? snapshotReceipts : real;
+      const snapshot = useSyncExternalStore(
+        (listener) => { snapshotListeners.add(listener); return () => snapshotListeners.delete(listener); },
+        () => snapshotReceipts,
+        () => snapshotReceipts,
+      );
+      return path === "/codex-snapshot.jsonl" || conversationId === "conv-snapshot" ? snapshot : real;
     },
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => { for (const root of mountedRoots) root.unmount(); });
+  mountedRoots.clear();
+  setLogFeedDependenciesForTests(null);
+  recoveryStorage?.uninstall();
+  recoveryStorage = null;
   setTmuxComposerRuntimeDependenciesForTests(null);
   setRuntimeUiEnabledForTests(null);
   setLocale("en");
@@ -165,6 +190,9 @@ async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
+  mountedRoots.add(root);
+  const unmount = root.unmount.bind(root);
+  root.unmount = () => { mountedRoots.delete(root); unmount(); };
   await act(async () => {
     root.render(node);
     await new Promise((r) => setTimeout(r, 0));
@@ -175,6 +203,7 @@ async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement
 const settle = async (fn: () => void) => {
   await act(async () => {
     fn();
+    publishSnapshotReceipts(snapshotReceipts);
     await new Promise((r) => setTimeout(r, 0));
   });
 };
@@ -356,6 +385,8 @@ test("dead structured attachments stay local after host recovery when durable br
 });
 
 test("structured recovery state is bounded and exposes retry details", async () => {
+  recoveryStorage = installComposerStorageForTests();
+  setLogFeedDependenciesForTests({ useLogTail: () => ({ lines: [], linesStart: 0, size: 0, loading: false, error: null, tickTime: null, paused: false, setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0 }) });
   structuredView.session.host = "unhosted";
   let finishRecovery!: (response: Response) => void;
   globalThis.fetch = (async (input: string | URL | Request) => {
@@ -367,7 +398,7 @@ test("structured recovery state is bounded and exposes retry details", async () 
     return new Promise<Response>((resolve) => { finishRecovery = resolve; });
   }) as typeof fetch;
 
-  const { host, root } = await renderInto(<TmuxComposer file={{ ...file, proc: null }} deadHost />);
+  const { host, root } = await renderInto(<><LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} /><TmuxComposer file={{ ...file, proc: null }} deadHost /></>);
   const { type, submit } = composerControls(host);
   await settle(() => type("preserve this recovery draft"));
   await settle(() => submit());
@@ -379,8 +410,10 @@ test("structured recovery state is bounded and exposes retry details", async () 
       status: 400,
       json: async () => ({ error: "recovery attempt failed; retry is available" }),
     } as Response);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 1));
   });
+  // 97aa4ac7c: error details live on the message's disclosure.
+  await settle(() => host.querySelector<HTMLButtonElement>("[data-outbox-reason]")!.click());
   expect(host.textContent).toContain("recovery attempt failed; retry is available");
   /* Queue-first: the recovery draft is not stranded in the composer — it is the
      durable outbox bubble, marked failed and retryable, so nothing is lost. */
@@ -573,8 +606,9 @@ test.each(["missing", "invalid", "future", "before-submission", "before-admissio
       expect(readOutbox("conv-snapshot")[0]?.state).toBe("delivered");
       expect(readOutbox("conv-snapshot")[0]?.settledAt).toBeUndefined();
       expect(visibleOutbox(readOutbox("conv-snapshot"), new Map(), Date.now(), null, origin + 60_000)).toHaveLength(1);
-      // Exact echo remains sufficient even while the settlement time is unknown.
-      expect(visibleOutbox(readOutbox("conv-snapshot"), new Map([["Inspect queued work.", 1]]), Date.now())).toHaveLength(0);
+      // 6bfcaab4b: a named delivery requires its own record, never matching text.
+      expect(visibleOutbox(readOutbox("conv-snapshot"), new Map([["Inspect queued work.", 1]]), Date.now())).toHaveLength(1);
+      expect(visibleOutbox(readOutbox("conv-snapshot"), new Map(), Date.now(), null, undefined, new Set([key]))).toHaveLength(0);
       snapshotReceipts = [{ ...snapshotReceipts[0]!, at: new Date(serverAt).toISOString(), revision: 4 }];
       await settle(() => mounted.root.render(<TmuxComposer file={file} />));
       expect(readOutbox("conv-snapshot")[0]?.settledAt).toBe(serverAt);

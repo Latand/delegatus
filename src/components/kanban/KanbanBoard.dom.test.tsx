@@ -406,6 +406,8 @@ test("a shelf takes the wide share, one at a time, and gives it back when work r
     card.dispatchEvent(new dom.PointerEvent("pointerup", { bubbles: true, pointerId: 1, pointerType: "mouse", buttons: 0 }) as unknown as Event);
   });
   expect(wideColumns(host)).toEqual(["done"]);
+  // Complete the pointer gesture before remounting; a held pointer suppresses later clicks.
+  flushSync(() => document.dispatchEvent(new dom.PointerEvent("pointerup", { bubbles: true }) as unknown as Event));
 
   const again = mount(tasks, NO_PORTS);
   expect(wideColumns(again.host)).toEqual(["done"]);
