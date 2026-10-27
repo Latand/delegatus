@@ -140,7 +140,7 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
 }
 
 // Every reviewed pin exposes the native private socket transport.
-test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
+test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.164.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cb-native-"));
   // Nested gate homes exceed the Unix socket path limit on older pins.
   // This private home is used only while constructing the listener address.
