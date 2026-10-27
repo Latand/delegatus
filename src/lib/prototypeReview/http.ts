@@ -20,6 +20,8 @@ import type { DecidePrototypeInput } from "./types";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
+import { isTelegramDestinationConfigurationReason } from "./telegramPostSignals";
+import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 
 export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
   const ambiguous = error instanceof PrototypeError && (error as { code?: string }).code === "short_id_ambiguous";
@@ -51,6 +53,15 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
     const { round } = resendTarget(request, body?.reviewId, world);
     if (typeof body.clientRequestId !== "string" || !body.clientRequestId.trim() || body.clientRequestId.length > 200) throw new PrototypeError("clientRequestId is required");
     if (round.decision) throw new PrototypeError("Рішення вже збережено. Щоб доставити відповідь поточному координатору, натисніть «Надіслати ще раз» біля стану доставки рішення.", 409);
+    // Keep the existing refusal until pairing changes what a resend can do.
+    // No post is admitted here; the sender rechecks the destination on retry.
+    const previous = round.telegramPost;
+    if (previous?.state === "failed" && isTelegramDestinationConfigurationReason(previous.reason)) {
+      const destination = ownerReviewDestination();
+      if (destination.reason && destination.reason === previous.reason && destination.detail === previous.destinationDetail) {
+        return NextResponse.json({ reviewId: round.id, telegramPost: previous }, { headers: { "cache-control": "private, no-store" } });
+      }
+    }
     const key = `${round.id}:resend:${body.clientRequestId.trim()}`;
     const telegramPost = await postPrototypeReviewToTelegram(round, key);
     return NextResponse.json({ reviewId: round.id, telegramPost }, { headers: { "cache-control": "private, no-store" } });

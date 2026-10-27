@@ -4769,3 +4769,27 @@ test.each(["mention", "photo"])("v2 %s contract refusal remains decisive without
     expect(bodies).toEqual([body]);
   } finally { await server.close(); }
 });
+
+test("a Cloud relay answer arrives while local account admission is occupied", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.engine = "codex-cloud";
+  paired.targets[0]!.model = "gpt-6.1-sol";
+  paired.targets[0]!.cloudEnvironmentId = "answer-env";
+  const previous = accountManager.resolveHeadlessSpawn;
+  let localSelections = 0;
+  accountManager.resolveHeadlessSpawn = (() => {
+    localSelections++;
+    throw new Error("local account admission is occupied");
+  }) as typeof previous;
+  try {
+    const result = await runClaimedRequest(paired, { ...sampleRequest, request_id: "cloud_local_busy" }, undefined, {
+      cloudTransport: async () => JSON.stringify({ action: "reply", text: "Cloud answer", reply_to: "m1" }),
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
+    expect(localSelections).toBe(0);
+  } finally {
+    accountManager.resolveHeadlessSpawn = previous;
+    await server.close();
+  }
+});

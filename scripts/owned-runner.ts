@@ -152,7 +152,10 @@ if (args[0] === "--namespace-guardian") {
     await stopNotify();
     budget.close();
     const survivors = members().filter(pid => pid !== identity?.pid || processIdentityStatus(identity!) === "alive");
-    if (survivors.length) console.error(`owned runner: surviving owned processes: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
+    // A deadline ends the main process before systemd drains the cgroup.
+    // Its pending children are expected; the waiting client returns only after
+    // that cleanup. A normal exit with children still refuses the check.
+    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
     process.exit(survivors.length && code === 0 ? 1 : code);

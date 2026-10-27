@@ -729,6 +729,29 @@ test("every generated operator_snapshot schema combination is admitted by reques
    caller seven sequential rejections to learn the stage contract. The published
    tool definition now carries that contract: every field the engine accepts,
    and the rules a JSONSchema cannot express in the description. */
+test.each(["local", "codex-cloud"])("stage runtime %s survives both MCP write boundaries", async runtime => {
+  const received: unknown[] = [];
+  await withProtocolClient(inertBindings({
+    create_pipeline: async args => { received.push(args); return { ok: true }; },
+    pipeline_action: async args => { received.push(args); return { ok: true }; },
+  }), async client => {
+    const stage = { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", model: "gpt-6.1-sol", runtime, prompt: "Implement", next: null };
+    const created = await client.callTool({ name: "create_pipeline", arguments: { clientRequestId: `create-runtime-${runtime}`,
+      task: "Runtime fixture", repoDir: "/workspace/project", stages: [stage] } });
+    expect(created.isError).not.toBe(true);
+    const updated = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: `override-runtime-${runtime}`,
+      pipelineId: "fixture", action: "override-stage", stageId: "build", runtime } });
+    expect(updated.isError).not.toBe(true);
+    expect(received).toEqual([expect.objectContaining({ stages: [stage] }), expect.objectContaining({ runtime })]);
+  });
+});
+
+test.each(["other", "constructor", "__proto__", null, 3])("invalid stage runtime %s is refused by both MCP schemas", runtime => {
+  expect(TOOL_INPUT_SCHEMAS.create_pipeline.safeParse({ clientRequestId: "bad-runtime", task: "Runtime fixture", repoDir: "/workspace/project",
+    stages: [{ id: "build", kind: "run", runtime, prompt: "Implement", next: null }] }).success).toBe(false);
+  expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "bad-runtime", pipelineId: "fixture", action: "override-stage", stageId: "build", runtime }).success).toBe(false);
+});
+
 test("create_pipeline publishes the stage contract in its tool definition", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const listed = await client.listTools();

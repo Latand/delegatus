@@ -17,6 +17,7 @@ test("a new monitor note and unavailable evidence leave a complete detail summar
   const lanes = Array.from({ length: 20 }, (_, n) => ({ id: `lane${String(n).padStart(4, "0")}`,
     title: `Exporter ${n} ${"long title ".repeat(10)}`, reason: "decision: build stopped", sinceMs: now - (120 - n) * 60_000 }));
   const input = { project: PROJECT, now, seatOwnedLanes: lanes,
+    sourceBudgetNote: "Sources skipped after their check budget share: liveness, workerAsks, recordRuleReports. Retried next check.",
     items: [{ kind: "ask" as const, id: lanes[0]!.id, label: "Inspect the failed build. ".repeat(101) }],
     reasons: [{ kind: "worker-ask" as const, detail: "a stage waits on the seat" }], deferred: 19, signals: [],
     gaps: [{ source: "pull-requests" as const, gap: "command-failed" as const, detail: "command-failed" },
@@ -28,6 +29,7 @@ test("a new monitor note and unavailable evidence leave a complete detail summar
   };
   const payload = seatTickWakePayload(input);
   expect(payload.text.length).toBeLessThanOrEqual(4_000);
+  expect(payload.text).toContain(input.sourceBudgetNote);
   expect(`\n${payload.text}\n`).toContain(`\n${seatTickBullet(payload.items[0]!)}\n`);
   expect(payload.items[0]!.label.length).toBeLessThan(input.items[0]!.label.length);
   for (const lane of lanes) expect(payload.text.split("\n").some(line => line.startsWith(`- ${lane.id}`))).toBe(true);

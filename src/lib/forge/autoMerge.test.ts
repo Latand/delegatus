@@ -16,7 +16,7 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const {
-  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge, sweepTaskFinishes,
+  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
 const { ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter } = await import("./appWrite");
 const { pipelineGraphError } = await import("../pipelines/store");
@@ -245,6 +245,108 @@ function retainedUpdate(h: ReturnType<typeof harness>, head: string, extra: Part
 }
 
 beforeEach(() => resetAutoMergeForTests());
+
+test("regression: task finishes continue while the optional post-merge forge read is held", async () => {
+  const completed = lane("L1");
+  completed.taskIds = ["task-1", "task-2"];
+  completed.finishesTaskIds = ["task-1"];
+  const h = harness({ lanes: [completed], prs: [openPr(11)], tasks: ["task-1", "task-2"] });
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+  expect(h.merge("L1")?.state).toBe("merged");
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const readEntered = new Promise<void>(resolve => { entered = resolve; });
+  let reads = 0;
+  const run = h.ports.run;
+  const ports = { ...h.ports, prepareRead: async () => {}, run: async (args: string[]) => {
+    if (args[1]?.endsWith("/commits/main")) {
+      reads++; entered(); await held;
+      throw new Error("optional forge read unavailable");
+    }
+    return run(args);
+  } };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  let recovery: Promise<unknown> | null | undefined;
+  try {
+    scheduleAutoMerge(ports);
+    recovery = host.__llvPostMergeRunning;
+    await readEntered;
+    await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-1")).toBe("done");
+    h.pipeline("L1").finishesTaskIds!.push("task-2");
+    h.advance(60_000);
+    scheduleAutoMerge(ports);
+    await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-2")).toBe("done");
+    expect(reads).toBe(1);
+  } finally {
+    release();
+    await host.__llvAutoMergeRunning;
+    await recovery;
+    await host.__llvPostMergeRunning;
+  }
+  expect(h.pipeline("L1").taskFinishes?.map(finish => finish.taskId)).toEqual(["task-1", "task-2"]);
+});
+
+test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot delay recovery enrolled on a later controller tick", async heldKind => {
+  const watched = lane("watched");
+  watched.merge = { state: "merged", by: "auto-merge", postMergeWatch: true, repository: REPO, prNumber: 12, mergeCommit: HEAD_B,
+    recovery: { firstRedAt: iso(T0 - 60 * 60_000), failures: [{ name: "ci", excerpt: "failed" }], fixPipelineId: "fix" } } as PipelineMerge;
+  watched.merge.postMergeWatch = false;
+  const blocked = lane("ordinary");
+  if (heldKind === "watched") blocked.merge = { ...watched.merge, repository: "acme/held", prNumber: 11, mergeCommit: HEAD_C, postMergeWatch: true };
+  const h = harness({ lanes: [blocked, watched], prs: [openPr(11), openPr(12, { state: "MERGED" })], required: ["ci"] });
+  let release!: () => void; let entered!: () => void; let recorded!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const readEntered = new Promise<void>(resolve => { entered = resolve; });
+  const revertRecorded = new Promise<void>(resolve => { recorded = resolve; });
+  let recoveryReads = 0; let revertWrites = 0;
+  const ports = { ...h.ports, prepareRead: async () => {},
+    run: async (args: string[]) => {
+      if ((heldKind === "ordinary" && args[0] === "pr" && args[1] === "view" && args[2] === "11") || args[1]?.endsWith("repos/acme/held/commits/main")) {
+        entered(); await held; throw new Error("held forge read unavailable");
+      }
+      if (args[1]?.startsWith("repos/acme/held/branches/")) return JSON.stringify(["ci"]);
+      if (args[1]?.startsWith("repos/acme/held/rules/")) return "[]";
+      if (args[1]?.endsWith("/commits/main")) { recoveryReads++; return JSON.stringify({ sha: HEAD_B }); }
+      if (args[1]?.includes("check-runs")) return JSON.stringify({ name: "ci", status: "completed", conclusion: "failure", completed_at: iso(T0) });
+      if (args[1]?.includes("/status")) return "";
+      if (args[1]?.includes("pulls?")) return "";
+      if (args[1]?.endsWith("/pulls/12")) return JSON.stringify({ node_id: "PR_fixture" });
+      return h.ports.run(args);
+    },
+    write: async () => { revertWrites++; return JSON.stringify({ data: { revertPullRequest: { revertPullRequest: { number: 13 } } } }); },
+    mutate: async (id: string, change: (pipeline: Pipeline) => boolean) => {
+      const changed = await h.ports.mutate(id, change);
+      if (h.merge("watched")?.recovery?.revertPr) recorded();
+      return changed;
+    },
+  };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let firstRecovery: Promise<unknown> | null | undefined;
+  try {
+    scheduleAutoMerge(ports);
+    firstRecovery = host.__llvPostMergeRunning;
+    await readEntered;
+    h.pipeline("watched").merge!.postMergeWatch = true;
+    h.advance(60_000);
+    scheduleAutoMerge(ports);
+    await Promise.race([revertRecorded, new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error("watched recovery waited for an unrelated forge read")), 2000);
+    })]);
+    expect(recoveryReads).toBe(2);
+    expect(revertWrites).toBe(1);
+    const { postMergeSeatSignals } = await import("./postMerge");
+    expect(postMergeSeatSignals([h.pipeline("watched")], "repo-fixture")).toHaveLength(1);
+  } finally {
+    clearTimeout(deadline); release();
+    await firstRecovery;
+    await host.__llvAutoMergeRunning;
+    await host.__llvPostMergeRunning;
+  }
+});
 
 test.each(["before-write", "credential-mint", "in-flight"] as const)("operator rejection at merge reconciles the actual effect: %s", async phase => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
