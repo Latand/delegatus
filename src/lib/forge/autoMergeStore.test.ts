@@ -16,7 +16,9 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
-const { patchPipeline } = await import("@/lib/pipelines/engine");
+const { refreshRequest } = await import("./autoRefresh");
+const { normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
+const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
 const { archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
@@ -879,7 +881,7 @@ describe("refresh retry recovery", () => {
   async function waitingRefresh(state: Pipeline["state"]) {
     resetAutoMergeForTests();
     setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
-    const parent = completedLane("refresh-parent");
+    const parent = missingPrLane("refresh-parent");
     parent.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
     savePipelines([parent]);
     expect((await patchPipeline(parent.id, { action: "retry-merge" }, { now: () => iso(T0) } as never)).error).toBeUndefined();
@@ -887,6 +889,13 @@ describe("refresh retry recovery", () => {
     waiting.merge!.state = "refreshing";
     waiting.merge!.refresh = { attempt: 0, base: "b".repeat(40), head: HEAD, key: "refresh-recovery", digest: "c".repeat(64), requestedAt: iso(T0), pipelineId: "refresh-child" };
     const child = completedLane("refresh-child");
+    const request = refreshRequest(waiting);
+    const normalized = normalizeStages(request.stages, pipelineRoleLookup);
+    expect(normalized.error).toBeUndefined();
+    child.stages = normalized.stages!;
+    child.runs = child.stages.map(stage => ({ stageId: stage.id, attempts: stage.id === "fix" ? []
+      : [attempt(1, stage.id === "refresh" && state === "running" ? "running" : "passed", stage.effectiveRole as typeof BUILDER)] })) as Pipeline["runs"];
+    child.cursor = state === "running" ? { stageId: "refresh", state: "running", input: null, activatedBy: null } : null;
     child.refreshOf = { pipelineId: waiting.id, base: "b".repeat(40) };
     child.lastPassedCommit = "d".repeat(40);
     child.workLinks = structuredClone(parent.workLinks);
@@ -907,6 +916,44 @@ describe("refresh retry recovery", () => {
       expect(stored.find(lane => lane.id === waiting.id)?.merge).toMatchObject({ state: "queued", attempts: 1 });
       expect(stored.find(lane => lane.id === waiting.id)?.merge?.refresh).toBeUndefined();
     }
+  });
+
+  test("a refresh lane in a later stage releases capacity in a fresh process", async () => {
+    const { child } = await waitingRefresh("running");
+    child.cursor!.stageId = "review";
+    child.runs.find(run => run.stageId === "refresh")!.attempts[0]!.state = "passed";
+    const peer = missingPrLane("refresh-peer");
+    peer.closedAt = iso(T0);
+    peer.delivery!.target.pr = 8;
+    peer.workLinks = [{ kind: "pr", repository: REPO, number: 8, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([...loadPipelines().filter(lane => lane.id !== child.id), child, peer]);
+    const script = `
+      const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const starts = [];
+      await sweepAutoMerge(productionAutoMergePorts({
+        now: () => ${T0}, loadPipelines, cachedState: () => null,
+        run: async args => {
+          if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false,
+            headRefOid: "${HEAD}", baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "BEHIND", statusCheckRollup: [] });
+          if (args[1]?.includes("/reviews")) return "";
+          if (args.at(-1) === ".commit.sha") return "${"b".repeat(40)}";
+          if (args[1]?.includes("/branches/")) return "[]";
+          throw new Error("unexpected forge read");
+        },
+        write: async () => { throw new Error("unexpected forge write"); },
+        startRefresh: async request => { starts.push(request.delivery.pr); return { error: "fixture refresh refused" }; },
+      }));
+      const peer = loadPipelines().find(lane => lane.id === "refresh-peer");
+      console.log(JSON.stringify({ starts, state: peer.merge.state, reason: peer.merge.reason }));
+    `;
+    const processChild = Bun.spawn([process.execPath, "-e", script], {
+      cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, code] = await Promise.all([new Response(processChild.stdout).text(), new Response(processChild.stderr).text(), processChild.exited]);
+    expect(code, error).toBe(0);
+    expect(JSON.parse(output)).toEqual({ starts: [8], state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused" });
+    expect(loadPipelines().find(lane => lane.id === child.id)?.cursor?.stageId).toBe("review");
   });
 
   test.each(["running", "needs_decision"] as const)("retry refuses a refresh still %s", async state => {
@@ -1005,11 +1052,13 @@ describe("refresh retry recovery", () => {
         const rows = loadPipelines();
         const child = rows.find(lane => lane.id === "refresh-child")!;
         child.state = state;
+        child.cursor = null;
+        child.runs.find(run => run.stageId === "refresh")!.attempts[0]!.state = "passed";
         child.lastPassedCommit = HEAD;
         child.stateDetail = "Resolution needs a decision";
         savePipelines(rows);
       }
-      const child = Bun.spawn([process.execPath, "-e", script.replace("FIXTURE_CLOCK", String(T0 + (state === "running" ? 1_000 : MERGE_POLL_MS)))], {
+      const child = Bun.spawn([process.execPath, "-e", script.replace("FIXTURE_CLOCK", String(T0 + (state === "running" ? 1_000 : MERGE_POLL_MS + 1_000)))], {
         cwd: process.cwd(), env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
           TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
         stdout: "pipe", stderr: "pipe",
@@ -1018,8 +1067,8 @@ describe("refresh retry recovery", () => {
       expect(code, error).toBe(0);
       const result = JSON.parse(output);
       const fifoReason = "queued behind PR #7 (pipeline refresh-child)";
-      if (state === "completed") expect(result.before).toBe(`${fifoReason}; waiting for repository capacity held by refresh refresh-child`);
-      expect(result.reads).toEqual(failed ? [8] : state === "completed" ? [7] : []);
+      if (state === "completed") expect(result.before).toBe("PR is behind its base; waiting for repository capacity held by refresh refresh-child");
+      expect(result.reads).toEqual(failed ? [8] : state === "completed" ? [7] : [8]);
       expect(result.starts).toEqual(failed ? [8] : []);
       if (state === "completed") expect(result.lanes.find((lane: Pipeline) => lane.id === "refresh-child").merge)
         .toMatchObject({ state: "waiting-checks", reviewedHead: HEAD });
@@ -1030,8 +1079,8 @@ describe("refresh retry recovery", () => {
       }
       expect(result.lanes.find((lane: Pipeline) => lane.id === peer.id).merge).toMatchObject(failed
         ? { state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused", reviewedHead: HEAD }
-        : { state: "queued", reviewedHead: HEAD, head: null,
-          reason: fifoReason + (state === "running" ? "; waiting for repository capacity held by refresh refresh-child" : "") });
+        : { state: "checking", reviewedHead: HEAD, head: HEAD,
+          reason: `PR is behind its base; ${state === "running" ? "waiting for repository capacity held by refresh refresh-child" : fifoReason}` });
     }
   });
 
