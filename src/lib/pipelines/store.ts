@@ -945,11 +945,24 @@ export function isStoredPipeline(value: unknown): value is Pipeline {
   return isPipeline(value);
 }
 
+export function isPipelineConversationSource(value: unknown): value is NonNullable<Pipeline["conversationSource"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  return Object.keys(source).length === 4
+    && typeof source.conversationId === "string" && /^conversation_[A-Za-z0-9_-]{1,180}$/.test(source.conversationId)
+    && typeof source.branch === "string" && source.branch.length > 0 && source.branch.length <= 1024
+    && !/[\s\x00-\x1f]/u.test(source.branch)
+    && typeof source.head === "string" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(source.head)
+    && typeof source.capturedAt === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(source.capturedAt)
+    && Number.isFinite(Date.parse(source.capturedAt)) && new Date(source.capturedAt).toISOString() === source.capturedAt;
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    (pipeline.conversationSource === undefined || isPipelineConversationSource(pipeline.conversationSource)) &&
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
@@ -1486,6 +1499,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       : []);
   return {
     ...pipeline,
+    conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
@@ -2029,12 +2043,14 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
     owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
 }
 
-export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean } = {}): Promise<Pipeline> {
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean; admit?: () => void; onReplay?: () => void } = {}): Promise<Pipeline> {
   return withDeliveryMutationAsync((tx) => {
+    options.admit?.();
     if (pipeline.creationRequest) {
       const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (replay) {
         if (replay.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+        options.onReplay?.();
         return replay;
       }
     }
