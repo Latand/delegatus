@@ -2196,7 +2196,15 @@ function startStructuredHostPass(
       trigger: replaced ? "runtime-host-replaced" : resumeDeferred ? "deferred-evidence-changed" : "startup-retry",
       completed: Boolean(current.ready), generationChanged: replaced,
     });
-    if (replaced && client) await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+    // Publish launch admission before the registry census and transcript I/O.
+    // Existing queued work stays fenced until startup evidence admits recovery.
+    if (client && (replaced || !hasStructuredDeliveryController(registry))) {
+      assertDarwinStructuredRuntime();
+      dependencies.signal?.throwIfAborted();
+      dependencies.assertActive?.();
+      await withViewerOperation("runtime.startup-bind", () =>
+        bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true }));
+    }
     const hosts = await startupReadBudget.run({ signal: dependencies.signal, assertActive: dependencies.assertActive, deadline: performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS }, () => withViewerOperation(isolatedRowRetry ? "runtime.startup-row" : "runtime.startup", async () => {
       const scope = replaced ? new Set(Object.keys((await preparedStartupSnapshot(registry)).entries)
         .filter((key) => !current.ready!.some((item) => sessionKeyId(item.key) === key))) : resumeDeferred;

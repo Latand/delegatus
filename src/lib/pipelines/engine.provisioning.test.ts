@@ -3056,3 +3056,22 @@ test.skip("an operator pause during relay stays paused across pipeline reconcili
     error: "review flow paused in relaying: paused by user",
   });
 });
+
+test("an unbound sidecar signals the Viewer before any local pipeline preparation", async () => {
+  const h = harness();
+  await create(h.ports);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { tickPipelines, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    let requests = 0, effects = 0;
+    globalThis.fetch = async () => { requests++; return new Response("{}", { status: 202 }); };
+    const ports = { ...defaultPipelinePorts(), structuredDeliveryPublication: () => "unbound",
+      exec: async () => { effects++; throw new Error("sidecar must hand preparation to the Viewer"); } };
+    const result = await tickPipelines([], ports);
+    await new Promise(resolve => setImmediate(resolve));
+    console.log(JSON.stringify({ requests, effects, changed: result.changed }));
+  `], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited,
+    new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  expect(JSON.parse(stdout.trim())).toEqual({ requests: 1, effects: 0, changed: false });
+});
