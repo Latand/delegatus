@@ -17,7 +17,7 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const {
-  MERGE_POLL_MS, MERGE_REASONS, lanePullRequest, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes,
+  MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, lanePullRequest, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
 const { ForgeAppWriteRefused } = await import("./appWrite");
 
@@ -1261,13 +1261,168 @@ test.each([1, 2])("closed originals retain their active refresh slots at concurr
   expect(h.merge(`queued-${refreshConcurrency}`)?.head).toBeNull();
 });
 
-test("an active refresh outside the head window still consumes capacity", async () => {
+test("an out-of-window refresh preserves capacity while completed carriers recover", async () => {
   const h = queuedRefreshes();
   await h.sweep();
   h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
-  await h.run(5 * MERGE_POLL_MS);
+  h.prs.get(12)!.mergeStateStatus = "CLEAN";
+  h.prs.get(13)!.state = "MERGED";
+  const owner = structuredClone(h.pipeline("refresh-1"));
+
+  await h.sweep();
+  expect(h.merge("queued-1")).toMatchObject({ state: "waiting-checks", head: HEAD_A, readAt: iso(T0), headSeenAt: iso(T0) });
+  const reads = h.calls.length;
+  await h.sweep();
+  expect(h.calls).toHaveLength(reads);
+  h.advance(MERGE_SETTLE_MS);
+  await h.sweep();
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", readAt: iso(h.now()), nextReadAt: iso(h.now() + MERGE_POLL_MS) });
+  expect(h.merge("queued-1")!.reason).toContain("refresh-1");
+  expect(h.merge("queued-2")!.readAt).toBeNull();
   expect(h.creates).toHaveLength(1);
-  expect(h.merge("queued-1")?.head).toBeNull();
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+
+  // A future poll must not hide a check hold that has already expired.
+  Object.assign(h.prs.get(12)!, { mergeStateStatus: "UNKNOWN", mergeable: null });
+  h.pipeline("queued-1").merge!.nextReadAt = iso(T0 + 2 * MERGE_WAIT_LIMIT_MS);
+  h.advance(MERGE_WAIT_LIMIT_MS - MERGE_SETTLE_MS);
+  await h.sweep();
+  expect(h.merge("queued-1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout,
+    readAt: iso(h.now()), nextReadAt: null });
+  await h.sweep();
+  expect(h.merge("queued-2")).toMatchObject({ state: "merged", by: "outside", mergedHead: HEAD_A,
+    readAt: iso(h.now()), nextReadAt: null });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.pipeline("refresh-1")).toEqual(owner);
+  expect(h.merge("queued-3")!.readAt).toBeNull();
+});
+
+test.each(["BEHIND", "DIRTY"])("an out-of-window refresh defers a %s head without losing its blocker or owner", async mergeStateStatus => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  Object.assign(h.prs.get(12)!, { mergeStateStatus, mergeable: mergeStateStatus === "DIRTY" ? "CONFLICTING" : "MERGEABLE" });
+  const owner = structuredClone(h.pipeline("refresh-1"));
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merge("queued-1")).toMatchObject({ state: "checking", head: HEAD_A,
+    readAt: iso(h.now() - MERGE_POLL_MS) });
+  expect(h.merge("queued-1")!.refresh).toBeUndefined();
+  expect(h.merge("queued-1")!.reason).toContain("refresh-1");
+  expect(h.merge("queued-1")!.reason).toContain(mergeStateStatus === "DIRTY" ? MERGE_REASONS.conflict : "behind");
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.pipeline("refresh-1")).toEqual(owner);
+  expect(h.merge("queued-2")!.readAt).toBeNull();
+
+  h.pipeline("refresh-1").state = "closed";
+  h.pipeline("refresh-1").delivery!.active = false;
+  await h.sweep();
+  expect(h.merge("queued-1")!.state).toBe("refreshing");
+  expect(h.creates).toHaveLength(2);
+  expect((h.creates[1]!.request as CreatePipelineRequest).delivery?.pr).toBe(12);
+  expect(h.writes).toEqual([]);
+});
+
+test.each([false, true])("an out-of-window refresh permits an expired failed read, preserving a racing retry: %s", async retry => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  Object.assign(h.merge("queued-1")!, { head: HEAD_A, headSeenAt: iso(T0 - MERGE_WAIT_LIMIT_MS),
+    lastChecks: ["ci"], nextReadAt: iso(T0 + MERGE_WAIT_LIMIT_MS) });
+  const owner = structuredClone(h.pipeline("refresh-1"));
+  const run = h.ports.run;
+  let read = false;
+  h.ports.run = async args => {
+    if (args[0] !== "pr" || args[1] !== "view" || args[2] !== "12") return run(args);
+    await Promise.resolve();
+    read = true;
+    if (retry) Object.assign(h.merge("queued-1")!, { attempts: 1, head: null, headSeenAt: null, state: "queued", nextReadAt: null });
+    throw new Error("fixture forge unavailable");
+  };
+  await h.sweep();
+  expect(read).toBe(true);
+  expect(h.merge("queued-1")).toMatchObject(retry
+    ? { state: "queued", attempts: 1, headSeenAt: null, readFailures: 0 }
+    : { state: "blocked", reason: MERGE_REASONS.checksTimeout, nextReadAt: null, readFailures: 1 });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.pipeline("refresh-1")).toEqual(owner);
+});
+
+test("an out-of-window refresh cannot keep a conflicting capacity wait beyond its deadline", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  Object.assign(h.prs.get(12)!, { mergeStateStatus: "DIRTY", mergeable: "CONFLICTING" });
+  const owner = structuredClone(h.pipeline("refresh-1"));
+  await h.sweep();
+  h.pipeline("queued-1").merge!.nextReadAt = iso(T0 + 2 * MERGE_WAIT_LIMIT_MS);
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout,
+    readAt: iso(h.now()), nextReadAt: null });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.pipeline("refresh-1")).toEqual(owner);
+});
+
+test("an out-of-window refresh defers an unattached reservation until capacity returns", async () => {
+  const h = queuedRefreshes();
+  h.setCreateMode("throw");
+  await h.sweep();
+  const reservation = structuredClone(h.merge("queued-0")!.refresh!);
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  h.setCreateMode("ok");
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  const owner = structuredClone(h.pipeline("refresh-1"));
+
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 - 1);
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(2);
+  expect(h.merge("queued-0")!.refresh).toEqual(reservation);
+  expect(h.pipeline("refresh-1")).toEqual(owner);
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+
+  h.pipeline("refresh-1").state = "closed";
+  h.pipeline("refresh-1").delivery!.active = false;
+  await h.sweep();
+  expect(h.creates).toHaveLength(3);
+  expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-2");
+});
+
+test("out-of-window refresh capacity is reconstructed after a process restart", async () => {
+  if (process.env.MERGE_CAPACITY_RESTART_FIXTURE) {
+    const stored = JSON.parse(fs.readFileSync(process.env.MERGE_CAPACITY_RESTART_FIXTURE, "utf8")) as { lanes: Pipeline[]; prs: PullRequest[] };
+    const h = harness(stored);
+    h.prs.get(12)!.mergeStateStatus = "CLEAN";
+    const owner = structuredClone(h.pipeline("refresh-1"));
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("queued-1")!.head).toBe(HEAD_A);
+    expect(h.merge("queued-1")!.reason).toContain("refresh-1");
+    expect(h.creates).toEqual([]);
+    expect(h.writes).toEqual([]);
+    expect(h.pipeline("refresh-1")).toEqual(owner);
+    return;
+  }
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  const lanes = h.ports.loadPipelines();
+  const fixture = path.join(sandbox, "merge-capacity-restart.json");
+  fs.writeFileSync(fixture, JSON.stringify({ lanes, prs: lanes.map(lane => h.prs.get(lane.delivery!.target.pr!)) }));
+  const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", "^out-of-window refresh capacity is reconstructed after a process restart$"], {
+    env: { ...process.env, MERGE_CAPACITY_RESTART_FIXTURE: fixture }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, `${stdout}\n${stderr}`).toBe(0);
 });
 
 test("an archived original preserves its completed refresh's queue position", async () => {
