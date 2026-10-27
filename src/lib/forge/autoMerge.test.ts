@@ -453,12 +453,13 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
     expect(decoded.merge).toEqual(findPipelineRecord(stored.id)!.merge);
     expect(decoded.merge?.effectUncertain).toBe(true);
   } finally { if (child.exitCode === null) child.kill(); await child.exited; }
-  const recovered = harness({ lanes: [{ ...completed, merge: decoded!.merge }], prs: [openPr(11)] });
+  const recovered = harness({ lanes: [{ ...completed, merge: decoded!.merge }, lane("accepted-merge", { closedAt: T0 + 1_000 })],
+    prs: [openPr(11), openPr(12)] });
   let receipt: "OPEN" | "MERGED" | "unreadable" = "OPEN";
   let receiptReads = 0;
   const read = recovered.ports.run;
   recovered.ports.run = async args => {
-    if (args[0] === "pr" && args[1] === "view") {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "11") {
       receiptReads++;
       if (receipt === "unreadable") throw new Error("fixture receipt unavailable");
       return harness({ lanes: [], prs: [openPr(11, { state: receipt })] }).ports.run(args);
@@ -469,6 +470,14 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   await recovered.sweep();
   expect(recovered.merges()).toHaveLength(0);
   expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
+  // A retry may requeue the row between the inventory read and queue assembly.
+  // Its unconfirmed receipt keeps custody without occupying accepted work's slot.
+  recovered.pipeline(completed.id).merge!.state = "queued";
+  recovered.pipeline(completed.id).merge!.nextReadAt = iso(recovered.now() + MERGE_SETTLE_MS + MERGE_POLL_MS * 10);
+  recovered.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
+  await recovered.sweep();
+  expect(recovered.merges().filter(args => args[2] === "12")).toHaveLength(1);
+  expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
   receipt = "unreadable"; recovered.advance(MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS);
   await recovered.sweep();
   expect(Date.parse(recovered.merge(completed.id)!.nextReadAt!)).toBe(recovered.now() + MERGE_POLL_MS);
@@ -479,7 +488,7 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   await recovered.sweep();
   expect(recovered.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
   expect(recovered.merge(completed.id)?.effectUncertain).toBeUndefined();
-  expect(recovered.merges()).toHaveLength(0);
+  expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
   savePipelines([{ ...stored, merge: recovered.merge(completed.id) }]);
   expect(findPipelineRecord(stored.id)?.merge?.effectUncertain).toBeUndefined();
 });
