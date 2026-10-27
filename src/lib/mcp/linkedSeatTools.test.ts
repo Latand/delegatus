@@ -227,6 +227,7 @@ test("an acceptance without a durable outbox admission cannot suppress safe retr
     expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "not_executed" });
     const retried = await create().callTool("send_message_to_orchestrator", args);
     expect(retried).toMatchObject({ ok: true, state: "queued" });
+    if (!retried.ok) throw new Error("same-key retry failed");
     expect(retried.operationId).not.toBe("seatmsg_unadmitted");
     expect(posts).toBe(2);
   } finally { clock.mockRestore(); }
