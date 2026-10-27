@@ -2532,6 +2532,234 @@ describe("delivery check card", () => {
   }, 300_000);
 });
 
+describe("the runtime pill names the model the conversation runs on", () => {
+  /*
+   * The production pill over the production composer, for a Codex stage launched
+   * on Luna before the board scanned it, a conversation with no known model, a
+   * model the catalogue does not list and four Claude cases, at the desktop
+   * width, one between it and the phone, and the phone width, both languages,
+   * both schemes. `LLV_MODEL_FACE_SIDE=before`
+   * runs the same case over a checkout that still falls back to the engine
+   * default and records what it drew under `before`; the default records
+   * `after` and gates it. Frames go to `.artifacts/runtime-model-face/`, which
+   * is not committed.
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const FILES = {
+    luna: { face: "6-Luna", never: ["Sol"] },
+    unknown: { face: null, never: ["Sol", "Opus"] },
+    unlisted: { face: "gpt-5.5", never: ["Sol"] },
+    sonnet: { face: "Sonnet 5.5", never: ["Opus"] },
+    "claude-unreported": { face: null, never: ["Opus", "Sonnet"] },
+    "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
+    /* The transcript's `fable-5-1` is the catalogue's Fable row: named, and its tiers stay open. */
+    fable: { face: "Fable", never: ["Opus", "Sonnet"] },
+  } as const;
+
+  browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(FILES)) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face&lang=${lang}&file=${name}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = `${name}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const pill = page.locator("[data-runtime-pill]");
+          await pill.waitFor();
+          const reading = await pill.evaluate((element) => {
+            const range = document.createRange();
+            const text = element.querySelector("span.truncate") ?? element;
+            range.selectNodeContents(text);
+            const drawn = range.getBoundingClientRect();
+            const box = element.getBoundingClientRect();
+            return {
+              text: element.textContent?.trim() ?? "",
+              label: element.getAttribute("aria-label") ?? "",
+              whole: (text as HTMLElement).scrollWidth <= (text as HTMLElement).clientWidth + 1,
+              inView: box.left >= 0 && box.right <= innerWidth,
+              drawnWithinBox: drawn.right <= box.right + 0.5,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-${key}.png`) });
+          await pill.click();
+          await page.locator("[data-runtime-popover], [data-runtime-sheet]").first().waitFor();
+          const opened = await page.evaluate(() => {
+            /* A line as text ranges see it: whole on one measured box, inside the window and inside every clipping ancestor. */
+            const measure = (element: Element | null) => {
+              if (!element) return null;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const rects = [...range.getClientRects()];
+              const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+              const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+              let clipped = false;
+              for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                const style = getComputedStyle(ancestor);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const box = ancestor.getBoundingClientRect();
+                if (left < box.left - 0.5 || right > box.right + 0.5 || top < box.top - 0.5 || bottom > box.bottom + 0.5) clipped = true;
+              }
+              return {
+                text: element.textContent?.trim() ?? "", lines: new Set(rects.map((r) => Math.round(r.top))).size,
+                inView: left >= 0 && right <= innerWidth && top >= 0 && bottom <= innerHeight, clipped,
+              };
+            };
+            return {
+              disabledTiers: [...document.querySelectorAll('[data-runtime-row="tier"], [data-runtime-sheet] button[disabled]')].filter((row) => row.hasAttribute("disabled")).length,
+              hold: measure(document.querySelector("[data-runtime-hold]")),
+              summary: measure(document.querySelector("[data-mobile2-next-message]")),
+            };
+          });
+          readings[`${key}-open`] = opened;
+          await page.screenshot({ path: path.join(out, `${side}-${key}-open.png`) });
+          expect(pageErrors).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+          expect(reading.inView).toBe(true);
+          expect(reading.whole).toBe(true);
+          if (side === "after") {
+            for (const never of expected.never) expect(reading.text + reading.label).not.toContain(never);
+            if (expected.face) expect(reading.text).toContain(expected.face);
+            else expect(reading.text).toContain(translate(lang, "composer.modelGroup"));
+            if (name === "unknown" || name === "claude-unreported" || name === "unlisted" || name === "opus-old") {
+              expect(opened.disabledTiers).toBeGreaterThan(0);
+              /* The reason is visible text on the first screen, whole and in view, and says which hold it is. */
+              expect(opened.hold).not.toBeNull();
+              expect(opened.hold!.inView).toBe(true);
+              expect(opened.hold!.clipped).toBe(false);
+              if (viewport.touch) {
+                /* The phone sheet's summary line is whole and in view too, and names no model the conversation lacks. */
+                expect(opened.summary).not.toBeNull();
+                expect(opened.summary!.inView).toBe(true);
+                expect(opened.summary!.clipped).toBe(false);
+                for (const never of expected.never) expect(opened.summary!.text).not.toContain(never);
+              }
+              expect(opened.hold!.text).toBe(name === "unknown" || name === "claude-unreported"
+                ? translate(lang, "runtimeConfig.modelUnknown")
+                : translate(lang, "runtimeConfig.modelUnlisted", { model: name === "unlisted" ? "gpt-5.5" : "Opus 4.1" }));
+            } else {
+              expect({ key, disabled: opened.disabledTiers }).toEqual({ key, disabled: 0 });
+              expect(opened.hold).toBeNull();
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/face.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model face: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 600_000);
+});
+
+describe("the headers name the model the conversation runs on", () => {
+  /*
+   * The pane's own header chip, the board reader's header chip and a relay
+   * chat reader's header chip over the production components, at the desktop
+   * width and one between it and the phone, both languages, both schemes; the
+   * relay reader at the phone width too.
+   * `LLV_MODEL_FACE_SIDE=before` records what a checkout that names the engine
+   * draws; the default records `after` and gates it. Frames go to
+   * `.artifacts/runtime-model-face/`, which is not committed.
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const CASES = {
+    luna: { shown: "gpt-6-luna", never: ["Sol"] },
+    unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
+    unlisted: { shown: "gpt-5.5", never: ["Sol"] },
+    sonnet: { shown: "Sonnet 5.5", never: ["Opus"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+  } as const;
+  const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
+  const PHONE = { name: "phone-390", width: 390, height: 844 } as const;
+
+  browserTest("the pane header and the reader header show the observed or requested model, or the engine's name, never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(CASES)) for (const part of ["branch", "reader", "relay"] as const) for (const viewport of part === "relay" ? [...VIEWPORTS, PHONE] : VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face-headers&lang=${lang}&file=${name}&part=${part}`, { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.width < 600);
+        const key = `${name}-${part}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          await page.locator("[data-evidence-case]").waitFor({ timeout: 15_000 }).catch((error: Error) => { throw new Error(`${error.message}; page errors: ${pageErrors.join(" | ")}`); });
+          /* The relay chat opens from its row into the read-only reader, as an operator opens it. */
+          if (part === "relay") {
+            await page.locator("[data-relay-chat] button").first().click();
+            await page.locator("[data-relay-chat-reader]").waitFor({ timeout: 15_000 });
+          }
+          await page.waitForTimeout(600);
+          const reading = await page.evaluate((which) => {
+            /* The identity chips the header draws: the model chip, and the engine's name where it names no model. */
+            const chips = [...document.querySelectorAll<HTMLElement>(which === "reader"
+              ? ".ch-engine, .ch-model"
+              : which === "relay" ? "[data-relay-chat-reader] .ch-engine, [data-relay-chat-reader] .ch-model"
+              : '[data-testid="mobile-conv-meta"] span.rounded-full.font-mono, [data-testid="mobile-conv-meta"] span.rounded-full.font-bold')].filter((element) => element.getClientRects().length > 0);
+            const range = document.createRange();
+            const measured = chips.map((chip) => {
+              range.selectNodeContents(chip);
+              const drawn = range.getBoundingClientRect();
+              const box = chip.getBoundingClientRect();
+              return {
+                text: (chip.textContent ?? "").trim(),
+                whole: chip.scrollWidth <= chip.clientWidth + 1,
+                drawnInBox: drawn.left >= box.left - 0.5 && drawn.right <= box.right + 0.5,
+                inView: drawn.left >= 0 && drawn.right <= innerWidth && drawn.top >= 0 && drawn.bottom <= innerHeight,
+              };
+            });
+            return {
+              text: measured.map((chip) => chip.text).join(" | "), chips: measured,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          }, part);
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-headers-${key}.png`) });
+          expect(pageErrors).toEqual([]);
+          if (side === "after") {
+            expect(reading.text).toContain(expected.shown);
+            for (const never of expected.never) expect(reading.text).not.toContain(never);
+            expect(reading.chips.length).toBeGreaterThan(0);
+            expect({ key, cut: reading.chips.filter((chip) => !(chip.whole && chip.drawnInBox && chip.inView)) }).toEqual({ key, cut: [] });
+            expect(reading.overflowX).toBe(0);
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/headers-desktop.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model face headers: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 600_000);
+});
+
 describe("retained message notice over the composer", () => {
   /*
    * The operator's report of 2026-10-07: a boxed «Автоматичну перевірку

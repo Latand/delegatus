@@ -8,7 +8,8 @@ import { DeputyBlock } from "./DeputyBlock";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { StagesSheet } from "@/components/kanban/StagesSheet";
 import { summarizePipeline } from "@/components/kanban/pipelineSummary";
-import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { ReaderPlacement, ReaderPortals, ReaderSlot } from "@/components/kanban/KanbanReaders";
+import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -38,6 +39,7 @@ import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
 import { BranchPane } from "@/components/BranchPane";
+import { RuntimePill } from "@/components/RuntimePill";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
 import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
@@ -118,6 +120,8 @@ export type ConversationWindowCase =
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
+  | "runtime-model-face"
+  | "runtime-model-face-headers"
   | "lifecycle"
   | "long-history"
   | "codex-history"
@@ -1483,10 +1487,107 @@ function DeliveryCheckCardFixture() {
   );
 }
 
+/** What the transcript and the launch have told the pill, per fixture file. */
+const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
+  /* A stage launched on Luna that the board has not scanned yet: no observed model, the launch's own. */
+  luna: { engine: "codex", model: null, launchModel: "gpt-6-luna" },
+  /* Neither is known yet. */
+  unknown: { engine: "codex", model: null, launchModel: null },
+  /* The transcript reports a model the catalogue does not list. */
+  unlisted: { engine: "codex", model: "gpt-5.5", launchModel: "gpt-6-luna" },
+  /* A Claude stage launched on the Opus alias whose transcript reports Sonnet. */
+  sonnet: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-sonnet-5-5", launchModel: "opus" },
+  /* A Claude stage launched with no model whose transcript has not reported one. */
+  "claude-unreported": { engine: "claude", fmt: "claude", root: "claude-projects", model: null, launchModel: null },
+  /* An older Opus release than the alias row names. */
+  "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
+  /* A Fable stage whose transcript names the release the alias resolved to. */
+  fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
+};
+
+function modelFaceFile(which: string): FileEntry {
+  return {
+    ...DEAD_FILE, proc: "running", pid: 10, effort: "high", fast: false, mtime: 1, size: 1, activity: "idle", title: "Review the stage switch",
+    conversationId: `conversation_model_face_${which}`, path: `/model-face-${which}.jsonl`, name: `model-face-${which}.jsonl`,
+    ...MODEL_FACE_FILES[which],
+  } as FileEntry;
+}
+
+/** The headers that name a conversation's model: the pane's own, the board reader's and a relay chat's reader. */
+function RuntimeModelFaceHeadersFixture() {
+  /* Written seven minutes ago, so each header's age reads as a real conversation's does. */
+  const [file] = useState(() => ({ ...modelFaceFile(params.get("file") ?? "luna"), mtime: Math.floor(Date.now() / 1000) - 7 * 60 }));
+  const [placement] = useState(() => new ReaderPlacement());
+  const [now] = useState(() => Date.now());
+  if (params.get("part") === "relay") {
+    /* One relay chat over the same conversation; the driver opens it into the agent window's read-only reader. */
+    const chat = {
+      id: "model-face", relayId: "relay-1", relayName: "Support relay", targetId: "bot-1", targetName: "Support bot", chatKey: "QmF6x9Lk2pTw7RzA",
+      authority: "member" as const, engine: file.engine === "claude" ? "claude" as const : "codex" as const, turns: 3, compactions: 0, createdAt: "2026-10-09T08:00:00.000Z",
+      lastTurnAt: "2026-10-09T09:00:00.000Z", state: "idle" as const, file,
+    };
+    return (
+      <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+        <RelayChatsView relayId="relay-1" payload={{ relays: [{ id: "relay-1", name: "Support relay", origin: "https://relay.example" }], chats: [chat] }} />
+      </div>
+    );
+  }
+  if (params.get("part") !== "reader") {
+    return (
+      <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas p-3 text-primary">
+        <div className="mx-auto flex min-h-0 w-full max-w-[720px] flex-1">
+          <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <main data-evidence-case="runtime-model-face-headers" className="kb h-dvh bg-canvas p-3 text-primary">
+      <div className="aw-reader mx-auto h-full w-full max-w-[720px]">
+        <ReaderSlot placement={placement} readerKey="model-face" />
+        <ReaderPortals placement={placement} readers={[{ readerKey: "model-face", file, owner: null, composerPrimary: true }]} now={now} onClose={noop} onLeave={noop} onMenu={noop} />
+      </div>
+    </main>
+  );
+}
+
+function RuntimeModelFaceFixture() {
+  const { t } = useLocale();
+  const file = modelFaceFile(params.get("file") ?? "luna");
+  const composer = useComposer({
+    initialText: () => "",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  return (
+    <div data-evidence-case="runtime-model-face" className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={<RuntimePill file={file} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+      />
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
+  if (id === "runtime-model-face") return <RuntimeModelFaceFixture />;
+  if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
