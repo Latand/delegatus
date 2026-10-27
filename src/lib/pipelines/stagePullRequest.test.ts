@@ -140,13 +140,14 @@ async function finalBudgetFixFixture() {
   } catch (error) { f.close(); throw error; }
 }
 
-for (const lost of [false, true]) test(`the final budget fix refreshes the PR head and reported checks without another review (lost reply: ${lost})`, async () => {
+for (const lost of [false, true]) test(`the final budget fix refreshes the PR head and reported checks before the terminal re-check (lost reply: ${lost})`, async () => {
   const f = await finalBudgetFixFixture();
   try {
     if (lost) f.setLost();
     const head = await f.git(f.worktree, "rev-parse", "HEAD");
     const p = await f.finish(fixSummary, 3);
-    expect(p.state, p.stateDetail ?? undefined).toBe("completed");
+    expect(p.state, p.stateDetail ?? undefined).toBe("running");
+    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
     expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
     expect(f.body()).toContain(head);
     expect(f.body()).toContain(fixSummary);
@@ -183,7 +184,8 @@ test("the final budget PR refresh uses REST when GraphQL Projects classic is una
     f.setBody(original);
     const head = await f.git(f.worktree, "rev-parse", "HEAD");
     const p = await f.finish(summary, 3);
-    expect(p.state, p.stateDetail ?? undefined).toBe("completed");
+    expect(p.state, p.stateDetail ?? undefined).toBe("running");
+    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
     expect(f.body()).toBe(`## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
       + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n${original}`);
     expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
@@ -630,6 +632,23 @@ test.each(["skip-stage", "retry-stage", "publish"] as const)("blocked linked PR 
       await tickPipelines([], f.h.ports);
       expect(loadPipelines().find(lane => lane.id === f.id)!.cursor?.stageId).toBe("review");
     }
+  } finally { f.close(); }
+});
+
+test("a successor PR refusal accepts a guarded decision answer", async () => {
+  const f = await fixture();
+  try {
+    f.link(); f.setPrShape("closed"); await f.commit();
+    const parked = await f.finish();
+    expect(parked.state).toBe("needs_decision");
+    const { pipelineRevision } = await import("./store");
+    const result = await engineModule.patchPipeline(f.id, { action: "resolve-decision",
+      clientRequestId: "successor-pr-answer", answer: "Check the delivery pull request again.",
+      expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) },
+    f.h.ports, { kind: "operator" });
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline?.state).toBe("running");
+    expect(result.pipeline?.decisionAnswers).toHaveLength(1);
   } finally { f.close(); }
 });
 

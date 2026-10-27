@@ -13,6 +13,8 @@ const placements = (surface: HeaderSurface): HeaderItem[] => {
 const VARIANT_3_PRESSES: Record<HeaderItem, number> = {
   activity: 2, team: 2, qr: 2, update: 2, signOut: 2,
   language: 3, push: 3, sound: 3, awake: 3, memory: 3, memorySource: 3, key: 3, mapping: 3, workers: 3, dictation: 3, voice: 3, linked: 3, relay: 3, ping: 3, guide: 3, walk: 3,
+  /* New with `delegatus stop --all`: two presses at rest on the desktop, three in the phone's Settings. */
+  stop: 3,
 };
 /* Where the phone keeps what its menu does not hold: the drawer header and the Team page. */
 const PHONE_ELSEWHERE: HeaderItem[] = ["language", "qr", "push", "signOut"];

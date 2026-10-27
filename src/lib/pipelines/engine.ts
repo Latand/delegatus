@@ -120,7 +120,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { clearEngineParkedTaskNote, parkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
 import { operatorLocale } from "@/lib/operator/settings";
-import { requestPipelineTick } from "./controllerSignal";
+import { hasLocalPipelineController, requestPipelineTick } from "./controllerSignal";
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
@@ -4177,8 +4177,8 @@ async function advancePipeline(
   const detail = successor.handoff && !successor.recheck ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
      new head leaves a head nobody reviewed. Under the default `advance` the
-     terminal gate completes after the final fix, while a nonterminal gate takes its
-     pass edge and relays the findings as unreviewed. Only an edge that
+     terminal gate re-checks the final fix once, while a nonterminal gate takes
+     its pass edge and relays the findings as unreviewed. Only an edge that
      asked for `stop-after-fix` stops in needs_review for the operator; a fix
      that wrote nothing new moves on under either. */
   if (
@@ -4216,8 +4216,8 @@ async function advancePipeline(
   pipeline.pausedState = null;
 }
 
-/** The final advance fix follows the gate's pass edge, including completion.
-    Explicit continuation grants retain their own validation ancestry. */
+/** A terminal advance gate owes one check of its final fix. Nonterminal gates
+    follow their pass edge; explicit grants retain their validation ancestry. */
 function passSuccessor(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -4246,8 +4246,34 @@ function passSuccessor(
     };
   }
 
+  const terminal = attempt && !terminalGrant ? terminalAdvanceGateForAttempt(pipeline, stage, attempt) : null;
+  if (terminal) return { next: terminal.id, handoff: null, recheck: true };
+
   if (!source || !activation) return { next: stage.next, handoff: null };
   return { next: source.next, handoff: { source, attempt: sourceAttempt } };
+}
+
+/** The obligation belongs to the spent fail activation, so retries and repairs
+    retain it through their durable ancestry.
+    A completed re-check discharges it even when older activations remain. */
+function terminalAdvanceGateForAttempt(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): PipelineStage | null {
+  let current: PipelineStageAttempt | undefined = attempt;
+  let currentStage = stage.id;
+  const checked = new Set<string>();
+  const visited = new Set<string>();
+  while (current?.activatedBy) {
+    const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+    if (current.activatedBy.budgetRecheck) checked.add(currentStage);
+    const source = pipeline.stages.find(candidate => candidate.id === activation.stageId);
+    if (activation.edge === "fail" && activation.budgetSpent && source?.next === null
+      && source.onFail && failEdgeExhaustion(source.onFail) === "advance" && !checked.has(source.id)) return source;
+    const key = `${activation.stageId}:${activation.attempt}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    currentStage = activation.stageId;
+    current = runFor(pipeline, currentStage)?.attempts.find(candidate => candidate.n === activation.attempt && !candidate.historical);
+  }
+  return null;
 }
 
 /** A terminal continuation owns one return to its reviewer after the complete
@@ -4399,13 +4425,12 @@ async function reconcileTerminalReviewPending(pipeline: Pipeline): Promise<boole
   return true;
 }
 
-/** Stored automatic budget stops belong to the owner. A retained failed
-    re-check owes one final fix; an already passed final fix owes its successor.
-    Explicit stops, blocked reviews and operator questions retain their wait. */
+/** An old default-advance stop after a passed fix still owes its successor.
+    A failed terminal re-check retains its exhausted-budget decision. */
 async function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
   if (pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") return false;
   const pending = pipeline.reviewPending;
-  if (!pending) return false;
+  if (!pending || pending.terminalRecheck) return false;
   const reviewStage = pipeline.stages.find(stage => stage.id === pending.stageId);
   if (!reviewStage?.onFail || failEdgeExhaustion(reviewStage.onFail) !== "advance") return false;
   const review = runFor(pipeline, reviewStage.id)?.attempts.find(attempt => attempt.n === pending.attempt && !attempt.historical);
@@ -4413,20 +4438,9 @@ async function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: Pipe
   const fix = fixStage && runFor(pipeline, fixStage.id)?.attempts.find(attempt => attempt.n === pending.fixAttempt && !attempt.historical);
   if (!review?.verdict || review.verdict.blocked || !review.completedAt || fix?.state !== "passed"
     || !fixStage || pending.currentHead !== pipeline.lastPassedCommit || pipelineSurvivorRefusal(pipeline)) return false;
-  if (pending.terminalRecheck) {
-    if (!currentTerminalReviewPending(pipeline, pending) || !terminalReviewPendingFromAttempt(pipeline, reviewStage, review)) return false;
-    review.budgetSpent = true;
-    review.reviewedHead = pending.reviewedHead;
-    pipeline.cursor = { stageId: reviewStage.onFail.to, state: "pending", input: failEdgeInput({ verdict: review.verdict, output: review.output ?? "" }),
-      activatedBy: { stageId: reviewStage.id, attempt: review.n, edge: "fail", budgetSpent: true } };
-    pipeline.state = "running";
-    pipeline.stateDetail = null;
-    pipeline.pausedState = null;
-  } else {
-    if (pipeline.state !== "needs_review" || !review.budgetSpent || fix.activatedBy?.stageId !== reviewStage.id
-      || fix.activatedBy.attempt !== review.n || !fix.activatedBy.budgetSpent) return false;
-    await advancePipeline(pipeline, fixStage, ports, fix, true);
-  }
+  if (pipeline.state !== "needs_review" || !review.budgetSpent || fix.activatedBy?.stageId !== reviewStage.id
+    || fix.activatedBy.attempt !== review.n || !fix.activatedBy.budgetSpent) return false;
+  await advancePipeline(pipeline, fixStage, ports, fix, true);
   delete pipeline.reviewPending;
   await clearEngineTaskNote(pipeline);
   return true;
@@ -4911,7 +4925,8 @@ async function routeFailedAttempt(
   const used = failEdgeRoundsUsed(pipeline, stage);
   /* Under the default `advance` (#1868) `maxRounds` is also how many reviews
      the source gets: the fail of its last one is the handoff below, so the
-     reviewer runs N times and the fix stage N+1. `stop-after-fix` counts and
+     budget runs N reviews and N fixes, followed by one terminal re-check.
+     `stop-after-fix` counts and
      hands off the same way and differs only after that fix (#2187). `park`
      keeps today's count, which reviews once more and then stops. */
   const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) !== "park";
@@ -5833,7 +5848,7 @@ async function settleStageVerdict(
        A spent budget (#1868) hands the findings to the target once more under
        the edge's default `onExhausted: "advance"` and under `stop-after-fix`,
        and parks under `park`. After that last fix `advance` follows the
-       source's pass edge or completes, with no further review; `stop-after-fix`
+       source's pass edge, re-checking a terminal gate once; `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
     if (parsed.verdict.blocked === true) {
       await park(pipeline, parsed.verdict.blockedReason!, attempt);
@@ -9702,14 +9717,16 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
     ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
 
+const provisioningHost = globalThis as typeof globalThis & { __llvProvisioningRepositories?: Map<string, Promise<void>> };
+
 /**
- * The provisioning pre-pass: every lane waiting on a base, fetched and
- * provisioned before the controller takes the lease (#1799).
+ * Fetch and provision outside the lease (#1799). Scoped controller passes
+ * dispatch this work to bounded jobs and apply each outcome in a later lease.
  *
  * The indexed read takes no write lease. A pass with no provisioning work
  * reads no pipeline payloads and starts no subprocess.
  */
-async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[]): Promise<Map<string, PipelineProvisionOutcome>> {
+async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[], waitForRepository: (previous: Promise<void>) => Promise<void> = previous => previous): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
@@ -9752,7 +9769,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Close/delete may originate in another process. Indexed row revisions
   // invalidate only changed jobs; polling needs no lease or close-path hook.
   const watch = setInterval(revalidate, 50);
-  const repositoryTails = new Map<string, Promise<void>>();
+  const repositoryTails = provisioningHost.__llvProvisioningRepositories ??= new Map<string, Promise<void>>();
   const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
     worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
@@ -9777,6 +9794,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
         catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
       };
       let releaseRepository: (() => void) | undefined;
+      let repository: string | undefined, tail: Promise<void> | undefined;
       try {
         // Linked worktrees share refs and Git locks even when repoDir differs.
         // Resolve through Git asynchronously, then serialize each common dir.
@@ -9788,10 +9806,11 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
           return;
         }
-        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
         const previous = repositoryTails.get(repository);
-        repositoryTails.set(repository, new Promise<void>((resolve) => { releaseRepository = resolve; }));
-        await previous;
+        tail = new Promise<void>((resolve) => { releaseRepository = resolve; });
+        repositoryTails.set(repository, tail);
+        if (previous) await waitForRepository(previous);
         const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
@@ -9801,7 +9820,10 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
           error: `pipeline provisioning failed: ${String(error)}`,
         });
-      } finally { releaseRepository?.(); }
+      } finally {
+        releaseRepository?.();
+        if (repository && repositoryTails.get(repository) === tail) repositoryTails.delete(repository);
+      }
     }));
   } finally { clearInterval(watch); }
   return outcomes;
@@ -12272,6 +12294,12 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   const scoped = Boolean(controllerPipelineKeys());
+  if (!hasLocalPipelineController() && ports.structuredDeliveryPublication?.() === "unbound") {
+    // An inventory sidecar owns no delivery publisher. Hand off before Git,
+    // registry reconciliation or another lane can delay the controller wake.
+    requestPipelineTick();
+    return { pipelines: [], changed: false };
+  }
   let completePhase!: () => void;
   const phaseDone = new Promise<void>(resolve => { completePhase = resolve; });
   const queueControllerJob = (id: string, run: () => Promise<unknown>) => startPipelineControllerJob(id, async () => {
@@ -12387,7 +12415,22 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* Before the lease, never under it (#1799). */
     await settlePendingRemoteActions(ports);
     await settlePendingStageProvenance(ports);
-    const provisioned = await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
+    // Production controller passes own bounded jobs; Git never occupies the
+    // scheduler phase. The durable provisioning row is replayed after restart.
+    const provisioned = scoped ? new Map<string, PipelineProvisionOutcome>()
+      : await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
+    if (scoped) for (const lane of await selectControllerPipelines("provisioning", provisioningThrough)) {
+      startPipelineControllerJob(lane.id, async waitOutsideCapacity => {
+        await phaseDone;
+        await withControllerPipelineScope([lane.id], async () => {
+          const outcomes = await provisionPendingPipelines(ports, provisioningThrough, [], waitOutsideCapacity);
+          await withPipelineMutation(async (pipelines, persist) => {
+            const current = pipelines.find(row => row.id === lane.id);
+            if (current && await applyProvisionOutcome(current, outcomes.get(lane.id), ports)) await persist([current]);
+          });
+        });
+      }, () => controllerPipelineVersion(lane.id), "provisioning");
+    }
     const stageBranchProtections = new Map<string, StageBranchProtection>();
     await Promise.all((await selectControllerPipelines("hosts")).map(async (pipeline) => {
       const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
