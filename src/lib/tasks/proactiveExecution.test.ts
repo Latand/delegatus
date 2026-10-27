@@ -217,5 +217,9 @@ test("decisions survive a fresh process and rejection races do not reset artifac
   const artifacts = loadTasks(file);
   await decideProactiveTask(task.id, "reject", "operator", file);
   expect(() => assertProactiveTaskExecution([task.id], file)).toThrow("rejected");
-  expect(loadTasks(file)).toEqual(artifacts);
+  const at = new Date(NOW).toISOString();
+  expect(loadTasks(file)[0]!.revision).not.toBe(artifacts[0]!.revision);
+  expect(loadTasks(file)).toEqual([{ ...artifacts[0]!, revision: expect.any(String), status: "done", doneAt: at, doneAdmissions: [],
+    statusBy: { actor: { kind: "operator" }, from: artifacts[0]!.status, at },
+    note: { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: at } }]);
 });

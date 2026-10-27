@@ -706,7 +706,9 @@ test.each(["reject", "edit"] as const)("proactive authority is rechecked before 
   expect(invalidated).toBe(true);
   expect(submits).toHaveLength(0);
   expect(attempt().cloud?.phase).toBe("failed");
-  expect(attempt().cloud?.error).toMatch(/rejected|scope review|unreadable/i);
+  // Editing removes ordinary adoption; this fixture has no active episode to
+  // replace it, so the live permission fence is also decisive.
+  expect(attempt().cloud?.error).toMatch(/rejected|scope review|unreadable|permission.*inactive/i);
 });
 
 test("the hosted transport guard rejects authority revoked after engine admission", async () => {
@@ -782,7 +784,7 @@ test("a Cloud submission already in flight keeps its receipt after proactive aut
   } finally { release(); await settlePipelineControllerJobs(); }
 
   expect(submits).toHaveLength(1);
-  expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "failed" });
+  expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "polling", submissionUnresolved: false });
 });
 
 

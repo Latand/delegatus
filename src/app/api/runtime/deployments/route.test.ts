@@ -12,6 +12,7 @@ import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/i
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
 import { beginSeatDeployment, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 
 /**
  * The HTTP deploy door, at parity with the MCP binding and the raw socket
@@ -46,6 +47,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   setSelfUpdateServiceForTests(null);
   setDeploymentRuntimeForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -68,6 +70,31 @@ function deployRequest(body: unknown): NextRequest {
 }
 
 describe.serial("HTTP deployment route", () => {
+test.each(["adopted", "rejected", "revoked-during-admission"] as const)("attributable deployment rechecks proactive authority: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const project = `deploy-${phase}`;
+  const { task } = await admitProactiveTask({ ...candidate(`deploy-${phase}`), project }, { ...context(), project }, undefined, authority());
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task));
+  const registry = agentRegistry();
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: sandboxes[0]!, taskIds: [task.id], origin: { kind: "operator" } });
+  if (begun.kind !== "created") throw new Error("expected a fresh launch");
+  const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+  const reject = () => decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+  if (phase === "rejected") await reject();
+  if (phase === "revoked-during-admission") setSelfUpdateServiceForTests(new SelfUpdateService({ ...productionDeps(), mode: async () => {
+    await reject();
+    return { mode: "managed", record: null, reason: null };
+  } }));
+  const request = deployRequest({ revision: SHA, idempotencyKey: `proactive-${phase}` });
+  request.headers.set("x-llv-spawn-capability", capability);
+  const response = await POST(request);
+  expect(response.status).toBe(phase === "adopted" ? 202 : 403);
+  expect(requested).toHaveLength(phase === "adopted" ? 1 : 0);
+});
+
 test("admission records the pending seat before a lost HTTP reply, including checkout installs", async () => {
   for (const mode of ["managed", "checkout"] as const) {
     const key = `lost-${mode}`;

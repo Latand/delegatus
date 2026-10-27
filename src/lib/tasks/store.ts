@@ -1051,3 +1051,15 @@ export async function patchTaskCompanion<C, R>(companion: SqliteStateCollection<
     }, undefined, { collection: companion, prepare: () => ({ records }) });
   }, { waitMs: 5_000, subject: "tasks.proactive" }));
 }
+
+/** Indexed, bounded evidence for discretionary dispatch. No busy wait: callers
+ * defer when a writer owns the store or retained history exceeds the cap. */
+export function proactiveProjectWork(projects: readonly string[], filePath = TASKS_FILE): BoardTask[] {
+  const store = taskCollection(filePath, "read");
+  if (!store) throw new Error("task capacity evidence is unavailable");
+  return store.boundedPatch(1_024, tx => tx.taskProjectRows(projects).map(raw => {
+    const task = coerceTask(raw);
+    if (!task) throw new Error("invalid task capacity evidence");
+    return task;
+  }));
+}

@@ -1,6 +1,8 @@
+import { reserveProactiveLane, recordProactiveScopeReview, proactiveScopeReviewEvidence } from "@/lib/tasks/proactiveLane";
+import { proactiveCandidateDecision } from "@/lib/tasks/proactive";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
-import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds, proactiveConversationContext, assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
@@ -806,18 +808,22 @@ async function spawnPipelineAgent(
   }
   const account = resolution.account;
   const parent = await parentIdentity(input.parentPath);
+  const proactiveLane = findPipelineRecord(input.membership.containerId);
+  if (proactiveLane) assertProactivePipelineExecution(proactiveLane, "dispatch", { id: account.accountId, engine: input.role.engine, model: input.role.model }, input.membership.stageId ?? undefined);
   const { access, sandbox } = input.runtimeProfile;
   if (access !== input.role.access) {
     throw new Error("pipeline stage runtime access does not match its effective role");
   }
+  const scopeReview = !!proactiveLane?.proactiveTaskIds?.length && proactiveLane.stages[0]?.id === input.membership.stageId
+    && input.role.roleId === "reviewer" && input.role.access === "read-only";
   const specBase = freshSpecFor(input.role.engine, input.cwd, {
     model: input.role.model,
     effort: input.role.effort,
     serviceTier,
     /* Pipeline access is enforced at settlement. Passing it to the engine
        would make the repository policy silently select the sandbox again. */
-    readOnly: false,
-    permissionMode: pipelineClaudePermissionMode(input.role, sandbox),
+    readOnly: scopeReview,
+    permissionMode: scopeReview && input.role.engine === "claude" ? "plan" : pipelineClaudePermissionMode(input.role, sandbox),
     codexHome: input.role.engine === "codex" ? account.home : null,
     claudeConfigDir: input.role.engine === "claude" ? account.home : null,
     claudeProjectsDir: input.role.engine === "claude" ? account.transcriptRoot : null,
@@ -826,7 +832,7 @@ async function spawnPipelineAgent(
     ...(specBase.launchProfile ?? {}),
     cwd: input.cwd,
     readOnly: access === "read-only",
-    sandbox,
+    sandbox: scopeReview ? null : sandbox,
     parentConversationId: parent.conversationId,
     title: input.title,
     project: input.project,
@@ -2396,7 +2402,7 @@ export function defaultPipelinePorts(
     },
     transcriptPresent: (pathname) => Boolean(pathname) && fs.existsSync(pathname),
     resumeSeveredTurn: async (input) => {
-      assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId]));
+      assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId]), undefined, () => proactiveConversationContext(input.conversationId));
       const result = await enqueueStructuredMessage({
         path: input.transcriptPath,
         conversationId: input.conversationId,
@@ -2409,7 +2415,7 @@ export function defaultPipelinePorts(
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       }, { ...(input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {}),
-        authorizeDispatch: () => assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId])) });
+        authorizeDispatch: () => assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId]), undefined, () => proactiveConversationContext(input.conversationId)) });
       if (result?.ok !== true) {
         input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host", result?.admission);
         if (result?.transportUncertain === true) input.onUncertain?.();
@@ -5600,6 +5606,12 @@ async function commitPassedStage(
     }
   }
   const unchangedHead = result.sha === pipeline.lastPassedCommit;
+  try {
+    await recordProactiveScopeReview(pipeline, stage.id, attempt.n, attempt.conversationId, "pass");
+  } catch (error) {
+    await parkStage(error instanceof Error ? error.message : String(error));
+    return;
+  }
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
     attempt.state = "passed";
@@ -5790,6 +5802,22 @@ async function settleStageVerdict(
     return;
   }
   attempt.verdict = parsed.verdict;
+  try {
+    const scopeReview = parsed.verdict.status !== "pass"
+      && await recordProactiveScopeReview(pipeline, stage.id, attempt.n, attempt.conversationId, parsed.verdict.status);
+    if (scopeReview && parsed.verdict.status !== "pass") {
+      attempt.state = "needs_decision";
+      attempt.completedAt = ports.now();
+      setCursorState(pipeline, stage.id, "pending");
+      await park(pipeline, "proactive scope review is held for the operator", attempt);
+      return;
+    }
+  } catch (error) {
+    attempt.completedAt = ports.now();
+    await park(pipeline, error instanceof Error ? error.message : String(error), attempt);
+    return;
+  }
+
   /* A fixer repairs discoveries; its next reviewer owns the verdict. Admit
      only an already committed, clean head through the normal acceptance and
      publication path. Blocked work and other roles retain fail routing. */
@@ -6844,7 +6872,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
             if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
               || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
-            assertProactiveTaskExecution(live.taskIds);
+            if (activation.phase !== "dispatching" && activation.phase !== "settled") assertProactivePipelineExecution(live);
             live.state = claimed.state;
             live.stateDetail = claimed.stateDetail;
             live.cursor = structuredClone(claimed.cursor);
@@ -7158,15 +7186,18 @@ async function spawnRunStage(
             : wait && budgetMs === SPAWN_CONTROLLER_WAIT_BUDGET_MS ? new Error("structured delivery controller is unavailable")
             : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
         }
-        assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
+        assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
+        const scopeEvidence = proactiveScopeReviewEvidence(findPipelineRecord(pipeline.id) ?? pipeline, stage.id);
+        const scopePrompt = (prompt: string) => scopeEvidence ? `${prompt}\n\nFrozen scope-review evidence:\n${scopeEvidence}` : prompt;
         spawned = await ports.spawnAgent({
           ...spawnInput,
+          "prompt": scopePrompt(spawnInput.prompt),
           clientAttemptId: callId,
           spawnAdmissionDeadline,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
           ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
-          assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
+          assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline, "dispatch", { id: reservation.accountId ?? null, engine: attempt.effectiveRole.engine, model: attempt.effectiveRole.model });
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;
           attempt.conversationId = reservation.conversationId;
@@ -7176,8 +7207,8 @@ async function spawnRunStage(
              recorded before the agent is actuated. */
           adoptPipelineFallbackTask(pipeline, tasksForBinding());
           await persist();
-          assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
-        }, preparePrompt);
+          assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline, "dispatch", { id: reservation.accountId ?? null, engine: attempt.effectiveRole.engine, model: attempt.effectiveRole.model });
+        }, async () => scopePrompt(await preparePrompt()));
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -7658,7 +7689,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         continue;
       }
       const dispatchCheckpoint = async (account = record.rollback ? record.from : record.to) => {
-        assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
+        assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
         const ignored = record.mode === "handoff" ? [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")] : [];
         for (const conversationId of new Set([record.from.conversationId, attempt.conversationId].filter((id): id is string => !!id))) {
           if (await ports.runtimeSwitchKilled?.(conversationId, record.requestedAt, ignored)) {
@@ -7689,7 +7720,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           await checkpoint(); throw new RuntimeSwitchSuperseded();
         }
         await checkpoint();
-        assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
+        assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
       };
       const outside: PipelinePorts = { ...ports,
         exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
@@ -8235,10 +8266,11 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const assertLane = () => {
         if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
-        assertProactiveTaskExecution(reader.read()?.taskIds ?? []);
+        if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline);
       };
       const guardAccount = (account: AccountContext) => () => {
         assertLane();
+        if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine: "codex", model: attempt.effectiveRole.model });
         const current = resolve(account.accountId);
         if (current.kind !== "available") throw new Error(`Codex Cloud account ${current.kind}`);
         if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error("Codex Cloud account changed");
@@ -8528,7 +8560,7 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
         const prior = current.runs.flatMap(run => run.attempts.filter(candidate =>
           candidate.conversationId && !(run.stageId === stage.id && candidate.n === attempt.n)));
         if (ports.stageHostTreeStillRunning?.(prior.map(candidate => candidate.conversationId!))) throw new Error("Codex Cloud prior stage writer is still running");
-        assertProactiveTaskExecution(current.taskIds);
+        assertProactivePipelineExecution(current, "effect");
         const request = { project: pipeline.project, requestedId: cloud.accountId ?? attempt.accountId, model: attempt.effectiveRole.model, requireCapacity: false };
         const account = ports.resolveProjectSpawn?.("codex", request) ?? accountManager.resolveProjectSpawn("codex", request);
         if (account.kind !== "available") throw new Error(`Codex Cloud account ${account.kind}`);
@@ -9893,7 +9925,7 @@ async function tickPipeline(
   provisioned: Map<string, PipelineProvisionOutcome>,
 ): Promise<boolean> {
   const before = performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline));
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const proactiveError = proactivePipelineExecutionError(pipeline, "prepare");
   // Parking changes the publisher's control fence. Keep it intact until the
   // active operation has recorded its actual receipt, then park on the next tick.
   if (proactiveError && pipeline.delivery?.operation?.state === "running") return false;
@@ -11868,6 +11900,8 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       && pipeline.remoteAction.state === "pending" && remoteActionFence(pipeline) === settlementFence;
     const budgetRefusal = (pipeline: Pipeline | null) => {
       if (!pipeline || (action.action !== "retry-stage" && action.action !== "skip-stage")) return null;
+      const proactive = proactivePipelineExecutionError(pipeline, "prepare");
+      if (proactive) return { error: proactive, status: 403 };
       const stage = currentStage(pipeline);
       return terminalBudgetDecisionRefusal(stage ? currentAttempt(pipeline, stage.id) : null, action.action === "retry-stage");
     };
@@ -12040,7 +12074,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   for (const preview of await selectControllerPipelines("running")) {
     if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
     // A revoked grant cannot change the active publisher's control fence.
-    if (preview.delivery?.operation?.state === "running" && proactiveTaskExecutionError(preview.taskIds)) continue;
+    if (preview.delivery?.operation?.state === "running" && proactivePipelineExecutionError(preview, "prepare")) continue;
     const stage = currentStage(preview);
     const attempt = stage ? currentAttempt(preview, stage.id) : null;
     if (!stage || !attempt) continue;
@@ -12059,7 +12093,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
     const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
       && ownership.current() && controllerTickFingerprint(current) === fingerprint
-      && !(current.delivery?.operation?.state === "running" && proactiveTaskExecutionError(current.taskIds))
+      && !(current.delivery?.operation?.state === "running" && proactivePipelineExecutionError(current, "prepare"))
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     let descriptor: number | null;
@@ -13439,7 +13473,7 @@ export async function createPipelineFromRequest(
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
   const proactiveError = proactiveTaskExecutionError([...(Array.isArray(req.taskIds) ? req.taskIds.filter((id): id is string => typeof id === "string") : []),
-    ...(options.ensureTask?.proactive ? [options.ensureTask.id] : [])]);
+    ...(options.ensureTask?.proactive ? [options.ensureTask.id] : [])], undefined, { phase: "create" });
   if (proactiveError) return { error: proactiveError, status: 403 };
   if (options.creationRequest) {
     const replay = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
@@ -13503,7 +13537,7 @@ export async function createPipelineFromRequest(
   if (!creator.lineage) violations.push({ field: "src", message: creator.error ?? "pipeline creator lineage is required; pass src", expected: PIPELINE_SRC_ROOT_GUIDANCE });
   const taskIds = [...new Set([...(req.taskIds ?? []).map((taskId) => taskId.trim()),
     ...proactiveConversationTaskIds([creator.lineage?.srcConversationId])])];
-  const inheritedProactiveError = proactiveTaskExecutionError(taskIds);
+  const inheritedProactiveError = proactiveTaskExecutionError(taskIds, undefined, { phase: "create" });
   if (inheritedProactiveError) return { error: inheritedProactiveError, status: 403 };
   const requestedRepoDir = typeof req.repoDir === "string" ? req.repoDir.trim() : "";
   if (!requestedRepoDir) violations.push({ field: "repoDir", message: "repoDir is required", expected: "absolute path of a project folder" });
@@ -13566,8 +13600,13 @@ export async function createPipelineFromRequest(
     ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec))
     : null;
   if (base && !base.ok) return { error: base.error, status: 409 };
+  const inventedTasks = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
+  if (inventedTasks.length && !options.creationRequest) {
+    const key = `proactive:${inventedTasks.map(task => task.id).sort().join(":")}`;
+    options = { ...options, creationRequest: { key, digest: crypto.createHash("sha256").update(JSON.stringify({ task, spec, stages: normalized.stages, taskIds })).digest("hex") } };
+  }
   const pipeline = buildPipeline({
-    id: crypto.randomUUID().slice(0, 8),
+    id: inventedTasks.length && options.creationRequest ? crypto.createHash("sha256").update(options.creationRequest.key).digest("hex").slice(0, 16) : crypto.randomUUID().slice(0, 8),
     task,
     taskIds,
     ...(taskSpawn ? { creationIntent: { kind: "task-spawn" as const, taskId: taskSpawn.task.id, launchId: taskSpawn.params.launchId } } : {}),
@@ -13635,6 +13674,9 @@ export async function createPipelineFromRequest(
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
+  try {
+    await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
+  } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
     const tasks = loadTasks();
@@ -14943,6 +14985,10 @@ export async function patchPipeline(
         return { error: "archived records are read-only; restore the pipeline before changing its links", status: 409 };
       }
       return { error: "pipeline not found", status: 404 };
+    }
+    if (["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "accept-head", "publish"].includes(req.action)) {
+      const error = proactivePipelineExecutionError(pipeline, "prepare");
+      if (error) return { error, status: 403 };
     }
     // Recheck after preparatory I/O and admission: a peer can replace the graph.
     if (legacyAction(pipeline) || hasRetiredStage([req.stage])) return STAGE_RETIREMENT;

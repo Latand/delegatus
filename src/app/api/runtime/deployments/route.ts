@@ -15,6 +15,9 @@ import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealt
 import { DeploymentRuntimeUnavailableError, requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
 import { runtimeEventsRolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { authenticatedAgentSpawnCaller } from "@/app/api/spawn/admission";
+import { agentRegistry } from "@/lib/agent/registry";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -155,8 +158,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
+    const authorize = () => {
+      if (!request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return;
+      const registry = agentRegistry();
+      const caller = authenticatedAgentSpawnCaller(request, undefined, registry);
+      if ("error" in caller) throw new ProactiveExecutionFenced(caller.error);
+      if (caller.kind !== "agent") return;
+      const context = proactiveConversationContext(caller.conversationId, registry);
+      assertProactiveTaskExecution(proactiveConversationTaskIds([caller.conversationId], registry), undefined,
+        context ? { ...context, phase: "effect" } : undefined);
+    };
+    authorize();
     const service = selfUpdateService();
     const decision = await service.decide();
+    authorize();
     if (decision.mode !== "managed") {
       const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey });
       await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
@@ -170,6 +185,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {
+    if (error instanceof ProactiveExecutionFenced) return NextResponse.json({ error: error.message }, { status: 403 });
     if (error instanceof DeploymentRuntimeUnavailableError) {
       return NextResponse.json(
         { error: error.message, code: RUNTIME_PLANE_ABSENT },

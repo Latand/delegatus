@@ -1112,6 +1112,8 @@ export type PipelineRemoteAction = {
 };
 
 export type Pipeline = {
+  /** Receipt-owned invention provenance, retained across attachment edits. */
+  proactiveTaskIds?: string[];
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
   /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */

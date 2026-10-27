@@ -1,4 +1,4 @@
-import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -2083,9 +2083,9 @@ export async function enqueueStructuredMessage(
       lastWritten = written;
       try {
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
-        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry), undefined, () => proactiveConversationContext(conversation.id, registry, { id: conversation.generations.at(-1)?.accountId ?? null, engine: conversation.engine as "claude" | "codex", model: conversation.generations.at(-1)?.launchProfile.model }));
         await dependencies.authorizeDispatch?.();
-        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry), undefined, () => proactiveConversationContext(conversation.id, registry, { id: conversation.generations.at(-1)?.accountId ?? null, engine: conversation.engine as "claude" | "codex", model: conversation.generations.at(-1)?.launchProfile.model }));
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
       catch (error) {
