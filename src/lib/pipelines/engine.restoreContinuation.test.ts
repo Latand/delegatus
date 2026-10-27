@@ -550,7 +550,7 @@ test.each(["normal Claude", "Codex", "final verdict"] as const)("%s retains its 
       attempt.effectiveRole = { ...attempt.effectiveRole, engine: "codex", model: "gpt-5.6-sol" };
       savePipelines([lane]);
       r.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null,
-        lastAgentEventAt: Date.parse(r.cutAt) + 1000, lastRecordAt: Date.parse(r.cutAt) + 1000 });
+        lastAgentEventAt: Date.parse(r.cutAt) - 1000, lastRecordAt: Date.parse(r.cutAt) + 1000 });
     }
     if (kind === "final verdict") {
       r.records.push({ type: "assistant", timestamp: new Date(Date.parse(r.cutAt) + 1000).toISOString(),
