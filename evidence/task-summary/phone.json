@@ -2,14 +2,14 @@
   "clock": "2026-10-24T13:30:00.000Z",
   "sourceDigests": {
     "src/components/tasks/TaskSummaryPanel.tsx": "87c2a11153826de28d55986a8115ed16f43f671c626b866085ea98e53d7d0d5f",
-    "src/components/kanban/TaskChronology.tsx": "f7d6f65385a2c7de9f44f14e2c2c9c63574bd1bd44bee5cd31a8cf7432837c87",
+    "src/components/kanban/TaskChronology.tsx": "efd9247953acfb764602905bf5c82b6fa8fd9e90352eab37418d02e6d70dc1d5",
     "src/components/kanban/taskChronologyModel.ts": "4398b24cdaecc9baf5a69c95f1a8a6e03cab18b098a34e5ff8119c79460e9e10",
     "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
     "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
-    "src/components/kanban/kanbanBoard.css": "c0127fb5bb0058dd9c7c5f1a0625cb6842af94de24df9aa47204c8509dac5445",
+    "src/components/kanban/kanbanBoard.css": "577e3bfa4b753b36b27658b680e30dea70dc0cfd73ec4231e42f744d90f4e262",
     "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
     "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
-    "src/components/kanban/issue1695BrowserHarness.ts": "b6b5b2680a56afbbb1ffdf6db2e789c17370b6a9e86ed72f7cde4ec707f01a33"
+    "src/components/kanban/issue1695BrowserHarness.ts": "a47ee9fa609ef6affb0393e1297d2cae003dd79f84240359b9b965fc07e73365"
   },
   "readings": [
     {
@@ -37,23 +37,34 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
-          "time": 603,
-          "words": 603,
-          "result": 634,
-          "bottom": 632,
-          "target": 44
+          "resultLines": 5,
+          "time": 587,
+          "words": 587,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 605,
+          "bottom": 616,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 109.71875,
-          "y": 406,
           "width": 113.40625,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 755,
-          "bottom": 773,
-          "innerHeight": 844
+          "fromTop": 358,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -91,23 +102,34 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
-          "time": 629,
-          "words": 629,
-          "result": 660,
-          "bottom": 658,
-          "target": 44
+          "resultLines": 5,
+          "time": 643,
+          "words": 643,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 661,
+          "bottom": 672,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 109.71875,
-          "y": 450,
           "width": 113.40625,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 807,
-          "bottom": 825,
-          "innerHeight": 932
+          "fromTop": 402,
+          "fromBottom": 403,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -145,23 +167,34 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
-          "time": 603,
-          "words": 603,
-          "result": 634,
-          "bottom": 632,
-          "target": 44
+          "resultLines": 5,
+          "time": 587,
+          "words": 587,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 605,
+          "bottom": 616,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 109.71875,
-          "y": 406,
           "width": 113.40625,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 755,
-          "bottom": 773,
-          "innerHeight": 844
+          "fromTop": 358,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -199,23 +232,34 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
-          "time": 629,
-          "words": 629,
-          "result": 660,
-          "bottom": 658,
-          "target": 44
+          "resultLines": 5,
+          "time": 643,
+          "words": 643,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 661,
+          "bottom": 672,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 109.71875,
-          "y": 450,
           "width": 113.40625,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 807,
-          "bottom": 825,
-          "innerHeight": 932
+          "fromTop": 402,
+          "fromBottom": 403,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -253,23 +297,34 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
-          "time": 603,
-          "words": 603,
-          "result": 634,
-          "bottom": 632,
-          "target": 44
+          "resultLines": 6,
+          "time": 587,
+          "words": 587,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 605,
+          "bottom": 616,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 115.15625,
-          "y": 406,
           "width": 97.6875,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 701,
-          "bottom": 719,
-          "innerHeight": 844
+          "fromTop": 358,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -307,23 +362,34 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
-          "time": 647,
-          "words": 647,
-          "result": 678,
-          "bottom": 676,
-          "target": 44
+          "resultLines": 5,
+          "time": 631,
+          "words": 631,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 649,
+          "bottom": 660,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 115.15625,
-          "y": 450,
           "width": 97.6875,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 825,
-          "bottom": 843,
-          "innerHeight": 932
+          "fromTop": 402,
+          "fromBottom": 403,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -361,23 +427,34 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
-          "time": 603,
-          "words": 603,
-          "result": 634,
-          "bottom": 632,
-          "target": 44
+          "resultLines": 6,
+          "time": 587,
+          "words": 587,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 605,
+          "bottom": 616,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 115.15625,
-          "y": 406,
           "width": 97.6875,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 701,
-          "bottom": 719,
-          "innerHeight": 844
+          "fromTop": 358,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -415,23 +492,34 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
-          "time": 647,
-          "words": 647,
-          "result": 678,
-          "bottom": 676,
-          "target": 44
+          "resultLines": 5,
+          "time": 631,
+          "words": 631,
+          "gap": 4,
+          "nextGap": 30,
+          "resultTop": 649,
+          "bottom": 660,
+          "target": 44,
+          "plainOpens": true
         },
         "link": {
-          "x": 115.15625,
-          "y": 450,
           "width": 97.6875,
-          "height": 44
+          "height": 44,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 56.6875,
+          "height": 44,
+          "missed": []
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 825,
-          "bottom": 843,
-          "innerHeight": 932
+          "fromTop": 402,
+          "fromBottom": 403,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []

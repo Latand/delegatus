@@ -2,14 +2,14 @@
   "clock": "2026-10-24T13:30:00.000Z",
   "sourceDigests": {
     "src/components/tasks/TaskSummaryPanel.tsx": "87c2a11153826de28d55986a8115ed16f43f671c626b866085ea98e53d7d0d5f",
-    "src/components/kanban/TaskChronology.tsx": "f7d6f65385a2c7de9f44f14e2c2c9c63574bd1bd44bee5cd31a8cf7432837c87",
+    "src/components/kanban/TaskChronology.tsx": "efd9247953acfb764602905bf5c82b6fa8fd9e90352eab37418d02e6d70dc1d5",
     "src/components/kanban/taskChronologyModel.ts": "4398b24cdaecc9baf5a69c95f1a8a6e03cab18b098a34e5ff8119c79460e9e10",
     "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
     "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
-    "src/components/kanban/kanbanBoard.css": "c0127fb5bb0058dd9c7c5f1a0625cb6842af94de24df9aa47204c8509dac5445",
+    "src/components/kanban/kanbanBoard.css": "577e3bfa4b753b36b27658b680e30dea70dc0cfd73ec4231e42f744d90f4e262",
     "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
     "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
-    "src/components/kanban/issue1695BrowserHarness.ts": "b6b5b2680a56afbbb1ffdf6db2e789c17370b6a9e86ed72f7cde4ec707f01a33"
+    "src/components/kanban/issue1695BrowserHarness.ts": "a47ee9fa609ef6affb0393e1297d2cae003dd79f84240359b9b965fc07e73365"
   },
   "readings": [
     {
@@ -37,23 +37,37 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
+          "resultLines": 6,
           "time": 662.84375,
           "words": 662.84375,
-          "result": 678.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
           "bottom": 676.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 1226.828125,
-          "y": 520.84375,
           "width": 103.953125,
-          "height": 22
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1247,695 span.",
+            "1297,695 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 522,
-          "bottom": 538,
-          "innerHeight": 900
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -91,23 +105,37 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
+          "resultLines": 6,
           "time": 605.84375,
           "words": 605.84375,
-          "result": 621.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
           "bottom": 619.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 934.828125,
-          "y": 463.84375,
           "width": 103.953125,
-          "height": 22
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "955,638 span.",
+            "1005,638 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 752,
-          "bottom": 768,
-          "innerHeight": 800
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -145,23 +173,37 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
+          "resultLines": 5,
           "time": 564.84375,
           "words": 564.84375,
-          "result": 580.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
           "bottom": 578.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 378.828125,
-          "y": 470.84375,
           "width": 103.953125,
-          "height": 22
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "399,597 span.",
+            "449,597 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 495,
-          "bottom": 511,
-          "innerHeight": 900
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -199,23 +241,37 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
+          "resultLines": 6,
           "time": 662.84375,
           "words": 662.84375,
-          "result": 678.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
           "bottom": 676.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 1226.828125,
-          "y": 520.84375,
           "width": 103.953125,
-          "height": 22
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1247,695 span.",
+            "1297,695 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 522,
-          "bottom": 538,
-          "innerHeight": 900
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -253,23 +309,37 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
+          "resultLines": 6,
           "time": 605.84375,
           "words": 605.84375,
-          "result": 621.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
           "bottom": 619.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 934.828125,
-          "y": 463.84375,
           "width": 103.953125,
-          "height": 22
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "955,638 span.",
+            "1005,638 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 752,
-          "bottom": 768,
-          "innerHeight": 800
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -307,23 +377,37 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
+          "resultLines": 5,
           "time": 564.84375,
           "words": 564.84375,
-          "result": 580.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
           "bottom": 578.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 378.828125,
-          "y": 470.84375,
           "width": 103.953125,
-          "height": 22
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "399,597 span.",
+            "449,597 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 495,
-          "bottom": 511,
-          "innerHeight": 900
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -361,23 +445,38 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
+          "resultLines": 7,
           "time": 662.84375,
           "words": 662.84375,
-          "result": 678.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
           "bottom": 676.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 1231.8125,
-          "y": 520.84375,
           "width": 89.546875,
-          "height": 22
+          "height": 22,
+          "missed": [
+            "1320,542 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1269,695 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 867,
-          "bottom": 883,
-          "innerHeight": 900
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -415,23 +514,38 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
+          "resultLines": 7,
           "time": 605.84375,
           "words": 605.84375,
-          "result": 621.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
           "bottom": 619.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 939.8125,
-          "y": 463.84375,
           "width": 89.546875,
-          "height": 22
+          "height": 22,
+          "missed": [
+            "1028,485 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "977,638 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 752,
-          "bottom": 768,
-          "innerHeight": 800
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -469,23 +583,39 @@
           "background": "rgb(203, 195, 183)"
         },
         "row": {
+          "resultLines": 5,
           "time": 564.84375,
           "words": 564.84375,
-          "result": 580.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
           "bottom": 578.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 383.8125,
-          "y": 470.84375,
           "width": 89.546875,
-          "height": 22
+          "height": 22,
+          "missed": [
+            "472,492 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "421,597 span.",
+            "471,597 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 495,
-          "bottom": 511,
-          "innerHeight": 900
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -523,23 +653,38 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
+          "resultLines": 7,
           "time": 662.84375,
           "words": 662.84375,
-          "result": 678.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
           "bottom": 676.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 1231.8125,
-          "y": 520.84375,
           "width": 89.546875,
-          "height": 22
+          "height": 22,
+          "missed": [
+            "1320,542 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1269,695 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 867,
-          "bottom": 883,
-          "innerHeight": 900
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -577,23 +722,38 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
+          "resultLines": 7,
           "time": 605.84375,
           "words": 605.84375,
-          "result": 621.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
           "bottom": 619.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 939.8125,
-          "y": 463.84375,
           "width": 89.546875,
-          "height": 22
+          "height": 22,
+          "missed": [
+            "1028,485 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "977,638 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 752,
-          "bottom": 768,
-          "innerHeight": 800
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []
@@ -631,23 +791,39 @@
           "background": "rgb(60, 64, 76)"
         },
         "row": {
+          "resultLines": 5,
           "time": 564.84375,
           "words": 564.84375,
-          "result": 580.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
           "bottom": 578.84375,
-          "target": 16
+          "target": 16,
+          "plainOpens": false
         },
         "link": {
-          "x": 383.8125,
-          "y": 470.84375,
           "width": 89.546875,
-          "height": 22
+          "height": 22,
+          "missed": [
+            "472,492 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "421,597 span.",
+            "471,597 span."
+          ]
         },
         "hiddenBefore": 9,
         "target": {
-          "top": 495,
-          "bottom": 511,
-          "innerHeight": 900
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
         },
         "summaryCuts": [],
         "timelineCuts": []

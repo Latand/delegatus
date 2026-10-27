@@ -118,19 +118,23 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
 }) {
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
+  /* The entry an answer's link last landed on: marked until focus leaves it. */
+  const [landed, setLanded] = useState<string | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   if (!entries.length) return null;
   const byId = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
   const byKey = new Map(entries.map((entry) => [entry.key, entry] as const));
   const targets = new Set(entries.flatMap((entry) => (entry.answers ? [entry.answers.key] : [])));
   const { hidden, shown } = foldChronology(entries, open);
-  /* An answer's link: the entry it names opens out of the fold, comes into view and takes focus. */
+  /* An answer's link: the entry it names opens out of the fold, comes to the middle of its scroller,
+     takes focus and carries the focus ring and a well tint until focus leaves it. */
   const goTo = (key: string) => {
     if (!shown.some((entry) => entry.key === key)) setOpen(true);
+    setLanded(key);
     requestAnimationFrame(() => {
       const target = [...(sectionRef.current?.querySelectorAll<HTMLElement>("[data-chronology-entry]") ?? [])].find((element) => element.dataset.chronologyEntry === key);
-      if (!target) return;
-      target.scrollIntoView({ block: "nearest" });
+      if (!target) { setLanded(null); return; }
+      target.scrollIntoView({ block: "center", inline: "nearest" });
       (target.querySelector<HTMLElement>(".chronology-open") ?? target).focus({ preventScroll: true });
     });
   };
@@ -181,8 +185,10 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
           return (
             <li
               key={entry.key}
-              className={`chronology-entry${TONE[entry.kind] ? ` tone-${TONE[entry.kind]}` : ""}${entry.answers ? " answers" : ""}`}
+              className={`chronology-entry${TONE[entry.kind] ? ` tone-${TONE[entry.kind]}` : ""}${entry.answers ? " answers" : ""}${landed === entry.key ? " landed" : ""}`}
               tabIndex={targets.has(entry.key) && !conversation ? -1 : undefined}
+              data-chronology-landed={landed === entry.key ? "" : undefined}
+              onBlur={landed === entry.key ? (event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setLanded(null); } : undefined}
               data-chronology-entry={entry.key}
               data-chronology-kind={entry.kind}
               data-chronology-stop={entry.stop ? entry.pipelineId ?? "" : undefined}

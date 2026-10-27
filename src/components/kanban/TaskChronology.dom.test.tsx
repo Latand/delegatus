@@ -92,15 +92,29 @@ test("in en the result keeps its capital after the reason", () => {
   expect(entry(host, "a:fix:attempt:1")!.querySelector("[data-chronology-result]")!.textContent).toBe(`Answers Review: ${RESULT}`);
 });
 
-test("the link opens the fold over its target, and focuses the target's open button", async () => {
-  const host = render();
-  const section = host.querySelector<HTMLElement>("section.chronology")!;
-  expect(Number(section.dataset.chronologyHidden)).toBeGreaterThan(0);
-  expect(entry(host, "a:review:attempt:1")).toBeNull();
-  host.querySelector<HTMLButtonElement>("[data-chronology-answers]")!.click();
-  await settle();
-  expect(section.dataset.chronologyHidden).toBe("0");
-  const review = entry(host, "a:review:attempt:1")!;
-  expect(review.querySelector("[data-chronology-result]")?.textContent).toBe("Три зауваження");
-  expect(document.activeElement).toBe(review.querySelector(".chronology-open"));
+test("the link opens the fold over its target, brings it to the middle, focuses its open button and marks it until focus leaves", async () => {
+  const scrolled: { key: string | undefined; options: unknown }[] = [];
+  const original = dom.HTMLElement.prototype.scrollIntoView;
+  dom.HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, options?: unknown) { scrolled.push({ key: this.dataset.chronologyEntry, options }); } as typeof original;
+  try {
+    const host = render();
+    const section = host.querySelector<HTMLElement>("section.chronology")!;
+    expect(Number(section.dataset.chronologyHidden)).toBeGreaterThan(0);
+    expect(entry(host, "a:review:attempt:1")).toBeNull();
+    const link = host.querySelector<HTMLButtonElement>("[data-chronology-answers]")!;
+    link.click();
+    await settle();
+    expect(section.dataset.chronologyHidden).toBe("0");
+    const review = entry(host, "a:review:attempt:1")!;
+    expect(review.querySelector("[data-chronology-result]")?.textContent).toBe("Три зауваження");
+    expect(document.activeElement).toBe(review.querySelector(".chronology-open"));
+    expect(scrolled).toEqual([{ key: "a:review:attempt:1", options: { block: "center", inline: "nearest" } }]);
+    expect(review.hasAttribute("data-chronology-landed")).toBe(true);
+    expect(review.classList.contains("landed")).toBe(true);
+    expect(host.querySelectorAll("[data-chronology-landed]").length).toBe(1);
+    /* Focus moves on: the mark goes with it. */
+    flushSync(() => link.focus());
+    expect(host.querySelectorAll("[data-chronology-landed]").length).toBe(0);
+    expect(review.classList.contains("landed")).toBe(false);
+  } finally { dom.HTMLElement.prototype.scrollIntoView = original; }
 });

@@ -2012,6 +2012,20 @@ async function wholeEach(page: Page, scope: string, selector: string): Promise<s
   return failures;
 }
 
+/** An answer link's hit rect: its drawn box on the desktop, 44 px round its line's middle on the phone (a positioned
+    layer the box does not report). Lists the corners where a tap misses the link, whatever line runs under them. */
+async function linkTarget(page: Page, selector: string) {
+  return page.locator(selector).evaluate((link) => {
+    const drawn = link.getBoundingClientRect();
+    const middle = (drawn.top + drawn.bottom) / 2;
+    const box = getComputedStyle(link, "::after").content === "none" ? drawn : new DOMRect(drawn.left, middle - 22, drawn.width, 44);
+    const corners = [[box.left + 1, box.top + 1], [box.right - 1, box.top + 1], [box.left + 1, box.bottom - 1], [box.right - 1, box.bottom - 1]] as const;
+    const name = (element: Element | null) => (element ? `${element.tagName.toLowerCase()}.${element.className}` : "none");
+    const missed = corners.filter(([x, y]) => !link.contains(document.elementFromPoint(x, y))).map(([x, y]) => `${Math.round(x)},${Math.round(y)} ${name(document.elementFromPoint(x, y))}`);
+    return { width: box.width, height: box.height, missed };
+  });
+}
+
 export async function captureTaskSummaryFrames(browser: Browser, base: string, out: string, phone: boolean) {
   const { translate } = await import("@/lib/i18n");
   fs.mkdirSync(out, { recursive: true });
@@ -2102,9 +2116,11 @@ export async function captureTaskSummaryFrames(browser: Browser, base: string, o
       expect(rule.width).toBe("2px");
       expect(await entry("p-refresh:review:attempt:2").evaluate((node) => getComputedStyle(node.querySelector(".chronology-what")!, "::before").content)).toBe("none");
       const link = lane.locator("[data-chronology-answers]");
-      const linkBox = await link.boundingBox();
-      if (phone) expect(linkBox!.height).toBeGreaterThanOrEqual(44);
-      /* The entry's words start on its time's line; its result line follows the open button, which keeps 44 px on the phone, without overlapping it. */
+      const linkBox = await linkTarget(page, `${csv} [data-chronology-entry="p-refresh:started"] [data-chronology-answers]`);
+      if (phone) { expect(linkBox.height).toBeGreaterThanOrEqual(44); expect(linkBox.width).toBeGreaterThanOrEqual(44); expect(linkBox.missed).toEqual([]); }
+      /* The entry's words start on its time's line and its result line sits right under them; the next entry starts
+         visibly further down. On the phone the open button keeps 44 px with the result line inside it: a tap on the
+         result's words opens the entry, and the result's link keeps a whole 44 px of its own. */
       const row = await refreshFix.evaluate((node) => {
         /* Text rects only: an inline-block link's padded box starts above its line. */
         const lines = (element: Element) => {
@@ -2113,25 +2129,75 @@ export async function captureTaskSummaryFrames(browser: Browser, base: string, o
           for (let text = walker.nextNode(); text; text = walker.nextNode()) { const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
           return rects.sort((one, two) => one.top - two.top);
         };
-        const open = node.querySelector(".chronology-open")!;
+        const open = node.querySelector<HTMLElement>(".chronology-open")!;
+        const result = node.querySelector<HTMLElement>("[data-chronology-result]")!;
         const box = open.getBoundingClientRect();
-        return { time: lines(node.querySelector(".chronology-time")!)[0]!.top, words: lines(open)[0]!.top, result: lines(node.querySelector("[data-chronology-result]")!)[0]!.top, bottom: box.bottom, target: box.height };
+        const words = lines(open);
+        const resultLines = lines(result);
+        const next = node.nextElementSibling ? lines(node.nextElementSibling.querySelector(".chronology-what")!)[0]! : null;
+        /* The result's plain words, before its link, probed where a finger lands. */
+        const plain = resultLines[0]!;
+        const hit = (x: number, y: number) => document.elementFromPoint(x, y);
+        return {
+          resultLines: resultLines.length,
+          time: lines(node.querySelector(".chronology-time")!)[0]!.top, words: words[0]!.top,
+          gap: resultLines[0]!.top - words[words.length - 1]!.bottom,
+          nextGap: next ? next.top - resultLines[resultLines.length - 1]!.bottom : null,
+          resultTop: resultLines[0]!.top, bottom: box.bottom, target: box.height,
+          plainOpens: open.contains(hit(plain.left + 2, (plain.top + plain.bottom) / 2)),
+        };
       });
+      const resultLink = await linkTarget(page, `${csv} [data-chronology-entry="p-refresh:refresh:attempt:2"] [data-chronology-answers]`);
       expect(Math.abs(row.words - row.time)).toBeLessThanOrEqual(2);
-      expect(row.result - row.bottom).toBeGreaterThanOrEqual(-0.5);
-      expect(row.result - row.bottom).toBeLessThanOrEqual(4);
-      if (phone) expect(row.target).toBeGreaterThanOrEqual(44);
+      expect(row.gap).toBeGreaterThanOrEqual(-0.5);
+      expect(row.gap).toBeLessThanOrEqual(6);
+      expect(row.nextGap).not.toBeNull();
+      expect(row.nextGap!).toBeGreaterThan(row.gap + 2);
+      if (phone) {
+        expect(row.target).toBeGreaterThanOrEqual(44);
+        expect(row.nextGap!).toBeGreaterThanOrEqual(Math.max(12, 2 * row.gap));
+        expect(row.plainOpens).toBe(true);
+        expect(resultLink.height).toBeGreaterThanOrEqual(44);
+        expect(resultLink.width).toBeGreaterThanOrEqual(44);
+        expect(resultLink.missed).toEqual([]);
+      } else {
+        expect(row.resultTop - row.bottom).toBeGreaterThanOrEqual(-0.5);
+        expect(row.resultTop - row.bottom).toBeLessThanOrEqual(4);
+      }
       await page.screenshot({ path: path.join(out, `${name}-csv-timeline.png`) });
       const foldedCuts = await wholeEach(page, csv, "[data-chronology-result]");
       /* The link opens the fold over the update it names, brings it into view and focuses it. */
       await link.click();
       await entry("p-export:merge:update:0").waitFor();
       await page.waitForFunction(() => document.activeElement?.closest("[data-chronology-entry]")?.getAttribute("data-chronology-entry") === "p-export:merge:update:0");
-      const target = await entry("p-export:merge:update:0").evaluate((node) => { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, innerHeight }; });
-      expect(target.top).toBeGreaterThanOrEqual(0);
-      expect(target.bottom).toBeLessThanOrEqual(target.innerHeight);
+      /* It lands in the middle of its scroller, whole and at least 48 px from either visible edge, and carries
+         the focus ring and the well tint. */
+      const target = await entry("p-export:merge:update:0").evaluate((node) => {
+        let scroller = node.parentElement;
+        while (scroller && !(/(auto|scroll)/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) scroller = scroller.parentElement;
+        const frame = scroller?.getBoundingClientRect();
+        const top = Math.max(frame?.top ?? 0, 0);
+        const bottom = Math.min(frame?.bottom ?? innerHeight, innerHeight);
+        const range = document.createRange(); range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        const probe = document.createElement("div"); probe.style.background = "var(--surface-well)"; document.body.append(probe);
+        const well = getComputedStyle(probe).backgroundColor; probe.remove();
+        const style = getComputedStyle(node);
+        return {
+          fromTop: Math.min(...rects.map((rect) => rect.top)) - top, fromBottom: bottom - Math.max(...rects.map((rect) => rect.bottom)),
+          landed: node.hasAttribute("data-chronology-landed"), outline: `${style.outlineStyle} ${style.outlineWidth}`, background: style.backgroundColor, well,
+        };
+      });
+      expect(target.fromTop).toBeGreaterThanOrEqual(48);
+      expect(target.fromBottom).toBeGreaterThanOrEqual(48);
+      expect(target.landed).toBe(true);
+      expect(target.outline).toBe("solid 2px");
+      expect(target.background).toBe(target.well);
       expect(await page.locator(`${csv} section.chronology`).getAttribute("data-chronology-hidden")).toBe("0");
       await page.screenshot({ path: path.join(out, `${name}-csv-link.png`) });
+      /* The mark lasts while the entry holds focus. */
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      expect(await page.locator(`${csv} [data-chronology-landed]`).count()).toBe(0);
       /* Unfolded: the build retried after its lost host and the fix answering the first review. */
       const fix = entry("p-export:fix:attempt:1");
       const fixLine = await fix.locator("[data-chronology-result]").innerText();
@@ -2140,7 +2206,7 @@ export async function captureTaskSummaryFrames(browser: Browser, base: string, o
       await fix.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
       await page.screenshot({ path: path.join(out, `${name}-csv-unfolded.png`) });
       const timelineCuts = [...foldedCuts, ...await wholeEach(page, csv, "[data-chronology-result]")];
-      Object.assign(reading, { csv: { by: await panel.locator("[data-task-summary-by]").innerText(), firstLine, surface, refreshLine, fixLine, rule, row, link: linkBox, hiddenBefore, target, summaryCuts, timelineCuts } });
+      Object.assign(reading, { csv: { by: await panel.locator("[data-task-summary-by]").innerText(), firstLine, surface, refreshLine, fixLine, rule, row, link: linkBox, resultLink, hiddenBefore, target, summaryCuts, timelineCuts } });
       expect(summaryCuts).toEqual([]);
       expect(timelineCuts).toEqual([]);
 
