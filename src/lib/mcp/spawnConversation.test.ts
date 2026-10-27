@@ -2,23 +2,36 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { NextRequest } from "next/server";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRedaction";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { loadTasks, loadTasksFile, mutateTasksFile } from "@/lib/tasks/store";
-import { productionDomainDependencies, viewerMcpBindings, type CallerAttribution, type ViewerMcpDomainDependencies } from "./bindings";
+import { statePath } from "@/lib/configDir";
+import { persistProjectAliases } from "@/lib/projects/aliases";
+import { projectAliasStore } from "@/lib/projects/persistence";
+import { productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution, type ViewerMcpDomainDependencies } from "./bindings";
+import { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore, type McpToolCallContext, type McpToolResult } from "./server";
+import { currentMcpHttpCaller } from "./callerContext";
+import { setMcpHttpDependenciesForTests } from "./http";
+import { POST } from "@/app/api/mcp/route";
 
 const now = "2026-10-26T22:30:00.000Z";
 const retryAt = "2026-10-26T22:31:00.000Z";
 const failure = "native protocol verification failed";
 const admissionWait = "runtime host admission is unavailable";
 const directories: string[] = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 let registry: AgentRegistry | undefined;
 let restoreTasks: (() => void) | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  setMcpHttpDependenciesForTests(null);
   registry?.close();
   setAgentRegistryForTests(null);
   restoreTasks?.();
@@ -80,10 +93,191 @@ function fixture(mode: "off" | "sqlite", options: { alias?: boolean; parent?: bo
     cwd: directory, accountId: "account-a", status: "unhosted", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
-  return { directory, receipt, bindings, transcriptPath, settle, aliasId,
+  const writeTranscript = () => {
+    fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    directories.push(path.dirname(transcriptPath));
+    fs.writeFileSync(transcriptPath, [
+      { type: "session_meta", payload: { id: "accepted-native-session", cwd: directory } },
+      { type: "response_item", timestamp: now, payload: { type: "message", role: "assistant",
+        content: [{ type: "output_text", text: "Transcript is ready." }] } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  };
+  return { directory, receipt, bindings, dependencies, transcriptPath, settle, aliasId, writeTranscript,
     useRegistryProject: () => { delete dependencies.callerProject; },
     as: (next: CallerAttribution, nextProject: string | null) => { caller = next; project = nextProject; },
     restart: () => { registry!.close(); open(); } };
+}
+
+function receiptService(f: ReturnType<typeof fixture>, mode: "memory" | "sqlite") {
+  const filename = path.join(f.directory, "mcp-receipts.sqlite");
+  let store = mode === "sqlite" ? new SqliteMcpReceiptStore(filename) : new MemoryMcpReceiptStore();
+  cleanups.push(() => { if (store instanceof SqliteMcpReceiptStore) store.close(); });
+  const open = () => createMcpToolService(f.bindings, store, viewerMcpToolPolicy(f.dependencies));
+  let service = open();
+  return {
+    call: (tool: string, args: Record<string, unknown>, context?: McpToolCallContext) => service.callTool(tool, args, context),
+    restart: () => {
+      if (store instanceof SqliteMcpReceiptStore) { store.close(); store = new SqliteMcpReceiptStore(filename); }
+      service = open();
+    },
+  };
+}
+
+const owner: CallerAttribution = { kind: "agent", conversationId: "conversation_owner", role: "builder" };
+const foreign: CallerAttribution = { kind: "agent", conversationId: "conversation_foreign", role: "builder" };
+const receiptTools = ["get_conversation", "agent_activity"] as const;
+
+function expectPrivateReceipt(result: McpToolResult, tool: typeof receiptTools[number]) {
+  expect(result).toMatchObject(tool === "get_conversation"
+    ? { ok: true, evidence: "spawn-receipt", state: "failed", reason: failure }
+    : { ok: true, count: 1, conversations: [{ evidence: "spawn-receipt", state: "failed", reason: failure }] });
+}
+
+function expectNoPrivateReceipt(result: McpToolResult, tool: typeof receiptTools[number]) {
+  expect(result).toMatchObject(tool === "get_conversation"
+    ? { ok: false, error: "conversation not found" }
+    : { ok: true, count: 0, conversations: [] });
+  expect(JSON.stringify(result)).not.toContain(failure);
+  expect(JSON.stringify(result)).not.toContain("spawn-receipt");
+}
+
+for (const registryMode of ["off", "sqlite"] as const) {
+  for (const receiptMode of ["memory", "sqlite"] as const) {
+    for (const tool of receiptTools) {
+      test(`keyed ${tool} partitions private receipts by caller and project (${registryMode}/${receiptMode})`, async () => {
+        const f = fixture(registryMode);
+        registry!.failSpawn(f.receipt.launchId, failure);
+        const before = registry!.readOnlySnapshot();
+        const service = receiptService(f, receiptMode);
+        const args = { conversationId: f.receipt.conversationId, clientRequestId: "read-pending" };
+        expectPrivateReceipt(await service.call(tool, args), tool);
+        expect(await service.call(tool, args)).toMatchObject({ replayed: true });
+        f.restart();
+        service.restart();
+        expectPrivateReceipt(await service.call(tool, args), tool);
+        expect(await service.call(tool, args)).toMatchObject({ replayed: true });
+        for (const [caller, project] of [
+          [foreign, "fixture"], [foreign, "other-project"],
+          [owner, "other-project"], [owner, null],
+          [{ kind: "unidentified", conversationId: null, role: null }, "fixture"],
+        ] as const) {
+          f.as(caller, project);
+          expectNoPrivateReceipt(await service.call(tool, { ...args, clientRequestId: "fresh-refusal" }), tool);
+          expectNoPrivateReceipt(await service.call(tool, args), tool);
+        }
+        f.as(owner, "fixture");
+        const replay = await service.call(tool, args);
+        expectPrivateReceipt(replay, tool);
+        expect(replay).toMatchObject({ replayed: true });
+        expect(registry!.readOnlySnapshot().receipts).toEqual(before.receipts);
+      });
+
+      test.each(["caller", "project"] as const)(`in-flight ${tool} cannot join another %s (${registryMode}/${receiptMode})`, async changed => {
+        const f = fixture(registryMode);
+        registry!.failSpawn(f.receipt.launchId, failure);
+        const original = f.bindings[tool];
+        let entered!: () => void;
+        let release!: () => void;
+        const ready = new Promise<void>(resolve => { entered = resolve; });
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let calls = 0;
+        f.bindings[tool] = Object.assign(async (...args: Parameters<typeof original>) => {
+          calls++;
+          const answer = await original(...args);
+          if (calls === 1) { entered(); await held; }
+          return answer;
+        }, original);
+        const service = receiptService(f, receiptMode);
+        const args = { conversationId: f.receipt.conversationId, clientRequestId: "held-read" };
+        const pending = service.call(tool, args);
+        try {
+          await ready;
+          f.as(changed === "caller" ? foreign : owner, changed === "project" ? "other-project" : "fixture");
+          const other = service.call(tool, args);
+          // The foreign call's promise chain reaches joining/dispatch before
+          // this next event-loop turn releases the owner's completed payload.
+          setImmediate(release);
+          expectNoPrivateReceipt(await other, tool);
+          expectPrivateReceipt(await pending, tool);
+          expect(calls).toBe(2);
+        } finally { release(); await pending; }
+      });
+    }
+  }
+}
+
+for (const tool of receiptTools) {
+  test(`keyed ${tool} replays across canonical project aliases`, async () => {
+    const f = fixture("sqlite");
+    registry!.failSpawn(f.receipt.launchId, failure);
+    const filename = statePath("project-aliases.json");
+    const previous = projectAliasStore.readExisting(filename);
+    cleanups.push(() => { projectAliasStore.mutate(filename, () => ({ next: previous, result: undefined })); });
+    expect(persistProjectAliases([{ source: "fixture-legacy", target: "fixture", displayName: "Fixture" }])).toBe(true);
+    const service = receiptService(f, "sqlite");
+    const args = { conversationId: f.receipt.conversationId, clientRequestId: "canonical-read" };
+    expectPrivateReceipt(await service.call(tool, args), tool);
+    f.as(owner, "fixture-legacy");
+    const replay = await service.call(tool, args);
+    expectPrivateReceipt(replay, tool);
+    expect(replay).toMatchObject({ replayed: true });
+  });
+
+  test(`HTTP SDK ${tool} keeps persisted receipts private and permits transcript takeover`, async () => {
+    const f = fixture("sqlite");
+    registry!.failSpawn(f.receipt.launchId, failure);
+    const service = receiptService(f, "sqlite");
+    const ownerCapability = "a".repeat(43);
+    const foreignCapability = "b".repeat(43);
+    let ownerProject: string | null = "fixture";
+    f.dependencies.callerAttribution = () => currentMcpHttpCaller()?.capability === ownerCapability ? owner : foreign;
+    f.dependencies.callerProject = () => currentMcpHttpCaller()?.capability === ownerCapability ? ownerProject : "other-project";
+    setMcpHttpDependenciesForTests({
+      service: async () => ({ callTool: (name, args, context) => service.call(name, args, context) }),
+      conversationForCapability: capability => capability === ownerCapability ? owner.conversationId
+        : capability === foreignCapability ? foreign.conversationId : null,
+    });
+    const listener = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch: request => POST(new NextRequest(request)) });
+    cleanups.push(() => { listener.stop(true); });
+    const url = new URL(`http://127.0.0.1:${listener.port}/api/mcp`);
+    const clients: Client[] = [];
+    cleanups.push(async () => { for (const client of clients) await client.close(); });
+    for (const capability of [ownerCapability, foreignCapability]) {
+      const client = new Client({ name: "receipt-fixture", version: "1" });
+      clients.push(client);
+      await client.connect(new StreamableHTTPClientTransport(url, {
+        requestInit: { headers: { "x-llv-spawn-capability": capability } },
+      }));
+    }
+    const args = { conversationId: f.receipt.conversationId, clientRequestId: "sdk-read-pending", full: true };
+    const call = async (client: Client, input = args) => (await client.callTool({ name: tool, arguments: input })).structuredContent as McpToolResult;
+    expectPrivateReceipt(await call(clients[0]!), tool);
+    f.restart();
+    service.restart();
+    expectPrivateReceipt(await call(clients[0]!), tool);
+    expect(await call(clients[0]!)).toMatchObject({ replayed: true });
+    expectNoPrivateReceipt(await call(clients[1]!), tool);
+    ownerProject = "other-project";
+    expectNoPrivateReceipt(await call(clients[0]!), tool);
+    ownerProject = "fixture";
+    expectPrivateReceipt(await call(clients[0]!), tool);
+    // A real transcript remains readable by the other caller, even when the
+    // accepted launch's private receipt belongs to the original owner.
+    const launched = registry!.beginSpawnRequest({
+      engine: "codex", cwd: f.directory, transport: "structured", conversationId: "conversation_transcript_spawn",
+      parentConversationId: "conversation_owner",
+      launchProfile: { cwd: f.directory, project: "fixture", title: "Transcript takeover" },
+    });
+    if (launched.kind !== "created") throw new Error("transcript launch was not created");
+    expect(f.settle(launched.receipt.launchId).kind).toBe("settled");
+    f.writeTranscript();
+    const transcript = await call(clients[1]!, { ...args, conversationId: launched.receipt.conversationId, clientRequestId: "sdk-transcript" });
+    expect(transcript).toMatchObject(tool === "get_conversation"
+      ? { ok: true, messages: [{ text: "Transcript is ready." }] }
+      : { ok: true, count: 1, conversations: [{ evidenceSource: "transcript" }] });
+    expect(JSON.stringify(transcript)).not.toContain(failure);
+  });
 }
 
 for (const mode of ["off", "sqlite"] as const) {
@@ -215,13 +409,7 @@ for (const mode of ["off", "sqlite"] as const) {
     f.settle();
     f.restart();
     expect(await f.bindings.get_conversation({ conversationId: f.receipt.conversationId })).toMatchObject({ state: "launched" });
-    fs.mkdirSync(path.dirname(f.transcriptPath), { recursive: true });
-    directories.push(path.dirname(f.transcriptPath));
-    fs.writeFileSync(f.transcriptPath, [
-      { type: "session_meta", payload: { id: "accepted-native-session", cwd: f.directory } },
-      { type: "response_item", timestamp: now, payload: { type: "message", role: "assistant",
-        content: [{ type: "output_text", text: "Transcript is ready." }] } },
-    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    f.writeTranscript();
     f.as({ kind: "agent", conversationId: "conversation_other", role: "builder" }, "other-project");
     const answer = await f.bindings.get_conversation({ conversationId: f.receipt.conversationId });
     expect(answer.messages).toMatchObject([{ text: "Transcript is ready." }]);

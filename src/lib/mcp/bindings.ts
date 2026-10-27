@@ -3315,15 +3315,25 @@ function conversationTailAnswer(
   };
 }
 
+function spawnConversationAccess(args: McpToolArgs,
+  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "callerProject">) {
+  const caller = attributionOf(dependencies);
+  const project = dependencies.callerProject ? dependencies.callerProject()
+    : caller.conversationId ? callerProjectFromSnapshot(agentRegistry().livenessConversationSnapshot(caller.conversationId), caller.conversationId)
+      : null;
+  return { caller, project, requestedProject: text(args.project) || undefined };
+}
+
 function spawnConversationForCaller(conversationId: string, args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "callerProject">) {
-  return spawnConversation(conversationId, () => {
-    const caller = attributionOf(dependencies);
-    const project = dependencies.callerProject ? dependencies.callerProject()
-      : caller.conversationId ? callerProjectFromSnapshot(agentRegistry().livenessConversationSnapshot(caller.conversationId), caller.conversationId)
-        : null;
-    return { caller, project, requestedProject: text(args.project) || undefined };
-  });
+  return spawnConversation(conversationId, () => spawnConversationAccess(args, dependencies));
+}
+
+async function conversationReadReceiptScope(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+  const { caller, project } = spawnConversationAccess(args, dependencies);
+  // Keyed reads can contain private launch facts. Partition both saved replay
+  // and in-flight joins using the same server-derived access as the fallback.
+  return JSON.stringify({ caller, project: project ? canonicalProject(project) : null });
 }
 
 async function getConversation(
@@ -8335,7 +8345,10 @@ export function viewerMcpBindings(
       dryRun: args.dryRun !== false, ...(args.project ? { project: args.project } : {}),
     }, {}, context),
     search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
-    get_conversation: (args, context) => getConversation(args, domainDependencies, context),
+    get_conversation: Object.assign(
+      (args: McpToolArgs, context?: McpToolCallContext) => getConversation(args, domainDependencies, context),
+      { receiptScope: (args: McpToolArgs) => conversationReadReceiptScope(args, domainDependencies) },
+    ),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: reads.conversation_messages,
     deploy_exact_sha: Object.assign(
@@ -8367,7 +8380,7 @@ export function viewerMcpBindings(
         return JSON.stringify({ caller, scope });
       },
     }),
-    agent_activity: async (args, context) => {
+    agent_activity: Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
       if (text(args.conversationId) && !text(args.cursor)) {
         const payload = await reads.agent_activity(args, context);
         const rows = payload.conversations as Record<string, unknown>[] | undefined;
@@ -8377,7 +8390,7 @@ export function viewerMcpBindings(
         return budgeted("agent_activity", args, 24_000, async () => payload);
       }
       return budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context));
-    },
+    }, { receiptScope: (args: McpToolArgs) => conversationReadReceiptScope(args, domainDependencies) }),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
