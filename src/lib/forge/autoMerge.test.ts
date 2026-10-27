@@ -348,14 +348,18 @@ test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot d
   }
 });
 
-test.each(["before-write", "credential-mint", "in-flight"] as const)("operator rejection at merge reconciles the actual effect: %s", async phase => {
+test.each([
+  ["before-write", "success"], ["credential-mint", "success"], ["in-flight", "success"],
+  ["in-flight", "refused"], ["in-flight", "lost-reply"],
+] as const)("operator rejection at merge reconciles the actual effect: %s / %s", async (phase, outcome) => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
   const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
-  const project = `atlas-merge-${phase}`;
+  const project = `atlas-merge-${phase}-${outcome}`;
   const { task } = await admitProactiveTask({ ...candidate(`merge-${phase}`), project }, { ...context(), project }, undefined, authority());
   const completed = lane("proactive-merge");
   completed.taskIds = [task.id];
   const h = harness({ lanes: [completed], prs: [openPr(11)] });
+  if (outcome === "refused") h.refuseMerges("fixture merge refused");
   await h.sweep();
   expect(h.writes).toEqual([]);
   await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
@@ -377,7 +381,9 @@ test.each(["before-write", "credential-mint", "in-flight"] as const)("operator r
       exec: async args => {
         // exec is the real dispatch seam: rejection here follows write start.
         if (phase === "in-flight") await reject();
-        return actualWrite(args, REPO);
+        const reply = await actualWrite(args, REPO);
+        if (outcome === "lost-reply") throw new Error("fixture merge acknowledgement was lost");
+        return reply;
       },
     }), () => true);
   }
@@ -388,7 +394,9 @@ test.each(["before-write", "credential-mint", "in-flight"] as const)("operator r
     expect(h.merge(completed.id)).toMatchObject({ state: "blocked", reason: expect.stringContaining("rejected") });
   } else {
     expect(h.merges()).toHaveLength(1);
-    expect(h.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
+    expect(h.merge(completed.id)).toMatchObject(outcome === "refused"
+      ? { state: "blocked", reason: expect.stringContaining("fixture merge refused") }
+      : { state: "merged", by: "auto-merge" });
   }
 });
 
