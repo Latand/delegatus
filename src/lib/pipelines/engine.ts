@@ -6449,10 +6449,17 @@ async function continueRestoredClaudeStage(
 ): Promise<boolean> {
   if (attempt.effectiveRole.engine !== "claude" || attempt.state !== "running" || attempt.paneId
     || !attempt.conversationId || !attempt.agentPath || !attempt.startedAt || attempt.report || attempt.verdict || !ports.resumeSeveredTurn) return false;
+  const evidenceFloor = attemptEvidenceFloor(attempt);
   const reserved = attempt.restoreContinuation;
   if (reserved && (reserved.conversationId !== attempt.conversationId || reserved.transcriptPath !== attempt.agentPath)) return false;
+  // A completed switch owns a fresh turn even when Claude keeps its transcript.
+  // Also retire records saved by a controller that predated switch cleanup.
+  if (reserved && unixMs(reserved.cutAt) < unixMs(evidenceFloor)) {
+    delete attempt.restoreContinuation;
+    await persist();
+  }
   const cut = ports.conversationRestartCut?.(attempt.conversationId);
-  if (!attempt.restoreContinuation && (!cut || unixMs(cut.recordedAt) < unixMs(attempt.startedAt ?? ""))) return false;
+  if (!attempt.restoreContinuation && (!cut || unixMs(cut.recordedAt) < unixMs(evidenceFloor))) return false;
   // Preserve the ordinary cheap live path while both scan and runtime agree.
   // A stale running ledger over a restored idle host must still fall through.
   if (liveTurn && !await ports.conversationTurnInterrupted?.(attempt.conversationId)) return true;

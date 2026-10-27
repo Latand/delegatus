@@ -2,6 +2,8 @@ import { expect, test, fs, path, spawn, harness, idleStageHostFixture, defaultPi
   tickPipelines, loadPipelines, savePipelines, durableStageTurnEvidence, withRuntimeSnapshot, recoveryReport, engineModule, entry } from "./engine.fixture";
 import { syntheticNoOpRecord, queueOperationRecords } from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
 import type { PipelinePorts } from "./engine";
+import { driveRuntimeSwitch, switchOperationKey } from "./runtimeSwitch";
+import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 
 const WAIT = 3 * 60_000;
 
@@ -70,7 +72,7 @@ async function restoredStage() {
   };
 }
 
-async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStage>>) {
+async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStage>>, cutAt = r.cutAt) {
   const probe = path.join(path.dirname(r.f.transcriptPath), "restore-probe.ts");
   const moduleUrl = (file: string) => new URL(file, import.meta.url).href;
   fs.writeFileSync(probe, `
@@ -92,7 +94,7 @@ async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStag
       conversationOutOfMemory: async () => null,
       conversationAgentActive: async () => null, conversationTurnInterrupted: async () => "idle",
       conversationRestartCutHeld: () => false, conversationInterruption: () => null,
-      conversationRestartCut: () => ({recordedAt: ${JSON.stringify(r.cutAt)}}),
+      conversationRestartCut: () => ({recordedAt: ${JSON.stringify(cutAt)}}),
       conversationOperatorStopped: async () => false, conversationDeliveryOutstanding: () => false,
       conversationDeliveryCompleted: () => true,
       durableTurnEvidence: durableStageTurnEvidence,
@@ -115,6 +117,98 @@ async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStag
   expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
   return { result: JSON.parse(stdout.trim()), pid: child.pid! };
 }
+
+test.each([1, 3])("a completed runtime switch retires restore continuation count %s before ordinary verdict handling", async count => {
+  const r = await restoredStage();
+  try {
+    for (let n = 1; n <= count; n++) {
+      await tickPipelines([], r.ports);
+      r.advance(WAIT);
+    }
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    expect(attempt.restoreContinuation?.count).toBe(count);
+    const stage = lane.stages[0]!;
+    const requestedAt = r.ports.now();
+    const record: NonNullable<typeof attempt.runtimeSwitches>[number] = {
+      id: "restore-switch", seq: 1, requestedAt, actor: { kind: "operator" }, mode: "fork", phase: "continuing",
+      from: { engine: "claude", model: attempt.effectiveRole.model, effort: attempt.effectiveRole.effort,
+        serviceTier: null, accountId: attempt.accountId ?? null, conversationId: attempt.conversationId!,
+        launchId: attempt.launchId, sessionId: attempt.sessionId, agentPath: attempt.agentPath },
+      to: { engine: "claude", model: "opus", effort: "high", serviceTier: null, accountId: attempt.accountId ?? null, accountPinned: false },
+      cutAt: requestedAt,
+    };
+    const key = switchOperationKey(record, "continue");
+    record.continuationDispatch = { key, at: requestedAt };
+    attempt.runtimeSwitches = [record];
+    savePipelines([lane]);
+    const ledger = new FileClaudeDeliveryLedger();
+    const session = path.basename(r.f.transcriptPath, ".jsonl");
+    ledger.recordQueued(session, { id: key, text: "Continue the stage", origin: { kind: "agent", role: "pipeline" } }, "turn-started");
+    ledger.confirmDelivered(session, key, "switch-prompt");
+    r.advance(1000);
+    const turnAt = r.ports.now();
+    r.records.push({ type: "user", uuid: "switch-prompt", timestamp: turnAt,
+      message: { role: "user", content: "Continue the stage" } });
+    r.advance(1000);
+    const answerAt = Date.parse(r.ports.now());
+    r.records.push({ type: "assistant", timestamp: r.ports.now(), message: { role: "assistant", model: "opus",
+      stop_reason: "end_turn", content: [{ type: "text", text: "Stage work completed" }] } });
+    r.write();
+    r.ports.runtimeSwitchDelivery = async () => ({ state: "delivered", at: requestedAt });
+    r.ports.conversationGeneration = () => ({ ...record.to, sessionId: "switched-session", agentPath: r.f.transcriptPath });
+    await driveRuntimeSwitch(lane, stage, attempt, r.ports, () => savePipelines([lane]), async () => {
+      throw new Error("delivered fork must not spawn");
+    });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ sessionId: "switched-session", runtimeEvidenceSince: turnAt,
+      runtimeSwitches: [{ phase: "committed", continuedAt: turnAt }] });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation).toBeUndefined();
+    r.advance(WAIT);
+    await tickPipelines([], r.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("running");
+    expect(current.runs[0]!.attempts[0]!.verdictRequest?.messageTs).toBe(answerAt);
+    expect(current.runs[0]!.attempts[0]!.restoreContinuation).toBeUndefined();
+    expect(r.sends).toHaveLength(count + 1);
+    expect(r.sends.at(-1)!.clientMessageId).toMatch(/^stage-verdict-request-/);
+    expect(r.h.calls.filter(call => call.startsWith("stop-host:"))).toEqual([]);
+  } finally { await r.f.end(); }
+});
+
+test.each([false, true])("a restart cut before the effective turn cannot claim it (saved recovery: %s)", async saved => {
+  const r = await restoredStage();
+  try {
+    if (saved) await tickPipelines([], r.ports);
+    const lane = loadPipelines()[0]!;
+    r.advance(1000);
+    lane.runs[0]!.attempts[0]!.runtimeEvidenceSince = r.ports.now();
+    savePipelines([lane]);
+    const { result } = await tickFromFreshController(r);
+    expect(result.keys).toEqual([]);
+    expect(result.recovery).toBeUndefined();
+    expect(result.state).toBe("running");
+  } finally { await r.f.end(); }
+});
+
+test("a fresh controller gives a later restart its own continuation budget after retiring stale recovery", async () => {
+  const r = await restoredStage();
+  try {
+    for (let n = 1; n <= 3; n++) {
+      await tickPipelines([], r.ports);
+      r.advance(WAIT);
+    }
+    const lane = loadPipelines()[0]!;
+    lane.runs[0]!.attempts[0]!.runtimeEvidenceSince = r.ports.now();
+    savePipelines([lane]);
+    r.advance(1000);
+    const cutAt = r.ports.now();
+    const { result } = await tickFromFreshController(r, cutAt);
+    expect(result.state).toBe("running");
+    expect(result.recovery).toMatchObject({ cutAt, count: 1, acceptedAt: cutAt });
+    expect(result.keys).toEqual([result.recovery.clientMessageId]);
+    expect(r.sends.map(send => send.clientMessageId)).not.toContain(result.keys[0]);
+  } finally { await r.f.end(); }
+});
 
 test.each(["unhosted", "missing"] as const)
 ("native restore bookkeeping keeps its cut and continues the same Claude stage before unavailable-host grace settlement (%s projection)", async projection => {
@@ -468,7 +562,7 @@ test.each(["prompt", "stop", "pending", "active", "native tool work", "account",
   } finally { await r.f.end(); }
 });
 
-test.each(["unchanged", "report", "control", "identity"] as const)("a live queue callback rereads persisted %s authority", async change => {
+test.each(["unchanged", "report", "control", "identity", "session", "evidence floor", "engine"] as const)("a live queue callback rereads persisted %s authority", async change => {
   const r = await restoredStage();
   try {
     r.ports.resumeSeveredTurn = async input => {
@@ -477,6 +571,9 @@ test.each(["unchanged", "report", "control", "identity"] as const)("a live queue
       if (change === "report") attempt.report = recoveryReport(r.ports.now());
       if (change === "control") lane.controlGeneration = "operator-control-generation";
       if (change === "identity") attempt.conversationId = "conversation_replacement";
+      if (change === "session") attempt.sessionId = "switched-session";
+      if (change === "evidence floor") attempt.runtimeEvidenceSince = new Date(Date.parse(r.cutAt) + 1000).toISOString();
+      if (change === "engine") attempt.effectiveRole.engine = "codex";
       if (change !== "unchanged") await saveFromPeerProcess(lane);
       const before = loadPipelines()[0]!;
       const allowed = await input.continuationAllowed!();
