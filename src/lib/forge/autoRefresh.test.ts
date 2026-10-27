@@ -1110,6 +1110,11 @@ function queuedRefreshes(required?: string[], count = 12) {
 test.each([
   ["refresh", "running", "running", true],
   ["refresh", "passed", "committing", true],
+  ["refresh", "skipped", "committing", true],
+  ["refresh", "failed", "pending", true],
+  ["refresh", "passed", "pending", true],
+  ["refresh", "needs_decision", "pending", true],
+  ["refresh", "skipped", "pending", true],
   ["refresh", "passed", "running", false],
   ["refresh", "failed", "running", false],
   ["refresh", "needs_decision", "running", false],
@@ -1132,6 +1137,84 @@ test.each([
   else expect(h.merge("queued-1")!.reason).toBeNull();
   expect(h.creates).toHaveLength(held ? 1 : 2);
   expect(h.writes).toEqual([]);
+});
+
+test("an unresolved repository merge holds dispatch across polling windows and process restarts", async () => {
+  const verify = async (h: ReturnType<typeof harness>) => {
+    const owner = structuredClone(h.merge("queued-1"));
+    await h.sweep();
+    expect(h.merge("queued-1")).toEqual(owner);
+    expect(h.merges()).toEqual([]);
+    expect(h.merge("queued-2")).toMatchObject({ state: "queued", reason: "waiting for repository merge of PR #12 (pipeline queued-1)", readAt: iso(h.now()) });
+    // Once the refresh leaves the queue, an older queued PR must still let
+    // this accepted merge reconcile its landing outside ordinary FIFO reads.
+    h.remove("refresh-1");
+    h.merge("queued-0")!.state = "merged";
+    h.merge("queued-1")!.requestedAt = iso(T0 + 100);
+    h.prs.get(12)!.state = "MERGED";
+    await h.run(4 * MERGE_POLL_MS, () => h.merge("queued-2")!.state === "merged");
+    expect(h.merge("queued-1")!.state).toBe("merged");
+    expect(h.merges().map(args => args[2])).toEqual(["13"]);
+    expect(h.creates).toHaveLength(0);
+  };
+  if (process.env.REPOSITORY_MERGE_FIXTURE) {
+    const stored = JSON.parse(fs.readFileSync(process.env.REPOSITORY_MERGE_FIXTURE, "utf8")) as { lanes: Pipeline[]; prs: PullRequest[] };
+    await verify(harness(stored));
+    return;
+  }
+  const h = queuedRefreshes(undefined, 3);
+  await h.sweep();
+  for (const index of [1, 2]) {
+    h.prs.get(index + 11)!.mergeStateStatus = "CLEAN";
+    Object.assign(h.merge(`queued-${index}`)!, { state: index === 1 ? "merging" : "queued", head: HEAD_A,
+      headSeenAt: iso(T0 - MERGE_SETTLE_MS), lastChecks: ["ci"], seenChecks: ["ci"],
+      nextReadAt: index === 1 ? iso(T0 + MERGE_POLL_MS) : null });
+  }
+  const lanes = h.ports.loadPipelines();
+  const fixture = path.join(sandbox, "repository-merge.json");
+  const stored = { lanes, prs: lanes.map(lane => h.prs.get(lane.delivery!.target.pr!)!) };
+  fs.writeFileSync(fixture, JSON.stringify(stored));
+  await verify(harness(stored));
+  const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", "^an unresolved repository merge holds dispatch across polling windows and process restarts$"], {
+    env: { ...process.env, REPOSITORY_MERGE_FIXTURE: fixture }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, `${stdout}\n${stderr}`).toBe(0);
+});
+
+test.each(["read", "method", "reservation", "dispatch"])("repository merge ownership is reread at %s", async seam => {
+  const h = queuedRefreshes(undefined, 3);
+  await h.sweep();
+  h.prs.get(12)!.mergeStateStatus = "CLEAN";
+  Object.assign(h.merge("queued-1")!, { head: HEAD_A, headSeenAt: iso(T0 - MERGE_SETTLE_MS), lastChecks: ["ci"], seenChecks: ["ci"] });
+  const takeOwnership = () => { h.merge("queued-2")!.state = "merging"; };
+  let raced = false;
+  const run = h.ports.run;
+  h.ports.run = async args => {
+    const result = await run(args);
+    if ((seam === "read" && args[0] === "pr" && args[1] === "view" && args[2] === "12") || (seam === "method" && args[0] === "repo")) {
+      raced = true; takeOwnership();
+    }
+    return result;
+  };
+  const mutate = h.ports.mutate;
+  h.ports.mutate = async (id, change) => {
+    if (seam === "reservation" && id === "queued-1") { raced = true; takeOwnership(); }
+    return mutate(id, change);
+  };
+  if (seam === "dispatch") {
+    const write = h.ports.write;
+    Object.assign(h.ports, { write: async (args: string[], repository: string, beforeDispatch: () => void) => {
+      await Promise.resolve(); raced = true; takeOwnership(); beforeDispatch();
+      return write(args, repository);
+    } });
+  }
+  await h.sweep();
+  expect(raced).toBe(true);
+  expect(h.writes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.merge("queued-1")!.state).toBe("queued");
+  expect(h.merge("queued-1")!.reason).toContain("repository merge of PR #13 (pipeline queued-2)");
 });
 
 test.each(["refresh", "later-work"])("a clean green follower passes a deferred conflict while the refresh lane is at %s", async stageId => {

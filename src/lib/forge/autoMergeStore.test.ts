@@ -918,10 +918,11 @@ describe("refresh retry recovery", () => {
     }
   });
 
-  test("a refresh lane in a later stage releases capacity in a fresh process", async () => {
+  test.each(["later", "failed", "passed", "needs_decision", "skipped", "publishing"] as const)("a persisted refresh reservation at %s releases capacity only after leaving refresh", async state => {
     const { child } = await waitingRefresh("running");
-    child.cursor!.stageId = "review";
-    child.runs.find(run => run.stageId === "refresh")!.attempts[0]!.state = "passed";
+    child.cursor!.stageId = state === "later" ? "review" : "refresh";
+    child.cursor!.state = state === "publishing" ? "committing" : "pending";
+    child.runs.find(run => run.stageId === "refresh")!.attempts[0]!.state = state === "publishing" ? "skipped" : state === "later" ? "passed" : state;
     const peer = missingPrLane("refresh-peer");
     peer.closedAt = iso(T0);
     peer.delivery!.target.pr = 8;
@@ -929,10 +930,11 @@ describe("refresh retry recovery", () => {
     savePipelines([...loadPipelines().filter(lane => lane.id !== child.id), child, peer]);
     const script = `
       const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
-      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const { loadPipelines, savePipelines } = await import("./src/lib/pipelines/store.ts");
       const starts = [];
-      await sweepAutoMerge(productionAutoMergePorts({
-        now: () => ${T0}, loadPipelines, cachedState: () => null,
+      let clock = ${T0};
+      const ports = productionAutoMergePorts({
+        now: () => clock, loadPipelines, cachedState: () => null,
         run: async args => {
           if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false,
             headRefOid: "${HEAD}", baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "BEHIND", statusCheckRollup: [] });
@@ -943,16 +945,28 @@ describe("refresh retry recovery", () => {
         },
         write: async () => { throw new Error("unexpected forge write"); },
         startRefresh: async request => { starts.push(request.delivery.pr); return { error: "fixture refresh refused" }; },
-      }));
+      });
+      await sweepAutoMerge(ports);
       const peer = loadPipelines().find(lane => lane.id === "refresh-peer");
-      console.log(JSON.stringify({ starts, state: peer.merge.state, reason: peer.merge.reason }));
+      const before = { starts: [...starts], state: peer.merge.state, reason: peer.merge.reason };
+      const lanes = loadPipelines();
+      lanes.find(lane => lane.id === "refresh-child").cursor.stageId = "review";
+      savePipelines(lanes);
+      clock += ${MERGE_POLL_MS};
+      await sweepAutoMerge(ports);
+      console.log(JSON.stringify({ before, starts }));
     `;
     const processChild = Bun.spawn([process.execPath, "-e", script], {
       cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const [output, error, code] = await Promise.all([new Response(processChild.stdout).text(), new Response(processChild.stderr).text(), processChild.exited]);
     expect(code, error).toBe(0);
-    expect(JSON.parse(output)).toEqual({ starts: [8], state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused" });
+    expect(JSON.parse(output)).toEqual({
+      before: state === "later"
+        ? { starts: [8], state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused" }
+        : { starts: [], state: "checking", reason: "PR is behind its base; waiting for repository capacity held by refresh refresh-child" },
+      starts: [8],
+    });
     expect(loadPipelines().find(lane => lane.id === child.id)?.cursor?.stageId).toBe("review");
   });
 
