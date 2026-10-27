@@ -468,9 +468,20 @@ test("an expired negative fence never regains admission through the message prun
   } finally { clock.mockRestore(); }
 });
 
-for (const acknowledged of [false, true]) {
-  test(`expired outbox history cannot become non-delivery proof after ${acknowledged ? "an accepted answer" : "a lost answer"}`, async () => {
-    const receipts = new MemoryMcpReceiptStore();
+test("missing history expires only beyond the retention boundary with a valid claim time", () => {
+  const input = { project: project.project, text: "Boundary proof.", caller, claimedAt: "2026-01-01T00:00:00.000Z" };
+  const boundary = Date.parse(input.claimedAt) + 35 * 86_400_000;
+  expect(recoverSeatMessage(install, "retention-boundary", input, boundary)).toMatchObject({ state: "not-delivered" });
+  expect(recoverSeatMessage(install, "retention-boundary", input, boundary + 1)).toMatchObject({ state: "not-delivered" });
+  expect(recoverSeatMessage(install, "retention-expired", input, boundary + 1)).toMatchObject({ outcome: "history-expired" });
+  expect(recoverSeatMessage(install, "retention-invalid", { ...input, claimedAt: "invalid" }, boundary + 1)).toBeNull();
+  expect(recoverSeatMessage(install, "retention-future", { ...input, claimedAt: new Date(boundary + 2).toISOString() }, boundary + 1)).toBeNull();
+});
+
+for (const backend of ["memory", "file", "sqlite"] as const) for (const acknowledged of [false, true]) {
+  test(`expired ${backend} outbox history closes recovery after ${acknowledged ? "an accepted answer" : "a lost answer"}`, async () => {
+    const file = path.join(root, `expired-${backend}-${acknowledged}`);
+    const receipts = backend === "memory" ? new MemoryMcpReceiptStore() : backend === "file" ? new FileMcpReceiptStore(file) : new SqliteMcpReceiptStore(file);
     let posts = 0;
     const control = { post: async (_path: string, body: Record<string, unknown>) => {
       posts++;
@@ -480,20 +491,67 @@ for (const acknowledged of [false, true]) {
       return accepted;
     } };
     const create = () => createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
-    const args = { project: project.project, machine: "Other", text: "Keep expiry separate from non-delivery.", clientRequestId: `expired-history-${acknowledged}` };
+    const args = { project: project.project, machine: "Other", text: "Keep expiry separate from non-delivery.", clientRequestId: `expired-history-${backend}-${acknowledged}` };
     const initial = await create().callTool("send_message_to_orchestrator", args);
     expect(initial.ok).toBe(true);
-    const bound = receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`)!.binding!;
-    const clock = spyOn(Date, "now").mockReturnValue(Date.parse(bound.claimedAt) + 36 * 86_400_000);
+    const bound = (await receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`))!.binding!;
+    const clock = spyOn(Date, "now").mockReturnValue(Date.parse(bound.claimedAt) + 35 * 86_400_000);
     try {
+      // Age alone never overrides an extant receipt, even past retention.
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ outcome: "accepted", state: "queued" });
+      clock.mockReturnValue(Date.parse(bound.claimedAt) + 36 * 86_400_000);
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ outcome: "accepted", state: "queued" });
       const link = resolveSeatMessageMachine(install, project.project)!;
       await drainSeatMessages(link);
       expect(recoverSeatMessage(install, bound.downstreamKey)).toBeNull();
-      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
-      expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject(acknowledged ? { ok: true, replayed: true } : { code: "outcome_unknown" });
+      const expired = { ok: false, code: "history_expired", retryable: false, details: {
+        outcome: "history-expired", state: "history-expired", nextAction: "manual-check", resend: "manual-check", duplicateRisk: true,
+      } };
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: !acknowledged })).toMatchObject(expired);
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject(expired);
+      expect(await create().callTool("send_message_to_orchestrator", args)).toMatchObject(expired);
+      expect(await create().callTool("send_message_to_orchestrator", { ...args, text: "Changed words" })).toMatchObject({ code: "idempotency_conflict" });
+      const foreignDomain = { ...domain, callerAttribution: () => ({ kind: "agent", conversationId: "conversation_foreign", role: "orchestrator" }),
+        attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_foreign" }) } as unknown as ViewerMcpDomainDependencies;
+      const foreign = createMcpToolService(viewerMcpBindings(undefined, control, foreignDomain), receipts, undefined, { recovery: viewerMcpRecoverableTools(foreignDomain) });
+      expect(await foreign.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({ code: "recovery_not_permitted" });
+      const row = (await receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`))!;
+      expect(row.stage).toBe("settled");
+      expect(row.recoveryResult ?? row.result).toMatchObject(expired);
+      // A fresh process reads the real writer's terminal result and cannot
+      // dispatch, including when its clock is earlier than the expiry seam.
+      if (backend !== "memory") {
+        const input = path.join(root, `expired-input-${backend}-${acknowledged}.json`);
+        fs.writeFileSync(input, JSON.stringify({ backend, file, args, caller, project: project.project,
+          server: path.resolve("src/lib/mcp/server.ts"), bindings: path.resolve("src/lib/mcp/bindings.ts") }));
+        const source = `const input = await Bun.file(process.env.LLV_TEST_EXPIRY_INPUT).json();
+          const classes = await import(input.server);
+          const { viewerMcpBindings, viewerMcpRecoverableTools } = await import(input.bindings);
+          const store = input.backend === "file" ? new classes.FileMcpReceiptStore(input.file) : new classes.SqliteMcpReceiptStore(input.file);
+          const domain = { callerAttribution: () => ({ kind: "agent", conversationId: input.caller, role: "orchestrator" }),
+            attentionAuthority: () => ({ kind: "worker", conversationId: input.caller }),
+            authorizedSeats: () => [{ project: input.project, conversationId: input.caller, path: null }], recoveryPredecessors: () => [] };
+          let posts = 0;
+          const service = classes.createMcpToolService(viewerMcpBindings(undefined, { post: async () => { posts++; throw new Error("unexpected dispatch"); } }, domain), store,
+            undefined, { recovery: viewerMcpRecoverableTools(domain) });
+          const results = [];
+          for (const recoveryOnly of [false, true]) results.push(await service.callTool("send_message_to_orchestrator", { ...input.args, recoveryOnly }));
+          store.close?.(); console.log(JSON.stringify({ results, posts }));`;
+        const child = Bun.spawn([process.execPath, "scripts/owned-runner.ts", "--portable", process.execPath, "-e", source], {
+          cwd: process.cwd(), env: { ...process.env, LLV_TEST_EXPIRY_INPUT: input }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+        });
+        try {
+          const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+          if (code !== 0) throw new Error(`expiry reader exited ${code}: ${errors}`);
+          const restarted = JSON.parse(output);
+          expect(restarted.posts).toBe(0);
+          expect(restarted.results).toHaveLength(2);
+          for (const result of restarted.results) expect(result).toMatchObject(expired);
+        } finally { if (child.exitCode === null) { child.kill("SIGTERM"); await child.exited; } }
+      }
       expect(posts).toBe(1);
       expect(seatMessageRetryFence(install, bound.downstreamKey)).toBeUndefined();
-    } finally { clock.mockRestore(); }
+    } finally { clock.mockRestore(); if (receipts instanceof SqliteMcpReceiptStore) receipts.close(); }
   });
 }
 

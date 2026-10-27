@@ -7919,6 +7919,11 @@ async function recoverSend(
         text: splitRelayMessageText(binding.sendPayload.text)?.body ?? binding.sendPayload.text,
         claimedAt: binding.claimedAt, admissionFence: binding.seatMessageFence, fence: fenceAdmission,
       } : undefined);
+    if (found?.state === "history-expired") return {
+      outcome: "history-expired", evidence: "seat-message-history-retention",
+      reason: "The 35-day seat-message history has expired. Check delivery manually on the destination before sending again; automatic resend is unsafe.",
+      ids: {}, facts: found,
+    };
     if (found?.state === "not-delivered") return {
       outcome: "not-executed", evidence: "seat-message-admission-fence",
       reason: "The MCP-to-outbox hop did not admit this message. The old attempt is fenced; resend safely with the same clientRequestId.",

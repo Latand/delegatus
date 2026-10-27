@@ -817,7 +817,7 @@ function terminalReceiptResult(result: McpToolResult | null | undefined): result
   return Boolean(result && (result.ok
     ? result.outcome === "settled" || result.settled === true
       || (result.toolName === "spawn_agent" && result.state === "settled")
-    : result.details?.outcome === "settled" || result.details?.outcome === "not-executed"));
+    : result.details?.outcome === "settled" || result.details?.outcome === "not-executed" || result.details?.outcome === "history-expired"));
 }
 
 function receiptSettlement(
@@ -2541,12 +2541,12 @@ export interface McpToolServiceOptions {
 }
 
 /** The closed outcome vocabulary of original-key recovery (#1490). */
-export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-executed" | "unknown";
+export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-executed" | "history-expired" | "unknown";
 
 /** What a caller may do next, stated on the answer rather than implied by
     `retryable`. `original-key-lookup` is the ONLY permitted action on an
     unknown or open outcome: never a new key, never an automatic resend. */
-export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request";
+export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request" | "manual-check";
 
 export interface McpRecoveryEvidence {
   /** A downstream admission CAS fenced this exact attempt before any effect. */
@@ -2666,6 +2666,7 @@ function stringIds(details: McpToolPayload): Record<string, string> {
 }
 
 function nextActionFor(outcome: McpRecoveryOutcome): McpRecoveryNextAction {
+  if (outcome === "history-expired") return "manual-check";
   if (outcome === "settled") return "follow-disposition";
   if (outcome === "not-executed") return "new-request-permitted";
   return "original-key-lookup";
@@ -2701,6 +2702,9 @@ function recoveryAnswer(
       replayed,
       shared,
     );
+  }
+  if (evidence.outcome === "history-expired") {
+    return failure(toolName, requestId, "history_expired", evidence.reason ?? "Check delivery manually before sending again.", false, replayed, shared);
   }
   if (evidence.outcome === "not-executed") {
     return failure(
@@ -3061,7 +3065,7 @@ export function createMcpToolService(
             return recoveryAnswer(typedTool, requestId, { outcome: "unknown", evidence: "mcp-receipt",
               reason: "The fenced attempt's receipt changed; look up the original key again.", ids: {} }, replayed);
           }
-          if (evidence.outcome !== "settled" && evidence.outcome !== "not-executed") return answer;
+          if (evidence.outcome !== "settled" && evidence.outcome !== "not-executed" && evidence.outcome !== "history-expired") return answer;
           let stored: McpToolResult;
           try {
             stored = await store.settle(
@@ -3122,11 +3126,15 @@ export function createMcpToolService(
           // Older relay bindings omitted gateway authorship. Their cached
           // results may name another author's send and cannot license replay.
           if (typedTool === "send_message_to_orchestrator" && !recorded.sendPayload) return notPermitted();
-          if (record.recoveryResult && record.stage === "not-executed") {
+          if (record.recoveryResult && (record.stage === "not-executed" || record.recoveryResult.details?.outcome === "history-expired")) {
             outcome = "replay";
             return { ...record.recoveryResult, replayed: true };
           }
-          if (record.result && (!recoveryOnly || record.stage === "not-executed")) {
+          // A remote acceptance may outlive its pruned delivery history.
+          // Revalidate it so ordinary same-key replays also close on expiry.
+          const remoteAcceptance = typedTool === "send_message_to_orchestrator"
+            && recorded.target.identity?.startsWith("machine:") && record.result?.ok && !terminalResult(record.result);
+          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance) {
             outcome = "replay";
             return { ...record.result, replayed: true };
           }

@@ -120,12 +120,14 @@ export function recoverSeatMessage(install: string, clientMessageId: string, req
   const digest = request ? sha(JSON.stringify({ p, k, t: request.text })) : "";
   if (row && request && row.digest !== digest) refuse("idempotency_conflict", "The recovery payload contradicts the outbound message.");
   if (row && row.st !== "not-delivered") return seatMessageAcceptance(row);
+  // An absent row older than retention may have been delivered and pruned.
+  // Close recovery without granting a resend that could duplicate delivery.
+  if (!row && request && Number.isFinite(Date.parse(request.claimedAt)) && now - Date.parse(request.claimedAt) > 35 * DAY) {
+    return { outcome: "history-expired", state: "history-expired", resend: "manual-check", duplicateRisk: true };
+  }
   // Allow the original admission a bounded window. The CAS below, rather
   // than elapsed time or peer reachability, is the proof of non-delivery.
   if (!request || request.fence === false || !Number.isFinite(Date.parse(request.claimedAt)) || now - Date.parse(request.claimedAt) < 30_000) return null;
-  // An absent row older than the existing retention may have been delivered
-  // and pruned. Absence then cannot prove that admission never happened.
-  if (!row && now - Date.parse(request.claimedAt) > 35 * DAY) return null;
   return collection(true)!.boundedPatch(2, tx => {
     const current = tx.get(key);
     if (current && current.digest !== digest) refuse("idempotency_conflict", "The recovery payload contradicts the outbound message.");
