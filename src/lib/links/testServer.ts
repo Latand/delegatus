@@ -58,6 +58,8 @@ process.env.XDG_CONFIG_HOME = `${dir}/config`;
 process.env.LLV_STATE_OWNER = "viewer";
 process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
+// Mirror the Viewer boot preparation before keyed relay recovery can run.
+await agentRegistry().prepareReadOnlySnapshot(undefined, { recoveryIndexes: true });
 let seatCrash: "before" | "after" | null = null;
 let dropSeatAnswer = false;
 let seatDeliveryMode: "hold" | null = null;

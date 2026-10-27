@@ -3102,8 +3102,7 @@ export function createMcpToolService(
             outcome = "replay";
             return { ...record.result, replayed: true };
           }
-          if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")
-            && Date.now() - Date.parse(recorded.claimedAt) >= 30_000) {
+          if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")) {
             // The sender's fence also closes a stalled pre-dispatch owner.
             return answerFromEvidence(await readEvidence(recorded, false), true, record.result, recorded);
           }
