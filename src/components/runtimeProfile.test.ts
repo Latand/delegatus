@@ -9,6 +9,7 @@ import {
   defaults,
   effectiveProfile,
   observedModelId,
+  readDraft,
   readProfile,
   readResumeDraft,
   savedResumeProfile,
@@ -150,4 +151,37 @@ test("a conversation launched on the pinned Sonnet 5.5 id observes that id, so i
   /* The alias launch and a dated transcript id still read as the family alias. */
   expect(observedModelId({ ...claudeFile, model: "claude-sonnet-5-5-20260928", launchModel: "sonnet" })).toBe("sonnet");
   expect(observedModelId({ ...claudeFile, model: "claude-opus-5-5", launchModel: undefined })).toBe("opus");
+});
+
+/* Ultra (2026-10-26): ultrafast is a named tier `fast` cannot say, so it rides the
+   draft as `serviceTier` and never becomes a per-turn `fast`, which is priority. */
+const ultraFile: FileEntry = { ...file, model: "gpt-6.1-sol", serviceTier: "ultrafast", fast: null };
+
+test("a thread running ultrafast never gets a per-turn fast that would slow it to priority", () => {
+  writeProfile(ultraFile, { fast: true });
+  expect(sendRuntimeFrom(ultraFile)).toBeUndefined();
+  /* Standard is still a real change, and still goes out. */
+  writeProfile(ultraFile, { fast: false });
+  expect(sendRuntimeFrom(ultraFile)).toEqual({ fast: false });
+  /* On a thread with no named tier the old rule holds. */
+  writeProfile(file, { fast: true });
+  expect(sendRuntimeFrom(file)).toEqual({ fast: true });
+});
+
+test("the face and every stored draft carry the conversation's named tier, and a speed choice replaces it", () => {
+  expect(defaults(ultraFile)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  expect("serviceTier" in defaults(file)).toBe(false);
+  /* A draft stored before tiers existed keeps the conversation's tier while its speed agrees… */
+  localStorage.setItem(key, JSON.stringify({ model: "gpt-6.1-sol", effort: "high", fast: true }));
+  expect(readDraft(ultraFile)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  /* …and names none once its speed says standard. */
+  localStorage.setItem(key, JSON.stringify({ model: "gpt-6.1-sol", effort: "high", fast: false }));
+  expect("serviceTier" in readDraft(ultraFile)).toBe(false);
+  /* A stored tier is its own. */
+  localStorage.setItem(key, JSON.stringify({ model: "gpt-6.1-sol", effort: "high", fast: true, serviceTier: "ultrafast" }));
+  expect(readDraft({ ...ultraFile, serviceTier: null, fast: false })).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  /* The resume profile: an effort edit keeps the tier, a speed choice replaces it. */
+  expect(writeResumeProfile(ultraFile, { effort: "low" })).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  expect(writeResumeProfile(ultraFile, { fast: true })).toEqual({ model: "gpt-6.1-sol", effort: "low", fast: true });
+  expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-6.1-sol", effort: "low", fast: true });
 });

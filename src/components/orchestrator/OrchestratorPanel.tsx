@@ -70,6 +70,7 @@ import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
 import { DecisionColumn, DecisionStripLine, defaultDecisionTab, useOpenDecisionCount, type DecisionTab } from "@/components/decisions/DecisionColumn";
 import { useDecisionSurface } from "@/components/decisions/decisionSurface";
+import { speedBody, speedChoiceOf } from "@/components/ReasoningControls";
 
 /* The report log beside the chat (#2146). It first opened at a 720 px seat
    as a 300 px column, which left the chat 420 px; the chat now keeps at least
@@ -466,7 +467,7 @@ export function OrchestratorPanel({
         engine: launch.engine,
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.effort ? { effort: launch.effort } : {}),
-        ...(launch.engine === "codex" && launch.speed ? { fast: launch.speed === "fast" } : {}),
+        ...speedBody(launch.engine, launch.speed),
         ...(launch.launchAccountId ? { accountId: launch.launchAccountId } : {}),
         /* The project's own root, resolved by the shell — the operator never
            types a directory for their own project's orchestrator. Absent, the
@@ -936,6 +937,7 @@ function RotateDraft({
     model: incumbent?.model ?? file?.model ?? "",
     effort: incumbent?.effort ?? "",
     accountId: incumbent?.accountId ?? "",
+    speed: speedChoiceOf(file),
   };
   const launch = useAgentLaunchDraft({
     storage: {
@@ -968,7 +970,7 @@ function RotateDraft({
         engine: launch.engine,
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.effort ? { effort: launch.effort } : {}),
-        ...(launch.engine === "codex" && launch.speed ? { fast: launch.speed === "fast" } : {}),
+        ...speedBody(launch.engine, launch.speed),
         ...(launch.launchAccountId ? { accountId: launch.launchAccountId } : {}),
       },
       launch: { draft: launch, cwd: cwd ?? "", firstMessage: mandate },

@@ -65,7 +65,7 @@ export function stageSwitchRequest(run: StageRun, engine: string, draft: Runtime
     model: draft.model,
     effort: draft.effort,
     // Claude has no speed: a tier the next attempt was given for Codex is cleared with the engine.
-    ...(engine === "codex" ? { serviceTier: displayedTier ?? (draft.fast ? "priority" : "standard") } : engine === "claude" ? { serviceTier: null } : {}),
+    ...(engine === "codex" ? { serviceTier: displayedTier ?? draft.serviceTier ?? (draft.fast ? "priority" : "standard") } : engine === "claude" ? { serviceTier: null } : {}),
     ...(accountId ? { account: accountId } : {}),
   };
 }

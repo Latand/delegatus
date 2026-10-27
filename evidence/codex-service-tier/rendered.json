@@ -14,7 +14,7 @@
       "locale": "en",
       "width": 390,
       "face": "6-Astra · high",
-      "detail": "Ultrafast tier",
+      "detail": "Ultra — Ultrafast tier",
       "overflow": false,
       "pageErrors": [],
       "mappingTier": " · ultrafast"
@@ -32,10 +32,1696 @@
       "locale": "uk",
       "width": 390,
       "face": "6-Astra · high",
-      "detail": "Рівень Ultrafast",
+      "detail": "Ультра — тариф Ultrafast",
       "overflow": false,
       "pageErrors": [],
       "mappingTier": " · ultrafast"
+    }
+  ],
+  "ultra": [
+    {
+      "state": "s1-offered",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s1-offered-en-light-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s2-picked-en-light-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · High · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s3-applied-en-light-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s4-unavailable-en-light-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s5-refused-en-light-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s6-create-select-en-light-1280.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s6-create-pill-en-light-1280.png",
+      "face": "Model and reasoning the new agent starts with — Codex · 6.1-Sol · High · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · High · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s6-rotate-select-en-light-1280.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s1-offered-en-light-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s2-picked-en-light-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · High · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s3-applied-en-light-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s4-unavailable-en-light-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s5-refused-en-light-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s6-create-select-en-light-768.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s6-create-pill-en-light-768.png",
+      "face": "Model and reasoning the new agent starts with — Codex · 6.1-Sol · High · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · High · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "en",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s6-rotate-select-en-light-768.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s1-offered-en-light-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s2-picked-en-light-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s3-applied-en-light-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s4-unavailable-en-light-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s5-refused-en-light-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-speed-error]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s6-create-select-en-light-390.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s6-create-pill-en-light-390.png",
+      "face": "Model and reasoning the new agent starts with — Codex · 6.1-Sol · high · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s6-rotate-select-en-light-390.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s1-offered-uk-light-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s2-picked-uk-light-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · Високі · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s3-applied-uk-light-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s4-unavailable-uk-light-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s5-refused-uk-light-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s6-create-select-uk-light-1280.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s6-create-pill-uk-light-1280.png",
+      "face": "Модель і міркування, з якими стартує новий агент — Codex · 6.1-Sol · Високі · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · Високі · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "uk",
+      "theme": "light",
+      "width": 1280,
+      "frame": "ultra-s6-rotate-select-uk-light-1280.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s1-offered-uk-light-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s2-picked-uk-light-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · Високі · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s3-applied-uk-light-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s4-unavailable-uk-light-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s5-refused-uk-light-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s6-create-select-uk-light-768.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s6-create-pill-uk-light-768.png",
+      "face": "Модель і міркування, з якими стартує новий агент — Codex · 6.1-Sol · Високі · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · Високі · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "uk",
+      "theme": "light",
+      "width": 768,
+      "frame": "ultra-s6-rotate-select-uk-light-768.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s1-offered-uk-light-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s2-picked-uk-light-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s3-applied-uk-light-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s4-unavailable-uk-light-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s5-refused-uk-light-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-speed-error]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s6-create-select-uk-light-390.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s6-create-pill-uk-light-390.png",
+      "face": "Модель і міркування, з якими стартує новий агент — Codex · 6.1-Sol · high · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s6-rotate-select-uk-light-390.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s1-offered-en-dark-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s2-picked-en-dark-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · High · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s3-applied-en-dark-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s4-unavailable-en-dark-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s5-refused-en-dark-1280.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s6-create-select-en-dark-1280.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s6-create-pill-en-dark-1280.png",
+      "face": "Model and reasoning the new agent starts with — Codex · 6.1-Sol · High · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · High · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s6-rotate-select-en-dark-1280.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s1-offered-en-dark-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s2-picked-en-dark-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · High · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s3-applied-en-dark-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s4-unavailable-en-dark-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s5-refused-en-dark-768.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s6-create-select-en-dark-768.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s6-create-pill-en-dark-768.png",
+      "face": "Model and reasoning the new agent starts with — Codex · 6.1-Sol · High · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · High · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "en",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s6-rotate-select-en-dark-768.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s1-offered-en-dark-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s2-picked-en-dark-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s3-applied-en-dark-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s4-unavailable-en-dark-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s5-refused-en-dark-390.png",
+      "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-speed-error]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s6-create-select-en-dark-390.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s6-create-pill-en-dark-390.png",
+      "face": "Model and reasoning the new agent starts with — Codex · 6.1-Sol · high · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ultra — Ultrafast tier",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ultra — Ultrafast tier"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s6-rotate-select-en-dark-390.png",
+      "select": "ultra",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s1-offered-uk-dark-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s2-picked-uk-dark-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · Високі · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s3-applied-uk-dark-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s4-unavailable-uk-dark-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s5-refused-uk-dark-1280.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s6-create-select-uk-dark-1280.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s6-create-pill-uk-dark-1280.png",
+      "face": "Модель і міркування, з якими стартує новий агент — Codex · 6.1-Sol · Високі · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · Високі · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1280,
+      "frame": "ultra-s6-rotate-select-uk-dark-1280.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s1-offered-uk-dark-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s2-picked-uk-dark-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": null,
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · Високі · Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s3-applied-uk-dark-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s4-unavailable-uk-dark-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s5-refused-uk-dark-768.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "ultra": null,
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-popover-account]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s6-create-select-uk-dark-768.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s6-create-pill-uk-dark-768.png",
+      "face": "Модель і міркування, з якими стартує новий агент — Codex · 6.1-Sol · Високі · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "Codex · 6.1-Sol · Високі · Ultrafast→ Account B"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 768,
+      "frame": "ultra-s6-rotate-select-uk-dark-768.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s1-offered",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s1-offered-uk-dark-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s2-picked",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s2-picked-uk-dark-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s3-applied",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s3-applied-uk-dark-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high · Ultrafast",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s4-unavailable",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s4-unavailable-uk-dark-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": true,
+        "checked": "false"
+      },
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-row-note]",
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+        }
+      ]
+    },
+    {
+      "state": "s5-refused",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s5-refused-uk-dark-390.png",
+      "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "false"
+      },
+      "note": null,
+      "error": "a runtime change is already in flight",
+      "measured": [
+        {
+          "selector": "[data-runtime-speed-error]",
+          "text": "a runtime change is already in flight"
+        }
+      ]
+    },
+    {
+      "state": "s6-create-select",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s6-create-select-uk-dark-390.png",
+      "select": "ультра",
+      "measured": []
+    },
+    {
+      "state": "s6-create-pill",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s6-create-pill-uk-dark-390.png",
+      "face": "Модель і міркування, з якими стартує новий агент — Codex · 6.1-Sol · high · Ultrafast → Account B",
+      "ultra": {
+        "text": "Ультра — тариф Ultrafast",
+        "disabled": false,
+        "checked": "true"
+      },
+      "note": null,
+      "measured": [
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
+          "text": "Ультра — тариф Ultrafast"
+        }
+      ]
+    },
+    {
+      "state": "s6-rotate-select",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s6-rotate-select-uk-dark-390.png",
+      "select": "ультра",
+      "measured": []
     }
   ]
 }

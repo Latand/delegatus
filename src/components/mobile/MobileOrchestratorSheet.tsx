@@ -65,6 +65,7 @@ import {
   type SeatCardView,
 } from "./orchestratorRowState";
 import { Z } from "@/components/layers";
+import { speedBody, speedChoiceOf } from "@/components/ReasoningControls";
 
 const BADGE_TONE: Record<SeatBadgeTone, string> = {
   success: "bg-success-soft text-success",
@@ -753,6 +754,7 @@ function RotateDraft({
     model: incumbent?.model ?? file?.model ?? "",
     effort: incumbent?.effort ?? "",
     accountId: incumbent?.accountId ?? "",
+    speed: speedChoiceOf(file),
   };
   const launch = useAgentLaunchDraft({
     storage: {
@@ -786,7 +788,7 @@ function RotateDraft({
         engine: launch.engine,
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.effort ? { effort: launch.effort } : {}),
-        ...(launch.engine === "codex" && launch.speed ? { fast: launch.speed === "fast" } : {}),
+        ...speedBody(launch.engine, launch.speed),
         ...(launch.launchAccountId ? { accountId: launch.launchAccountId } : {}),
       },
       launch: { draft: launch, cwd: cwd ?? "", firstMessage: mandate },

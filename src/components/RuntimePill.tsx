@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, X, Zap } from "@/components/icons";
@@ -18,12 +18,14 @@ import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, claudeCatalogModelId, listedModels } from "@/lib/agent/models";
 import type { AgentModelOption } from "@/lib/agent/models";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
+import { requestFilesRefresh } from "@/lib/filesEvents";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { RuntimeSettingsCapability } from "@/lib/runtime/contracts";
 import type { FileEntry, RateLimitState } from "@/lib/types";
 
 import { accountWeeklyLeft, WeeklyColumn, weeklyLeftAria, weeklyLeftHint, type WeeklyLeft } from "./accountWeekly";
 import type { StripSurface } from "./agentCapabilities";
+import { ULTRA_TIER, ultraRowOf, useCodexTierOffer, type UltraRow } from "./codexTierOffer";
 import { browserPipelinePorts } from "./kanban/pipelinePorts";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 import { stagePipelineId, stageRunOf, stageSwitchRequest, switchFailureText, switchOpen, switchRefusalText, type StageRun } from "./stageRuntimeSwitch";
@@ -115,6 +117,22 @@ export function tierWord(t: TFunction, tier: string, phone: boolean): string {
   return phone ? tier : reasoningTierLabel(t, tier);
 }
 
+/** A speed row's choice: Standard, Fast (the priority tier) or Ultra (ultrafast). */
+export type SpeedTier = "default" | "priority" | typeof ULTRA_TIER;
+
+/** The speed a draft runs at: `fast` splits standard from the rest, and the tier
+    names which of the rest (a plain `fast` is priority). */
+export function speedTierOf(draft: RuntimeDraft): string {
+  if (!draft.fast) return "default";
+  const tier = draft.serviceTier ?? null;
+  return tier && tier !== "default" && tier !== "standard" ? tier : "priority";
+}
+
+/** The draft fields a speed choice sets: the tier is named only where `fast` cannot say it. */
+export function speedPatch(tier: SpeedTier): Pick<RuntimeDraft, "fast" | "serviceTier"> {
+  return { fast: tier !== "default", serviceTier: tier === ULTRA_TIER ? ULTRA_TIER : null };
+}
+
 function modelShortLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.shortLabel ?? modelId;
 }
@@ -150,6 +168,8 @@ export function RuntimePill({
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" ? file.engine : null;
+  /* Any pipeline's conversation changes speed through its stage, never the conversation's own speed action. */
+  const stageBound = Boolean(file.durableLineage?.memberships.some((item) => item.kind === "pipeline"));
   const pillSurface: PillSurface | null =
     surface === "structured" ? "structured"
     : surface === "resume" ? "resume"
@@ -164,6 +184,8 @@ export function RuntimePill({
   const liveDraftRef = useRef(liveDraft);
   const [applyState, setApplyState] = useState<ApplyState>("idle");
   const [error, setError] = useState("");
+  /* The refusal of a speed choice, which the phone's sheet says beside the speed rows. */
+  const [speedError, setSpeedError] = useState("");
   const revisionRef = useRef(0);
   const operationRef = useRef<string | null>(null);
   const rollbackRef = useRef<BrowserProfileRollback | null>(null);
@@ -348,7 +370,8 @@ export function RuntimePill({
           action: "reconfigure",
           path: file.path,
           conversationId: runtimeConversationId,
-          ...draft,
+          model: draft.model,
+          effort: draft.effort,
           fast: engine === "codex" ? draft.fast : undefined,
         }),
       });
@@ -406,6 +429,50 @@ export function RuntimePill({
     setApplyState(switchOpen(stageRunOf(file, answer.pipeline)?.attempt.runtimeSwitches?.at(-1)) ? "idle" : "applied");
     return true;
   }, [engine, file, t]);
+
+  /* A Codex conversation's speed is a thread setting changed in place: no host
+     restarts and no turn is cut. The rows show the choice at once; a refusal
+     returns the face to what the conversation runs and says why. Applied means
+     the tier the next poll reads back. */
+  const applySpeed = useCallback(async (tier: SpeedTier, patch: Partial<RuntimeDraft>) => {
+    revisionRef.current += 1;
+    const revision = revisionRef.current;
+    const next = { ...liveDraftRef.current, ...patch };
+    liveDraftRef.current = next;
+    setLiveDraft(next);
+    setApplyState("saving");
+    setError("");
+    setSpeedError("");
+    const conversationId = file.conversationId ?? runtimeConversationId;
+    let failure: string | null = null;
+    try {
+      const response = await fetch("/api/conversation-host", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: file.path,
+          ...(conversationId ? { conversationId } : {}),
+          action: "speed",
+          serviceTier: tier,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!response.ok || body.ok !== true) failure = body.error ?? t("runtimeConfig.failed");
+    } catch (cause) {
+      failure = cause instanceof Error ? cause.message : t("runtimeConfig.failed");
+    }
+    if (revision !== revisionRef.current) return;
+    if (failure) {
+      liveDraftRef.current = defaults(file);
+      setLiveDraft(liveDraftRef.current);
+      setError(failure);
+      setSpeedError(failure);
+      setApplyState("error");
+      return;
+    }
+    setApplyState("applied");
+    requestFilesRefresh();
+  }, [file, runtimeConversationId, t]);
 
   /* The switch this page watched settle. One that was already over when the
      page opened is only shown, never announced again. */
@@ -539,6 +606,7 @@ export function RuntimePill({
   /* The pill's one error: its own failed change, else a stage switch that did not take. */
   const shownError = applyState === "error" && error ? error : !applying ? stageFailure : null;
   const failed = applyState === "error" || Boolean(shownError);
+  const shownSpeedError = speedError && shownError === speedError ? speedError : null;
 
   // ---- the effective face (single source of truth) --------------------------
   const face: RuntimeDraft = useMemo(() => {
@@ -557,6 +625,17 @@ export function RuntimePill({
 
   const efforts = useMemo(() => effortScaleForModel(face.model), [effortScaleForModel, face.model]);
   const speedShown = engine === "codex";
+  const faceSpeed = speedTierOf(face);
+  /* Ultra is a thread setting a structured Codex conversation changes in place (a
+     running stage through its switch); it is offered where the account's own
+     catalog lists it for the model, read only while the speed rows are open. */
+  const ultraShown = speedShown && pillSurface === "structured" && (Boolean(stageRoute) || !stageBound);
+  const ultraOffer = useCodexTierOffer({
+    account: runsOnAccount,
+    model: face.model,
+    enabled: ultraShown && open && (isMobile || panel === "speed"),
+  });
+  const ultraRow: UltraRow | null = ultraShown && engine ? ultraRowOf(t, ultraOffer, modelLabel(engine, face.model), faceSpeed === ULTRA_TIER) : null;
 
   // Structured reconfigure restarts at an idle boundary, so every launch-level
   // setting remains available while a turn is running. Per-turn capabilities
@@ -745,10 +824,12 @@ export function RuntimePill({
     commit({ model: id });
     if (!isMobile) closePopover();
   };
-  const selectFast = (fast: boolean) => {
+  const selectSpeed = (tier: SpeedTier) => {
     if (speedLocked) return;
-    if (face.fast === fast) return closePopover();
-    commit({ fast });
+    if (faceSpeed === tier) return closePopover();
+    if (tier === ULTRA_TIER && !ultraRow?.enabled) return;
+    if (pillSurface === "structured" && !stageBound) void applySpeed(tier, speedPatch(tier));
+    else commit(speedPatch(tier));
     if (!isMobile) closePopover();
   };
 
@@ -756,12 +837,14 @@ export function RuntimePill({
 
   const faceModelShort = modelShortLabel(engine, face.model);
   const faceTier = tierWord(t, face.effort, isMobile);
-  const serviceTier = engine === "codex" && file.serviceTier && face.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
+  /* A tier is named once the conversation reports one or a choice set one; a
+     plain fast flag stays «Fast». */
+  const serviceTier = engine === "codex" && (face.serviceTier || faceSpeed === ULTRA_TIER) && faceSpeed !== "default" ? faceSpeed : null;
   const namedTier = serviceTier ? serviceTier.charAt(0).toUpperCase() + serviceTier.slice(1) : null;
   const speedDetail = serviceTier === "priority" ? t("composer.speedFastTier")
-    : serviceTier && !["default", "standard"].includes(serviceTier) ? t("composer.speedTierNamed", { tier: namedTier! })
+    : serviceTier ? t("composer.speedTierNamed", { tier: namedTier! })
     : face.fast ? t("composer.speedFastTier") : t("composer.speedStandard");
-  const tierSuffix = namedTier && !["default", "standard"].includes(serviceTier!) ? ` · ${namedTier}` : "";
+  const tierSuffix = namedTier ? ` · ${namedTier}` : "";
   const accessibleLabel = stageRoute
     ? `${t("mobile2.composer.stageSheetTitle")} — ${t("mobile2.composer.stageNow")}`
     : t("composer.runtimePill");
@@ -823,7 +906,8 @@ export function RuntimePill({
           lockReason={lockReason}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
-          onSelectFast={selectFast}
+          onSelectSpeed={selectSpeed}
+          ultra={ultraRow}
           onClose={closePopover}
         />
       ) : null}
@@ -837,7 +921,8 @@ export function RuntimePill({
           account={runsOnAccount}
           nameOf={nameOf}
           accountChoice={accountChoice}
-          error={shownError}
+          error={shownSpeedError ? null : shownError}
+          speedError={shownSpeedError}
           owner={pillRef.current?.ownerDocument ?? document}
           face={face}
           efforts={efforts}
@@ -850,7 +935,8 @@ export function RuntimePill({
           limit={file.rateLimit ?? null}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
-          onSelectFast={selectFast}
+          onSelectSpeed={selectSpeed}
+          ultra={ultraRow}
           onClose={closePopover}
         />
       ) : null}
@@ -1072,14 +1158,18 @@ interface PanelProps {
   lockReason: string;
   onSelectEffort: (tier: string) => void;
   onSelectModel: (id: string) => void;
-  onSelectFast: (fast: boolean) => void;
+  onSelectSpeed: (tier: SpeedTier) => void;
+  /** The Ultra speed row, on a surface that offers it; absent, the rows are Standard and Fast. */
+  ultra?: UltraRow | null;
+  /** A speed choice that did not take, said beside the speed rows. */
+  speedError?: string | null;
   onClose: () => void;
 }
 
 export function RuntimePopover({
   t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, onClose, at, owner,
 }: PanelProps & {
   panel: Panel;
   setPanel: (p: Panel) => void;
@@ -1098,9 +1188,9 @@ export function RuntimePopover({
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
     t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart, now,
+    onSelectEffort, onSelectModel, onSelectSpeed, ultra, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart, now,
   }), [accountStart, now, t, engine, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
+    onSelectEffort, onSelectModel, onSelectSpeed, ultra, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
     () => rows.map((row, index) => (row.enabled ? index : -1)).filter((index) => index >= 0),
@@ -1235,6 +1325,8 @@ interface Row {
   checked: boolean;
   enabled: boolean;
   reason?: string;
+  /** Why the row cannot be chosen, as a visible line under it rather than a tooltip. */
+  note?: string;
   submenu?: "model" | "speed" | "account";
   role: "menuitemradio" | "menuitem";
   /** An account row's weekly limit left, drawn as the footer draws it; absent without a weekly reading. */
@@ -1269,7 +1361,7 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 
 function buildRows({
   t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart, now,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart, now,
 }: Omit<PanelProps, "onClose" | "account" | "accessibleLabel"> & {
   panel: Panel;
   onOpenPanel: (panel: Panel) => void;
@@ -1341,10 +1433,17 @@ function buildRows({
     ];
   }
   if (panel === "speed") {
+    const tier = speedTierOf(face);
+    const lock = { enabled: !speedLocked, reason: speedLocked ? lockReason : undefined };
     return [
       back(t("composer.speedGroup")),
-      { key: "standard", kind: "speed", label: t("composer.speedStandard"), checked: !face.fast, enabled: !speedLocked, reason: speedLocked ? lockReason : undefined, role: "menuitemradio", activate: () => onSelectFast(false) },
-      { key: "fast", kind: "speed", label: t("composer.speedFastTier"), checked: face.fast, enabled: !speedLocked, reason: speedLocked ? lockReason : undefined, role: "menuitemradio", activate: () => onSelectFast(true) },
+      { key: "standard", kind: "speed", label: t("composer.speedStandard"), checked: tier === "default", ...lock, role: "menuitemradio", activate: () => onSelectSpeed("default") },
+      { key: "fast", kind: "speed", label: t("composer.speedFastTier"), checked: tier !== "default" && !(ultra && tier === ULTRA_TIER), ...lock, role: "menuitemradio", activate: () => onSelectSpeed("priority") },
+      ...(ultra ? [{
+        key: ULTRA_TIER, kind: "speed" as const, label: t("composer.speedUltraTier"), checked: tier === ULTRA_TIER,
+        enabled: lock.enabled && ultra.enabled, reason: lock.reason, note: lock.reason ? undefined : ultra.reason ?? undefined,
+        role: "menuitemradio" as const, activate: () => onSelectSpeed(ULTRA_TIER),
+      }] : []),
     ];
   }
   const tiers = efforts.map((tier): Row => ({
@@ -1392,6 +1491,7 @@ function MenuRow({
   refFor: (el: HTMLButtonElement | null) => void;
 }) {
   const accessibleName = row.reason ? `${row.label} — ${row.reason}` : row.label;
+  const noteId = useId();
   if (row.kind === "back") {
     return (
       <button
@@ -1411,6 +1511,7 @@ function MenuRow({
   }
   const isSubmenu = row.kind === "submenu";
   return (
+    <>
     <button
       ref={refFor}
       type="button"
@@ -1421,6 +1522,7 @@ function MenuRow({
       disabled={!row.enabled}
       tabIndex={active ? 0 : -1}
       aria-label={row.reason ? accessibleName : row.ariaLabel}
+      aria-describedby={row.note ? noteId : undefined}
       title={row.reason ?? row.hint}
       onClick={row.activate}
       data-runtime-row={row.kind}
@@ -1437,6 +1539,9 @@ function MenuRow({
       {isSubmenu ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : null}
       {row.kind === "account" ? <WeeklyColumn weekly={row.weekly} shown={Boolean(row.weeklyColumn)} /> : null}
     </button>
+    {/* Outside the button, so the reason keeps full contrast while the row is dimmed. */}
+    {row.note ? <span id={noteId} role="none" className="block px-2 pb-1 text-caption leading-snug text-muted" data-runtime-row-note>{row.note}</span> : null}
+    </>
   );
 }
 
@@ -1450,7 +1555,7 @@ function MenuRow({
 export function RuntimeSheet({
   t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
-  onSelectEffort, onSelectModel, onSelectFast, onClose,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, speedError = null, onClose,
 }: PanelProps & {
   limit?: RateLimitState | null;
   owner: Document;
@@ -1460,6 +1565,7 @@ export function RuntimeSheet({
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const immediate = Boolean(accountChoice?.immediate);
+  const speed = speedTierOf(face);
 
   useOverlayEscape(onClose);
 
@@ -1497,8 +1603,10 @@ export function RuntimeSheet({
       >
         {/* The grab bar and the header stay put while the groups scroll under
             them: a Codex sheet (Model, Reasoning, Speed) or a fourth account
-            pushed the title and the way out off the top of the scroller. */}
-        <div className="sticky top-0 z-[1] -mx-3 -mt-3 bg-card px-3 pt-3" data-runtime-sheet-header>
+            pushed the title and the way out off the top of the scroller. It
+            sticks over the scroller's top padding too, or a scrolled row shows
+            through that band above it. */}
+        <div className="sticky -top-3 z-[1] -mx-3 -mt-3 bg-card px-3 pt-3" data-runtime-sheet-header>
           <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
           <div className="mb-2 flex items-start gap-2">
             <div className="min-w-0 flex-1">
@@ -1568,8 +1676,26 @@ export function RuntimeSheet({
 
         {speedShown ? (
           <SheetSection label={t("composer.speedGroup")}>
-            <SheetRow label={t("composer.speedStandard")} checked={!face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(false)} />
-            <SheetRow label={speedDetail === t("composer.speedStandard") ? t("composer.speedFastTier") : speedDetail} checked={face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(true)} />
+            <SheetRow label={t("composer.speedStandard")} checked={speed === "default"} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectSpeed("default")} />
+            <SheetRow
+              label={speedDetail === t("composer.speedStandard") || (ultra && speed === ULTRA_TIER) ? t("composer.speedFastTier") : speedDetail}
+              checked={speed !== "default" && !(ultra && speed === ULTRA_TIER)}
+              disabled={speedLocked}
+              reason={speedLocked ? lockReason : undefined}
+              onSelect={() => onSelectSpeed("priority")}
+            />
+            {ultra ? (
+              <SheetRow
+                label={t("composer.speedUltraTier")}
+                checked={speed === ULTRA_TIER}
+                disabled={speedLocked || !ultra.enabled}
+                reason={speedLocked ? lockReason : undefined}
+                note={speedLocked ? undefined : ultra.reason ?? undefined}
+                value={ULTRA_TIER}
+                onSelect={() => onSelectSpeed(ULTRA_TIER)}
+              />
+            ) : null}
+            {speedError ? <p className="break-words px-2 pt-1 text-label leading-snug text-danger" data-runtime-speed-error>{speedError}</p> : null}
           </SheetSection>
         ) : null}
       </div>
@@ -1768,15 +1894,20 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
 }
 
 function SheetRow({
-  label, checked, disabled = false, reason, onSelect,
+  label, checked, disabled = false, reason, note, value, onSelect,
 }: {
   label: string;
   checked: boolean;
   disabled?: boolean;
   reason?: string;
+  /** Why the row cannot be chosen, as visible text under it: a phone has no tooltip. */
+  note?: string;
+  value?: string;
   onSelect: () => void;
 }) {
+  const noteId = useId();
   return (
+    <>
     <button
       type="button"
       role="radio"
@@ -1784,9 +1915,11 @@ function SheetRow({
       aria-disabled={disabled || undefined}
       disabled={disabled}
       aria-label={reason ? `${label} — ${reason}` : undefined}
+      aria-describedby={note ? noteId : undefined}
       title={reason}
       onClick={onSelect}
       data-runtime-sheet-row
+      data-runtime-sheet-value={value}
       className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 ${
         checked ? "text-primary" : "text-secondary"
       }`}
@@ -1794,5 +1927,8 @@ function SheetRow({
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {checked ? <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : null}
     </button>
+    {/* Outside the button, so the reason keeps full contrast while the row is dimmed. */}
+    {note ? <span id={noteId} role="none" className="-mt-1 block px-2 pb-1.5 text-label leading-snug text-muted" data-runtime-row-note>{note}</span> : null}
+    </>
   );
 }

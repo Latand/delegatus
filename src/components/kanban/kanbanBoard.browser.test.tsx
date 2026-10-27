@@ -19659,6 +19659,151 @@ describe("fast TTS header", () => {
   }, 120_000);
 });
 
+/* Ultra on the seat's speed control (2026-10-26), at 1280, 768 and 390 in both
+   languages and themes: S1 offered, S2 just picked, S3 applied, S4 unavailable on a
+   priority-only account with its reason as visible text, S5 refused and rolled back,
+   S6 the create and rotate drafts with Ultra chosen. Every changed string is
+   measured as whole text inside the window and its popover or sheet. */
+async function captureUltraSpeedStates(browser: Browser, base: string, out: string) {
+  const frames: Record<string, unknown>[] = [];
+  const HEIGHT = 844;
+  for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) for (const width of [1280, 768, 390]) {
+    const phone = width === 390;
+    const ultraText = translate(locale, "composer.speedUltraTier");
+    const shot = async (page: Page, state: string, facts: Record<string, unknown>, measured: string[]) => {
+      const whole = await page.evaluate((selectors) => selectors.map((selector) => {
+        const element = document.querySelector(selector);
+        if (!element || !element.textContent?.trim()) return { selector, whole: false, reason: "missing" };
+        const range = document.createRange(); range.selectNodeContents(element);
+        const box = element.closest("[data-runtime-sheet], [data-runtime-popover]")?.getBoundingClientRect() ?? null;
+        const cut = [...range.getClientRects()].filter((rect) => rect.width > 0).find((rect) => rect.left < 0 || rect.top < 0 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5
+          || (box && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)));
+        /* An ellipsis keeps every rect inside the box and still drops the end of the text. */
+        const clipped = [element, ...element.querySelectorAll("*")].some((node) => getComputedStyle(node).textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 0.5);
+        return { selector, whole: !cut && !clipped, text: element.textContent };
+      }), measured);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+      const popover = await page.locator("[data-runtime-popover]").count() ? await page.locator("[data-runtime-popover]").boundingBox() : null;
+      const file = `ultra-${state}-${locale}-${theme}-${width}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      for (const item of whole) expect(item, `${state} ${locale} ${theme} ${width}`).toMatchObject({ whole: true });
+      expect(overflow).toBeFalse();
+      if (popover) { expect(popover.y).toBeGreaterThanOrEqual(0); expect(popover.y + popover.height).toBeLessThanOrEqual(HEIGHT); expect(popover.x + popover.width).toBeLessThanOrEqual(width); }
+      frames.push({ state, locale, theme, width, frame: file, ...facts, measured: whole.map(({ selector, text }) => ({ selector, text })) });
+    };
+    const seat = async (query: string) => openFixture(browser, `${base}?scenario=service-tier&speed=1${query}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+    const ultraRow = phone ? '[data-runtime-sheet-value="ultrafast"]' : '[data-runtime-row="speed"][data-runtime-value="ultrafast"]';
+    const openSpeed = async (page: Page) => {
+      await page.locator("[data-runtime-pill]").click();
+      if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
+      await page.locator(ultraRow).waitFor();
+      /* Settled: the catalog answered, so Ultra is enabled or carries its reason. */
+      await page.waitForFunction((selector) => !(document.querySelector(selector) as HTMLButtonElement).disabled || !!document.querySelector("[data-runtime-row-note]") || (document.querySelector(selector) as HTMLElement).getAttribute("aria-checked") === "true", ultraRow);
+      if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
+    };
+    const facts = async (page: Page) => ({
+      face: await page.locator("[data-runtime-pill]").getAttribute("aria-label"),
+      ultra: await page.locator(ultraRow).count() ? await page.locator(ultraRow).evaluate((row) => ({ text: row.textContent, disabled: (row as HTMLButtonElement).disabled, checked: row.getAttribute("aria-checked") })) : null,
+      note: await page.locator("[data-runtime-row-note]").count() ? await page.locator("[data-runtime-row-note]").textContent() : null,
+    });
+    const label = `${ultraRow} [data-runtime-row-label], ${ultraRow} > span`;
+
+    { // S1: standard applied on Account B, whose catalog lists ultrafast.
+      const { context, page, pageErrors } = await seat("");
+      try {
+        await openSpeed(page);
+        const read = await facts(page);
+        expect(read.ultra).toEqual({ text: ultraText, disabled: false, checked: "false" });
+        expect(read.note).toBeNull();
+        await shot(page, "s1-offered", read, [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S2: Ultra just picked, the speed action still answering: checked at once, the face names it.
+      const { context, page, pageErrors } = await seat("&speedanswer=hold");
+      try {
+        await openSpeed(page);
+        await page.locator(ultraRow).click();
+        await page.locator("[data-runtime-switch-pending]").waitFor();
+        expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).toContain("Ultrafast");
+        if (phone) expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("true");
+        await shot(page, "s2-picked", await facts(page), phone ? [label] : ["[data-runtime-pill]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S3: Ultra applied, as the conversation reports it.
+      const { context, page, pageErrors } = await seat("&tier=ultrafast");
+      try {
+        if (!phone) expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+        await openSpeed(page);
+        const read = await facts(page);
+        expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
+        await shot(page, "s3-applied", read, [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S4: Account D lists only priority: disabled, with its reason as visible text.
+      const { context, page, pageErrors } = await seat("&account=d");
+      try {
+        await openSpeed(page);
+        await page.locator("[data-runtime-row-note]").scrollIntoViewIfNeeded();
+        const read = await facts(page);
+        expect(read.ultra).toMatchObject({ disabled: true, checked: "false" });
+        expect(read.note).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account D", model: "GPT\u20116.1\u2011Sol", offers: "Fast" }));
+        await shot(page, "s4-unavailable", read, [label, "[data-runtime-row-note]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S5: refused: back on Standard, the reason where the choice was made.
+      const { context, page, pageErrors } = await seat("&speedanswer=refuse");
+      try {
+        await openSpeed(page);
+        await page.locator(ultraRow).click();
+        if (phone) {
+          await page.locator("[data-runtime-speed-error]").waitFor();
+          await page.locator("[data-runtime-speed-error]").scrollIntoViewIfNeeded();
+          expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
+        } else {
+          await page.waitForFunction(() => document.querySelector("[data-runtime-pill]")?.className.includes("text-danger"));
+          await page.locator("[data-runtime-pill]").click();
+          await page.locator("[data-runtime-popover-account]").waitFor();
+        }
+        const error = await page.locator(phone ? "[data-runtime-speed-error]" : "[data-runtime-popover-account]").textContent();
+        expect(error).toBe("a runtime change is already in flight");
+        expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).not.toContain("Ultrafast");
+        await shot(page, "s5-refused", { ...await facts(page), error }, [phone ? "[data-runtime-speed-error]" : "[data-runtime-popover-account]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    for (const mode of ["create", "rotate"] as const) { // S6: launch drafts with Ultra chosen.
+      const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=service-tier&draft=${mode}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+      try {
+        await page.locator(`[data-speed-draft="${mode}"]`).waitFor();
+        if (mode === "create") await page.locator("[data-orchestrator-runs-on-change]").click();
+        const select = page.locator('select[aria-label]').filter({ has: page.locator('option[value="ultrafast"]') });
+        await select.waitFor();
+        await page.waitForFunction(() => !(document.querySelector('option[value="ultrafast"]') as HTMLOptionElement).disabled);
+        expect(await select.inputValue()).toBe("ultrafast");
+        await select.scrollIntoViewIfNeeded();
+        await shot(page, `s6-${mode}-select`, { select: await select.evaluate((element) => (element as HTMLSelectElement).selectedOptions[0]?.textContent) }, []);
+        if (mode === "create") {
+          await page.locator("[data-runtime-pill]").click();
+          if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
+          await page.locator(ultraRow).waitFor();
+          await page.waitForFunction((selector) => !(document.querySelector(selector) as HTMLButtonElement).disabled, ultraRow);
+          if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
+          const read = await facts(page);
+          expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
+          if (!phone) expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+          await shot(page, "s6-create-pill", read, phone ? [label] : [label, "[data-runtime-pill]"]);
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+  }
+  return frames;
+}
+
 describe("Codex service tier rendered evidence", () => {
   browserTest("ultrafast appears on desktop and in the phone speed sheet in both locales", async () => {
     const out = path.resolve(".artifacts/codex-service-tier");
@@ -19674,7 +19819,8 @@ describe("Codex service tier rendered evidence", () => {
           await pill.waitFor();
           if (width > 390) expect(await pill.textContent()).toContain("Ultrafast");
           await pill.click();
-          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.getByText(translate(locale, "composer.speedTierNamed", { tier: "Ultrafast" }), { exact: true });
+          /* The phone's sheet names the tier in its own checked Ultra row. */
+          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.locator('[data-runtime-sheet-value="ultrafast"][aria-checked="true"]');
           await detail.waitFor();
           if (width === 390) await detail.scrollIntoViewIfNeeded();
           expect(await detail.textContent()).toContain("Ultrafast");
@@ -19695,10 +19841,11 @@ describe("Codex service tier rendered evidence", () => {
           evidence.push({ ...runtimeEvidence, mappingTier: await mapping.textContent() });
         } finally { await context.close(); }
       }
+      const ultra = await captureUltraSpeedStates(browser, server.base, out);
       fs.mkdirSync("evidence/codex-service-tier", { recursive: true });
-      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence }, null, 2) + "\n");
+      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence, ultra }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 1_500_000);
 });
 
 describe("linked board sync health", () => {

@@ -1153,6 +1153,11 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.speedStandard": "Стандартна",
   "composer.speedTierNamed": "Рівень {tier}",
   "composer.speedFastTier": "Швидка — пріоритетний тариф",
+  "composer.speedUltraTier": "Ультра — тариф Ultrafast",
+  "composer.speedUltraAbsent": "{account} не пропонує Ultrafast для {model} (є: {offers})",
+  "composer.speedUltraAbsentNone": "{account} не пропонує Ultrafast для {model}",
+  "composer.speedUltraUnknown": "Не вдалося прочитати каталог моделей {account}, щоб перевірити Ultrafast",
+  "composer.speedUltraNeedsModel": "Для Ultrafast оберіть модель",
   "composer.backTo": "Назад",
   "composer.nextMessageUses": "Наступне повідомлення: {model} · {effort}",
   "composer.settingsNextResume": "застосується під час наступного відновлення розмови",
@@ -1419,6 +1424,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.rolePromptToggle": "Промпт ролі (EN)",
   "draft.speedFast": "швидкий",
   "draft.speedStandard": "стандартний",
+  "draft.speedUltra": "ультра",
 
   // Локалізовані назви рівнів міркувань (у CLI надсилаються оригінальні токени)
   "effortTier.none": "без міркувань",

@@ -1163,6 +1163,11 @@ export const en = {
   "composer.speedStandard": "Standard",
   "composer.speedTierNamed": "{tier} tier",
   "composer.speedFastTier": "Fast — priority tier",
+  "composer.speedUltraTier": "Ultra — Ultrafast tier",
+  "composer.speedUltraAbsent": "{account} doesn't offer Ultrafast for {model} (offers: {offers})",
+  "composer.speedUltraAbsentNone": "{account} doesn't offer Ultrafast for {model}",
+  "composer.speedUltraUnknown": "Can't read {account}'s model catalog to check Ultrafast",
+  "composer.speedUltraNeedsModel": "Ultrafast needs a chosen model",
   "composer.backTo": "Back",
   "composer.nextMessageUses": "Next message: {model} · {effort}",
   "composer.settingsNextResume": "applies when the conversation is next resumed",
@@ -1440,6 +1445,7 @@ export const en = {
   "draft.rolePromptToggle": "Role prompt (EN)",
   "draft.speedFast": "fast",
   "draft.speedStandard": "standard",
+  "draft.speedUltra": "ultra",
 
   // Reasoning tier display names (submitted values stay the CLI tokens)
   "effortTier.none": "none",
