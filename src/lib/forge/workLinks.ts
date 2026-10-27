@@ -197,7 +197,7 @@ export function workLinkInputs(value: unknown): unknown[] {
 
 /* ── Resolution ─────────────────────────────────────────────────────────── */
 
-export const workLinkKey = (repository: string, number: number) => `${repository}#${number}`;
+export const workLinkKey = (repository: string, number: number) => `${repository.toLowerCase()}#${number}`;
 
 export function workLinkUrl(repository: string, number: number, kind: WorkLinkKind | null): string {
   return `https://github.com/${repository}/${kind === "pr" ? "pull" : "issues"}/${number}`;
@@ -210,7 +210,7 @@ function materialize(drafts: readonly LinkDraft[], cache: ForgeCacheView): WorkL
   const byKey = new Map<string, WorkLink>();
   for (const draft of drafts) {
     const view = cache.repository(draft.repository);
-    const repository = view?.canonical ?? draft.repository;
+    const repository = (view?.canonical ?? draft.repository).toLowerCase();
     const cached = view?.pr(draft.number);
     const kind: WorkLinkKind | null = cached ? "pr" : draft.kind ?? (view?.isIssue(draft.number) ? "issue" : null);
     const link: WorkLink = {
@@ -218,7 +218,7 @@ function materialize(drafts: readonly LinkDraft[], cache: ForgeCacheView): WorkL
       kind,
       repository,
       number: draft.number,
-      url: cached?.url ?? workLinkUrl(repository, draft.number, kind),
+      url: workLinkUrl(repository, draft.number, kind),
       source: draft.source,
       via: [...draft.via],
       state: kind === "pr" && cached ? cached.state : null,
@@ -259,9 +259,12 @@ export function sortWorkLinks(links: readonly WorkLink[]): WorkLink[] {
   return [...links].sort((a, b) => linkRank(a) - linkRank(b) || b.number - a.number || a.key.localeCompare(b.key));
 }
 
-export function mergeWorkLinks(lists: ReadonlyArray<readonly WorkLink[]>): WorkLink[] {
+export function mergeWorkLinks(lists: ReadonlyArray<readonly WorkLink[]>, cache: ForgeCacheView = EMPTY_FORGE_CACHE): WorkLink[] {
   const byKey = new Map<string, WorkLink>();
-  for (const list of lists) for (const link of list) {
+  for (const list of lists) for (const original of list) {
+    const repository = (cache.repository(original.repository)?.canonical ?? original.repository).toLowerCase();
+    const link = { ...original, repository, key: workLinkKey(repository, original.number),
+      url: repository !== original.repository ? workLinkUrl(repository, original.number, original.kind) : original.url };
     const prior = byKey.get(link.key);
     byKey.set(link.key, prior ? mergeLink(prior, link) : { ...link, via: [...link.via] });
   }
@@ -345,7 +348,7 @@ export function resolveTaskLinks(
   repository?: string | null,
 ): ResolvedWorkLinks {
   const own = materialize(manualDrafts(task.workLinks), cache);
-  return { links: mergeWorkLinks([own, ...pipelines.map((entry) => entry.links)]), noPr: false, ...(repository ? { repository } : {}) };
+  return { links: mergeWorkLinks([own, ...pipelines.map((entry) => entry.links)], cache), noPr: false, ...(repository ? { repository } : {}) };
 }
 
 /* ── Stored-link edits ──────────────────────────────────────────────────── */

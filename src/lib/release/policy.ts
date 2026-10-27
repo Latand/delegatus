@@ -1,4 +1,4 @@
-export type ReleaseOutcome = "published" | "failed" | "declined" | "completed" | "superseded";
+export type ReleaseOutcome = "published" | "failed" | "declined" | "completed" | "superseded" | "refused";
 export interface ReleaseDeployment { revision: string; at: number }
 export interface ReleaseChange { subject: string; files: string[] }
 export interface ReleaseInput {

@@ -47,8 +47,6 @@ import {
 export { READY_MARKERS, screenTail } from "@/lib/status";
 
 const TMUX = "tmux";
-const CANONICAL_EXTERNAL_SESSION = "agents";
-const LEGACY_TMUX_MIGRATION_MARKER = statePath("legacy-tmux-migration-complete");
 /* Outlives the 10 s /api/files poll so the pane map is not rebuilt every
    request; a post-kill rebuild passes fresh=true to bypass the memo. */
 const PANE_MAP_TTL_MS = 12_000;
@@ -109,87 +107,19 @@ interface RunResult {
   stderr: string;
 }
 
-export interface TmuxEndpointContractInput {
-  configuredTmpdir: string;
-  externalFlag: string | undefined;
-  migrationComplete: boolean;
-  uid: number;
-}
-
-export interface TmuxEndpointContract {
-  external: boolean;
-  tmuxTmpdir: string;
-  health: TmuxEndpointHealth;
-}
-
-export type TmuxEndpointHealth =
-  | { status: "healthy" }
-  | {
-      status: "degraded";
-      code: "migration-marker-endpoint-mismatch" | "external-endpoint-mismatch";
-      configuredTmpdir: string;
-      expectedTmpdir: string;
-      message: string;
-    };
+export type TmuxEndpointHealth = { status: "healthy" };
 
 interface ResolveTmuxAttachDeps {
   runTmux(args: string[], input?: Buffer | string, endpoint?: TmuxEndpointDescriptor): Promise<RunResult>;
   processIdentity(pid: number): string | null;
 }
 
-/** The service endpoint is intentionally an environment contract. During the
-    migration the old /tmp server remains reachable until this flag is enabled. */
-export function resolveTmuxEndpointContract(input: TmuxEndpointContractInput): TmuxEndpointContract {
-  const supervisorTmpdir = `/run/user/${input.uid}/agent-log-viewer`;
-  const external = input.externalFlag === "1";
-  if (input.migrationComplete && (!external || input.configuredTmpdir !== supervisorTmpdir)) {
-    return {
-      external,
-      tmuxTmpdir: input.configuredTmpdir,
-      health: {
-        status: "degraded",
-        code: "migration-marker-endpoint-mismatch",
-        configuredTmpdir: input.configuredTmpdir,
-        expectedTmpdir: supervisorTmpdir,
-        message: `A migration completion marker exists while the Viewer is using ${input.configuredTmpdir}. Legacy tmux delivery remains active; remove the stale marker or complete the supervisor migration.`,
-      },
-    };
-  }
-  if (external && input.configuredTmpdir !== supervisorTmpdir) {
-    return {
-      external,
-      tmuxTmpdir: input.configuredTmpdir,
-      health: {
-        status: "degraded",
-        code: "external-endpoint-mismatch",
-        configuredTmpdir: input.configuredTmpdir,
-        expectedTmpdir: supervisorTmpdir,
-        message: `External tmux mode is enabled with ${input.configuredTmpdir}. Set TMUX_TMPDIR=${supervisorTmpdir} and redeploy the Viewer.`,
-      },
-    };
-  }
-  return { external, tmuxTmpdir: input.configuredTmpdir, health: { status: "healthy" } };
-}
-
-function tmuxEndpointContract(): TmuxEndpointContract {
-  return resolveTmuxEndpointContract({
-    configuredTmpdir: process.env.TMUX_TMPDIR || "/tmp",
-    externalFlag: process.env.LLV_LEGACY_TMUX_EXTERNAL,
-    migrationComplete: fs.existsSync(LEGACY_TMUX_MIGRATION_MARKER),
-    uid: process.getuid?.() ?? 0,
-  });
-}
-
-export function externalTmuxMode(): boolean {
-  return tmuxEndpointContract().external;
-}
-
 export function tmuxEndpoint(): string {
-  return tmuxEndpointContract().tmuxTmpdir;
+  return process.env.TMUX_TMPDIR || "/tmp";
 }
 
 export function tmuxEndpointHealth(): TmuxEndpointHealth {
-  return tmuxEndpointContract().health;
+  return { status: "healthy" };
 }
 
 /** Builds the descriptor from values supplied by the host process. The small
@@ -999,13 +929,6 @@ export async function killPane(target: TmuxTarget): Promise<void> {
  * session; no server at all yields a fresh detached «agents» session.
  */
 export async function activeTmuxSession(endpoint = tmuxEndpointDescriptor(), authorize?: DeliveryAdmissionGuard): Promise<string> {
-  if (externalTmuxMode()) {
-    const healthy = await runTmux(["has-session", "-t", CANONICAL_EXTERNAL_SESSION], undefined, endpoint).catch(() => null);
-    if (!healthy || healthy.code !== 0) {
-      throw new Error("external legacy tmux supervisor is unavailable; refusing to create a container-owned server");
-    }
-    return CANONICAL_EXTERNAL_SESSION;
-  }
   const clients = await runTmux(["list-clients", "-F", "#{client_activity} #{client_session}"], undefined, endpoint).catch(() => null);
   const pick = (stdout: string) => {
     let best: { at: number; name: string } | null = null;

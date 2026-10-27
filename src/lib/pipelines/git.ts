@@ -2025,7 +2025,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         : { ...result, failure: failureEvidence, error: detail };
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
-      if (!result.ok && failureEvidence.hookBudgetMs) result = { ...result, outcome: "not-landed" };
+      if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.
