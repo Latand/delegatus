@@ -49,6 +49,13 @@ function enCount(count: number, singular: string): string {
   return `${count >= 1 && count <= 3 ? COUNT_WORDS.en[count - 1] : count} ${singular}${new Intl.PluralRules("en").select(count) === "one" ? "" : "s"}`;
 }
 const capital = (text: string) => text.charAt(0).toLocaleUpperCase() + text.slice(1);
+/* Up to this many images are named in the intro; more are named by the first two and a count. */
+const NAMED_IMAGES = 3;
+
+/** Ukrainian typesetting keeps a one-letter preposition or conjunction on its next word's line. */
+export function typesetFileConfirmation(text: string, locale: Locale): string {
+  return locale === "uk" ? text.replace(/(?<=^|[\s(«])([звуіаоЗВУІАО]) (?=\S)/g, "$1\u00a0") : text;
+}
 
 /** Independent of the shared settings catalog owned by the voice-approval lane. */
 export const fileConfirmationText = {
@@ -200,8 +207,15 @@ export function fileConfirmationSummary(view: Pick<FileConfirmationView, "chatTi
     return fallback(reason);
   });
   const images = uk ? ukCount(view.files.length, "image", "neuter") : enCount(view.files.length, "image");
+  /* The first screen names the images that would go: up to three by name, then the first two and how many more. */
+  const shown = view.files.length <= NAMED_IMAGES ? view.files : view.files.slice(0, 2);
+  const hiddenCount = view.files.length - shown.length;
+  if (several) names.push(...shown.map(file => file.filename));
+  const sending = hiddenCount
+    ? `${shown.map(file => file.filename).join(", ")} ${uk ? `і ще ${ukCount(hiddenCount, "image", "neuter")}` : `and ${enCount(hiddenCount, "more image")}`}`
+    : list(shown.map(file => file.filename));
   const intro = several
-    ? (uk ? `Агент хоче надіслати ${images} у ${view.chatTitle}.` : `An agent wants to send ${images} to ${view.chatTitle}.`)
+    ? (uk ? `Агент хоче надіслати ${sending} у ${view.chatTitle}.` : `An agent wants to send ${sending} to ${view.chatTitle}.`)
     : uk ? `Агент хоче надіслати ${filename} у ${view.chatTitle}${real ? `, а це посилання на ${real}` : ""}.`
       : `An agent wants to send ${filename} to ${view.chatTitle}${real ? `, and it is a link to ${real}` : ""}.`;
   const count = rest.length;

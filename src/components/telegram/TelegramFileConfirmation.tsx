@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "re
 import { Check, CircleX, Clock, Loader2, Send, TriangleAlert, X } from "lucide-react";
 import { translate, useLocale, type Locale } from "@/lib/i18n";
 import { MobileSheetFold } from "@/components/mobile/MobileSheet";
-import { fileConfirmationSummary, fileConfirmationText, type FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
+import { fileConfirmationSummary, fileConfirmationText, typesetFileConfirmation, type FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 
 /* The product's button recipe (SelfUpdateView): refusing is the primary, the send carries the warning tone. */
 const BUTTON = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[8px] border px-3.5 text-ui font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-55 pointer-coarse:h-11 max-sm:h-11 max-sm:w-full";
@@ -118,20 +118,23 @@ function Details({ view, decidedAt }: { view: FileConfirmationView; decidedAt: s
     [words.expires, day(view.expiresAt, locale)],
     [words.digest, view.digest, true],
   ];
-  const list = (entries: Row[]) => entries.filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value, code]) => <div key={label} className="min-w-0">
-    <dt className="text-label text-muted">{label}</dt>
-    <dd data-file-confirmation-code={code ? "" : undefined} className={`${code ? "font-mono " : ""}whitespace-pre-wrap text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere]`}>{value}</dd>
-  </div>);
+  const list = (entries: Row[]) => <dl className="flex flex-col gap-2">
+    {entries.filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value, code]) => <div key={label} className="min-w-0">
+      <dt className="text-label text-muted">{label}</dt>
+      <dd data-file-confirmation-code={code ? "" : undefined} className={`${code ? "font-mono " : ""}whitespace-pre-wrap text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere]`}>{value}</dd>
+    </div>)}
+  </dl>;
   /* The rule spans the card; the fold's own 16 px inset plus 4 px meets the card's 20 px text column at sm. */
   return <div data-file-confirmation-details className="-mx-4 border-t border-border pt-1 sm:-mx-5 sm:px-1">
     <MobileSheetFold id="details" title={translate(locale, "kanban.details")} open={open} onToggle={() => setOpen(value => !value)}>
-      <dl className="flex flex-col gap-2 py-2 pl-3 pr-4">
-        {several ? view.files.map((file, index) => <div key={index} className="flex flex-col gap-2">
-          <p className="text-ui font-semibold text-primary [overflow-wrap:anywhere]">{file.filename}</p>
+      {/* Among several files, a hairline opens each file's group and the fields they share, so no field reads as another file's. */}
+      <div className="flex flex-col gap-3 py-2 pl-3 pr-4">
+        {several ? view.files.map((file, index) => <section key={index} data-file-confirmation-group className="flex flex-col gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
+          <h2 className="text-ui font-semibold text-primary [overflow-wrap:anywhere]">{file.filename}</h2>
           {list(fileRows(file, index, true))}
-        </div>) : null}
-        {list(rows)}
-      </dl>
+        </section>) : null}
+        <div data-file-confirmation-group className={several ? "border-t border-border pt-3" : undefined}>{list(rows)}</div>
+      </div>
     </MobileSheetFold>
   </div>;
 }
@@ -154,14 +157,14 @@ export function TelegramFileConfirmationView({ view, busy, decidedAt: pressedAt,
   const time = decidedAt ? clock(decidedAt, locale) : null;
   const shown = state === "pending" && busy ? (busy === "send" ? "sending" : "declining") : state;
   const detail = state === "expired" ? words.at(clock(view.expiresAt, locale)) : (state === "sent" || state === "rejected") && time ? words.at(time) : null;
-  const text = (sentence: string) => named(sentence, summary.names);
+  const text = (sentence: string) => named(typesetFileConfirmation(sentence, locale), summary.names.map(name => typesetFileConfirmation(name, locale)));
   let content: ReactNode;
   if (state === "pending") {
     content = <>
       <Heading icon={<TriangleAlert className={`${ICON} text-warning`} aria-hidden />} announce={false}>{text(summary.heading)}</Heading>
       <div className="flex flex-col gap-1 text-body text-secondary">
         <p data-file-confirmation-intro>{text(summary.intro)}</p>
-        {summary.more ? <p>{summary.more}</p> : null}
+        {summary.more ? <p>{text(summary.more)}</p> : null}
       </div>
       {summary.reasons.length ? <ul data-file-confirmation-reasons className="flex flex-col gap-1.5 text-body text-primary">
         {summary.reasons.map((reason, index) => <li key={index} className="flex items-start gap-2">

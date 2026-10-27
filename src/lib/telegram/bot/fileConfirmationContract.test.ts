@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fileConfirmationReason, fileConfirmationSummary, fileConfirmationText, type FileConfirmationView } from "./fileConfirmationContract";
+import { fileConfirmationReason, fileConfirmationSummary, fileConfirmationText, typesetFileConfirmation, type FileConfirmationView } from "./fileConfirmationContract";
 import type { DocumentWarning } from "./documents";
 
 const hidden: DocumentWarning = { code: "document_forbidden_path", path: "/srv/orbit/.codex/auth.json", segment: ".codex", reason: "/srv/orbit/.codex/auth.json passes through dot-directory .codex." };
@@ -56,9 +56,9 @@ describe("fileConfirmationSummary", () => {
   test("one reason every image shares is said once, for all of them", () => {
     const files = shots("one.png", "two.png");
     const en = fileConfirmationSummary(view([away("one.png"), away("two.png")], files), "en");
-    expect(en).toMatchObject({ heading: "Both images are outside the folders files may be sent from (handoff)", intro: "An agent wants to send two images to Orbit Reports.", more: null, reasons: [], real: null });
+    expect(en).toMatchObject({ heading: "Both images are outside the folders files may be sent from (handoff)", intro: "An agent wants to send one.png and two.png to Orbit Reports.", more: null, reasons: [], real: null });
     const uk = fileConfirmationSummary(view([away("one.png"), away("two.png")], files), "uk");
-    expect(uk).toMatchObject({ heading: "Обидва зображення поза теками, з яких дозволено надсилати (handoff)", intro: "Агент хоче надіслати два зображення у Orbit Reports.", more: null, reasons: [] });
+    expect(uk).toMatchObject({ heading: "Обидва зображення поза теками, з яких дозволено надсилати (handoff)", intro: "Агент хоче надіслати one.png і two.png у Orbit Reports.", more: null, reasons: [] });
     const three = shots("a.png", "b.png", "c.png");
     expect(fileConfirmationSummary(view(three.map(file => dotted(file.filename)), three), "en").heading).toBe("All three images are inside the hidden folder .cache");
     expect(fileConfirmationSummary(view(three.map(file => dotted(file.filename)), three), "uk").heading).toBe("Усі три зображення лежать у прихованій теці .cache");
@@ -107,11 +107,28 @@ describe("fileConfirmationSummary", () => {
     expect(forms.map(summary => summary.warnings)).toEqual(["одне застереження", "два застереження", "5 застережень", "21 застереження"]);
     expect(forms.map(summary => summary.more)).toEqual([null, "Ще одна причина, чому Delegatus зупинив надсилання:", "Ще 4 причини, чому Delegatus зупинив надсилання:", "Ще 20 причин, чому Delegatus зупинив надсилання:"]);
     const images = (count: number) => Array.from({ length: count }, (_, index) => ({ path: `/srv/${index}.png`, resolvedPath: `/srv/${index}.png`, filename: `${index}.png`, sha256: "f".repeat(64), bytes: 1 }));
-    expect([2, 5, 21].map(count => fileConfirmationSummary(view([outside], images(count)), "uk").intro)).toEqual([
-      "Агент хоче надіслати два зображення у Orbit Reports.",
-      "Агент хоче надіслати 5 зображень у Orbit Reports.",
-      "Агент хоче надіслати 21 зображення у Orbit Reports.",
+    expect([2, 3, 4, 5, 21].map(count => fileConfirmationSummary(view([outside], images(count)), "uk").intro)).toEqual([
+      "Агент хоче надіслати 0.png і 1.png у Orbit Reports.",
+      "Агент хоче надіслати 0.png, 1.png і 2.png у Orbit Reports.",
+      "Агент хоче надіслати 0.png, 1.png і ще два зображення у Orbit Reports.",
+      "Агент хоче надіслати 0.png, 1.png і ще три зображення у Orbit Reports.",
+      "Агент хоче надіслати 0.png, 1.png і ще 19 зображень у Orbit Reports.",
     ]);
+    expect([3, 4, 21].map(count => fileConfirmationSummary(view([outside], images(count)), "en").intro)).toEqual([
+      "An agent wants to send 0.png, 1.png and 2.png to Orbit Reports.",
+      "An agent wants to send 0.png, 1.png and two more images to Orbit Reports.",
+      "An agent wants to send 0.png, 1.png and 19 more images to Orbit Reports.",
+    ]);
+    expect(fileConfirmationSummary(view([outside], images(21)), "en").names).toEqual(expect.arrayContaining(["0.png", "1.png"]));
+    expect(fileConfirmationSummary(view([outside], images(21)), "en").names).not.toContain("2.png");
+  });
+
+  test("a Ukrainian one-letter preposition or conjunction stays on its next word's line", () => {
+    const heading = fileConfirmationSummary(view([away("one.png"), away("two.png")], shots("one.png", "two.png")), "uk").heading;
+    expect(typesetFileConfirmation(heading, "uk")).toBe("Обидва зображення поза теками, з\u00a0яких дозволено надсилати (handoff)");
+    expect(typesetFileConfirmation("one.png і в теці (у Orbit) О 15:03, а все", "uk")).toBe("one.png і\u00a0в\u00a0теці (у\u00a0Orbit) О\u00a015:03, а\u00a0все");
+    expect(typesetFileConfirmation("Схоже, у цьому файлі", "uk")).toBe("Схоже, у\u00a0цьому файлі");
+    expect(typesetFileConfirmation("one.png and a file", "en")).toBe("one.png and a file");
   });
 
   test("decided sentences drop the time an old row never recorded", () => {

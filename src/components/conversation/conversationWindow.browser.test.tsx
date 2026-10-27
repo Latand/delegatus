@@ -1,4 +1,4 @@
-import { fileConfirmationText } from "@/lib/telegram/bot/fileConfirmationContract";
+import { fileConfirmationText, typesetFileConfirmation } from "@/lib/telegram/bot/fileConfirmationContract";
 import { afterAll, describe, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -5718,7 +5718,7 @@ describe("owner confirmation of one Telegram file send", () => {
   const output = path.resolve(".artifacts/telegram-file-confirmation");
   const recorded = new Map<string, Record<string, unknown>>();
   const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const;
-  type Frame = { width: 390 | 820 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
+  type Frame = { width: 390 | 600 | 820 | 1000 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
   const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
   const LONG_CHAT = "Fixture reports for the regional and international operations office";
   /* Names, captions and code tokens a Ukrainian frame may carry in Latin letters; any other Latin word is an English fallback. */
@@ -5745,30 +5745,33 @@ describe("owner confirmation of one Telegram file send", () => {
         try {
           await page.locator("[data-file-confirmation-heading]").waitFor();
           await page.evaluate(() => document.fonts.ready);
-          /* The decision's own words, from the stored view: the strongest reason leads. */
-          const pendingHeading = data === "media"
+          /* The decision's own words, from the stored view: the strongest reason leads. Ukrainian binds one-letter words to the next. */
+          const pendingHeading = typesetFileConfirmation(data === "media"
             ? (lang === "uk" ? "Обидва зображення поза теками, з яких дозволено надсилати (handoff)" : "Both images are outside the folders files may be sent from (handoff)")
-            : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key");
-          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: words.sentTitle(chat), rejected: words.rejectedTitle(chat), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
+            : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key"), lang);
+          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
           const asking = ["pending", "details", "status", "sending"].includes(state);
           /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
-          const firstScreen = await page.evaluate(() => {
+          const firstScreen = await page.evaluate((media) => {
             const whole = (box: DOMRect | undefined) => box ? box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth : null;
-            const real = (() => {
+            /* A name in the intro, measured from its own text range. */
+            const inIntro = (token: string) => {
               const intro = document.querySelector("[data-file-confirmation-intro]");
               if (!intro) return undefined;
               const walker = document.createTreeWalker(intro, NodeFilter.SHOW_TEXT);
               while (walker.nextNode()) {
-                const at = walker.currentNode.textContent?.indexOf("auth.json") ?? -1;
+                const at = walker.currentNode.textContent?.indexOf(token) ?? -1;
                 if (at < 0) continue;
                 const range = document.createRange();
                 range.setStart(walker.currentNode, at);
-                range.setEnd(walker.currentNode, at + "auth.json".length);
+                range.setEnd(walker.currentNode, at + token.length);
                 return range.getBoundingClientRect();
               }
               return undefined;
-            })();
+            };
+            const real = inIntro(media ? "board-before.png" : "auth.json");
             return {
+              secondImage: media ? whole(inIntro("board-after.png")) : null,
               scrollTop: document.querySelector("main")!.scrollTop,
               heading: whole(document.querySelector("[data-file-confirmation-heading]")?.getBoundingClientRect()),
               headingText: document.querySelector("[data-file-confirmation-heading]")?.textContent ?? "",
@@ -5776,13 +5779,14 @@ describe("owner confirmation of one Telegram file send", () => {
               send: whole(document.querySelector("[data-file-confirmation-send]")?.getBoundingClientRect()),
               realFile: whole(real),
             };
-          });
+          }, data === "media");
           if (firstScreen.scrollTop !== 0) failures.push(`${name}: opened scrolled`);
           if (!firstScreen.heading) failures.push(`${name}: the heading is not whole on the first screen`);
           if (opened === "pending") {
             if (firstScreen.headingText !== pendingHeading) failures.push(`${name}: heading «${firstScreen.headingText}»`);
             if (!firstScreen.refuse || !firstScreen.send) failures.push(`${name}: an answer is off the first screen (${JSON.stringify(firstScreen)})`);
-            if (data !== "media" && !firstScreen.realFile) failures.push(`${name}: the real file is not whole on the first screen`);
+            if (!firstScreen.realFile) failures.push(`${name}: ${data === "media" ? "board-before.png" : "the real file"} is not whole on the first screen`);
+            if (data === "media" && !firstScreen.secondImage) failures.push(`${name}: board-after.png is not whole on the first screen`);
             /* Both images share one reason: the heading says it for both, and no list repeats it. */
             if (data === "media" && await page.locator("[data-file-confirmation-reasons]").count() !== 0) failures.push(`${name}: a reason the heading already says is listed again`);
             if (await page.getByRole("button", { name: words.refuse, exact: true }).count() !== 1 || await page.getByRole("button", { name: words.approve, exact: true }).count() !== 1) failures.push(`${name}: the two answers are not «${words.refuse}» and «${words.approve}»`);
@@ -5799,6 +5803,16 @@ describe("owner confirmation of one Telegram file send", () => {
             }
             const codes = await page.locator("[data-mobile2-menu-body] dl > div", { has: page.locator("dt", { hasText: words.codes }) }).locator("dd").innerText();
             if (data === "media" && codes !== "document_outside_roots") failures.push(`${name}: detector codes «${codes}»`);
+            /* Each image's group and the fields they share open on a hairline, so no field reads as the image above. */
+            if (data === "media") {
+              const groups = await page.evaluate(() => [...document.querySelectorAll("[data-mobile2-menu-body] [data-file-confirmation-group]")].map((group) => ({
+                head: (group.querySelector("h2") ?? group.querySelector("dt"))?.textContent ?? "",
+                rule: parseFloat(getComputedStyle(group).borderTopWidth),
+              })));
+              const heads = groups.map((group) => group.head);
+              if (heads.join("|") !== `board-before.png|board-after.png|${words.chat}`) failures.push(`${name}: Details groups «${heads.join(" | ")}»`);
+              if (groups.slice(1).some((group) => group.rule < 1)) failures.push(`${name}: a Details group opens without a hairline: ${JSON.stringify(groups)}`);
+            }
           }
           if (state === "status") {
             await page.click("[data-file-confirmation-status]");
@@ -5838,13 +5852,13 @@ describe("owner confirmation of one Telegram file send", () => {
             if (href !== `/sign-in?next=${encodeURIComponent(`/?${query}`)}`) failures.push(`${name}: sign-in link ${href}`);
           }
           await page.waitForTimeout(150);
-          const reading = await page.evaluate(({ coarse, strip }) => {
+          const reading = await page.evaluate(({ coarse, uk, strip }) => {
             const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
             const screen = new DOMRect(0, 0, innerWidth, innerHeight);
             const main = document.querySelector("main")!;
             const card = document.querySelector("[data-file-confirmation-card]")!;
             const popover = document.querySelector("[data-file-confirmation-popover]");
-            const offscreen: string[] = [], clipped: string[] = [], covered: string[] = [], cut: string[] = [], small: string[] = [], latin: string[] = [], orphans: string[] = [];
+            const offscreen: string[] = [], clipped: string[] = [], covered: string[] = [], cut: string[] = [], small: string[] = [], latin: string[] = [], orphans: string[] = [], danglers: string[] = [];
             const clippers: DOMRect[] = [];
             for (let node = card.parentElement; node && node !== document.body; node = node.parentElement) {
               const style = getComputedStyle(node);
@@ -5899,6 +5913,11 @@ describe("owner confirmation of one Telegram file send", () => {
               }
               const lines = [...new Set(words.map((word) => word.top))];
               if (lines.length < 2) continue;
+              /* Ukrainian typesetting: no line ends on a one-letter preposition or conjunction. */
+              if (uk) for (const top of lines.slice(0, -1)) {
+                const end = words.filter((word) => word.top === top).at(-1)!.text;
+                if (/^[звуіаоЗВУІАО]$/.test(end)) danglers.push(`«${end}» ends a line (${block.textContent?.trim().slice(0, 40)}…)`);
+              }
               const last = words.filter((word) => word.top === lines.at(-1));
               const tail = last.map((word) => word.text).join(" ");
               if (last.length === 1 && tail.length < 10 || last.length === 2 && tail.length < 11) orphans.push(`${tail} (${block.textContent?.trim().slice(0, 40)}…)`);
@@ -5924,7 +5943,7 @@ describe("owner confirmation of one Telegram file send", () => {
             const dot = document.querySelector("[data-file-confirmation-status] > span")?.getBoundingClientRect();
             const chevron = document.querySelector("[data-file-confirmation-details] button svg")?.getBoundingClientRect();
             return {
-              offscreen, clipped, covered, cut, small, latin, orphans, contrast,
+              offscreen, clipped, covered, cut, small, latin, orphans, danglers, contrast,
               popover: popoverBox ? { inCard: popoverBox.top >= cardBox.top + 4 && popoverBox.bottom <= cardBox.bottom - 4 && popoverBox.left >= cardBox.left + 4 && popoverBox.right <= cardBox.right - 4, text: popover!.textContent } : null,
               dotOffChevron: dot && chevron ? Math.round(((dot.left + dot.right) / 2 - (chevron.left + chevron.right) / 2) * 10) / 10 : null,
               detailsRow: document.querySelector("[data-file-confirmation-details] button")?.textContent?.trim() ?? null,
@@ -5934,13 +5953,14 @@ describe("owner confirmation of one Telegram file send", () => {
               cardWidth: Math.round(cardBox.width),
               background: getComputedStyle(main).backgroundColor,
             };
-          }, { coarse: phone, strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After"] });
+          }, { coarse: phone, uk: lang === "uk", strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After"] });
           if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
           if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
           if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
           if (reading.cut.length) failures.push(`${name}: ellipsis: ${reading.cut.join(" | ")}`);
           if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
           if (reading.orphans.length) failures.push(`${name}: ${reading.orphans.join(" | ")}`);
+          if (reading.danglers.length) failures.push(`${name}: ${reading.danglers.join(" | ")}`);
           if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
           if (reading.iso.length) failures.push(`${name}: ISO timestamps on the page: ${reading.iso.join(", ")}`);
           for (const [label, ratio] of Object.entries(reading.contrast)) if (ratio < 4.5) failures.push(`${name}: «${label}» reads at ${ratio}:1`);
@@ -5976,8 +5996,9 @@ describe("owner confirmation of one Telegram file send", () => {
       { width: 820, lang: "uk", theme: "light", state: "pending" },
       { width: 390, lang: "uk", theme: "light", state: "pending", data: "long" },
     ]],
-    /* Two images that share one reason: the heading says it for both, and Details list its code once. */
-    ["two images: pending and Details in both languages and themes, at 390, 820 and 1440 px", ([390, 820, 1440] as const).flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).flatMap((theme) => (["pending", "details"] as const).map((state): Frame => ({ width, lang, theme, state, data: "media" })))))],
+    /* Two images that share one reason: the intro names both, the heading says the reason for both, and Details
+       list its code once, under a hairline apart from each image. One width between each pair the prototype draws. */
+    ...([390, 600, 820, 1000, 1440] as const).map((width): [string, Frame[]] => [`two images at ${width} px: pending and Details in both languages and themes`, (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).flatMap((theme) => (["pending", "details"] as const).map((state): Frame => ({ width, lang, theme, state, data: "media" }))))]),
   ];
   for (const [title, list] of CASES) browserTest(title, () => frames(list), 300_000);
   /* The record covers every frame or is left as committed: a filtered or failed run writes nothing. */

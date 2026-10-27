@@ -2,11 +2,11 @@
   "sources": [
     {
       "path": "src/components/telegram/TelegramFileConfirmation.tsx",
-      "sha256": "e065c92b9b8b6f047b082192f509f00f119b8beecb668bc36668f3f875b0e8d8"
+      "sha256": "04787875c00e0b9c329015d9b8d2a9155f4532016a55879a9eef22df89f57d6d"
     },
     {
       "path": "src/lib/telegram/bot/fileConfirmationContract.ts",
-      "sha256": "894ef8ce393901a53239a6a6e96f01a291dd9a615636ecfec155d8669da82e35"
+      "sha256": "24130642c81b47645da5db48e766c847bed0c336c5f38110dea8037cc94b1346"
     },
     {
       "path": "src/components/conversation/conversationWindowEvidence.fixture.tsx",
@@ -14,13 +14,14 @@
     },
     {
       "path": "src/components/conversation/conversationWindow.browser.test.tsx",
-      "sha256": "40a21fce76977a883db4f14f51f9de95e0f075202508e7f8fb6c2c88fb6e17b2"
+      "sha256": "2f7ae6be8898b10468745d588339542e4fd512bc28bedce8461922549f1db73f"
     }
   ],
   "frames": [
     {
       "frame": "390-en-light-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -34,6 +35,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -50,6 +52,7 @@
     {
       "frame": "390-en-light-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -63,6 +66,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -79,6 +83,7 @@
     {
       "frame": "390-en-light-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -92,6 +97,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -111,6 +117,7 @@
     {
       "frame": "390-en-light-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -124,6 +131,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -137,6 +145,7 @@
     {
       "frame": "390-en-light-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -150,6 +159,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -163,6 +173,7 @@
     {
       "frame": "390-en-light-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -176,6 +187,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -189,6 +201,7 @@
     {
       "frame": "390-en-light-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This request expired",
@@ -202,6 +215,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -215,6 +229,7 @@
     {
       "frame": "390-en-light-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram did not confirm delivery",
@@ -228,6 +243,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -241,6 +257,7 @@
     {
       "frame": "390-en-light-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "The send was refused",
@@ -254,6 +271,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -267,6 +285,7 @@
     {
       "frame": "390-en-light-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This confirmation is unavailable",
@@ -280,6 +299,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -293,6 +313,7 @@
     {
       "frame": "390-en-light-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Sign in to review this send",
@@ -306,6 +327,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Sign in": 12.29
       },
@@ -321,6 +343,7 @@
     {
       "frame": "390-en-dark-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -334,6 +357,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -350,6 +374,7 @@
     {
       "frame": "390-en-dark-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -363,6 +388,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -379,6 +405,7 @@
     {
       "frame": "390-en-dark-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -392,6 +419,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -411,6 +439,7 @@
     {
       "frame": "390-en-dark-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -424,6 +453,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -437,6 +467,7 @@
     {
       "frame": "390-en-dark-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -450,6 +481,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -463,6 +495,7 @@
     {
       "frame": "390-en-dark-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -476,6 +509,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -489,6 +523,7 @@
     {
       "frame": "390-en-dark-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This request expired",
@@ -502,6 +537,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -515,6 +551,7 @@
     {
       "frame": "390-en-dark-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram did not confirm delivery",
@@ -528,6 +565,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -541,6 +579,7 @@
     {
       "frame": "390-en-dark-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "The send was refused",
@@ -554,6 +593,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -567,6 +607,7 @@
     {
       "frame": "390-en-dark-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This confirmation is unavailable",
@@ -580,6 +621,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -593,6 +635,7 @@
     {
       "frame": "390-en-dark-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Sign in to review this send",
@@ -606,6 +649,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Sign in": 6.35
       },
@@ -621,9 +665,10 @@
     {
       "frame": "390-uk-light-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -634,6 +679,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -650,9 +696,10 @@
     {
       "frame": "390-uk-light-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -663,6 +710,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -679,9 +727,10 @@
     {
       "frame": "390-uk-light-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -692,6 +741,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -711,9 +761,10 @@
     {
       "frame": "390-uk-light-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -724,6 +775,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -737,9 +789,10 @@
     {
       "frame": "390-uk-light-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -750,6 +803,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -763,9 +817,10 @@
     {
       "frame": "390-uk-light-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -776,6 +831,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -789,6 +845,7 @@
     {
       "frame": "390-uk-light-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Термін дії запиту минув",
@@ -802,6 +859,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -815,6 +873,7 @@
     {
       "frame": "390-uk-light-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram не підтвердив доставку",
@@ -828,6 +887,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -841,6 +901,7 @@
     {
       "frame": "390-uk-light-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Надсилання відхилено",
@@ -854,6 +915,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -867,6 +929,7 @@
     {
       "frame": "390-uk-light-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Це підтвердження недоступне",
@@ -880,6 +943,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -893,6 +957,7 @@
     {
       "frame": "390-uk-light-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Увійдіть, щоб переглянути це надсилання",
@@ -906,6 +971,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Увійти": 12.29
       },
@@ -921,9 +987,10 @@
     {
       "frame": "390-uk-dark-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -934,6 +1001,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -950,9 +1018,10 @@
     {
       "frame": "390-uk-dark-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -963,6 +1032,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -979,9 +1049,10 @@
     {
       "frame": "390-uk-dark-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -992,6 +1063,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -1011,9 +1083,10 @@
     {
       "frame": "390-uk-dark-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1024,6 +1097,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1037,9 +1111,10 @@
     {
       "frame": "390-uk-dark-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1050,6 +1125,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1063,9 +1139,10 @@
     {
       "frame": "390-uk-dark-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1076,6 +1153,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1089,6 +1167,7 @@
     {
       "frame": "390-uk-dark-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Термін дії запиту минув",
@@ -1102,6 +1181,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1115,6 +1195,7 @@
     {
       "frame": "390-uk-dark-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram не підтвердив доставку",
@@ -1128,6 +1209,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1141,6 +1223,7 @@
     {
       "frame": "390-uk-dark-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Надсилання відхилено",
@@ -1154,6 +1237,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1167,6 +1251,7 @@
     {
       "frame": "390-uk-dark-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Це підтвердження недоступне",
@@ -1180,6 +1265,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1193,6 +1279,7 @@
     {
       "frame": "390-uk-dark-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Увійдіть, щоб переглянути це надсилання",
@@ -1206,6 +1293,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Увійти": 6.35
       },
@@ -1221,6 +1309,7 @@
     {
       "frame": "1440-en-light-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1234,6 +1323,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -1250,6 +1340,7 @@
     {
       "frame": "1440-en-light-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1263,6 +1354,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -1279,6 +1371,7 @@
     {
       "frame": "1440-en-light-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1292,6 +1385,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -1311,6 +1405,7 @@
     {
       "frame": "1440-en-light-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1324,6 +1419,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1337,6 +1433,7 @@
     {
       "frame": "1440-en-light-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1350,6 +1447,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1363,6 +1461,7 @@
     {
       "frame": "1440-en-light-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1376,6 +1475,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1389,6 +1489,7 @@
     {
       "frame": "1440-en-light-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This request expired",
@@ -1402,6 +1503,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1415,6 +1517,7 @@
     {
       "frame": "1440-en-light-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram did not confirm delivery",
@@ -1428,6 +1531,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1441,6 +1545,7 @@
     {
       "frame": "1440-en-light-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "The send was refused",
@@ -1454,6 +1559,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1467,6 +1573,7 @@
     {
       "frame": "1440-en-light-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This confirmation is unavailable",
@@ -1480,6 +1587,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1493,6 +1601,7 @@
     {
       "frame": "1440-en-light-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Sign in to review this send",
@@ -1506,6 +1615,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Sign in": 12.29
       },
@@ -1521,6 +1631,7 @@
     {
       "frame": "1440-en-dark-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1534,6 +1645,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -1550,6 +1662,7 @@
     {
       "frame": "1440-en-dark-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1563,6 +1676,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -1579,6 +1693,7 @@
     {
       "frame": "1440-en-dark-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1592,6 +1707,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -1611,6 +1727,7 @@
     {
       "frame": "1440-en-dark-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1624,6 +1741,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1637,6 +1755,7 @@
     {
       "frame": "1440-en-dark-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1650,6 +1769,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1663,6 +1783,7 @@
     {
       "frame": "1440-en-dark-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -1676,6 +1797,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1689,6 +1811,7 @@
     {
       "frame": "1440-en-dark-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This request expired",
@@ -1702,6 +1825,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1715,6 +1839,7 @@
     {
       "frame": "1440-en-dark-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram did not confirm delivery",
@@ -1728,6 +1853,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1741,6 +1867,7 @@
     {
       "frame": "1440-en-dark-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "The send was refused",
@@ -1754,6 +1881,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1767,6 +1895,7 @@
     {
       "frame": "1440-en-dark-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This confirmation is unavailable",
@@ -1780,6 +1909,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1793,6 +1923,7 @@
     {
       "frame": "1440-en-dark-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Sign in to review this send",
@@ -1806,6 +1937,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Sign in": 6.35
       },
@@ -1821,9 +1953,10 @@
     {
       "frame": "1440-uk-light-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1834,6 +1967,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -1850,9 +1984,10 @@
     {
       "frame": "1440-uk-light-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1863,6 +1998,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -1879,9 +2015,10 @@
     {
       "frame": "1440-uk-light-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1892,6 +2029,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -1911,9 +2049,10 @@
     {
       "frame": "1440-uk-light-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1924,6 +2063,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1937,9 +2077,10 @@
     {
       "frame": "1440-uk-light-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1950,6 +2091,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1963,9 +2105,10 @@
     {
       "frame": "1440-uk-light-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -1976,6 +2119,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -1989,6 +2133,7 @@
     {
       "frame": "1440-uk-light-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Термін дії запиту минув",
@@ -2002,6 +2147,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2015,6 +2161,7 @@
     {
       "frame": "1440-uk-light-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram не підтвердив доставку",
@@ -2028,6 +2175,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2041,6 +2189,7 @@
     {
       "frame": "1440-uk-light-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Надсилання відхилено",
@@ -2054,6 +2203,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2067,6 +2217,7 @@
     {
       "frame": "1440-uk-light-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Це підтвердження недоступне",
@@ -2080,6 +2231,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2093,6 +2245,7 @@
     {
       "frame": "1440-uk-light-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Увійдіть, щоб переглянути це надсилання",
@@ -2106,6 +2259,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Увійти": 12.29
       },
@@ -2121,9 +2275,10 @@
     {
       "frame": "1440-uk-dark-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2134,6 +2289,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2150,9 +2306,10 @@
     {
       "frame": "1440-uk-dark-details",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2163,6 +2320,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2179,9 +2337,10 @@
     {
       "frame": "1440-uk-dark-status",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2192,6 +2351,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2211,9 +2371,10 @@
     {
       "frame": "1440-uk-dark-sending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2224,6 +2385,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2237,9 +2399,10 @@
     {
       "frame": "1440-uk-dark-sent",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2250,6 +2413,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2263,9 +2427,10 @@
     {
       "frame": "1440-uk-dark-rejected",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2276,6 +2441,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2289,6 +2455,7 @@
     {
       "frame": "1440-uk-dark-expired",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Термін дії запиту минув",
@@ -2302,6 +2469,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2315,6 +2483,7 @@
     {
       "frame": "1440-uk-dark-uncertain",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Telegram не підтвердив доставку",
@@ -2328,6 +2497,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2341,6 +2511,7 @@
     {
       "frame": "1440-uk-dark-failed",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Надсилання відхилено",
@@ -2354,6 +2525,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2367,6 +2539,7 @@
     {
       "frame": "1440-uk-dark-unavailable",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Це підтвердження недоступне",
@@ -2380,6 +2553,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {},
       "popover": null,
       "dotOffChevron": 0,
@@ -2393,6 +2567,7 @@
     {
       "frame": "1440-uk-dark-owner",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Увійдіть, щоб переглянути це надсилання",
@@ -2406,6 +2581,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Увійти": 6.35
       },
@@ -2421,6 +2597,7 @@
     {
       "frame": "820-en-light-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
         "headingText": "This file looks like it holds a private key",
@@ -2434,6 +2611,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -2450,9 +2628,10 @@
     {
       "frame": "820-uk-light-pending",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2463,6 +2642,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -2479,9 +2659,10 @@
     {
       "frame": "390-uk-light-pending-long",
       "firstScreen": {
+        "secondImage": null,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Схоже, у цьому файлі приватний ключ",
+        "headingText": "Схоже, у цьому файлі приватний ключ",
         "refuse": true,
         "send": true,
         "realFile": true
@@ -2492,6 +2673,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -2508,12 +2690,13 @@
     {
       "frame": "390-en-light-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2521,6 +2704,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -2537,12 +2721,13 @@
     {
       "frame": "390-en-light-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2550,6 +2735,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -2566,12 +2752,13 @@
     {
       "frame": "390-en-dark-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2579,6 +2766,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -2595,12 +2783,13 @@
     {
       "frame": "390-en-dark-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2608,6 +2797,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -2624,12 +2814,13 @@
     {
       "frame": "390-uk-light-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2637,6 +2828,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -2653,12 +2845,13 @@
     {
       "frame": "390-uk-light-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2666,6 +2859,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -2682,12 +2876,13 @@
     {
       "frame": "390-uk-dark-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2695,6 +2890,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2711,12 +2907,13 @@
     {
       "frame": "390-uk-dark-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2724,6 +2921,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2738,14 +2936,15 @@
       "background": "rgb(17, 18, 24)"
     },
     {
-      "frame": "820-en-light-pending-media",
+      "frame": "600-en-light-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2753,6 +2952,255 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "600-en-light-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "600-en-dark-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "600-en-dark-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "600-uk-light-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "600-uk-light-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "600-uk-dark-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "600-uk-dark-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 568,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "820-en-light-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -2769,12 +3217,13 @@
     {
       "frame": "820-en-light-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2782,6 +3231,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -2798,12 +3248,13 @@
     {
       "frame": "820-en-dark-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2811,6 +3262,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -2827,12 +3279,13 @@
     {
       "frame": "820-en-dark-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2840,6 +3293,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -2856,12 +3310,13 @@
     {
       "frame": "820-uk-light-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2869,6 +3324,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -2885,12 +3341,13 @@
     {
       "frame": "820-uk-light-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2898,6 +3355,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -2914,12 +3372,13 @@
     {
       "frame": "820-uk-dark-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2927,6 +3386,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2943,12 +3403,13 @@
     {
       "frame": "820-uk-dark-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2956,6 +3417,255 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1000-en-light-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1000-en-light-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 12.29,
+        "Send once anyway": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1000-en-dark-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1000-en-dark-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Both images are outside the folders files may be sent from (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Don't send": 6.35,
+        "Send once anyway": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Details",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1000-uk-light-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1000-uk-light-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 12.29,
+        "Усе одно надіслати один раз": 5.56
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": true,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1000-uk-dark-pending-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
+      "contrast": {
+        "Не надсилати": 6.35,
+        "Усе одно надіслати один раз": 8.43
+      },
+      "popover": null,
+      "dotOffChevron": 0,
+      "detailsRow": "Деталі",
+      "detailsOpen": false,
+      "iso": [],
+      "overflow": 0,
+      "cardWidth": 576,
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1000-uk-dark-details-media",
+      "firstScreen": {
+        "secondImage": true,
+        "scrollTop": 0,
+        "heading": true,
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "refuse": true,
+        "send": true,
+        "realFile": true
+      },
+      "offscreen": [],
+      "clipped": [],
+      "covered": [],
+      "cut": [],
+      "small": [],
+      "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -2972,12 +3682,13 @@
     {
       "frame": "1440-en-light-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -2985,6 +3696,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -3001,12 +3713,13 @@
     {
       "frame": "1440-en-light-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3014,6 +3727,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 12.29,
         "Send once anyway": 5.56
@@ -3030,12 +3744,13 @@
     {
       "frame": "1440-en-dark-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3043,6 +3758,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -3059,12 +3775,13 @@
     {
       "frame": "1440-en-dark-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
         "headingText": "Both images are outside the folders files may be sent from (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3072,6 +3789,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Don't send": 6.35,
         "Send once anyway": 8.43
@@ -3088,12 +3806,13 @@
     {
       "frame": "1440-uk-light-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3101,6 +3820,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -3117,12 +3837,13 @@
     {
       "frame": "1440-uk-light-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3130,6 +3851,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 12.29,
         "Усе одно надіслати один раз": 5.56
@@ -3146,12 +3868,13 @@
     {
       "frame": "1440-uk-dark-pending-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3159,6 +3882,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
@@ -3175,12 +3899,13 @@
     {
       "frame": "1440-uk-dark-details-media",
       "firstScreen": {
+        "secondImage": true,
         "scrollTop": 0,
         "heading": true,
-        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
+        "headingText": "Обидва зображення поза теками, з яких дозволено надсилати (handoff)",
         "refuse": true,
         "send": true,
-        "realFile": null
+        "realFile": true
       },
       "offscreen": [],
       "clipped": [],
@@ -3188,6 +3913,7 @@
       "cut": [],
       "small": [],
       "orphans": [],
+      "danglers": [],
       "contrast": {
         "Не надсилати": 6.35,
         "Усе одно надіслати один раз": 8.43
