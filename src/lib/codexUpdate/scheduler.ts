@@ -29,14 +29,17 @@ export function createCodexUpdateTicker(ports: UpdateSchedulerPorts): (requested
     await deliver();
     if (!requested && ports.now() < clock.until && !await ports.hasPending?.()) return;
     if (!ports.current()) return;
-    // An accepted request survives report/read failures until the updater
-    // takes it; compatibility, idle and launch admission remain its job.
+    // The updater distinguishes an old outbox blocking entry from a report
+    // after the requested work; only the former keeps this intent pending.
     if (requested) pendingRequest = false;
     try { await ports.update(requested); }
     catch (error) {
       // The CLI's own durable outbox retries on the next minute, keeping
       // its precise version/check and its original idempotency key.
-      if (error instanceof CodexUpdateReportPending) return;
+      if (error instanceof CodexUpdateReportPending) {
+        if (requested && error.beforeCheck) pendingRequest = true;
+        return !error.beforeCheck;
+      }
       const at = ports.now();
       clock = { until: at + CHECK_INTERVAL_MS, notice: {
         id: `unavailable:${at}`, at, version: "unknown", failed: true,
@@ -57,7 +60,7 @@ export function createCodexUpdateTicker(ports: UpdateSchedulerPorts): (requested
     try {
       for (let passIndex = 0; passIndex < 2; passIndex++) {
         requested = pendingRequest;
-        await pass(requested);
+        if (await pass(requested) === false) return;
         if (!pendingRequest || !ports.current()) return;
       }
     } finally { running = false; }
