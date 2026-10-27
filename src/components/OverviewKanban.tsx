@@ -6,7 +6,7 @@ import { useNowSeconds, BOARD_CLOCK_MS } from "@/hooks/useNowSeconds";
 import { isOpaqueProjectKey, projectTitle } from "@/lib/displayNames";
 import { cachedProjectName } from "@/lib/client/projectNameCache";
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
