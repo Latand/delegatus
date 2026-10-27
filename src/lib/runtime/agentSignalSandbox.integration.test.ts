@@ -20,7 +20,7 @@ kernelTest("the namespace supervisors retain inherited OOM priority while the na
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-kernel-score-"));
   const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
   const plan = planAgentMemory({ engine: "codex", sessionKey: "kernel-score", liveAgents: 1 },
-    { DELEGATUS_AGENT_MEMORY: "scope" }, { totalBytes: 8 * GIB, probe: () => 255, runner: () => "" })!;
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "scope" }, { totalBytes: 8 * GIB, probe: () => 255, runner: () => "" })!;
   // A private transient scope, with no mutation of the shared agent slice.
   plan.slice = "app.slice"; plan.viewerUnit = null;
   const cell = new AgentMemoryCell(plan);

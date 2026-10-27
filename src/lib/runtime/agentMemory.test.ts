@@ -65,7 +65,7 @@ test("scope preserves literal argv and binding; watchdog raises score; off is un
 });
 test.skipIf(process.platform !== "linux")("a refused workload score warns and still execs with literal argv and native status", () => {
   const plan = planAgentMemory({ engine: "codex", sessionKey: "score-refused", liveAgents: 1 },
-    { DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
   const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
   // The kernel refuses this value even when the test has elevated privileges.
   plan.score = -1001;
@@ -80,11 +80,11 @@ test.skipIf(process.platform !== "linux")("a refused workload score warns and st
 });
 
 test("disabled memory and unsupported platforms clear inherited deferred scores", () => {
-  const env = { LLV_SIGNAL_LAUNCHER: "launcher", LLV_SIGNAL_OOM_SCORE: "900" };
+  const env = { NODE_ENV: "test" as const, LLV_SIGNAL_LAUNCHER: "launcher", LLV_SIGNAL_OOM_SCORE: "900" };
   const plan = planAgentMemory({ engine: "codex", sessionKey: "score-off", liveAgents: 1 },
-    { DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
   for (const unsupported of [null, { ...plan, mechanism: "none" as const }, { ...plan, platform: "darwin" as const }]) {
-    expect(wrapAgentLaunch(unsupported, "agent", ["literal"], env)).toEqual({ command: "agent", args: ["literal"], env: { LLV_SIGNAL_LAUNCHER: "launcher" } });
+    expect(wrapAgentLaunch(unsupported, "agent", ["literal"], env)).toEqual({ command: "agent", args: ["literal"], env: { NODE_ENV: "test", LLV_SIGNAL_LAUNCHER: "launcher" } });
   }
   expect(env.LLV_SIGNAL_OOM_SCORE).toBe("900");
 });

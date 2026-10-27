@@ -439,7 +439,7 @@ test.skipIf(process.platform !== "linux")("the host shim warns on a refused scor
   try {
     const shim = bridgeShim(root, path.join(root, "absent-python3"), process.execPath);
     const plan = planAgentMemory({ engine: "codex", sessionKey: "bridge-score-refused", liveAgents: 1 },
-      { DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+      { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
     plan.score = -1001;
     const marker = path.join(root, "native.json");
     const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
