@@ -14,7 +14,7 @@ export interface UpdateSchedulerPorts {
 /** The existing minute timer drives this bounded, non-overlapping job. The
  * durable outbox also covers unknown/unwritable locations before CLI state exists. */
 export function createCodexUpdateTicker(ports: UpdateSchedulerPorts): (requested?: boolean) => Promise<void> {
-  let running = false, requested = false, followup = false;
+  let running = false, requested = false, pendingRequest = false;
   const pass = async (requested: boolean) => {
     let clock: { until: number; notice: UpdateNotice | null } = { until: 0, notice: null };
     try {
@@ -29,6 +29,9 @@ export function createCodexUpdateTicker(ports: UpdateSchedulerPorts): (requested
     await deliver();
     if (!requested && ports.now() < clock.until && !await ports.hasPending?.()) return;
     if (!ports.current()) return;
+    // An accepted request survives report/read failures until the updater
+    // takes it; compatibility, idle and launch admission remain its job.
+    if (requested) pendingRequest = false;
     try { await ports.update(requested); }
     catch (error) {
       // The CLI's own durable outbox retries on the next minute, keeping
@@ -45,21 +48,17 @@ export function createCodexUpdateTicker(ports: UpdateSchedulerPorts): (requested
   };
   return async (request = false) => {
     if (!ports.current()) return;
-    if (running) {
-      // An automatic pass may still stop at the CLI's own daily budget after
-      // an await. Join it with one explicit follow-up; requests during that
-      // explicit pass coalesce, so a drain always has at most two passes.
-      if (request && !requested) followup = true;
-      return;
-    }
+    // An automatic pass may still stop at the CLI's own daily budget after
+    // an await. Join it with one explicit follow-up; requests during that
+    // explicit pass coalesce, so a drain always has at most two passes.
+    if (request && (!running || !requested)) pendingRequest = true;
+    if (running) return;
     running = true;
-    requested = request;
     try {
       for (let passIndex = 0; passIndex < 2; passIndex++) {
-        followup = false;
+        requested = pendingRequest;
         await pass(requested);
-        if (!followup || !ports.current()) return;
-        requested = true;
+        if (!pendingRequest || !ports.current()) return;
       }
     } finally { running = false; }
   };

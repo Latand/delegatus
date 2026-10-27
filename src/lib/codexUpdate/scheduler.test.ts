@@ -101,6 +101,42 @@ test("requests during outbox delivery join the budget decision and coalesce duri
   finish(); await run;
 });
 
+test.each([false, true])("an explicit request survives failed report delivery until update entry (initial explicit: %s)", async initialExplicit => {
+  const work = fixture();
+  const notice: UpdateNotice = { id: "retained", at: 0, version: "0.164.0", failed: false, line: "retained report" };
+  const clock = JSON.stringify({ until: CHECK_INTERVAL_MS, notice });
+  fs.writeFileSync(work.ports.clockFile, clock);
+  let entered!: () => void, reject!: (error: Error) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const hold = new Promise<void>((_, refuse) => { reject = refuse; });
+  work.ports.report = async () => { entered(); await hold; };
+  const requests: boolean[] = [];
+  work.ports.update = async requested => { requests.push(requested); };
+  const tick = createCodexUpdateTicker(work.ports);
+  const run = tick(initialExplicit);
+  const failed = run.then(() => null, (error: unknown) => error);
+  await ready; await tick(true); await tick(true);
+  reject(new Error("journal busy"));
+  expect(await failed).toMatchObject({ message: "journal busy" });
+  expect(requests).toEqual([]);
+  expect(fs.readFileSync(work.ports.clockFile, "utf8")).toBe(clock);
+
+  // Repeated delivery failures and ticks without authority cannot consume it.
+  work.ports.report = async () => { throw new Error("journal busy"); };
+  await expect(tick()).rejects.toThrow("journal busy");
+  work.ports.current = () => false;
+  await tick(); expect(requests).toEqual([]);
+  expect(fs.readFileSync(work.ports.clockFile, "utf8")).toBe(clock);
+
+  work.ports.current = () => true;
+  work.ports.report = async delivered => { work.reports.push(delivered); };
+  await tick();
+  expect(requests).toEqual([true]);
+  expect(work.reports).toEqual([notice]);
+  expect(JSON.parse(fs.readFileSync(work.ports.clockFile, "utf8"))).toEqual({ until: CHECK_INTERVAL_MS, notice: null });
+  await tick(); expect(requests).toEqual([true]);
+});
+
 test("demotion while delivering a report refuses even an explicit request", async () => {
   const work = fixture(); let current = true;
   work.ports.current = () => current;
