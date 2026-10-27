@@ -960,19 +960,29 @@ test("a refused speed choice returns to the speed the conversation runs and says
   codexCatalogAnswer = MAIN;
   const refusal = "service tier \"ultrafast\" is not offered for gpt-6.1-sol on pinned account \"default\"";
   speedAnswers.push({ answer: { status: 409, body: { ok: false, code: "service_tier_unavailable", error: refusal } } });
-  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
-  await click(host.querySelector("[data-runtime-pill]")!);
-  await settle();
-  await click(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!);
-  await settle();
-  expect(requests.at(-1)).toMatchObject({ action: "speed", serviceTier: "ultrafast" });
-  const rows = [...document.querySelectorAll('[data-runtime-sheet] [role="radiogroup"][aria-label="Speed"] [data-runtime-sheet-row]')];
-  expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
-  expect(document.querySelector("[data-runtime-speed-error]")!.textContent).toBe(refusal);
-  /* Once per surface: the account line does not repeat it. */
-  expect(document.querySelector("[data-runtime-sheet-account-current]")!.textContent).not.toContain(refusal);
-  expect(faceOf(host)).not.toContain("Ultrafast");
-  await act(async () => root.unmount());
+  /* happy-dom lays nothing out: record what the sheet asks to bring into view. */
+  const revealed: Element[] = [];
+  const original = dom.Element.prototype.scrollIntoView;
+  dom.Element.prototype.scrollIntoView = function (this: Element) { revealed.push(this); } as typeof original;
+  try {
+    const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+    await click(host.querySelector("[data-runtime-pill]")!);
+    await settle();
+    await click(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!);
+    await settle();
+    expect(requests.at(-1)).toMatchObject({ action: "speed", serviceTier: "ultrafast" });
+    /* The reason lands under the last row and grows below the sheet's edge, so the sheet reveals it. */
+    expect(revealed).toContain(document.querySelector("[data-runtime-speed-error]")!);
+    const rows = [...document.querySelectorAll('[data-runtime-sheet] [role="radiogroup"][aria-label="Speed"] [data-runtime-sheet-row]')];
+    expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    expect(document.querySelector("[data-runtime-speed-error]")!.textContent).toBe(refusal);
+    /* Once per surface: the account line does not repeat it. */
+    expect(document.querySelector("[data-runtime-sheet-account-current]")!.textContent).not.toContain(refusal);
+    expect(faceOf(host)).not.toContain("Ultrafast");
+    await act(async () => root.unmount());
+  } finally {
+    dom.Element.prototype.scrollIntoView = original;
+  }
 });
 
 test("a late refusal of an earlier speed choice never overrides the later one", async () => {

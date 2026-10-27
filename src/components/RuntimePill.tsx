@@ -1588,10 +1588,19 @@ export function RuntimeSheet({
   heading?: { title: string; summary: string } | null;
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
+  const speedErrorRef = useRef<HTMLParagraphElement>(null);
   const immediate = Boolean(accountChoice?.immediate);
   const speed = speedTierOf(face);
 
   useOverlayEscape(onClose);
+
+  /* A refusal lands under the last Speed row, which the operator scrolled to
+     in order to tap it, so its lines grow below the sheet's bottom edge:
+     bring the whole reason into view when it appears, with the section's and
+     the sheet's bottom padding below it (scroll-mb-5). */
+  useEffect(() => {
+    if (speedError) speedErrorRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [speedError]);
 
   useEffect(() => {
     sheetRef.current?.focus();
@@ -1720,7 +1729,7 @@ export function RuntimeSheet({
                 onSelect={() => onSelectSpeed(ULTRA_TIER)}
               />
             ) : null}
-            {speedError ? <p className="break-words px-2 pt-1 text-label leading-snug text-danger" data-runtime-speed-error>{speedError}</p> : null}
+            {speedError ? <p ref={speedErrorRef} className="break-words scroll-mb-5 px-2 pt-1 text-label leading-snug text-danger" data-runtime-speed-error>{speedError}</p> : null}
           </SheetSection>
         ) : null}
       </div>

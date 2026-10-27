@@ -4137,7 +4137,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body.action === "speed") {
       const answer = new URLSearchParams(location.search).get("speedanswer");
       if (answer === "hold") await new Promise(() => {});
-      if (answer === "refuse") return json({ ok: false, code: "runtime_change_in_flight", requestedTier: body.serviceTier, error: "a runtime change is already in flight" }, 409);
+      /* The server's own service_tier_unavailable wording (serviceTierRefusal): several lines on a phone. */
+      if (answer === "refuse") return json({ ok: false, code: "service_tier_unavailable", requestedTier: body.serviceTier, error: `no evaluated account offers serviceTier ${body.serviceTier} for model gpt-6.1-sol; evaluated pinned account "default": account "Account B" (default): gpt-6.1-sol offered: priority` }, 409);
       return json({ ok: true, operationId: "speed-fixture", requestedTier: body.serviceTier, appliedTier: body.serviceTier, echoed: true });
     }
   }

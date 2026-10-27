@@ -136,11 +136,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -319,11 +320,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -502,11 +504,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 3,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -681,11 +684,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -864,11 +868,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -1047,11 +1052,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 3,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -1226,11 +1232,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -1409,11 +1416,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -1592,11 +1600,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 3,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -1771,11 +1780,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -1954,11 +1964,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 4,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },
@@ -2137,11 +2148,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "a runtime change is already in flight",
+      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
+      "lines": 3,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "a runtime change is already in flight"
+          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
         }
       ]
     },

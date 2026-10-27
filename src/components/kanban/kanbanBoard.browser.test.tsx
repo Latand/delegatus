@@ -19767,15 +19767,23 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
       const { context, page, pageErrors } = await seat("&speedanswer=refuse");
       try {
         await openSpeed(page);
+        /* On the phone the operator scrolls the sheet to its end to reach Ultra, as far as it goes. */
+        if (phone) await page.locator("[data-runtime-sheet]").evaluate((sheet) => { sheet.scrollTop = sheet.scrollHeight; });
         await page.locator(ultraRow).click();
-        /* Said where the choice was made, on the desktop too: no second click on the pill. */
+        /* Said where the choice was made, on the desktop too: no second click on the pill,
+           and no scroll after the tap: the sheet brings the whole reason into view itself. */
         await page.locator("[data-runtime-speed-error]").waitFor();
-        await page.locator("[data-runtime-speed-error]").scrollIntoViewIfNeeded();
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
         const error = await page.locator("[data-runtime-speed-error]").textContent();
-        expect(error).toBe("a runtime change is already in flight");
+        expect(error).toBe('no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account "default": account "Account B" (default): gpt-6.1-sol offered: priority');
+        const lines = await page.locator("[data-runtime-speed-error]").evaluate((element) => {
+          const range = document.createRange(); range.selectNodeContents(element);
+          return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
+        });
+        if (phone) expect(lines).toBeGreaterThanOrEqual(3);
         expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).not.toContain("Ultrafast");
-        await shot(page, "s5-refused", { ...await facts(page), error }, ["[data-runtime-speed-error]"]);
+        await shot(page, "s5-refused", { ...await facts(page), error, lines }, ["[data-runtime-speed-error]"]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     }
