@@ -58,7 +58,8 @@ function line(body: string, engine = "claude"): string {
 async function run(file: string, state: string, engine: "claude" | "codex" | "copilot" = "claude", mode = "") {
   const stat = fs.statSync(file);
   const source = transcriptIndexFeed([{
-    path:file, root:"fixture", name:"session", project:"fixture", title:"Fixture", firstPrompt:"", engine,
+    path:file, root:engine === "claude" ? "claude-projects" : engine === "copilot" ? "copilot-sessions" : "codex-sessions",
+    name:"session", project:"fixture", title:"Fixture", firstPrompt:"", engine,
     kind:"session", fmt:engine, mtime:stat.mtimeMs / 1000, size:stat.size,
   }], true).sources[0]!;
   const child = Bun.spawn([process.execPath, "--eval", driver, JSON.stringify([source,mode])], {
