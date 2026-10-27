@@ -331,6 +331,7 @@ export function compactLiveness(snapshot: AgentLivenessSnapshot) {
   return {
     observedAt: snapshot.observedAt,
     count: snapshot.count,
+    ...(snapshot.unresolvedProjectCount ? { unresolvedProjectCount: snapshot.unresolvedProjectCount } : {}),
     stalledCount: snapshot.stalledCount,
     stalledConfirmedCount: snapshot.stalledConfirmedCount,
     conversations: snapshot.conversations.map(compactLivenessRow),
