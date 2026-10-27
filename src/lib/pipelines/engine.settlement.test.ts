@@ -2377,6 +2377,28 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(h.flows.size).toBe(0);
 });
 
+test("a read-write privacy gate checks the accepted committed head and leaves a rejected head unpublished (#2424)", async () => {
+  const h = harness();
+  const box = publishHarness(h, { privacyRejects: true });
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+
+  const rejected = loadPipelines()[0]!;
+  expect(box.order).toEqual(["commit", `privacy:${box.passedSha}:${box.passedSha}`]);
+  expect(rejected).toMatchObject({
+    state: "needs_decision",
+    lastPassedCommit: box.passedSha,
+    publishedCommit: null,
+    stateDetail: expect.stringContaining("privacy"),
+  });
+  expect(rejected.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
+  expect(box.remote()).toBeNull();
+  expect(h.flows.size).toBe(0);
+});
+
 test("retry-stage republishes a committing passed stage without rerunning its work", async () => {
   const h = harness();
   const box = publishHarness(h);
