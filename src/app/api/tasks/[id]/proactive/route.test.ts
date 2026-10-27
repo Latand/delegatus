@@ -85,9 +85,10 @@ test("operator decisions require same-origin authority; a body cannot impersonat
   expect((await send("adopt", browser, initial)).status).toBe(409);
   expect(launchAdmission(loadTasks())).toMatchObject({ code: "PROACTIVE_EXECUTION_FENCED", status: 403 });
   expect(taskRevision(loadTasks()[0]!)).not.toBe(taskRevision(before[0]!));
-  expect(loadTasks()).toEqual([{ ...before[0]!, revision: expect.any(String), status: "done", updatedAt: expect.any(String), doneAt: expect.any(String), doneAdmissions: [],
+  const expected: TaskWithRevision = { ...before[0]!, revision: expect.any(String), status: "done", updatedAt: expect.any(String), doneAt: expect.any(String), doneAdmissions: [],
     statusBy: { actor: { kind: "operator" }, from: before[0]!.status, at: expect.any(String) },
-    note: { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: expect.any(String) } } satisfies TaskWithRevision]);
+    note: { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: expect.any(String) } };
+  expect(loadTasks()).toEqual([expected]);
 });
 
 test("pipeline HTTP, MCP and shared creation refuse prepared invented work before any stage or provisioning", async () => {

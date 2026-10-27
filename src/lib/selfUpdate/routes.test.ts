@@ -1030,14 +1030,18 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     };
     try {
       const response = deployPost(request());
-      await reading; await decide("reject"); greenReady = true; releaseGreen({ state: "green" });
+      await Promise.race([reading, response.then(async result => { throw new Error(`HTTP completed before green (${result.status}): ${await result.text()}`); })]);
+      await decide("reject"); greenReady = true; releaseGreen({ state: "green" });
       expect((await response).status).toBe(403);
       expect(checkoutDeployments(h.deps.dir)).toEqual([]);
       await decide("adopt");
       expect((await deployPost(request())).status).toBe(202);
       expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
       h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
-    } finally { registry.failStructuredSpawn(begun.receipt.launchId, "fixture completed before dispatch", { announce: false }); }
+    } finally {
+      registry.failStructuredSpawn(begun.receipt.launchId, "fixture completed before dispatch", { announce: false });
+      greenReady = true; releaseGreen?.({ state: "green" });
+    }
   });
 
   /* A launcher started in a multiplexer pane sits in that unit's cgroup.
