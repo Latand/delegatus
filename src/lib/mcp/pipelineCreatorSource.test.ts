@@ -18,7 +18,7 @@ process.env.LLV_STATE_DIR = path.join(process.env.XDG_CONFIG_HOME!, "delegatus",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 setSystemTime(new Date("2026-10-27T10:00:00Z"));
 let sequence = 0;
-const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
+const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `${(++sequence).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`);
 
 const { createManagedClaudeAccount, sharedClaudeProjectsRoot } = await import("@/lib/accounts/claude");
 const { AgentRegistry, setAgentRegistryForTests, identityMaterializationFence, normalizeRegistry } = await import("@/lib/agent/registry");
@@ -105,6 +105,7 @@ test.each(["off", "sqlite"] as const)("a completed account-local resume publishe
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools() });
     const args = { task: "Exercise account creator", spec: "Retain authenticated lineage", repoDir: directory,
       baseRef: git("rev-parse", "HEAD"), autoStart: false, stages: [{ id: "build", kind: "run", prompt: "Build fixture", next: null }] };
+    const beforeCreates = loadPipelines().length;
     for (const source of ["explicit", "inferred"] as const) {
       const answer = await runAsMcpHttpCaller({ capability }, () => service.callTool("create_pipeline", {
         ...args, clientRequestId: `${sqliteMode}-${source}`, ...(source === "explicit" ? { src: transcript } : {}),
@@ -113,6 +114,7 @@ test.each(["off", "sqlite"] as const)("a completed account-local resume publishe
       if (!answer.ok) throw new Error(answer.error);
       expect(loadPipelines().find(row => row.id === answer.pipelineId)).toMatchObject({ srcPath: transcript, srcConversationId: launch.receipt.conversationId });
     }
+    expect(loadPipelines()).toHaveLength(beforeCreates + 2);
     const count = loadPipelines().length;
     for (const source of ["explicit", "inferred"] as const) {
       const refused = await runAsMcpHttpCaller({ capability: "invalid-fixture-capability" }, () => service.callTool("create_pipeline", {
