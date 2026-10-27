@@ -5711,98 +5711,266 @@ describe("streamed composer attachments", () => {
 
 
 describe("owner confirmation of one Telegram file send", () => {
-  browserTest("the file, destination, warnings and decisions fit both languages and themes", async () => {
-    const output = path.resolve(".artifacts/telegram-file-confirmation");
+  /* Variant 2 of docs/design/telegram-file-confirmation/prototype: the strongest warning is the heading,
+     «Don't send» is the primary answer and the send carries the warning tone. Each case frames one width
+     and language in both themes; the last writes the readings of every case. */
+  const output = path.resolve(".artifacts/telegram-file-confirmation");
+  const evidence: Array<Record<string, unknown>> = [];
+  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const;
+  type Frame = { width: 390 | 820 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
+  const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
+  const LONG_CHAT = "Fixture reports for the regional and international operations office";
+  /* Names, captions and code tokens a Ukrainian frame may carry in Latin letters; any other Latin word is an English fallback. */
+  const LATIN_ALLOWED = /^(?:Telegram|Delegatus|HTML|SHA-256|JWT|API|handoff|codex)$/;
+  const POSTED = { id: "fixture-confirmation", digest: "a".repeat(64) };
+  async function frames(list: Frame[]) {
     fs.mkdirSync(output, { recursive: true });
     const served = await serveEvidenceFixture(output, FIXTURE);
-    let browser: Browser | null = null;
-    const evidence: Array<Record<string, unknown>> = [];
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
     try {
-      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
-      for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
-        for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-          for (const state of ["pending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const) {
-            const name = `${viewport.width}-${lang}-${theme}-${state}`;
-            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=file-confirmation&state=${state}&lang=${lang}&id=fixture-confirmation`, viewport, theme, lang);
-            try {
-              const words = fileConfirmationText[lang];
-              const status = page.getByRole("status");
-              await page.waitForFunction(() => !/Loading|Завантаження/.test(document.querySelector('[role="status"]')?.textContent ?? "Loading"));
-              // Measure the opening screen before any action or scroll can hide a misplaced state.
-              expect(await status.textContent()).toBe(words[state]);
-              const initialStatus = await status.boundingBox();
-              expect(initialStatus).not.toBeNull();
-              expect(initialStatus!.x).toBeGreaterThanOrEqual(0);
-              expect(initialStatus!.y).toBeGreaterThanOrEqual(0);
-              expect(initialStatus!.x + initialStatus!.width).toBeLessThanOrEqual(viewport.width);
-              expect(initialStatus!.y + initialStatus!.height).toBeLessThanOrEqual(viewport.height);
-              expect(await page.locator("main").evaluate(node => node.scrollTop)).toBe(0);
-              if (state !== "pending") {
-                expect(await page.getByRole("heading", { name: words.title, exact: true }).count()).toBe(0);
-                expect(await page.getByText(words.intro, { exact: true }).count()).toBe(0);
+      for (const { width, lang, theme, state, data } of list) {
+        const name = `${width}-${lang}-${theme}-${state}${data ? `-${data}` : ""}`;
+        const words = fileConfirmationText[lang];
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const chat = data === "long" ? LONG_CHAT : "Fixture reports";
+        const opened = ["pending", "details", "status", "sending", "sent", "rejected"].includes(state) ? "pending" : state;
+        const query = `case=file-confirmation&state=${opened}&lang=${lang}&id=fixture-confirmation${data ? `&data=${data}` : ""}${state === "sending" ? "&post=hold" : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.locator("[data-file-confirmation-heading]").waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          /* The decision's own words, from the stored view: the strongest reason leads. */
+          const pendingHeading = data === "media"
+            ? (lang === "uk" ? "Один із файлів поза теками, з яких дозволено надсилати (handoff)" : "One of these files is outside the folders files may be sent from (handoff)")
+            : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key");
+          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: words.sentTitle(chat), rejected: words.rejectedTitle(chat), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
+          const asking = ["pending", "details", "status", "sending"].includes(state);
+          /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
+          const firstScreen = await page.evaluate(() => {
+            const whole = (box: DOMRect | undefined) => box ? box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth : null;
+            const real = (() => {
+              const intro = document.querySelector("[data-file-confirmation-intro]");
+              if (!intro) return undefined;
+              const walker = document.createTreeWalker(intro, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const at = walker.currentNode.textContent?.indexOf("auth.json") ?? -1;
+                if (at < 0) continue;
+                const range = document.createRange();
+                range.setStart(walker.currentNode, at);
+                range.setEnd(walker.currentNode, at + "auth.json".length);
+                return range.getBoundingClientRect();
               }
-              if (state === "pending") {
-                expect(await page.getByText("b".repeat(64), { exact: false }).count()).toBe(1);
-                expect(await page.getByText("document_secret", { exact: false }).count()).toBe(1);
-                expect(await page.getByText(`${words.requestedPath}: /sandbox/handoff/weekly-report.json`, { exact: true }).count()).toBe(1);
-                expect(await page.getByText(`${words.resolvedPath}: /sandbox/.codex/auth.json`, { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.replyTo, { exact: true }).count()).toBe(1);
-                expect(await page.getByText("42", { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.format, { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.silent, { exact: true }).count()).toBe(1);
-                expect(await page.getByText("HTML", { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.yes, { exact: true }).count()).toBe(1);
-                await page.screenshot({ path: path.join(output, `${name}-top.png`) });
-                const resolved = page.locator("[data-resolved-path]");
-                await resolved.scrollIntoViewIfNeeded();
-                await page.screenshot({ path: path.join(output, `${name}-paths.png`) });
-                const warnings = page.getByRole("region", { name: words.reasons });
-                await warnings.scrollIntoViewIfNeeded();
-                const warningText = await warnings.textContent();
-                expect(warningText).toContain("/sandbox/.codex/auth.json");
-                expect(warningText).toContain(".codex");
-                await page.screenshot({ path: path.join(output, `${name}-warnings.png`) });
-                const approve = page.getByRole("button", { name: words.approve, exact: true });
-                await approve.scrollIntoViewIfNeeded();
-                expect(await approve.isEnabled()).toBe(true);
-                await page.screenshot({ path: path.join(output, `${name}-decision.png`) });
-                await approve.click();
-                await page.getByText(words.sent, { exact: true }).waitFor();
-                await page.waitForFunction(() => {
-                  const status = document.querySelector('[role="status"]')!.getBoundingClientRect();
-                  return status.top >= 0 && status.bottom <= innerHeight;
-                });
-                await page.screenshot({ path: path.join(output, `${name}-sent.png`) });
-                expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(1);
-                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
-              } else {
-                await page.getByText(words[state], { exact: true }).waitFor();
-                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
-                await page.screenshot({ path: path.join(output, `${name}.png`) });
-              }
-              const reading = await page.evaluate(() => {
-                const main = document.querySelector("main")!;
-                const bounds = main.getBoundingClientRect();
-                const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
-                const clippedText: string[] = [];
-                while (walker.nextNode()) {
-                  const node = walker.currentNode;
-                  if (!node.textContent?.trim()) continue;
-                  const range = document.createRange(); range.selectNodeContents(node);
-                  if ([...range.getClientRects()].some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1)) clippedText.push(node.textContent);
-                }
-                return { overflow: main.scrollWidth - main.clientWidth, clippedText, text: main.textContent, background: getComputedStyle(main).backgroundColor };
-              });
-              expect(reading.overflow).toBeLessThanOrEqual(1);
-              expect(reading.clippedText).toEqual([]);
-              expect(reading.background).not.toBe("rgba(0, 0, 0, 0)");
-              expect(pageErrors).toEqual([]);
-              evidence.push({ frame: name, initialStatus, initialStatusText: words[state], ...reading });
-            } finally { await context.close(); }
+              return undefined;
+            })();
+            return {
+              scrollTop: document.querySelector("main")!.scrollTop,
+              heading: whole(document.querySelector("[data-file-confirmation-heading]")?.getBoundingClientRect()),
+              headingText: document.querySelector("[data-file-confirmation-heading]")?.textContent ?? "",
+              refuse: whole(document.querySelector("[data-file-confirmation-refuse]")?.getBoundingClientRect()),
+              send: whole(document.querySelector("[data-file-confirmation-send]")?.getBoundingClientRect()),
+              realFile: whole(real),
+            };
+          });
+          if (firstScreen.scrollTop !== 0) failures.push(`${name}: opened scrolled`);
+          if (!firstScreen.heading) failures.push(`${name}: the heading is not whole on the first screen`);
+          if (opened === "pending") {
+            if (firstScreen.headingText !== pendingHeading) failures.push(`${name}: heading «${firstScreen.headingText}»`);
+            if (!firstScreen.refuse || !firstScreen.send) failures.push(`${name}: an answer is off the first screen (${JSON.stringify(firstScreen)})`);
+            if (data !== "media" && !firstScreen.realFile) failures.push(`${name}: the real file is not whole on the first screen`);
+            if (await page.getByRole("button", { name: words.refuse, exact: true }).count() !== 1 || await page.getByRole("button", { name: words.approve, exact: true }).count() !== 1) failures.push(`${name}: the two answers are not «${words.refuse}» and «${words.approve}»`);
+          } else if (firstScreen.refuse !== null || firstScreen.send !== null) failures.push(`${name}: a closed request still offers a decision`);
+          if (state === "details") {
+            await page.click("[data-file-confirmation-details] button");
+            await page.locator("[data-mobile2-menu-body]").waitFor();
+            /* The whole fold in one frame: the window grows to the page instead of scrolling it. */
+            const height = await page.evaluate(() => document.querySelector("main")!.scrollHeight);
+            await page.setViewportSize({ width, height: Math.max(viewport.height, height) });
+            const details = await page.locator("[data-mobile2-menu-body]").innerText();
+            for (const value of data === "media" ? ["/sandbox/shots/board-after.png", "1".repeat(64), "/sandbox/handoff"] : ["/sandbox/.codex/auth.json", "b".repeat(64), "a".repeat(64), "-1000000000101", "/sandbox/handoff", "document_secret (private_key"]) {
+              if (!details.includes(value)) failures.push(`${name}: Details omit ${value}`);
+            }
           }
-        }
+          if (state === "status") {
+            await page.click("[data-file-confirmation-status]");
+            await page.locator("[data-file-confirmation-popover]").waitFor();
+            const popover = await page.locator("[data-file-confirmation-popover]").innerText();
+            const until = await page.evaluate(() => new Intl.DateTimeFormat(document.documentElement.lang === "uk" || localStorage.getItem("llv_lang") === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date("2026-10-22T12:10:00.000Z")));
+            if (!popover.includes(words.status.pending) || !popover.includes(words.minutesLeft(10, until))) failures.push(`${name}: popover «${popover}»`);
+          }
+          if (state === "sending") {
+            await page.click("[data-file-confirmation-send]");
+            await page.locator("[data-file-confirmation-send][aria-busy=true]").waitFor();
+            if (await page.locator("[data-file-confirmation-send]").innerText() !== words.sending) failures.push(`${name}: the pressed answer does not say ${words.sending}`);
+            if (!await page.locator("[data-file-confirmation-refuse]").isDisabled() || !await page.locator("[data-file-confirmation-send]").isDisabled()) failures.push(`${name}: an answer stays pressable while the send is in flight`);
+          }
+          if (state === "sent" || state === "rejected") {
+            await page.click(state === "sent" ? "[data-file-confirmation-send]" : "[data-file-confirmation-refuse]");
+            await page.getByRole("status").filter({ hasText: heading }).waitFor();
+            const posts = await page.evaluate(() => (window as unknown as { fileConfirmationPosts(): unknown[] }).fileConfirmationPosts());
+            expect(posts).toEqual([{ ...POSTED, approve: state === "sent" }]);
+            expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(state === "sent" ? 1 : 0);
+            expect(await page.locator("[data-file-confirmation-send], [data-file-confirmation-refuse]").count()).toBe(0);
+            /* The time of the press (the fixture's clock), in the browser's own zone. */
+            const at = await page.evaluate(() => new Intl.DateTimeFormat(localStorage.getItem("llv_lang") === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(Date.now())));
+            const body = await page.locator("[data-file-confirmation-card]").innerText();
+            const expected = state === "sent"
+              ? words.sentBody(at, data === "media" ? (lang === "uk" ? "два зображення" : "two images") : words.linkSubject(".codex/auth.json", data === "long" ? LONG_FILE : "weekly-report.json"), lang === "uk" ? (data === "media" ? "два застереження" : "три застереження") : (data === "media" ? "two warnings" : "three warnings"))
+              : words.rejectedBody(at, data === "media" ? (lang === "uk" ? "два зображення" : "two images") : data === "long" ? LONG_FILE : "weekly-report.json");
+            if (!body.replace(/\s+/g, " ").includes(expected)) failures.push(`${name}: body lacks «${expected}»: ${body}`);
+            if (!body.includes(words.usedUp)) failures.push(`${name}: the used-up line is missing`);
+          }
+          if (!asking) {
+            const shown = await page.locator("[data-file-confirmation-heading]").innerText();
+            if (shown.trim() !== heading) failures.push(`${name}: heading «${shown}», expected «${heading}»`);
+          }
+          if (state === "owner") {
+            const href = await page.getByRole("link", { name: words.signIn, exact: true }).getAttribute("href");
+            if (href !== `/sign-in?next=${encodeURIComponent(`/?${query}`)}`) failures.push(`${name}: sign-in link ${href}`);
+          }
+          await page.waitForTimeout(150);
+          const reading = await page.evaluate(({ coarse, strip }) => {
+            const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+            const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+            const main = document.querySelector("main")!;
+            const card = document.querySelector("[data-file-confirmation-card]")!;
+            const popover = document.querySelector("[data-file-confirmation-popover]");
+            const offscreen: string[] = [], clipped: string[] = [], covered: string[] = [], cut: string[] = [], small: string[] = [], latin: string[] = [], orphans: string[] = [];
+            const clippers: DOMRect[] = [];
+            for (let node = card.parentElement; node && node !== document.body; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              if (style.overflowX !== "visible" || style.overflowY !== "visible") clippers.push(node.getBoundingClientRect());
+            }
+            const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const text = node.textContent?.trim();
+              if (!text) continue;
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width === 0 || rect.height === 0) continue;
+                if (!within(rect, screen)) offscreen.push(text);
+                else if (clippers.some((box) => !within(rect, box))) clipped.push(text);
+                /* The popover stands beside the words, never on them. */
+                if (popover && !popover.contains(node)) {
+                  for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+                    const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+                    if (hit && popover.contains(hit)) covered.push(text);
+                  }
+                }
+              }
+              /* Code tokens (paths, hashes, detector codes) stay as they are in every language. */
+              if (!node.parentElement?.closest("[data-file-confirmation-code]")) {
+                let words = text;
+                for (const value of strip) words = words.split(value).join(" ");
+                latin.push(...words.split(/[\s·,;:()?!«»"/…]+/).filter((word) => /^[A-Za-z][A-Za-z-]*$/.test(word)));
+              }
+            }
+            for (const node of card.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) cut.push(node.textContent?.trim() ?? "");
+            /* Every control is reachable: 44 px under a finger, 24 under a pointer. */
+            for (const control of card.querySelectorAll<HTMLElement>("button, a")) {
+              const box = control.getBoundingClientRect();
+              if (box.width === 0 || box.height === 0) continue;
+              if (Math.min(box.width, box.height) < (coarse ? 44 : 24)) small.push(`${(control.textContent || control.getAttribute("aria-label") || "").trim()} ${Math.round(box.width)}×${Math.round(box.height)}`);
+            }
+            /* A paragraph never ends on a lone short word, and a short name never breaks. */
+            for (const block of card.querySelectorAll<HTMLElement>("h1, p, li")) {
+              const words: Array<{ text: string; top: number }> = [];
+              const inner = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+              while (inner.nextNode()) {
+                const node = inner.currentNode;
+                for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+                  const range = document.createRange();
+                  range.setStart(node, match.index!);
+                  range.setEnd(node, match.index! + match[0].length);
+                  const rect = range.getClientRects()[0];
+                  if (rect) words.push({ text: match[0], top: Math.round(rect.top) });
+                }
+              }
+              const lines = [...new Set(words.map((word) => word.top))];
+              if (lines.length < 2) continue;
+              const last = words.filter((word) => word.top === lines.at(-1));
+              const tail = last.map((word) => word.text).join(" ");
+              if (last.length === 1 && tail.length < 10 || last.length === 2 && tail.length < 11) orphans.push(`${tail} (${block.textContent?.trim().slice(0, 40)}…)`);
+            }
+            for (const name of card.querySelectorAll(".whitespace-nowrap[data-file-confirmation-name]")) if (name.getClientRects().length > 1) orphans.push(`${name.textContent} broken across lines`);
+            /* Both answers read against their own fill: 4.5:1 or more. */
+            const channel = (value: number) => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+            const luminance = (css: string) => { const [r, g, b] = (css.match(/[\d.]+/g) ?? []).map(Number); return 0.2126 * channel(r!) + 0.7152 * channel(g!) + 0.0722 * channel(b!); };
+            const fill = (element: Element) => {
+              for (let node: Element | null = element; node; node = node.parentElement) {
+                const value = getComputedStyle(node).backgroundColor;
+                if (!/^rgba\(.*,\s*0\)$/.test(value) && value !== "transparent") return value;
+              }
+              return "rgb(255, 255, 255)";
+            };
+            const contrast: Record<string, number> = {};
+            for (const control of card.querySelectorAll<HTMLButtonElement>("[data-file-confirmation-send]:enabled, [data-file-confirmation-refuse]:enabled, a")) {
+              const [a, b] = [luminance(getComputedStyle(control).color), luminance(fill(control))].sort((x, y) => y - x);
+              contrast[(control.textContent ?? "").trim()] = Math.round(((a! + 0.05) / (b! + 0.05)) * 100) / 100;
+            }
+            const cardBox = card.getBoundingClientRect();
+            const popoverBox = popover?.getBoundingClientRect();
+            const dot = document.querySelector("[data-file-confirmation-status] > span")?.getBoundingClientRect();
+            const chevron = document.querySelector("[data-file-confirmation-details] button svg")?.getBoundingClientRect();
+            return {
+              offscreen, clipped, covered, cut, small, latin, orphans, contrast,
+              popover: popoverBox ? { inCard: popoverBox.top >= cardBox.top + 4 && popoverBox.bottom <= cardBox.bottom - 4 && popoverBox.left >= cardBox.left + 4 && popoverBox.right <= cardBox.right - 4, text: popover!.textContent } : null,
+              dotOffChevron: dot && chevron ? Math.round(((dot.left + dot.right) / 2 - (chevron.left + chevron.right) / 2) * 10) / 10 : null,
+              detailsRow: document.querySelector("[data-file-confirmation-details] button")?.textContent?.trim() ?? null,
+              detailsOpen: Boolean(document.querySelector("[data-mobile2-menu-body]")),
+              iso: (main.innerText.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/g) ?? []),
+              overflow: main.scrollWidth - main.clientWidth,
+              cardWidth: Math.round(cardBox.width),
+              background: getComputedStyle(main).backgroundColor,
+            };
+          }, { coarse: phone, strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After"] });
+          if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
+          if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
+          if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
+          if (reading.cut.length) failures.push(`${name}: ellipsis: ${reading.cut.join(" | ")}`);
+          if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
+          if (reading.orphans.length) failures.push(`${name}: ${reading.orphans.join(" | ")}`);
+          if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
+          if (reading.iso.length) failures.push(`${name}: ISO timestamps on the page: ${reading.iso.join(", ")}`);
+          for (const [label, ratio] of Object.entries(reading.contrast)) if (ratio < 4.5) failures.push(`${name}: «${label}» reads at ${ratio}:1`);
+          const latin = lang === "uk" ? reading.latin.filter((word) => !LATIN_ALLOWED.test(word)) : [];
+          if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
+          if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
+          if (reading.popover && !reading.popover.inCard) failures.push(`${name}: the popover crosses or touches the card's edge`);
+          if (state !== "owner") {
+            if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
+            if (!reading.detailsRow || /\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row reads «${reading.detailsRow}»`);
+          }
+          if ((state === "details") !== reading.detailsOpen) failures.push(`${name}: Details open: ${reading.detailsOpen}`);
+          if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          await page.screenshot({ path: path.join(output, `${name}.png`) });
+          if (state === "sending") {
+            await page.evaluate(() => (window as unknown as { releaseFileConfirmation(): void }).releaseFileConfirmation());
+            await page.getByRole("status").filter({ hasText: words.sentTitle(chat) }).waitFor();
+            expect(await page.evaluate(() => (window as unknown as { fileConfirmationPosts(): unknown[] }).fileConfirmationPosts())).toEqual([{ ...POSTED, approve: true }]);
+          }
+          evidence.push({ frame: name, firstScreen, ...reading, latin: undefined });
+        } finally { await context.close(); }
       }
-    } finally { await browser?.close(); served.stop(); }
+    } finally { await browser.close(); served.stop(); }
+    expect(failures).toEqual([]);
+  }
+  const themed = (width: Frame["width"], lang: Frame["lang"]) => (["light", "dark"] as const).flatMap((theme) => STATES.map((state): Frame => ({ width, lang, theme, state })));
+  for (const width of [390, 1440] as const) for (const lang of ["en", "uk"] as const) {
+    browserTest(`${width} px, ${lang}: every state in light and dark`, () => frames(themed(width, lang)), 300_000);
+  }
+  browserTest("820 px pending in both languages; two images and long names at 390 px", () => frames([
+    { width: 820, lang: "en", theme: "light", state: "pending" },
+    { width: 820, lang: "uk", theme: "light", state: "pending" },
+    { width: 390, lang: "uk", theme: "light", state: "pending", data: "media" },
+    { width: 390, lang: "uk", theme: "light", state: "pending", data: "long" },
+  ]), 300_000);
+  browserTest("the file, destination, warnings and decisions fit both languages and themes", async () => {
+    expect(evidence.length).toBe(4 * 2 * STATES.length + 4);
     fs.mkdirSync("evidence/telegram-file-confirmation", { recursive: true });
     const { createHash } = await import("node:crypto");
     const sources = ["src/components/telegram/TelegramFileConfirmation.tsx", "src/lib/telegram/bot/fileConfirmationContract.ts", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
