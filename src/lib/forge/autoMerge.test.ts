@@ -420,6 +420,14 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task));
   const completed = lane(`unconfirmed-${revoked}`);
   completed.taskIds = [task.id]; completed.proactiveTaskIds = [task.id];
+  // Receipt recovery begins after result review of this exact head.
+  completed.stages[1]!.role = { roleId: "reviewer" };
+  const { resolvePipelineRole, pipelineRoleLookup } = await import("@/lib/pipelines/roles");
+  const reviewer = resolvePipelineRole(completed.stages[1]!, "run", pipelineRoleLookup, project);
+  if (!reviewer.role) throw new Error(reviewer.error);
+  completed.stages[1]!.effectiveRole = reviewer.role;
+  completed.runs[1]!.attempts[0]!.effectiveRole = reviewer.role;
+  completed.runs[1]!.attempts[0]!.reviewHeadSha = HEAD_A;
   const h = harness({ lanes: [completed], prs: [openPr(11)] });
   const run = h.ports.run;
   const write = h.ports.write;
