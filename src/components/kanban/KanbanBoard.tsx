@@ -7,7 +7,7 @@ import { flushSync } from "react-dom";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { isCurrentSeatConversation, type SeatRefs } from "@/lib/tasks/groupHide";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";

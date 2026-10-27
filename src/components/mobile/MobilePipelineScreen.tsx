@@ -6,13 +6,14 @@ import { ChevronLeft, ChevronRight } from "@/components/icons";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { formatConversationHash } from "@/lib/accounts/identity";
 import { cleanTitle } from "@/lib/title";
 
+import { openReviewHistory } from "../flows/ReviewHistory";
 import { reviewerBindingTargetsForRound } from "../flows/flowModel";
 import type { ReceiptAction as BoardReceiptAction } from "../kanban/KanbanReceipts";
 import { summarizePipeline, workingStageConversations } from "../kanban/kanbanModel";
@@ -756,6 +757,7 @@ export function MobilePipelineScreen({
 }
 
 interface PastRow {
+  archive?: { id: string; round?: number };
   key: string;
   label: string;
   state: string;
@@ -785,16 +787,28 @@ function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, 
   const [open, setOpen] = useMobileScreenState({ kind: "pipeline", id: pipeline.id }, "past", false);
   const nameOf = (stageId: string) => names.get(stageId) ?? stageId;
   const history = pastAttempts([pipeline], flowsById);
+  const archiveByStage = new Map<string, Map<number, string>>();
+  for (const run of pipeline.runs) {
+    const byAttempt = new Map<number, string>();
+    for (const attempt of run.attempts) if (attempt.flowId) byAttempt.set(attempt.n, attempt.flowId);
+    archiveByStage.set(run.stageId, byAttempt);
+  }
   const listed = new Set(history.flatMap((row) => (row.conversation.path ? [row.conversation.path] : [])));
   const rows: PastRow[] = [
-    ...history.map((row) => ({
-      key: row.key,
-      label: pastAttemptLabel(t, row, nameOf(row.stageId)),
-      state: pastAttemptState(t, row),
-      tone: pastAttemptTone(row),
-      atMs: row.atMs,
-      file: resolveStageNavFile({ conversationId: row.conversation.conversationId, agentPath: row.conversation.path }, files),
-    })),
+    ...history.map((row) => {
+      const archiveAttempt = row.kind === "round" ? row.attempt : row.kind === "attempt" ? row.n : null;
+      const archiveId = archiveAttempt != null ? archiveByStage.get(row.stageId)?.get(archiveAttempt) : null;
+      return {
+        archive: archiveId && (row.kind === "round" || !flowsById.has(archiveId))
+          ? { id: archiveId, round: row.kind === "round" ? row.n : undefined } : undefined,
+        key: row.key,
+        label: pastAttemptLabel(t, row, nameOf(row.stageId)),
+        state: pastAttemptState(t, row),
+        tone: pastAttemptTone(row),
+        atMs: row.atMs,
+        file: resolveStageNavFile({ conversationId: row.conversation.conversationId, agentPath: row.conversation.path }, files),
+      };
+    }),
     ...pipeline.stages.flatMap((stage) => reviewTranscripts(pipeline, stage, flows, files)
       .filter((transcript) => !listed.has(transcript.path))
       .map((transcript) => ({
@@ -823,14 +837,20 @@ function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, 
       {open ? (
         <ul className="flex flex-col">
           {rows.map((row) => {
-            const Tag = row.file ? "button" : "div";
+            const canOpen = Boolean(row.file || row.archive);
+            const Tag = canOpen ? "button" : "div";
             return (
-              <li key={row.key} className="border-t border-border">
+              <li key={row.key} className="flex items-stretch border-t border-border">
                 <Tag
-                  {...(row.file ? { type: "button" as const, onClick: () => onOpenConversation(row.file!), "aria-label": t("kanban.past.openAria", { label: row.label }) } : {})}
+                  {...(canOpen ? { type: "button" as const, onClick: () => {
+                    if (row.file) onOpenConversation(row.file);
+                    else if (row.archive) openReviewHistory(row.archive.id, row.archive.round);
+                  }, "aria-label": row.file ? t("kanban.past.openAria", { label: row.label }) : `${t("reviewHistory.open")} · ${row.label}` } : {})}
                   data-mobile2-past-row={row.key}
-                  data-mobile2-go={row.file ? "chat" : undefined}
-                  className={`flex min-h-11 w-full items-center gap-2 py-1.5 pl-3 pr-2.5 text-left text-label tabular-nums ${row.file ? "active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40" : ""}`}
+                  data-mobile2-go={row.file ? "chat" : row.archive ? "review-history" : undefined}
+                  data-mobile2-review-history={!row.file ? row.archive?.id : undefined}
+                  data-review-round={!row.file ? row.archive?.round : undefined}
+                  className={`flex min-h-11 min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-2.5 text-left text-label tabular-nums ${canOpen ? "active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40" : ""}`}
                 >
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="min-w-0 truncate text-ui font-semibold text-primary">{row.label}</span>
@@ -843,6 +863,10 @@ function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, 
                   </span>
                   {row.file ? <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : null}
                 </Tag>
+                {row.archive && row.file ? <button type="button" data-mobile2-review-history={row.archive.id} data-review-round={row.archive.round}
+                  aria-label={`${t("reviewHistory.open")} · ${row.label}`}
+                  className="min-h-11 min-w-11 shrink-0 px-2 text-ui font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                  onClick={() => openReviewHistory(row.archive!.id, row.archive!.round)}>{t("reviewHistory.open")}</button> : null}
               </li>
             );
           })}
