@@ -25,6 +25,24 @@ function writeTranscript(name: string, records: Record<string, unknown>[]): stri
 
 const PASS_TEXT = "done\n\n```json\n{\"status\":\"pass\"}\n```";
 
+test.each(["native", "human", "typed", "sdk"] as const)("Claude %s notification envelopes retain their progress authority", async source => {
+  const before = "2026-10-20T10:00:00.000Z";
+  const after = "2026-10-20T10:01:00.000Z";
+  const file = writeTranscript(`restore-notification-${source}.jsonl`, [
+    { type: "assistant", timestamp: before, message: { role: "assistant", model: "claude-test",
+      content: [{ type: "tool_use", id: "tool-check", name: "Bash", input: {} }] } },
+    syntheticNoOpRecord(after),
+    { type: "user", timestamp: after, queueTranscriptOnly: true,
+      ...(source === "human" ? { origin: { kind: "human" }, promptSource: "system" }
+        : source === "native" ? { origin: "task-notification", promptSource: "system" } : { promptSource: source }),
+      message: { role: "user", content: "<task-notification>Background command ended</task-notification>" } },
+  ]);
+  const evidence = await durableStageTurnEvidence("claude", file);
+  expect(evidence?.lastAgentEventAt).toBe(Date.parse(source === "native" ? before : after));
+  expect(evidence?.lastAgentOutputAt).toBe(Date.parse(before));
+  expect(evidence?.prompts?.at(-1)?.origin).toBe(source === "native" ? "harness" : "external");
+});
+
 test.each(["origin=agent", "origin=agent sender=reviewer", "origin=agent sender=pipeline"])
 ("Codex unverified legacy prompt authorship remains external (%s)", async attributes => {
   const cut = Date.parse("2026-10-05T10:00:00Z");
@@ -1059,7 +1077,8 @@ for (const engine of ["claude", "codex"] as const) {
     const file = writeTranscript(`chain-open-over-bound-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
       notice(later), ...Array.from({ length: 8500 }, () => filler), notice(later + 1000)]);
     expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))
-      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: false, promptHistoryComplete: false });
+      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: false, promptHistoryComplete: false,
+        ...(engine === "claude" ? { lastAgentOutputAt: cut + 2000 } : {}) });
     expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, later))
       .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: true, promptHistoryComplete: false });
   });
