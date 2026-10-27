@@ -37,7 +37,7 @@ function alive(pid, identity) {
     return false;
   }
 }
-function matchingProcess(candidate, socket, port = null, installRoot = null, releasePointer = null) {
+export function matchingProcess(candidate, socket, port = null, installRoot = null, releasePointer = null) {
   if (!Number.isSafeInteger(candidate?.pid) || candidate.pid <= 1 || candidate.pid === process.pid
     || typeof candidate.startIdentity !== "string" || !alive(candidate.pid, candidate.startIdentity)) return false;
   try {

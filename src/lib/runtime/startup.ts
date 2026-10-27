@@ -717,7 +717,12 @@ async function restartCutTargets(
        whole identity is compared: a predecessor whose pid this process was
        given is still a predecessor. An idle row is a Claude turn that ended. */
     if (!entry?.structuredHost || entry.host !== null) continue;
-    const live = entry.status === "live";
+    // A deploy can checkpoint the engine as gone before startup observes it.
+    // Its busy conversation still needs cut recognition; durable turn evidence
+    // below decides whether work was interrupted or completed.
+    const releasedBusy = (entry.status === "dead" || entry.status === "unhosted")
+      && conversation.turn.state === "busy";
+    const live = entry.status === "live" || releasedBusy;
     if (entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) continue;
     if (!live && !(entry.status === "idle" && conversation.engine === "claude")) continue;
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
@@ -2190,7 +2195,15 @@ function startStructuredHostPass(
       trigger: replaced ? "runtime-host-replaced" : resumeDeferred ? "deferred-evidence-changed" : "startup-retry",
       completed: Boolean(current.ready), generationChanged: replaced,
     });
-    if (replaced && client) await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+    // Publish launch admission before the registry census and transcript I/O.
+    // Existing queued work stays fenced until startup evidence admits recovery.
+    if (client && (replaced || !hasStructuredDeliveryController(registry))) {
+      assertDarwinStructuredRuntime();
+      dependencies.signal?.throwIfAborted();
+      dependencies.assertActive?.();
+      await withViewerOperation("runtime.startup-bind", () =>
+        bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true }));
+    }
     const hosts = await startupReadBudget.run({ signal: dependencies.signal, assertActive: dependencies.assertActive, deadline: performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS }, () => withViewerOperation(isolatedRowRetry ? "runtime.startup-row" : "runtime.startup", async () => {
       const scope = replaced ? new Set(Object.keys((await preparedStartupSnapshot(registry)).entries)
         .filter((key) => !current.ready!.some((item) => sessionKeyId(item.key) === key))) : resumeDeferred;

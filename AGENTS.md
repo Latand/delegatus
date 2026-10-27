@@ -166,10 +166,13 @@ operator was talking to. Their composer started answering `structured host
 ownership is unavailable` and they had to recover the conversation by pasting an
 attach command into a terminal.
 
-Run the specific test files you touched, by path. If a change genuinely needs a
-broad sweep, point the run at an isolated state directory first and say so; do
-not sweep the live one. The same applies to any command that enumerates and acts
-on runtime processes — `pgrep -f <pattern>` matches your own command line too.
+Stages run, by path, only the test files their change touches. They run no
+`bunx tsc --noEmit`, no full test suite and no `bun run build` unless the stage
+brief explicitly names that check. The pre-push at publication is the one full
+check; the nightly workflow runs the full test suite on main. Any check the
+brief names still needs an isolated state directory. The same applies to any
+command that enumerates and acts on runtime processes — `pgrep -f <pattern>`
+matches your own command line too.
 
 The shipped role prompts tell a stage agent to isolate "any state-directory
 variable the project's instruction files name". Here that is `LLV_STATE_DIR`:

@@ -15,7 +15,7 @@ import {
   isQuietReconfigureFailure, onAccountChoiceRequest, pickApplying, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
 } from "@/lib/accounts/intendedAccount";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId, listedModels } from "@/lib/agent/models";
+import { ENGINE_MODELS, listedModels, modelDisplayName } from "@/lib/agent/models";
 import type { AgentModelOption } from "@/lib/agent/models";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -33,6 +33,9 @@ import {
   adoptRuntimeProfile,
   defaults,
   effectiveProfile,
+  launchedModelId,
+  modelHoldMessage,
+  observedModelId,
   phaseKey,
   phaseOperationKey,
   phaseRollbackKey,
@@ -41,6 +44,7 @@ import {
   readProfile,
   readResumeDraft,
   storageKey,
+  unlistedModelName,
   writeProfile,
   dropStoredSelection,
   writeResumeProfile,
@@ -514,8 +518,8 @@ export function RuntimePill({
      (ported verbatim from the retired AgentRuntimeControls lifecycle). */
   useEffect(() => {
     if (pillSurface !== "live-root" || applyState !== "confirming") return;
-    const observedModel = engine === "claude" ? claudeCatalogModelId(file.launchModel ?? file.model) : file.model;
-    const modelMatches = observedModel === liveDraft.model;
+    /* A pinned release the transcript names and the alias the launch asked for are one model. */
+    const modelMatches = observedModelId(file) === liveDraft.model || launchedModelId(file) === liveDraft.model;
     const effortMatches = file.effort === liveDraft.effort;
     const speedMatches = engine === "claude" || file.fast === liveDraft.fast;
     if (!modelMatches || !effortMatches || !speedMatches) return;
@@ -562,17 +566,22 @@ export function RuntimePill({
   // setting remains available while a turn is running. Per-turn capabilities
   // still describe message-scoped overrides elsewhere in the composer.
   void runtimeSettings;
-  const effortLocked = false;
+  /* A reconfigure names a catalogue model (the server refuses one without), so a
+     conversation whose model is not known holds the edits that would send one
+     until a model is picked. A stage switch and a resume send no model. */
+  const modelUnknown = !face.model && !stageRoute && pillSurface !== "resume";
+  const effortLocked = modelUnknown;
   const modelLocked = false;
-  const speedLocked = false;
-  const lockReason = t("composer.settingsNextResume");
+  const speedLocked = modelUnknown;
+  /* A face with no model holds the edits even when the file has since listed one, so the line always says why. */
+  const modelHold = modelUnknown ? modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown") : null;
+  const lockReason = modelHold ?? t("composer.settingsNextResume");
 
   const announceCommit = useCallback((next: RuntimeDraft) => {
-    setAnnounce(t("composer.nextMessageUses", {
-      model: engine ? modelLabel(engine, next.model) : next.model,
-      effort: reasoningTierLabel(t, next.effort),
-    }));
-  }, [engine, t]);
+    const model = next.model ? (engine ? modelLabel(engine, next.model) : next.model) : unlistedModelName(file);
+    const effort = reasoningTierLabel(t, next.effort);
+    setAnnounce(model ? t("composer.nextMessageUses", { model, effort }) : t("composer.nextMessageUsesNoModel", { effort }));
+  }, [engine, file, t]);
 
   const commit = useCallback((patch: Partial<RuntimeDraft>) => {
     if (!engine) return;
@@ -651,6 +660,11 @@ export function RuntimePill({
    */
   const pickAccount = useCallback(async (accountId: string) => {
     if (!engine || accountId === nextAccount || (switchApplying && accountId === runsOnAccount)) return;
+    /* The move is a reconfigure, and a reconfigure names a model. */
+    if (!stageRoute && !liveDraftRef.current.model) {
+      pushTaskToast("err", modelHoldMessage(t, file, "move") ?? t("runtimeConfig.moveModelUnknown"));
+      return;
+    }
     const previous = readPickedAccount(cardId);
     setPickedAccount(cardId, accountId);
     if (stageRoute) {
@@ -754,7 +768,10 @@ export function RuntimePill({
 
   if (!engine || !pillSurface) return null;
 
-  const faceModelShort = modelShortLabel(engine, face.model);
+  const unlistedName = unlistedModelName(file);
+  /* No model known: the chip says so with the group's own name, never a model nobody ran. */
+  const faceModelShort = face.model ? modelShortLabel(engine, face.model) : unlistedName || t("composer.modelGroup");
+  const faceModelLong = face.model ? modelLabel(engine, face.model) : unlistedName || t("composer.modelGroup");
   const faceTier = tierWord(t, face.effort, isMobile);
   const serviceTier = engine === "codex" && file.serviceTier && face.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
   const namedTier = serviceTier ? serviceTier.charAt(0).toUpperCase() + serviceTier.slice(1) : null;
@@ -765,7 +782,7 @@ export function RuntimePill({
   const accessibleLabel = stageRoute
     ? `${t("mobile2.composer.stageSheetTitle")} — ${t("mobile2.composer.stageNow")}`
     : t("composer.runtimePill");
-  const faceLabel = `${accessibleLabel} — ${modelLabel(engine, face.model)}, ${faceTier}${tierSuffix}`;
+  const faceLabel = `${accessibleLabel} — ${faceModelLong}, ${faceTier}${tierSuffix}`;
   /* At the account's limit the chip stops offering a reasoning tier the next
      message cannot use and names the wall instead (mobile v2 §4.2, §4.4); its
      sheet leads with the accounts that can take the message. */
@@ -812,6 +829,7 @@ export function RuntimePill({
           accountChoice={accountChoice}
           error={shownError}
           face={face}
+          modelName={unlistedName}
           efforts={efforts}
           speedShown={speedShown}
           speedDetail={speedDetail}
@@ -821,6 +839,7 @@ export function RuntimePill({
           modelLocked={modelLocked}
           speedLocked={speedLocked}
           lockReason={lockReason}
+          hold={modelHold}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
           onSelectFast={selectFast}
@@ -840,6 +859,7 @@ export function RuntimePill({
           error={shownError}
           owner={pillRef.current?.ownerDocument ?? document}
           face={face}
+          modelName={unlistedName}
           efforts={efforts}
           speedShown={speedShown}
           speedDetail={speedDetail}
@@ -847,6 +867,7 @@ export function RuntimePill({
           modelLocked={modelLocked}
           speedLocked={speedLocked}
           lockReason={lockReason}
+          hold={modelHold}
           limit={file.rateLimit ?? null}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
@@ -1063,6 +1084,9 @@ interface PanelProps {
   /** A change that did not take; the account line says it until the next choice. */
   error?: string | null;
   face: RuntimeDraft;
+  /** What the model row and the sheet's summary call the running model when `face.model` names none: the
+      model a transcript reports that the catalogue does not list. Empty when no model is known. */
+  modelName?: string | null;
   efforts: readonly string[];
   speedShown: boolean;
   speedDetail: string;
@@ -1070,6 +1094,8 @@ interface PanelProps {
   modelLocked: boolean;
   speedLocked: boolean;
   lockReason: string;
+  /** Visible words for why reasoning and speed are held (no model, or one the pickers cannot send); absent when nothing is held. */
+  hold?: string | null;
   onSelectEffort: (tier: string) => void;
   onSelectModel: (id: string) => void;
   onSelectFast: (fast: boolean) => void;
@@ -1077,8 +1103,8 @@ interface PanelProps {
 }
 
 export function RuntimePopover({
-  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
-  effortLocked, modelLocked, speedLocked, lockReason,
+  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, modelName = null, efforts, speedShown, speedDetail, panel, setPanel,
+  effortLocked, modelLocked, speedLocked, lockReason, hold = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
   panel: Panel;
@@ -1097,9 +1123,9 @@ export function RuntimePopover({
 
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
-    t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+    t, engine, modelOptions, face, modelName, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
     onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart, now,
-  }), [accountStart, now, t, engine, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+  }), [accountStart, now, t, engine, face, modelName, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
     onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
@@ -1189,6 +1215,7 @@ export function RuntimePopover({
               {error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
           ) : null}
+          {hold ? <p className="px-2 pb-1 text-label text-muted" data-runtime-hold>{hold}</p> : null}
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
               <MenuRow key={row.key} row={row} active={rows.indexOf(row) === activeIndex} refFor={(el) => { rowRefs.current[rows.indexOf(row)] = el; }} />
@@ -1268,7 +1295,7 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 }
 
 function buildRows({
-  t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+  t, engine, modelOptions, face, modelName, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart, now,
 }: Omit<PanelProps, "onClose" | "account" | "accessibleLabel"> & {
   panel: Panel;
@@ -1360,7 +1387,7 @@ function buildRows({
   const submenus: Row[] = [
     {
       key: "model", kind: "submenu", label: t("composer.modelGroup"),
-      detail: modelOptions.find((m) => m.id === face.model)?.shortLabel ?? face.model,
+      detail: face.model ? modelOptions.find((m) => m.id === face.model)?.shortLabel ?? face.model : modelName ?? "",
       checked: false, enabled: true, submenu: "model", role: "menuitem", activate: () => onOpenPanel("model"),
     },
   ];
@@ -1448,8 +1475,8 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 export function RuntimeSheet({
-  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
-  effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
+  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, modelName = null, efforts, speedShown, speedDetail,
+  effortLocked, modelLocked, speedLocked, lockReason, hold = null, limit = null, heading = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & {
   limit?: RateLimitState | null;
@@ -1511,7 +1538,9 @@ export function RuntimeSheet({
                 {/* A running stage has no next message to wait for: the tap stops its turn. */}
                 {heading?.summary ?? (immediate
                   ? t("mobile2.composer.stageNow")
-                  : t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) }))}
+                  : (face.model || modelName)
+                    ? t("mobile2.composer.nextMessage", { model: face.model ? modelShortLabel(engine, face.model) : modelName!, effort: tierWord(t, face.effort, true) })
+                    : t("mobile2.composer.nextMessageNoModel", { effort: tierWord(t, face.effort, true) }))}
               </p>
             </div>
             {/* A phone has no Escape and the backdrop is a guess, so the way out
@@ -1539,6 +1568,8 @@ export function RuntimeSheet({
             </SheetSection>
           </div>
         ) : null}
+
+        {hold ? <p className="mb-2 px-1 text-label text-muted" data-runtime-hold>{hold}</p> : null}
 
         <SheetSection label={t("composer.modelGroup")}>
           {modelOptions.map((model) => (

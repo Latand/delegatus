@@ -9,6 +9,9 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
 import { viewerPostableReportChats, viewerReportChatTitle } from "@/lib/projects/reportDestination";
 import {
+  pipelineStageRuntime,
+  setPipelineStageRuntime,
+  validPipelineStageRuntime,
   codexCloudEnvironmentId,
   setCodexCloudEnvironmentId,
   validCodexCloudEnvironmentId,
@@ -44,6 +47,7 @@ export interface ProjectSettingsResponse {
   ok: true;
   project: string;
   codexCloudEnvironmentId: string;
+  pipelineStageRuntime?: "local" | "codex-cloud";
   mergeOnReview: MergeOnReviewSetting;
   bridgeReports: BridgeReportsSetting;
   /** What the operator chose for reports besides the bridge log
@@ -74,6 +78,7 @@ function answer(project: string): ProjectSettingsResponse {
     ok: true,
     project: key,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
+    pipelineStageRuntime: pipelineStageRuntime(key),
     agentMemoryMaxBytes: projectAgentMemoryMax(key),
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
@@ -131,6 +136,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   const merge = record?.mergeOnReview;
   const bridge = record?.bridgeReports;
   const cloud = record?.codexCloudEnvironmentId;
+  const stageRuntime = record?.pipelineStageRuntime;
   const memory = record?.agentMemoryMaxBytes;
   if (!validAgentMemoryMax(memory)) return NextResponse.json({ error: "INVALID_REQUEST", message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB" }, { status: 400, headers });
   const telegram = record?.reportTelegram;
@@ -145,13 +151,14 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   );
   const shapeOk = (merge === undefined || typeof merge === "boolean")
     && (cloud === undefined || validCodexCloudEnvironmentId(cloud))
+    && (stageRuntime === undefined || validPipelineStageRuntime(stageRuntime))
     && (bridge === undefined || typeof bridge === "boolean")
     && telegramShape
-    && (merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined || memory !== undefined);
+    && (merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined || stageRuntime !== undefined || memory !== undefined);
   if (!project || project.length > 256 || !shapeOk) {
     return NextResponse.json({ error: "INVALID_REQUEST", message: "project and mergeOnReview or bridgeReports (boolean), reportTelegram ({ chat, name } or null), or codexCloudEnvironmentId (environment id or empty string), are required" }, { status: 400, headers });
   }
-  if (cloud !== undefined) {
+  if (cloud !== undefined || stageRuntime !== undefined) {
     const authority = requireOperatorAuthority(request);
     if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
   }
@@ -208,6 +215,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))
     || (typeof cloud === "string" && !setCodexCloudEnvironmentId(project, cloud))
+    || (validPipelineStageRuntime(stageRuntime) && !setPipelineStageRuntime(project, stageRuntime))
     || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))
     || (memory !== undefined && !setProjectAgentMemoryMax(project, memory))) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });

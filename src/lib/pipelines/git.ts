@@ -2025,7 +2025,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         : { ...result, failure: failureEvidence, error: detail };
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
-      if (!result.ok && failureEvidence.hookBudgetMs) result = { ...result, outcome: "not-landed" };
+      if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.
@@ -2253,6 +2253,10 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
+    // Older branches run their own hook scripts, so supply the gate's current
+    // memory defaults here as well. Explicit caller settings remain authoritative.
+    NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=11264",
+    LLV_GATE_MEM: process.env.LLV_GATE_MEM ?? "14G",
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };

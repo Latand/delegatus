@@ -686,3 +686,30 @@ test("the Stages sheet carries the same chips: a waiting stage's pane names its 
   await openPicker(host, pane("merge").querySelector('[data-account-trigger="stage:p-search:merge"]'));
   expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Merge · Claude");
 });
+
+/* A move is a reconfigure, and a reconfigure names a model: a conversation whose model is not known holds the
+   move and says why; one whose transcript has not reported a model yet moves on the model its launch asked for. */
+test("a conversation with no known model keeps its account when one is picked, sends nothing and says why", async () => {
+  const unknown = { ...verify, model: null, launchModel: null } as FileEntry;
+  const { host } = mount(searchPipeline(), [build, unknown]);
+  await tick();
+  await openVerify(host);
+  await openPicker(host, conversationChip(host));
+  click(row(host, "account-c"));
+  await tick(20);
+  expect(hostRequests).toEqual([]);
+  expect(receiptTexts(host)).toEqual(["No model reported yet — pick a model before moving to another account"]);
+  expect(chipText(conversationChip(host))).toBe("Account A");
+});
+
+test("a conversation whose transcript has reported no model yet moves on the model its launch asked for", async () => {
+  const launched = { ...verify, model: null, launchModel: "claude-sonnet-5-5" } as FileEntry;
+  const { host } = mount(searchPipeline(), [build, launched]);
+  await tick();
+  await openVerify(host);
+  await openPicker(host, conversationChip(host));
+  click(row(host, "account-c"));
+  await tick(20);
+  expect(hostRequests).toEqual([{ action: "reconfigure", path: verify.path, conversationId: verify.conversationId, accountId: "account-c", model: "claude-sonnet-5-5", effort: "high" }]);
+  expect(chipText(conversationChip(host))).toBe("Account A → Account C with the next message");
+});

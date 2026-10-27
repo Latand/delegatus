@@ -979,6 +979,8 @@ test("a pre-host retry budget survives an actual controller restart", async () =
   const child = Bun.spawn([process.execPath, "-e", `
     const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
     const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+    registerPipelineTick(async () => {});
     const receipt = JSON.parse(process.env.LLV_TEST_RECEIPT);
     let spawns = 0;
     await tickPipelines([], { ...defaultPipelinePorts(),

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as workLinks from "./workLinks";
 
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -6,6 +7,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { emptyRepositoryEntry, forgeViewOf, type ForgeCacheFile, type StoredPullRequest } from "./cache";
 import {
   editStoredWorkLinks,
+  mergeWorkLinks,
   githubRepositoryOfRemote,
   MAX_WORK_LINKS,
   normalizeWorkLinkInput,
@@ -283,4 +285,146 @@ describe("manual attach and detach", () => {
     expect(refused).toMatchObject({ ok: false, status: 409, code: "WORK_LINK_LIMIT" });
     expect(!refused.ok && refused.error).toContain("acme/widgets#20");
   });
+});
+
+test("task links merge case variants and a recorded rename across pipeline snapshots", () => {
+  const view = forgeViewOf({ schemaVersion: 1, repositories: {
+    "acme/old-name": { ...emptyRepositoryEntry(), canonical: "Acme/Widgets" },
+  } });
+  const link = (repository: string, source: "auto" | "manual", checkedAt: string): WorkLink => ({
+    key: `${repository}#46`, repository, number: 46, kind: "pr",
+    url: `https://github.com/${repository}/pull/46`, source,
+    via: source === "manual" ? ["manual"] : ["delivery-pr"],
+    state: source === "manual" ? "merged" : "open", checkedAt,
+  });
+  const old = link("ACME/OLD-NAME", "auto", "2026-09-21T00:00:00Z");
+  const current = link("acme/widgets", "manual", "2026-09-22T00:00:00Z");
+  const result = resolveTaskLinks({}, [{ links: [old, current], noPr: false }], view);
+  expect(result.links).toHaveLength(1);
+  expect(result.links[0]).toMatchObject({ key: "acme/widgets#46", repository: "acme/widgets", source: "manual", state: "merged", via: ["delivery-pr", "manual"] });
+  expect(result.links[0]!.url).toBe("https://github.com/acme/widgets/pull/46");
+  expect(old.repository).toBe("ACME/OLD-NAME");
+  expect(mergeWorkLinks([[current, { ...current, key: "ACME/WIDGETS#46", repository: "ACME/WIDGETS" }]])).toHaveLength(1);
+  expect(resolveTaskLinks({}, [{ links: [old, link("acme/unrelated", "auto", old.checkedAt!)], noPr: false }], view).links).toHaveLength(2);
+});
+
+test("the recorded project rename joins task links before a forge sweep", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { recordProjectRemote, persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
+  const { forgeCacheView } = await import("./cache");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "work-link-rename-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const old = projectIdentityFromRemote("https://github.com/acme/old-name.git", root)!;
+    const current = projectIdentityFromRemote("https://github.com/acme/widgets.git", root)!;
+    recordProjectRemote(old);
+    recordProjectRemote(current);
+    const task = { workLinks: [
+      { repository: "ACME/OLD-NAME", number: 46, kind: "pr" as const, addedAt: LANE_AT, addedBy: "operator" as const },
+      { repository: "acme/widgets", number: 46, kind: "pr" as const, addedAt: LANE_AT, addedBy: "operator" as const },
+    ] };
+    expect(resolveTaskLinks(task, [], forgeCacheView()).links).toHaveLength(2);
+    expect(persistProjectAliases([{ source: old.project, target: current.project, displayName: "widgets" }])).toBe(true);
+    const links = resolveTaskLinks(task, [], forgeCacheView()).links;
+    expect(links).toHaveLength(1);
+    expect(links[0]!.key).toBe("acme/widgets#46");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("renamed cache entries share the freshest PR and preserve both histories", () => {
+  const view = forgeViewOf({ schemaVersion: 1, repositories: {
+    "Acme/Old-Name": { ...emptyRepositoryEntry(), canonical: "Acme/Widgets", prs: Object.fromEntries([pr(46), pr(45)]) },
+    "acme/widgets": { ...emptyRepositoryEntry(), prs: Object.fromEntries([pr(46, { state: "merged", checkedAt: "2026-09-23T00:00:00Z" }), pr(47)]) },
+  } });
+  const old = view.repository("ACME/OLD-NAME")!;
+  expect(old).toBe(view.repository("Acme/Widgets")!);
+  expect(old.pr(46)?.state).toBe("merged");
+  expect(old.pr(45)?.number).toBe(45);
+  expect(old.pr(47)?.number).toBe(47);
+  expect(old.byHead("feature/46")).toHaveLength(1);
+});
+
+test("warm forge views reuse alias derivation until either ledger changes", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { recordProjectRemote, persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
+  const { forgeCacheView, updateForgeCache } = await import("./cache");
+  const { worktreeMapStore } = await import("@/lib/projects/persistence");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "work-link-warm-"));
+  const previous = process.env.LLV_STATE_DIR;
+  const normalize = spyOn(workLinks, "githubRepositoryOfRemote");
+  process.env.LLV_STATE_DIR = root;
+  try {
+    updateForgeCache(() => {});
+    const old = projectIdentityFromRemote("https://github.com/acme/old-name.git", root)!;
+    const current = projectIdentityFromRemote("https://github.com/acme/widgets.git", root)!;
+    const latest = projectIdentityFromRemote("https://github.com/acme/latest.git", root)!;
+    for (const identity of [old, current, latest]) recordProjectRemote(identity);
+    // Include the empty derivation: an unchanged ledger still needs no rescan.
+    forgeCacheView();
+    normalize.mockClear();
+    forgeCacheView();
+    expect(normalize).not.toHaveBeenCalled();
+
+    expect(persistProjectAliases([{ source: old.project, target: current.project, displayName: "widgets" }])).toBe(true);
+    const first = forgeCacheView();
+    expect(first.repository("acme/old-name")?.canonical).toBe("acme/widgets");
+    expect(normalize).toHaveBeenCalled();
+    normalize.mockClear();
+    expect(forgeCacheView()).toBe(first);
+    expect(normalize).not.toHaveBeenCalled();
+    worktreeMapStore.patchRows(path.join(root, "worktree-map.json"), 2, tx => {
+      tx.put({ key: "fixture-checkout", value: { repo: "fixture-repository", worktree: "fixture-lane" } });
+    });
+    expect(forgeCacheView()).toBe(first);
+    expect(normalize).not.toHaveBeenCalled();
+
+    // A remote revision alone changes the target behind the same alias.
+    recordProjectRemote({ ...current, canonicalRemote: "github.com/acme/renamed" });
+    const renamed = forgeCacheView();
+    expect(renamed.repository("acme/old-name")?.canonical).toBe("acme/renamed");
+    expect(normalize).toHaveBeenCalled();
+    normalize.mockClear();
+    expect(forgeCacheView()).toBe(renamed);
+    expect(normalize).not.toHaveBeenCalled();
+
+    expect(persistProjectAliases([{ source: current.project, target: latest.project, displayName: "latest" }])).toBe(true);
+    const chained = forgeCacheView();
+    expect(chained.repository("acme/old-name")?.canonical).toBe("acme/latest");
+    expect(normalize).toHaveBeenCalled();
+    normalize.mockClear();
+    updateForgeCache(data => { data.repositories["acme/latest"] = { ...emptyRepositoryEntry(), prs: Object.fromEntries([pr(46)]) }; });
+    const refreshed = forgeCacheView();
+    expect(refreshed.repository("acme/old-name")?.pr(46)?.number).toBe(46);
+    expect(normalize).not.toHaveBeenCalled();
+
+    const recovered = projectIdentityFromRemote("https://github.com/acme/recovered.git", root)!;
+    recordProjectRemote(recovered);
+    expect(forgeCacheView().repository("acme/recovered")).toBeNull();
+    const { worktreeRecoveryCollection } = await import("@/lib/projects/worktreeRecoveryStore");
+    worktreeRecoveryCollection().replaceSync([{
+      source: recovered.project, target: latest.project, displayName: "latest",
+      cwd: root, repo: root, worktree: "fixture-lane",
+      event: {
+        id: "recovery-fixture", seq: 1, at: LANE_AT, type: "project_moved", state: "completed", project: latest.project,
+        pipelineId: null, stageId: null, attempt: null, conversationId: null, role: null, summary: "Recovered fixture",
+      },
+    }]);
+    expect(forgeCacheView().repository("acme/recovered")?.canonical).toBe("acme/latest");
+  } finally {
+    normalize.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

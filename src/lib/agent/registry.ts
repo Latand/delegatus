@@ -7,6 +7,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
+import { structuredSetupStartedAt } from "@/lib/runtime/admissionBudget";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, currentWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
@@ -263,11 +264,18 @@ function hasCompleteProcessIdentity(identity: ProcessIdentity | null): identity 
     && identity.bootEpoch.length > 0;
 }
 
-/** Complete durable input for an explicit-account launch waiting on a known
-    quota reset. Keeping the payload and retry deadline in one object lets the
-    registry publish or replace the queue atomically with its card copy. */
+/** Durable input for a quota-delayed pin or a direct structured admission.
+    The account is the one already admitted; retaining it does not add a pin.
+    Payload, retry deadline and card copy are published atomically. */
 export interface QueuedPinnedSpawn {
   version: 1;
+  /** Present for direct structured admission, including unpinned accounts.
+      Absolute and retained across owner exits and all retry generations. */
+  admissionDeadlineAt?: string;
+  lastAdmissionError?: string;
+  /** A degraded pin keeps accountId as routing authority while this generation
+      uses the already-admitted fallback. Legacy queues launch on accountId. */
+  launchAccountId?: string;
   retryAt: string;
   accountId: string;
   locale: "en" | "uk";
@@ -333,6 +341,8 @@ export interface SpawnReceipt {
   /** Admission-attested explicit Telegram grant from an operator seat. */
   telegramSeatGrant?: boolean;
   createdAt: string;
+  /** Runtime admission acknowledged; the host's setup ceiling starts here. */
+  hostSetupStartedAt?: string;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   artifactPath: string | null;
   /** Tracks whether inventory has ever materialized the reserved artifact. */
@@ -4018,6 +4028,11 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
   const retryAt = typeof candidate.retryAt === "string" ? Date.parse(candidate.retryAt) : Number.NaN;
   const imageRefs = parseStructuredImageRefs(candidate.imageRefs ?? [], 16);
   if (candidate.version !== 1
+    || (candidate.admissionDeadlineAt !== undefined
+      && (typeof candidate.admissionDeadlineAt !== "string" || !Number.isFinite(Date.parse(candidate.admissionDeadlineAt))))
+    || (candidate.lastAdmissionError !== undefined && typeof candidate.lastAdmissionError !== "string")
+    || (candidate.launchAccountId !== undefined && (!candidate.admissionDeadlineAt
+      || typeof candidate.launchAccountId !== "string" || !candidate.launchAccountId))
     || !Number.isFinite(retryAt)
     || typeof candidate.accountId !== "string"
     || !candidate.accountId
@@ -4037,6 +4052,9 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
   }
   return {
     version: 1,
+    ...(candidate.admissionDeadlineAt ? { admissionDeadlineAt: candidate.admissionDeadlineAt } : {}),
+    ...(candidate.lastAdmissionError ? { lastAdmissionError: candidate.lastAdmissionError.slice(0, 240) } : {}),
+    ...(candidate.launchAccountId ? { launchAccountId: candidate.launchAccountId } : {}),
     retryAt: new Date(retryAt).toISOString(),
     accountId: candidate.accountId,
     locale: candidate.locale,
@@ -4095,6 +4113,8 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     ...(value.identityWaveTitleBackfill === true ? { identityWaveTitleBackfill: true as const } : {}),
     pendingOrchestratorSeatIdentity: normalizePendingOrchestratorSeatIdentity(value.pendingOrchestratorSeatIdentity),
     transport: value.transport === "tmux" || value.transport === "structured" ? value.transport : null,
+    hostSetupStartedAt: typeof value.hostSetupStartedAt === "string" && Number.isFinite(Date.parse(value.hostSetupStartedAt))
+      ? value.hostSetupStartedAt : undefined,
     admissionOwner: value.admissionOwner
       && Number.isInteger(value.admissionOwner.pid)
       && value.admissionOwner.pid > 0
@@ -7116,7 +7136,7 @@ export class AgentRegistry {
     });
   }
 
-  /** Atomically publishes or refreshes every durable part of a queued pin,
+  /** Atomically publishes or refreshes every durable part of a queued launch,
       including the card's deadline copy. A crash can therefore expose either
       the prior complete queue or the next complete queue, never a title-only
       receipt that pretends to be recoverable. */
@@ -7134,7 +7154,7 @@ export class AgentRegistry {
         || receipt.state !== "starting"
         || receipt.key
         || receipt.pane
-        || !receipt.accountPin
+        || (!receipt.accountPin && !(receipt.transport === "structured" && normalized.admissionDeadlineAt))
         || !receipt.accountId
         || normalized.accountId !== receipt.accountId
         || normalized.spec.engine !== receipt.engine
@@ -7144,6 +7164,42 @@ export class AgentRegistry {
       receipt.queuedPinnedSpawn = normalized;
       receipt.launchProfile = emptyLaunchProfile({ ...receipt.launchProfile, title: queuedTitle }, this.mcpGrantPolicy);
       return clone(receipt);
+    });
+  }
+
+  /** Defer unbound work and release its lease atomically. A later owner wins. */
+  deferStructuredSpawnAdmission(launchId: string, owner: ProcessIdentity, now: number, reason: string): boolean {
+    return this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      const queued = receipt?.queuedPinnedSpawn;
+      if (!queued?.admissionDeadlineAt || receipt.transport !== "structured"
+        || receipt.state !== "starting" || receipt.key || receipt.pane
+        || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)
+        || Date.parse(queued.admissionDeadlineAt) <= now) return false;
+      queued.retryAt = new Date(Math.min(now + 250, Date.parse(queued.admissionDeadlineAt))).toISOString();
+      queued.lastAdmissionError = reason.slice(0, 240);
+      receipt.admissionOwner = null;
+      return true;
+    });
+  }
+
+  /** The acknowledged runtime command now holds the payload. Retire admission
+      replay before host setup can create an engine whose cleanup is uncertain. */
+  beginStructuredHostSetup(launchId: string, owner: ProcessIdentity, startedAt: number): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt || receipt.state !== "starting" || receipt.key || receipt.pane
+        || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
+        throw new Error("structured spawn admission ownership changed");
+      }
+      if (receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+        receipt.launchProfile = emptyLaunchProfile({
+          ...receipt.launchProfile,
+          title: receipt.queuedPinnedSpawn.spec.launchProfile?.title,
+        }, this.mcpGrantPolicy);
+        receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
+        receipt.queuedPinnedSpawn = null;
+      }
     });
   }
 
@@ -7519,6 +7575,14 @@ export class AgentRegistry {
       receipt.queuedPinnedSpawn = null;
     }
 
+    // The structured launcher supplies the host's account at staging; the
+    // receipt keeps the requested pin. Later evidence retains this operation's
+    // recorded account rather than choosing another one from a snapshot.
+    let actualAccountId = receipt.accountId;
+    if (receipt.transport === "structured" && entry.structuredHostOperationId === launchId) {
+      actualAccountId = prior?.structuredHostOperationId === launchId && prior.artifactPath === entry.artifactPath
+        ? prior.accountId : entry.accountId ?? receipt.accountId;
+    }
     const createdAt = now();
     const conversation = existingConversation ?? {
       id: receipt.conversationId,
@@ -7581,7 +7645,7 @@ export class AgentRegistry {
       if (continued) {
         if (!conversation.continuityPaths.includes(continued.path)) conversation.continuityPaths.push(continued.path);
         continued.path = entry.artifactPath;
-        continued.accountId = receipt.accountId ?? continued.accountId;
+        continued.accountId = actualAccountId ?? continued.accountId;
         continued.launchProfile = { ...continued.launchProfile, ...receipt.launchProfile };
       } else {
         const previous = conversation.generations.at(-1);
@@ -7589,7 +7653,7 @@ export class AgentRegistry {
         conversation.generations.push({
           id: nativeId,
           path: entry.artifactPath,
-          accountId: receipt.accountId,
+          accountId: actualAccountId,
           launchProfile: receipt.launchProfile,
           historyHash: null,
           host: null,
@@ -7627,7 +7691,7 @@ export class AgentRegistry {
       conversation.generations.push({
         id: nativeGenerationId(entry.artifactPath),
         path: entry.artifactPath,
-        accountId: receipt.accountId,
+        accountId: actualAccountId,
         launchProfile: receipt.launchProfile,
         historyHash: null,
         host: null,
@@ -7663,7 +7727,7 @@ export class AgentRegistry {
 
     const full: AgentRegistryEntry = {
       ...entry,
-      accountId: receipt.accountId,
+      accountId: actualAccountId,
       launchProfile: receipt.launchProfile,
       updatedAt: createdAt,
     };
@@ -7835,9 +7899,10 @@ export class AgentRegistry {
         storedEvidence = entry;
       }
       if (storedEvidence && (storedEvidence.structuredHost?.process || storedEvidence.claimOwner)
-        && receipt.accountId !== storedEvidence.accountId) {
-        // Settlement attributes an entry to the receipt's birth account. A
-        // stale or unknown account cannot rebind an already-owned writer.
+        && receipt.accountId !== storedEvidence.accountId
+        && (receipt.transport !== "structured" || storedEvidence.structuredHostOperationId !== launchId)) {
+        // Only this launch's staged writer can retain an admitted fallback.
+        // A stale receipt cannot rebind another operation's owned writer.
         return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
       }
       /* Runtime snapshots prove delivery and session identity, while the
@@ -8120,7 +8185,7 @@ export class AgentRegistry {
         // Recovery's journal read yielded. The current receipt and admission
         // owner decide inside this mutation, before any runtime failure write.
         const { now: recoveryNow, timeoutMs } = options.startingRecovery;
-        const createdAt = Date.parse(receipt.createdAt);
+        const createdAt = structuredSetupStartedAt(receipt);
         const withinSetupBound = !Number.isFinite(createdAt) || recoveryNow - createdAt < timeoutMs;
         if (receipt.state !== "starting" || receipt.key || receipt.queuedPinnedSpawn
           || (withinSetupBound && receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) {

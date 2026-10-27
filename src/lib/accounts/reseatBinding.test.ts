@@ -90,3 +90,13 @@ test("a bound project with no healthy successor is reported as fenced, never as 
   expect(bound.kind).toBe("fenced");
   expect(unbound.kind).toBe("none");
 });
+
+test("reseat spends primary capacity before fallback and returns after recovery", () => {
+  const allowed = ACCOUNTS.map(account => account.id);
+  const pick = (primaryUsage: number) => chooseProjectReseatTarget("acct-alpha",
+    [observation("acct-alpha", 100), observation("acct-beta", primaryUsage), observation("acct-gamma", 0)],
+    ACCOUNTS, allowed, NOW, undefined, ["acct-gamma"]);
+  expect(pick(32)).toMatchObject({ kind: "target", target: { accountId: "acct-beta" } });
+  expect(pick(100)).toMatchObject({ kind: "target", target: { accountId: "acct-gamma" } });
+  expect(pick(0)).toMatchObject({ kind: "target", target: { accountId: "acct-beta" } });
+});

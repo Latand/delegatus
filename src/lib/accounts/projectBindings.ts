@@ -46,6 +46,7 @@ export interface AccountProjectBinding {
   accountId: string;
   project: string;
   createdAt: string;
+  fallback?: boolean;
 }
 
 interface BindingFile {
@@ -85,11 +86,13 @@ function bindingList(value: unknown): AccountProjectBinding[] | null {
       || typeof record.accountId !== "string" || !record.accountId.trim()
       || typeof record.project !== "string" || !record.project.trim()
       || typeof record.createdAt !== "string" || !record.createdAt.trim()) return null;
+    if (record.fallback !== undefined && typeof record.fallback !== "boolean") return null;
     entries.push({
       engine: record.engine,
       accountId: record.accountId,
       project: record.project,
       createdAt: record.createdAt,
+      fallback: record.fallback === true,
     });
   }
   return entries;
@@ -244,6 +247,7 @@ export type BindingMutationFailure =
   | "INVALID_ENGINE"
   | "INVALID_ACCOUNT"
   | "INVALID_PROJECT"
+  | "NOT_BOUND"
   /** The record on disk is damaged, so this mutation refused to read it, and
       refused to write over it. Its own failure because the repair is the
       operator's and nothing else will do: no launch, reseat or switch selects
@@ -357,6 +361,8 @@ export function bindAccountToProject(
   accountId: unknown,
   project: unknown,
   now: () => string = () => new Date().toISOString(),
+  fallback?: boolean,
+  existingOnly = false,
 ): BindingMutationResult {
   const input = normalized(engine, accountId, project);
   /* Validated before the lock: a malformed request is refused on its own
@@ -365,17 +371,21 @@ export function bindAccountToProject(
   return inRecordTransaction(() => {
     const current = readBindings();
     const existing = current.some((binding) => sameBinding(binding, input.engine, input.accountId, input.project));
-    if (!existing) {
-      const next = [...current, { engine: input.engine, accountId: input.accountId, project: input.project, createdAt: now() }];
+    if (existingOnly && !existing) return { ok: false, code: "NOT_BOUND", message: "binding does not exist", bindings: accountProjectBindings() };
+    const changed = !existing || (fallback !== undefined && current.some(binding => sameBinding(binding, input.engine, input.accountId, input.project) && (binding.fallback === true) !== fallback));
+    if (changed) {
+      const next = existing
+        ? current.map(binding => sameBinding(binding, input.engine, input.accountId, input.project) ? { ...binding, fallback } : binding)
+        : [...current, { engine: input.engine, accountId: input.accountId, project: input.project, createdAt: now(), fallback: fallback === true }];
       if (!writeBindings(next)) {
         return { ok: false, code: "STORE_ERROR", message: "the binding could not be written", bindings: accountProjectBindings() };
       }
     }
     const confirmed = accountProjectBindings();
-    if (!confirmed.some((binding) => sameBinding(binding, input.engine, input.accountId, input.project))) {
+    if (!confirmed.some((binding) => sameBinding(binding, input.engine, input.accountId, input.project) && (fallback === undefined || binding.fallback === fallback))) {
       return { ok: false, code: "NOT_CONFIRMED", message: "the binding is not present in the record read back", bindings: confirmed };
     }
-    return { ok: true, changed: !existing, bindings: confirmed };
+    return { ok: true, changed, bindings: confirmed };
   });
 }
 
@@ -440,6 +450,14 @@ export function allowedAccountIdsForProject(
   const inherited = workspaceDefaultsForProject(key)?.accounts[engine];
   if (allowed.length) return [...new Set(allowed)].filter(id => !inherited?.length || inherited.includes(id)).sort();
   return inherited?.length ? [...inherited] : null;
+}
+
+/** Fallback status belongs to the binding, never to the account globally. */
+export function fallbackAccountIdsForProject(project: string | null, engine: BindingEngine,
+  bindings: readonly AccountProjectBinding[] = readBindings()): string[] {
+  const key = project?.trim() ? bindingKey(project) : "";
+  return bindings.filter(binding => binding.engine === engine && binding.project === key && binding.fallback === true)
+    .map(binding => binding.accountId);
 }
 
 /**

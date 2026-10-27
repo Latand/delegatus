@@ -5442,10 +5442,13 @@ describe("CodexAppServerHost", () => {
     });
     const receipt = await adopted[0]!.host.send({ id: "persist-turn", text: "start" });
     expect(receipt.outcome).toBe("turn-started");
-    expect(registry.snapshot().entries["codex:adopted-thread"]?.structuredHost).toMatchObject({
-      eventCursor: 14,
+    const persistedTurn = registry.snapshot().entries["codex:adopted-thread"]?.structuredHost;
+    expect(persistedTurn).toMatchObject({
       activeTurnRef: "turn-1",
     });
+    // A following cursor event can coalesce with the turn's material write.
+    expect(persistedTurn!.eventCursor).toBeGreaterThanOrEqual(14);
+    expect(persistedTurn!.eventCursor).toBeLessThanOrEqual((await adopted[0]!.host.health()).eventCursor);
     expect(eventStore.load("adopted-thread").at(-1)?.seq).toBe(15);
     server.request("persist-attention", "item/commandExecution/requestApproval", { command: "date" });
     await Bun.sleep(0);

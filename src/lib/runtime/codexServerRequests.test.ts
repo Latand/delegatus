@@ -13,7 +13,7 @@ const questions = { ...identity, isBlocking: true, questions: [
   { id: "second", header: "Second", question: "Why?", isOther: true, isSecret: false, options: null },
 ] };
 
-describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0"])("Codex %s request boundary", version => {
+describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0"])("Codex %s request boundary", version => {
   const protocol = new CodexPinnedProtocol(version);
   test("decodes the complete request and refuses missing identity or malformed ingress", () => {
     expect(decodeCodexServerRequest(protocol, 7, command, approval)).toMatchObject({ id: 7, params: identity });
