@@ -91,7 +91,7 @@ test.each(["unhosted", "missing"] as const)
   } finally { await r.f.end(); }
 });
 
-test.each(["deliver", "operator input", "operator stop", "lost ACK"] as const)
+test.each(["deliver", "operator input", "operator stop", "report", "control", "identity", "lost ACK"] as const)
 ("restore continuation uses durable structured admission: %s", async scenario => {
   const r = await restoredStage();
   const { RuntimeJournal } = await import("@/runtime-host/journal");
@@ -117,6 +117,14 @@ test.each(["deliver", "operator input", "operator stop", "lost ACK"] as const)
           r.write();
         }
         if (scenario === "operator stop") r.setStopped();
+        if (["report", "control", "identity"].includes(scenario)) {
+          const lane = loadPipelines()[0]!;
+          const attempt = lane.runs[0]!.attempts[0]!;
+          if (scenario === "report") attempt.report = recoveryReport(r.ports.now());
+          if (scenario === "control") lane.controlGeneration = "operator-control-generation";
+          if (scenario === "identity") attempt.conversationId = "conversation_replacement";
+          savePipelines([lane]);
+        }
       }
       return journal.readSession({ conversationId: r.f.attempt.conversationId! });
     },
@@ -430,20 +438,25 @@ test.each(["prompt", "stop", "pending", "active", "native tool work", "account",
   } finally { await r.f.end(); }
 });
 
-test.each(["report", "control", "identity"] as const)("a retained queue callback rereads persisted %s authority", async change => {
+test.each(["unchanged", "report", "control", "identity"] as const)("a live queue callback rereads persisted %s authority", async change => {
   const r = await restoredStage();
   try {
+    r.ports.resumeSeveredTurn = async input => {
+      const lane = loadPipelines()[0]!;
+      const attempt = lane.runs[0]!.attempts[0]!;
+      if (change === "report") attempt.report = recoveryReport(r.ports.now());
+      if (change === "control") lane.controlGeneration = "operator-control-generation";
+      if (change === "identity") attempt.conversationId = "conversation_replacement";
+      if (change !== "unchanged") savePipelines([lane]);
+      const before = loadPipelines()[0]!;
+      const allowed = await input.continuationAllowed!();
+      expect(allowed).toBe(change === "unchanged");
+      expect(loadPipelines()[0]).toEqual(before);
+      if (allowed) r.sends.push(input);
+      return allowed;
+    };
     await tickPipelines([], r.ports);
-    expect(r.sends).toHaveLength(1);
-    const lane = loadPipelines()[0]!;
-    const attempt = lane.runs[0]!.attempts[0]!;
-    if (change === "report") attempt.report = recoveryReport(r.ports.now());
-    if (change === "control") lane.controlGeneration = "operator-control-generation";
-    if (change === "identity") attempt.conversationId = "conversation_replacement";
-    savePipelines([lane]);
-    const before = loadPipelines()[0]!;
-    expect(await r.sends[0]!.continuationAllowed!()).toBe(false);
-    expect(loadPipelines()[0]).toEqual(before);
+    expect(r.sends).toHaveLength(change === "unchanged" ? 1 : 0);
   } finally { await r.f.end(); }
 });
 
