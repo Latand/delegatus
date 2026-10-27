@@ -23,6 +23,8 @@ class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 function bindDomGlobals() {
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
     Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
     sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
