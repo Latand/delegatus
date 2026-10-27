@@ -524,12 +524,14 @@ for (const backend of ["memory", "file", "sqlite"] as const) for (const acknowle
       if (backend !== "memory") {
         const input = path.join(root, `expired-input-${backend}-${acknowledged}.json`);
         fs.writeFileSync(input, JSON.stringify({ backend, file, args, caller, project: project.project,
-          server: path.resolve("src/lib/mcp/server.ts"), bindings: path.resolve("src/lib/mcp/bindings.ts") }));
+          server: path.resolve("src/lib/mcp/server.ts"), bindings: path.resolve("src/lib/mcp/bindings.ts"), registry: path.resolve("src/lib/agent/registry.ts") }));
         const source = `const input = await Bun.file(process.env.LLV_TEST_EXPIRY_INPUT).json();
           const classes = await import(input.server);
           const { viewerMcpBindings, viewerMcpRecoverableTools } = await import(input.bindings);
+          const { agentRegistry } = await import(input.registry);
           const store = input.backend === "file" ? new classes.FileMcpReceiptStore(input.file) : new classes.SqliteMcpReceiptStore(input.file);
-          const domain = { callerAttribution: () => ({ kind: "agent", conversationId: input.caller, role: "orchestrator" }),
+          const domain = { registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+            callerAttribution: () => ({ kind: "agent", conversationId: input.caller, role: "orchestrator" }),
             attentionAuthority: () => ({ kind: "worker", conversationId: input.caller }),
             authorizedSeats: () => [{ project: input.project, conversationId: input.caller, path: null }], recoveryPredecessors: () => [] };
           let posts = 0;
