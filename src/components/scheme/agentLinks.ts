@@ -1,4 +1,6 @@
-import type { Flow, FlowState, Round } from "@/lib/flows/types";
+import { isDirectGroup } from "@/components/flows/reviewGroup";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { FlowState, Round } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { SchemeRect } from "@/components/scheme/layout";
 
@@ -231,7 +233,7 @@ export function deriveFlowLinks(flows: Flow[], anchorOf: (pathOrKey: string) => 
       from,
       to,
       leg: activeLoopLeg(flow),
-      flow: { flow, round: round?.n ?? 0, phase: flowLinkPhase(flow.state) },
+      flow: { flow, round: round?.n ?? 0, phase: isDirectGroup(flow) ? flowLinkPhase(flow.state) : "done" },
     });
   }
   return links;
