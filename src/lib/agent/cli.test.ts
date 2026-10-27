@@ -50,9 +50,13 @@ test("delegated Codex specs omit skills in terminal and structured launches; ope
       expect(config.skills).toEqual(delegated ? { include_instructions: false } : undefined);
       expect(profile.omitSkillsInstructions === true).toBe(delegated);
     }
-    const entry = { path: "skills-rollout.jsonl", engine: "codex", root: "codex-sessions",
+    const entry: FileEntry = { path: "skills-rollout.jsonl", engine: "codex", root: "codex-sessions",
+      name: "skills-rollout.jsonl", project: "viewer", title: "Skills launch",
+      kind: "session", fmt: "codex", parent: null, mtime: 1, size: 1,
+      activity: "idle", proc: null, pid: null, model: null,
+      pendingQuestion: null, waitingInput: null,
       durableLineage: { kind: "spawn", role: null, parentConversationId: null,
-        depth: delegated ? 1 : 0, reviewsConversationId: null, memberships: [] } } as FileEntry;
+        depth: delegated ? 1 : 0, reviewsConversationId: null, memberships: [] } };
     for (const profile of [fresh.launchProfile!, { ...fresh.launchProfile!, omitSkillsInstructions: undefined }]) {
       const attached = resolveAttachCommand(entry.path, {
         files: [entry], launchProfileForPath: () => profile,

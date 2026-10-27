@@ -168,7 +168,7 @@ export interface LaunchAttachReceipt {
   accountId: string | null;
   agentRole?: string | null;
   key: { engine: AgentEngine; sessionId: string } | null;
-  launchProfile: { readOnly?: boolean | null; permissionMode?: string | null; sandbox?: "full" | "restricted" | null; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
+  launchProfile: { omitSkillsInstructions?: boolean; readOnly?: boolean | null; permissionMode?: string | null; sandbox?: "full" | "restricted" | null; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
   transport: SpawnReceipt["transport"];
   state: SpawnReceipt["state"];
   purpose: SpawnReceipt["purpose"];
