@@ -4,17 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fromJSONSchema, type ZodType } from "zod";
-import current from "./protocol/0.163.0/experimental.json";
-import currentStable from "./protocol/0.163.0/stable.json";
-import currentManifest from "./protocol/0.163.0/manifest.json";
-import prior from "./protocol/0.162.1/experimental.json";
-import priorStable from "./protocol/0.162.1/stable.json";
+import currentManifest from "./protocol/0.164.0/manifest.json";
+import recentManifest from "./protocol/0.163.0/manifest.json";
 import priorManifest from "./protocol/0.162.1/manifest.json";
-import previous from "./protocol/0.159.0/experimental.json";
-import previousStable from "./protocol/0.159.0/stable.json";
 import previousManifest from "./protocol/0.159.0/manifest.json";
-import oldest from "./protocol/0.154.0/experimental.json";
-import oldestStable from "./protocol/0.154.0/stable.json";
 import oldestManifest from "./protocol/0.154.0/manifest.json";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
@@ -25,12 +18,17 @@ type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boo
 // Generated JSON includes namespace maps and boolean schemas. Navigation uses
 // this small view; the response/request validator compiles the complete shape.
 function generatedSchema(value: unknown): Schema { return value as Schema; }
+// Literal requires retain the artifacts in Bun/webpack bundles while keeping
+// TypeScript from inferring the entire generated graph for every retained pin.
+/* eslint-disable @typescript-eslint/no-require-imports -- Generated schemas are runtime-validated data. */
 const pins = [
-  { schema: generatedSchema(current), stable: generatedSchema(currentStable), manifest: currentManifest },
-  { schema: generatedSchema(prior), stable: generatedSchema(priorStable), manifest: priorManifest },
-  { schema: generatedSchema(previous), stable: generatedSchema(previousStable), manifest: previousManifest },
-  { schema: generatedSchema(oldest), stable: generatedSchema(oldestStable), manifest: oldestManifest },
+  { schema: generatedSchema(require("./protocol/0.164.0/experimental.json")), stable: generatedSchema(require("./protocol/0.164.0/stable.json")), manifest: currentManifest },
+  { schema: generatedSchema(require("./protocol/0.163.0/experimental.json")), stable: generatedSchema(require("./protocol/0.163.0/stable.json")), manifest: recentManifest },
+  { schema: generatedSchema(require("./protocol/0.162.1/experimental.json")), stable: generatedSchema(require("./protocol/0.162.1/stable.json")), manifest: priorManifest },
+  { schema: generatedSchema(require("./protocol/0.159.0/experimental.json")), stable: generatedSchema(require("./protocol/0.159.0/stable.json")), manifest: previousManifest },
+  { schema: generatedSchema(require("./protocol/0.154.0/experimental.json")), stable: generatedSchema(require("./protocol/0.154.0/stable.json")), manifest: oldestManifest },
 ];
+/* eslint-enable @typescript-eslint/no-require-imports */
 // Pure compiled schemas are shared across hosts; this cache never retains RPC
 // payloads, accounts or process ownership.
 const validators = new Map<string, ZodType>();

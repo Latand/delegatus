@@ -961,3 +961,35 @@ test("cooperative preparation normalizes hot rows in bounded batches and keeps t
   }
   expect(prepared.file.deliveryOperationOwners).toEqual(complete.deliveryOperationOwners);
 }, 30_000);
+
+test.each([256, 257, 512])("a %i row hot journal batch retains the validated cold projection", count => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let i = 0; i < count; i++) {
+      const id = `hot-batch-${i}`;
+      file.receipts[id] = { ...template, launchId: id };
+    }
+    file.receipts["cold-batch"] = { ...template, launchId: "cold-batch", state: "failed",
+      createdAt: "2020-01-01T00:00:00Z", error: "retained history" };
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const held = reader.readOnlySnapshot();
+  writer.mutate(file => {
+    for (let i = 0; i < count; i++) file.receipts[`hot-batch-${i}`]!.error = "updated";
+  }, false);
+  const started = performance.now();
+  const updated = reader.readOnlySnapshot();
+  for (let i = 0; i < count; i++) {
+    expect(updated.file.receipts[`hot-batch-${i}`]!.error).toBe("updated");
+    expect(held.file.receipts[`hot-batch-${i}`]!.error).toBeNull();
+  }
+  expect(updated.file.receipts["cold-batch"]!.error).toBe("retained history");
+  // A hot-only batch must never walk the cold headers, at any batch size.
+  expect(performanceSpans.snapshot(started).records.filter(record =>
+    performanceSites[record.site] === "registry.headers")).toHaveLength(0);
+  writer.mutate(file => { file.receipts["cold-batch"]!.error = "archive changed"; }, false);
+  expect((reader.readOnlySnapshot()).file.receipts["cold-batch"]!.error).toBe("archive changed");
+  expect(held.file.receipts["cold-batch"]!.error).toBe("retained history");
+});

@@ -163,6 +163,9 @@ describe("global merge admission", () => {
   function spentReviewLane(id: string): Pipeline {
     const lane = completedLane(id);
     lane.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
+    lane.stages[1]!.next = "ship";
+    lane.stages.push({ ...lane.stages[0]!, id: "ship", next: null });
+    lane.runs.push({ stageId: "ship", attempts: [{ ...lane.runs[0]!.attempts[0]! }] });
     lane.stages.push({ ...lane.stages[0]!, id: "fix", next: null });
     Object.assign(lane.runs[1]!.attempts[0]!, { state: "failed", budgetSpent: true });
     lane.runs.push({ stageId: "fix", attempts: [{ ...lane.runs[0]!.attempts[0]!,
@@ -995,8 +998,9 @@ describe("refresh retry recovery", () => {
           return { error: "fixture refresh refused" };
         },
       });
+      const before = loadPipelines().find(lane => lane.id === "refresh-peer")?.merge?.reason;
       await sweepAutoMerge(ports);
-      console.log(JSON.stringify({ reads, starts, lanes: loadPipelines().map(lane => ({ id: lane.id, merge: lane.merge })) }));
+      console.log(JSON.stringify({ before, reads, starts, lanes: loadPipelines().map(lane => ({ id: lane.id, merge: lane.merge })) }));
     `;
     for (const state of ["running", "completed", failure] as const) {
       const failed = state === failure;
@@ -1016,6 +1020,8 @@ describe("refresh retry recovery", () => {
       const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect(code, error).toBe(0);
       const result = JSON.parse(output);
+      const fifoReason = "queued behind PR #7 (pipeline refresh-child)";
+      if (state === "completed") expect(result.before).toBe(`${fifoReason}; waiting for repository capacity held by refresh refresh-child`);
       expect(result.reads).toEqual(failed ? [8] : state === "completed" ? [7] : []);
       expect(result.starts).toEqual(failed ? [8] : []);
       if (state === "completed") expect(result.lanes.find((lane: Pipeline) => lane.id === "refresh-child").merge)
@@ -1027,7 +1033,8 @@ describe("refresh retry recovery", () => {
       }
       expect(result.lanes.find((lane: Pipeline) => lane.id === peer.id).merge).toMatchObject(failed
         ? { state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused", reviewedHead: HEAD }
-        : { state: "queued", reviewedHead: HEAD, head: null });
+        : { state: "queued", reviewedHead: HEAD, head: null,
+          reason: fifoReason + (state === "running" ? "; waiting for repository capacity held by refresh refresh-child" : "") });
     }
   });
 

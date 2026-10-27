@@ -35,6 +35,27 @@ test("relationship-only consumers retain paths across metadata refreshes and ret
   }
 });
 
+test("a catalog metadata answer does not rebuild the dashboard relationship model (#2218)", () => {
+  const derive = createProjectDashboardDerivation();
+  const root = file("/repo/root.jsonl", { conversationId: "root", activity: "live" });
+  const child = file("/repo/child.jsonl", { conversationId: "child", parent: root.path, activity: "live" });
+  const firstCatalog = [root, child];
+  const relationshipCatalog = derive.relationshipFiles(firstCatalog);
+  const groups = derive.baseGroups(relationshipCatalog, "atlas", { now: NOW });
+
+  // Polling creates fresh row objects even when only transcript byte counts and
+  // mtimes advanced. Those payload fields must not invalidate the topology that
+  // feeds descendant, flow-membership, and branch-group derivations.
+  const polledCatalog = firstCatalog.map((row, index) => ({ ...row, size: row.size + index + 1, mtime: row.mtime + 1 }));
+  const nextRelationshipCatalog = derive.relationshipFiles(polledCatalog);
+  const nextGroups = derive.baseGroups(nextRelationshipCatalog, "atlas", { now: NOW });
+
+  expect(nextRelationshipCatalog).toBe(relationshipCatalog);
+  expect(nextGroups).toBe(groups);
+  expect(nextGroups.map(group => group.columns.flatMap(column => column.file.path)))
+    .toEqual([[root.path, child.path]]);
+});
+
 test("equal task stacks retain identity while recency, due dates and explicit expansion remain live", () => {
   const derive = createProjectDashboardDerivation();
   const tasks: BoardTask[] = [{ id: "stack", project: "atlas", text: "Stacked work", status: "done", placement: "pinned", pos: { x: 0, y: 0 },

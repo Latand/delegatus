@@ -31,7 +31,8 @@ const busyProject = (await import("@/lib/scanner/describe")).projectForCwd(proce
 const { agentRegistry } = await import("@/lib/agent/registry");
 const pipelineStore = await import("@/lib/pipelines/store");
 const { loadPipelines, withPipelineMutation } = pipelineStore;
-const { getPipelines, tickPipelines } = await import("@/lib/pipelines/engine");
+const { getPipelines } = await import("@/lib/pipelines/engine");
+const { tickPipelinesController } = await import("@/lib/pipelines/controllerPass");
 const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
 const { isoNow } = await import("@/lib/tasks/helpers");
 const { mutateTasks } = await import("@/lib/tasks/store");
@@ -182,9 +183,9 @@ test("a create that meets a held lease is queued under its id and stored exactly
   expect(retried).toMatchObject({ ok: true, replayed: true, pipelineId });
 
   /* The controller's next pass stores it, and a second pass stores nothing more. */
-  await tickPipelines([]);
+  await tickPipelinesController([]);
   expect(pipelinesNamed(task)).toEqual([pipelineId]);
-  await tickPipelines([]);
+  await tickPipelinesController([]);
   expect(pipelinesNamed(task)).toEqual([pipelineId]);
 });
 
@@ -202,11 +203,12 @@ test("a queued create the controller refuses when it stores it answers that refu
   expect(waiting).toMatchObject({ ok: false, details: { code: "pipeline_queued", pipelineId, queuedCreation: { state: "queued" } } });
 
   /* The store turns it away for a reason no retry changes. */
+  const reason = "idempotency_conflict: creation arguments changed";
   const refusal = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementationOnce(async () => {
-    throw new Error("idempotency_conflict: creation arguments changed");
+    throw new Error(reason);
   });
   try {
-    await tickPipelines([]);
+    await tickPipelinesController([]);
   } finally {
     refusal.mockRestore();
   }
@@ -218,10 +220,10 @@ test("a queued create the controller refuses when it stores it answers that refu
     details: {
       code: "pipeline_creation_refused",
       pipelineId,
-      queuedCreation: { state: "refused", error: "idempotency_conflict: creation arguments changed" },
+      queuedCreation: { state: "refused", error: reason },
     },
   });
-  expect(read.ok ? "" : read.error).toContain("refused when the controller stored it");
+  expect(read.ok ? "" : read.error).toContain(reason);
 });
 
 test("a completed create still replays its receipt under the same id", async () => {
@@ -270,7 +272,7 @@ test("the bounded wait for the lock cannot hang a request", async () => {
   expect(elapsed).toBeGreaterThanOrEqual(300);
   expect(answered).toMatchObject({ ok: true, queued: true });
   expect(pipelinesNamed("bounded wait")).toEqual([]);
-  await tickPipelines([]);
+  await tickPipelinesController([]);
   expect(pipelinesNamed("bounded wait")).toHaveLength(1);
 });
 
@@ -368,7 +370,7 @@ test("a create during a deploy's write fence is queued and stored by the release
 
     /* The successor activates, and its controller's next pass stores it. */
     publishHotStateAuthority(stateDir, "sqlite", revision, { activationReadyAt: new Date().toISOString() });
-    await tickPipelines([]);
+    await tickPipelinesController([]);
 
     expect(pipelinesNamed(task)).toEqual([pipelineId]);
     expect(loadPipelines().find((pipeline) => pipeline.id === pipelineId)).toMatchObject({

@@ -453,7 +453,9 @@ also run the shared supply-chain check; CI audits weekly and by dispatch.
 
 Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
-(default `8G`), and a default Node heap of 6144 MB. The slot locks live in
+(default `14G`), and a default Node heap of 11264 MiB (11 GiB). The pipeline
+publisher passes both defaults to hooks on older branches; explicit caller
+settings take precedence. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.

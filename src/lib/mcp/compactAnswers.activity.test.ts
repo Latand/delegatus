@@ -10,3 +10,9 @@ test("compact activity marks verification and omits unmeasured silence", () => {
   const checked = compactLiveness({ ...snapshot, conversations: [{ ...row, evidenceSource: "transcript", verified: true, silentForMs: 10_000, activity: { state: "checking", check: "bun test", idleForMs: null } }] } as unknown as AgentLivenessSnapshot).conversations[0];
   expect(checked).toMatchObject({ verified: true, silentForMs: 10_000, activity: { state: "checking", check: "bun test" } });
 });
+
+test("compact activity retains the count of unresolved project rows", () => {
+  const snapshot = { count: 0, conversations: [], stalledCount: 0, stalledConfirmedCount: 0,
+    observedAt: "2026-10-26T14:29:00Z", unresolvedProjectCount: 2 } as unknown as AgentLivenessSnapshot;
+  expect(compactLiveness(snapshot)).toMatchObject({ count: 0, unresolvedProjectCount: 2 });
+});
