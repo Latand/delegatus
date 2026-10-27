@@ -2453,11 +2453,34 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
   return generations[0].path;
 }
 
+/** Bind creator lineage to the actual caller's current generation before the
+ * engine maps a live deputy's own generation to its seat's ownership. */
+function assertExplicitPipelineSource(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): void {
+  if (args.src === undefined) return;
+  refuseSpawnDeniedPipelineCaller(dependencies, args.src);
+  assertPipelineSeatAuthority(dependencies, args.src);
+  const authority = authorityOf(dependencies);
+  if (authority.kind === "unidentified") {
+    throw new McpToolRefusal("pipeline creation requires an authenticated caller", { code: "caller_unidentified", status: 403 });
+  }
+  const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
+  const conversation = authority.conversationId
+    ? lookup.conversation(authority.conversationId as `conversation_${string}`) : null;
+  const current = conversation?.generations.at(-1);
+  if (!current?.path || current.archivedAt || typeof args.src !== "string" || args.src.trim() !== current.path) {
+    throw new McpToolRefusal("src must identify the authenticated caller's current transcript generation", { code: "caller_source_mismatch", status: 403 });
+  }
+  // A capability also pins the receipt's exact generation, as inference does.
+  if (callerCapability()) inferredPipelineSource(dependencies);
+}
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (dependencies) {
+    assertExplicitPipelineSource(args, dependencies);
     args = await namedLaunchProject(args, dependencies, "repoDir");
     refuseSpawnDeniedPipelineCaller(dependencies, args.src);
     assertPipelineSeatAuthority(dependencies, args.src);
+    assertExplicitPipelineSource(args, dependencies);
   }
   refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
@@ -8135,7 +8158,9 @@ export function viewerMcpRecoverableTools(
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
+        assertExplicitPipelineSource(args, domainDependencies);
         args = await namedLaunchProject(args, domainDependencies, "repoDir");
+        assertExplicitPipelineSource(args, domainDependencies);
         const project = projectForCwd(required(args, "repoDir"));
         refuseCrossProjectFromSeat("create_pipeline", () => project, args, domainDependencies);
         return { caller: recoveryCaller(domainDependencies),
@@ -8211,7 +8236,10 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true)),
     update_task: Object.assign((args: McpToolArgs) => updateBoardTask(args, domainDependencies), { prepareAdmission: admitTaskDuePatch }),
-    create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
+    create_pipeline: Object.assign(
+      (args: McpToolArgs, context?: McpToolCallContext) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
+      { prepareAdmission: (args: McpToolArgs) => assertExplicitPipelineSource(args, domainDependencies) },
+    ),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { canonicalizeReceiptArgs: (args: McpToolArgs) => {
