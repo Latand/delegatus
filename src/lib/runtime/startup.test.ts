@@ -182,7 +182,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     cwd: directory, accountId: "account", status: "dead", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
-  let options: { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
+  let options: { cleanMemory?: boolean; omitSkillsInstructions?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
   try {
     await adoptStructuredHostsAtStartup({
       registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
@@ -203,6 +203,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     fs.rmSync(directory, { recursive: true, force: true });
   }
   expect(options?.cleanMemory).toBe(true);
+  if (engine === "codex") expect(options?.omitSkillsInstructions).toBe(true);
   expect(options?.developerInstructions ?? options?.appendSystemPrompt ?? "").not.toContain("Read the latest transcript tail");
 });
 

@@ -1,5 +1,6 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
 import { withHostStopOrigin } from "./hostExit";
+import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
@@ -2668,10 +2669,11 @@ async function adoptStructuredHostsPass(
           storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
+        const omitSkillsInstructions = launchProfile?.omitSkillsInstructions === true || sessionOriginFor(conversation) === "delegated";
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: startupEnvironment };
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, omitSkillsInstructions, env: startupEnvironment };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = materializeStructuredHostAccess(
@@ -2691,6 +2693,7 @@ async function adoptStructuredHostsPass(
           allowSubagents: launchProfile?.allowSubagents ?? false,
           operatorDecisionForms: operatorDecisionFormsRequired(conversation?.agentRole, entry.artifactPath),
           cleanMemory: launchProfile?.cleanMemory === true,
+          omitSkillsInstructions,
           nativeMemoryEnabled,
           developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env, nativeMemoryEnabled }),
           mcpServers: launchProfile?.mcpServers ?? ["viewer"],

@@ -1,4 +1,5 @@
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { sessionOriginFor } from "./pluginAllowlist";
 /**
  * Composition of the "attach in your terminal" command (issue #247 item 2).
  *
@@ -68,6 +69,7 @@ export type AttachResolution =
 
 /** The registry facts a composed command must agree with. */
 export interface AttachLaunchProfile {
+  omitSkillsInstructions?: boolean;
   readOnly?: boolean | null;
   permissionMode?: string | null;
   sandbox?: "full" | "restricted" | null;
@@ -122,6 +124,11 @@ export function resolveAttachCommand(path: string, deps: AttachResolverDeps): At
   const effectiveCwd = profile?.cwd || target.entry.cwd || entry.cwd || null;
   const accountId = deps.accountIdForPath(target.entry.path);
   const spec = deps.resumeSpecFor(target.entry.root, target.entry.path, {
+    ...(target.entry.engine === "codex" && (profile?.omitSkillsInstructions === true || sessionOriginFor({
+      agentRole: target.entry.durableLineage?.role,
+      parentConversationId: target.entry.durableLineage?.parentConversationId,
+      delegationDepth: target.entry.durableLineage?.depth,
+    }) === "delegated") ? { omitSkillsInstructions: true } : {}),
     /* Same precedence for the runtime axes: an applied reconfigure is what the
        conversation runs on now, while `entry.model` is transcript provenance —
        resuming on the latter silently reverts the operator's model choice. */
@@ -209,6 +216,8 @@ export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolu
   const home = receipt.accountId ? deps.homeForAccount(receipt.engine, receipt.accountId) : null;
   if (!home) return { ok: false, error: "the launch account is unavailable for a terminal command", status: 409 };
   const spec = deps.resumeSpecForSession(receipt.engine, receipt.key.sessionId, receipt.cwd, home, {
+    ...(receipt.engine === "codex" && (receipt.launchProfile.omitSkillsInstructions === true || sessionOriginFor(receipt) === "delegated")
+      ? { omitSkillsInstructions: true } : {}),
     model: receipt.launchProfile.model,
     effort: receipt.launchProfile.effort,
     fast: receipt.launchProfile.fast,

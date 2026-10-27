@@ -900,10 +900,13 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     release: async () => {},
   };
   const cells: Array<AgentMemoryCell | null> = [];
-  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string; nativeMemoryEnabled?: boolean }) => {
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string; nativeMemoryEnabled?: boolean; omitSkillsInstructions?: boolean }) => {
     cells.push(options.memoryCell ?? null);
     expect(engine === "codex" ? options.developerInstructions : options.appendSystemPrompt).toContain(rule);
-    if (engine === "codex") expect(options.nativeMemoryEnabled).toBe(false);
+    if (engine === "codex") {
+      expect(options.nativeMemoryEnabled).toBe(false);
+      expect(options.omitSkillsInstructions).toBe(true);
+    }
     return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
   };
   const adopt = engine === "codex"
@@ -936,7 +939,7 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       host: engine === "codex"
         ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
         : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
-    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, allowSubagents: true, learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, allowSubagents: true, ...(engine === "codex" ? { omitSkillsInstructions: true } : {}), learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
   };
   const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
   Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });

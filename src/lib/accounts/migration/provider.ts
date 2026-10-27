@@ -2,6 +2,7 @@ import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileFor
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import path from "node:path";
 
 import { accountManager } from "@/lib/accounts/manager";
@@ -401,6 +402,9 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       codexHome: input.target.home,
       cleanMemory: input.profile.cleanMemory === true,
       nativeMemoryEnabled,
+      omitSkillsInstructions: input.profile.omitSkillsInstructions === true || sessionOriginFor(
+        input.conversationId ? input.registry.conversation(input.conversationId as ViewerConversationId) ?? {} : {},
+      ) === "delegated",
       developerInstructions,
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,

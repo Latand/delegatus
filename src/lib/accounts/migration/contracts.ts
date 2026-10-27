@@ -78,6 +78,8 @@ export interface LaunchProfile {
       clean role or review gate (src/lib/memory/eligibility.ts) and kept on
       every resume. Absent means memory is allowed. */
   cleanMemory?: boolean;
+  /** Delegated Codex launches omit the machine skills catalogue on every resume. */
+  omitSkillsInstructions?: boolean;
   /** Text-free selector, replayed from SQLite at every engine process start.
       reader "operator" marks the operator's own root conversation in Delegatus
       mode: it reads the project and machine rules under its own notice. */

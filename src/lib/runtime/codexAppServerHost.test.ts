@@ -950,6 +950,19 @@ test("Codex verifies Viewer tools from the opened thread", async () => {
   finally { if (host) await (host as CodexAppServerHost).release(); }
 });
 
+test.each([false, true])("skills policy reaches fresh and resumed Codex threads (omit=%s)", async (omitSkillsInstructions) => {
+  for (const resumed of [false, true]) {
+    const server = new FakeAppServer();
+    const options = { cwd: "/repo", omitSkillsInstructions,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+    const host = resumed ? await CodexAppServerHost.adopt("thread-149", options) : await CodexAppServerHost.start(options);
+    try {
+      const params = server.requests.find(request => request.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: Record<string, unknown> };
+      expect(params.config.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    } finally { await host.release(); }
+  }
+});
+
 test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
   const child = new FakeAppServer();
   child.beforeViewerStatus = () => {

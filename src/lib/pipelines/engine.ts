@@ -811,6 +811,7 @@ async function spawnPipelineAgent(
     throw new Error("pipeline stage runtime access does not match its effective role");
   }
   const specBase = freshSpecFor(input.role.engine, input.cwd, {
+    ...(input.role.engine === "codex" ? { omitSkillsInstructions: true } : {}),
     model: input.role.model,
     effort: input.role.effort,
     serviceTier,

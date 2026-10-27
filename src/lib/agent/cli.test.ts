@@ -11,6 +11,8 @@ import { resolveAttachCommand } from "./attachCommand";
 import { viewerMcpServerEnv } from "./spawnPolicy";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import type { FileEntry } from "@/lib/types";
+import { sessionOriginFor } from "./pluginAllowlist";
+import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cli-account-test-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
@@ -26,6 +28,42 @@ const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, resumeSpecForSession, with
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
+
+test("delegated Codex specs omit skills in terminal and structured launches; operator specs inherit", async () => {
+  const home = path.join(SANDBOX, "skills-home");
+  fs.mkdirSync(home, { recursive: true });
+  for (const origin of [
+    {}, { origin: { kind: "operator" } }, { agentRole: "builder" },
+    { agentRole: "reviewer" }, { parentConversationId: "conversation_parent" },
+    { origin: { kind: "agent" } },
+  ]) {
+    const delegated = sessionOriginFor(origin) === "delegated";
+    const options = { codexHome: home, omitSkillsInstructions: delegated };
+    const fresh = freshSpecFor("codex", SANDBOX, options);
+    const sessionId = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+    const resumed = resumeSpecForSession("codex", sessionId, SANDBOX, home, fresh.launchProfile!)!;
+    for (const spec of [fresh, resumed, await prepareAgentPublicationSpec(fresh)]) {
+      expect(spec.command.includes("skills.include_instructions=false")).toBe(delegated);
+      const profile = spec.launchProfile!;
+      const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, skills: { include_instructions: true } } },
+        profile.allowSubagents, profile.mcpServers, profile.plugins, "stdio", [], profile.cleanMemory, profile.omitSkillsInstructions);
+      expect(config.skills).toEqual(delegated ? { include_instructions: false } : undefined);
+      expect(profile.omitSkillsInstructions === true).toBe(delegated);
+    }
+    const entry = { path: "skills-rollout.jsonl", engine: "codex", root: "codex-sessions",
+      durableLineage: { kind: "spawn", role: null, parentConversationId: null,
+        depth: delegated ? 1 : 0, reviewsConversationId: null, memberships: [] } } as FileEntry;
+    for (const profile of [fresh.launchProfile!, { ...fresh.launchProfile!, omitSkillsInstructions: undefined }]) {
+      const attached = resolveAttachCommand(entry.path, {
+        files: [entry], launchProfileForPath: () => profile,
+        accountIdForPath: () => "account-a", accountLabelFor: () => "Account A",
+        resumeSpecFor: (_root, _pathname, input) => resumeSpecForSession("codex", sessionId, SANDBOX, home, input),
+      });
+      expect(attached.ok).toBe(true);
+      if (attached.ok) expect(attached.value.command.includes("skills.include_instructions=false")).toBe(delegated);
+    }
+  }
+});
 
 test("fresh and resumed terminal launches deny all native agent routes and future features", () => {
   const home = path.join(SANDBOX, "legacy");

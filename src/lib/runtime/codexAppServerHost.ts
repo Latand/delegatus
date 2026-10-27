@@ -227,6 +227,7 @@ export interface CodexAppServerHostOptions {
   operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
@@ -1637,6 +1638,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         viewerMcpTransportForLaunch(childEnv),
         features,
         options.cleanMemory === true,
+        options.omitSkillsInstructions === true,
       );
       const viewer = record(record(config.mcp_servers)?.viewer);
       provisional.viewerMcpTransport = viewer?.enabled === true

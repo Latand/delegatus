@@ -183,14 +183,27 @@ function launchAccount(engine: "claude" | "codex") {
 }
 
 async function launch(engine: "claude" | "codex", seatId: string | null, mcpServers?: string[],
-  overrides: Partial<SpawnCommandDependencies> = {}, clientAttemptId = `telegram_${crypto.randomUUID()}`) {
+  overrides: Partial<SpawnCommandDependencies> = {}, clientAttemptId = `telegram_${crypto.randomUUID()}`, role?: string) {
   const request = new NextRequest("http://127.0.0.1/api/spawn", { method: "POST",
     headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
     body: JSON.stringify({ clientAttemptId, title: "Seat child Telegram grant", engine, cwd, prompt: "inspect",
+      ...(role ? { role, model: "gpt-6.1-sol", serviceTier: "default" } : {}),
       ...(seatId ? { parentConversationId: seatId } : {}), ...(mcpServers ? { mcpServers } : {}) }) });
   const response = await executeSpawnRequest(request, dependencies(engine, overrides));
   return { response, receipt: registry.spawnReceiptForClientAttempt(clientAttemptId) };
 }
+
+test("Codex admission omits skills for delegated and role launches while operator roots inherit", async () => withRegistryMode("off", async () => {
+  notSetUp();
+  const parent = seedSeat();
+  for (const [kind, seat, role] of [
+    ["operator", null, undefined], ["child", parent, undefined], ["role", null, "builder"],
+  ] as const) {
+    const { response, receipt } = await launch("codex", seat, undefined, {}, `skills_admission_${kind}`, role);
+    expect(response.status).toBe(202);
+    expect(receipt?.launchProfile.omitSkillsInstructions === true).toBe(kind !== "operator");
+  }
+}));
 
 test("Claude tmux admission materializes the current memory source at the real launch boundary", async () => {
   const transport = process.env.LLV_SPAWN_TRANSPORT;
@@ -382,6 +395,7 @@ for (const mode of ["off", "sqlite"] as const) test(`the ${mode} production laun
     expect(response.status).toBe(202);
     expect(receipt?.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
     expect(receipt?.telegramSeatGrant).toBe(true);
+    if (engine === "codex") expect(receipt?.launchProfile.omitSkillsInstructions).toBe(true);
     const sid = crypto.randomUUID();
     const artifactPath = path.join(sandbox, `${sid}.jsonl`);
     fs.writeFileSync(artifactPath, "{}\n");
@@ -429,6 +443,7 @@ for (const mode of ["off", "sqlite"] as const) test(`the ${mode} disconnected op
       const { response, receipt } = await launch(engine, null, undefined, probe.overrides);
       expect(response.status).toBe(202);
       expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+      if (engine === "codex") expect(receipt?.launchProfile.omitSkillsInstructions).toBeUndefined();
       await Promise.all(probe.work.map(work => work()));
       expect(probe.evidence.reachedEngine).toBe(true);
       expect(probe.evidence.tokenPresent).toBe(false);

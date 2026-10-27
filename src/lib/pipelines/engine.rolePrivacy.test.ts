@@ -104,6 +104,7 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   const sent: string[] = [];
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    expect(input.spec.launchProfile?.omitSkillsInstructions).toBe(true);
     sent.push(input.prompt);
     return { path: null } as never;
   });

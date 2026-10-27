@@ -1,0 +1,57 @@
+{
+  "version": "codex-cli 0.162.1",
+  "transport": "app-server stdio, thread/start config override",
+  "runs": [
+    {
+      "skills.include_instructions": null,
+      "first_developer_bytes": 23563,
+      "skills_block_present": true,
+      "developer_messages": 3,
+      "skills_block_bytes": 22252
+    },
+    {
+      "skills.include_instructions": false,
+      "first_developer_bytes": 1311,
+      "skills_block_present": false,
+      "developer_messages": 3,
+      "skills_block_bytes": 0
+    },
+    {
+      "skills.include_instructions": null,
+      "first_developer_bytes": 23563,
+      "skills_block_present": true,
+      "developer_messages": 3,
+      "skills_block_bytes": 22252
+    },
+    {
+      "skills.include_instructions": false,
+      "first_developer_bytes": 1311,
+      "skills_block_present": false,
+      "developer_messages": 3,
+      "skills_block_bytes": 0
+    }
+  ],
+  "observedAt": "2026-10-27T15:12:56.942793+00:00",
+  "baseRevision": "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+  "command": "rtk proxy python3 scripts/observe-codex-skills.py --output \"$TMPDIR/codex-skills-observation-production-copied.json\"",
+  "conditions": {
+    "instructions": "Short fixed developer instruction and identical fixed user input; installed skill roots copied into a private home.",
+    "configuration": "Real headlessCodexThreadConfig output applied via thread/start config; MCP servers disabled in both arms.",
+    "provider": "Port-0 loopback response stub; no model-service traffic.",
+    "measurement": "UTF-8 bytes of the text of the first developer response_item in the Codex rollout. The model request also includes a separate base developer scaffold.",
+    "trials": "Alternating inherited setting and per-thread false, twice in one isolated app-server."
+  },
+  "sourceDigests": {
+    "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3",
+    "scripts/observe-codex-skills.py": "3ae07f7a19db20f0c561bb582442b13452c860e8c6686e891d488eabe350817b"
+  },
+  "savedBytes": 22252,
+  "initialObservation": {
+    "beforeProductEdits": true,
+    "firstDeveloperBytes": 23538,
+    "afterBytes": 1311,
+    "skillsBlockAbsentAfter": true,
+    "command": "rtk proxy python3 \"$TMPDIR/observe-codex-skills.py\"",
+    "conditions": "The first probe linked the skill roots; the committed probe copies them to keep every write inside scratch."
+  }
+}

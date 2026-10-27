@@ -1009,6 +1009,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: string | null,
     ) => {
       const specBase = freshSpecFor(engine, cwd, {
+        ...(engine === "codex" ? { omitSkillsInstructions: sessionOrigin === "delegated" } : {}),
         model: selectedModel.model,
         effort: reasoning.effort,
         fast: launchTier ? !["default", "standard"].includes(launchTier) : reasoning.fast,
