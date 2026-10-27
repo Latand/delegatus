@@ -6453,8 +6453,6 @@ async function continueRestoredClaudeStage(
   if (reserved && (reserved.conversationId !== attempt.conversationId || reserved.transcriptPath !== attempt.agentPath)) return false;
   const cut = ports.conversationRestartCut?.(attempt.conversationId);
   if (!attempt.restoreContinuation && (!cut || unixMs(cut.recordedAt) < unixMs(attempt.startedAt ?? ""))) return false;
-  if (restartCutHoldsStageRecovery(attempt, ports) || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return true;
-  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   // Preserve the ordinary cheap live path while both scan and runtime agree.
   // A stale running ledger over a restored idle host must still fall through.
   if (liveTurn && !await ports.conversationTurnInterrupted?.(attempt.conversationId)) return true;
@@ -6481,12 +6479,17 @@ async function continueRestoredClaudeStage(
   const final = durable?.turn === "terminal" && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))
     && parsePipelineStageVerdict(durable.message.text);
   if (final && "verdict" in final) return false;
+  if (restartCutHoldsStageRecovery(attempt, ports) || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return true;
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   const provider = durable?.turn === "terminal" && durable.terminalProviderMessage;
   if (provider && classifyProviderCondition("claude", provider.errorClass, provider.text).kind !== "turn_cut") return false;
+  const externalSinceCut = (evidence: StageTurnEvidence, at: string) =>
+    evidence.hasUndatedExternalPrompt === true || (evidence.newestExternalPromptAt ?? 0) >= unixMs(at)
+    || evidence.prompts?.some(prompt => prompt.origin === "external" && prompt.ts >= unixMs(at)) === true;
   if (!attempt.restoreContinuation) {
     if (durable && !restartCutOf(attempt, durable, ports)) return false;
-    if (attempt.providerWait?.retryCancelled || durable?.prompts?.some(prompt => prompt.origin === "external"
-      && prompt.ts > unixMs(cut!.recordedAt))) return false;
+    // An equal-time external prompt cannot be proven to predate the restart.
+    if (attempt.providerWait?.retryCancelled || durable && externalSinceCut(durable, cut!.recordedAt)) return false;
     const now = ports.now();
     attempt.restoreContinuation = { cutAt: cut!.recordedAt, conversationId, transcriptPath, promptBoundary: durable?.promptCount ?? null,
       count: 1, clientMessageId: `stage-restore-${pipeline.id}-${stage.id}-${attempt.n}-${unixMs(cut!.recordedAt)}-1`,
@@ -6505,7 +6508,7 @@ async function continueRestoredClaudeStage(
       && owner?.restoreContinuation?.clientMessageId === recovery.clientMessageId;
   };
   const external = (evidence: StageTurnEvidence) => recovery.promptBoundary === null
-    ? evidence.prompts?.some(prompt => prompt.origin === "external" && prompt.ts > unixMs(recovery.cutAt)) === true
+    ? externalSinceCut(evidence, recovery.cutAt)
     : (evidence.lastExternalPromptIndex ?? -1) >= recovery.promptBoundary;
   if (durable && external(durable)) return parkRestore("newer operator input requires a decision");
   if (recovery.promptBoundary === null && durable?.promptCount !== undefined) {
@@ -6553,7 +6556,7 @@ async function continueRestoredClaudeStage(
     const latest = await read();
     if (!current() || await operatorStopped()) return false;
     if (!latest || latest.promptCount === undefined || latest.snapshot && stageTurnEvidenceCurrent(latest) !== true) return false;
-    if (latest.prompts?.some(prompt => prompt.origin === "external" && prompt.ts <= 0)) return false;
+    if (latest.hasUndatedExternalPrompt || latest.prompts?.some(prompt => prompt.origin === "external" && prompt.ts <= 0)) return false;
     if (recovery.promptBoundary === null || external(latest)) return false;
     const latestFinal = latest.turn === "terminal" && latest.message && latest.message.ts > unixMs(attemptEvidenceFloor(attempt))
       && parsePipelineStageVerdict(latest.message.text);

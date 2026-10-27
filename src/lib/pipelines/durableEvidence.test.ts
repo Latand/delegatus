@@ -1186,3 +1186,43 @@ test("large native-start recovery refuses a transcript changed after its final t
   });
   expect(evidence).toMatchObject({ turn: "terminal", message: { text: PASS_TEXT }, turnStartedAt: null });
 });
+
+for (const largeHistory of [false, true]) {
+  test.each(["unknown", "operator", "agent", "human override", "task notification"] as const)
+  (`Claude queued prompt authorship keeps physical cancellation order (large=${largeHistory}, %s)`, async source => {
+    const cut = Date.parse("2026-10-20T10:00:00Z");
+    const text = "Wait for review";
+    const file = writeTranscript(`queued-authorship-${largeHistory}-${source.replaceAll(" ", "-")}.jsonl`, [
+      ...(largeHistory ? [{ type: "system", subtype: "historical-context", content: "x".repeat(MAX_REPORT_EVIDENCE_BYTES + 1024) }] : []),
+      { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+        message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } },
+      { type: "attachment", timestamp: new Date(cut - 1).toISOString(), entrypoint: "sdk-cli", attachment: {
+        type: "queued_command", commandMode: source === "task notification" ? "task-notification" : "prompt",
+        source_uuid: "queued-prompt-source", prompt: text,
+        ...(source === "human override" ? { origin: { kind: "human" } } : {}),
+      } },
+    ]);
+    if (["operator", "agent", "human override"].includes(source)) {
+      const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+      const ledger = new FileClaudeDeliveryLedger();
+      const session = path.basename(file, ".jsonl");
+      ledger.recordQueued(session, { id: "queued-send", text,
+        origin: source === "operator" ? { kind: "operator" } : { kind: "agent", role: "pipeline" } }, "turn-started");
+      ledger.confirmDelivered(session, "queued-send", "queued-prompt-source");
+    }
+    const evidence = await durableStageTurnEvidence("claude", file, undefined, new Date(cut - 1000).toISOString(), undefined, cut);
+    const external = source !== "agent" && source !== "task notification";
+    expect(evidence).toMatchObject({ promptHistoryComplete: true,
+      promptCount: source === "task notification" ? 0 : 1,
+      lastExternalPromptIndex: external ? 0 : -1,
+      requestedPromptBoundary: 0, externalPromptAfterCut: external,
+    });
+    if (largeHistory) {
+      expect(evidence?.newestExternalPromptAt).toBe(external ? cut - 1 : null);
+      expect(evidence?.hasUndatedExternalPrompt).toBe(false);
+    }
+    expect(evidence?.prompts).toEqual(source === "task notification" ? [] : [
+      { ts: cut - 1, origin: external ? "external" : "pipeline" },
+    ]);
+  });
+}

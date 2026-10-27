@@ -70,6 +70,52 @@ async function restoredStage() {
   };
 }
 
+async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStage>>) {
+  const probe = path.join(path.dirname(r.f.transcriptPath), "restore-probe.ts");
+  const moduleUrl = (file: string) => new URL(file, import.meta.url).href;
+  fs.writeFileSync(probe, `
+    import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(moduleUrl("./engine.ts"))};
+    import { loadPipelines } from ${JSON.stringify(moduleUrl("./store.ts"))};
+    import { durableStageTurnEvidence } from ${JSON.stringify(moduleUrl("./durableEvidence.ts"))};
+    import { registerPipelineTick } from ${JSON.stringify(moduleUrl("./controllerSignal.ts"))};
+    registerPipelineTick(async () => {});
+    const lane = loadPipelines()[0];
+    const attempt = lane.runs[0].attempts[0];
+    const keys = [];
+    const ports = { ...defaultPipelinePorts(),
+      now: () => process.argv[2], monotonicNow: () => 0,
+      worktreePresent: () => true, headCwd: () => lane.worktreeDir,
+      pathForConversation: () => attempt.agentPath,
+      conversationIdForPath: () => attempt.conversationId,
+      sourcePathAllowed: () => true,
+      spawnReceipt: () => null, accountExhausted: () => false, allowedAccountIds: () => null,
+      conversationOutOfMemory: async () => null,
+      conversationAgentActive: async () => null, conversationTurnInterrupted: async () => "idle",
+      conversationRestartCutHeld: () => false, conversationInterruption: () => null,
+      conversationRestartCut: () => ({recordedAt: ${JSON.stringify(r.cutAt)}}),
+      conversationOperatorStopped: async () => false, conversationDeliveryOutstanding: () => false,
+      conversationDeliveryCompleted: () => true,
+      durableTurnEvidence: durableStageTurnEvidence,
+      resumeSeveredTurn: async input => {
+        if (!await input.continuationAllowed()) return false;
+        keys.push(input.clientMessageId); return true;
+      },
+      scheduleTick: () => {},
+    };
+    await tickPipelines([], ports);
+    const current = loadPipelines()[0];
+    console.log(JSON.stringify({keys, state: current.state, recovery: current.runs[0].attempts[0].restoreContinuation}));
+    await (await import(${JSON.stringify(moduleUrl("../links/taskPageWorker.ts"))})).shutdownTaskPageWorker();
+  `);
+  const child = spawn(process.execPath, [probe, r.ports.now()], { env: { ...process.env, LLV_STRUCTURED_HOSTS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = "";
+  child.stdout!.on("data", chunk => { stdout += chunk; });
+  child.stderr!.on("data", chunk => { stderr += chunk; });
+  const exit = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  return { result: JSON.parse(stdout.trim()), pid: child.pid! };
+}
+
 test.each(["unhosted", "missing"] as const)
 ("native restore bookkeeping keeps its cut and continues the same Claude stage before unavailable-host grace settlement (%s projection)", async projection => {
   const r = await restoredStage();
@@ -103,7 +149,7 @@ test.each(["unhosted", "missing"] as const)
   } finally { await r.f.end(); }
 });
 
-test.each(["deliver", "operator input", "operator stop", "report", "control", "identity", "lost ACK"] as const)
+test.each(["deliver", "operator input", "unknown input", "queued operator input", "queued unknown input", "queued agent input", "task attachment", "operator stop", "report", "control", "identity", "lost ACK"] as const)
 ("restore continuation uses durable structured admission: %s", async scenario => {
   const r = await restoredStage();
   const { RuntimeJournal } = await import("@/runtime-host/journal");
@@ -123,8 +169,22 @@ test.each(["deliver", "operator input", "operator stop", "report", "control", "i
     readSession: async () => {
       if (!changed) {
         changed = true;
-        if (scenario === "operator input") {
-          r.records.push({ type: "user", timestamp: r.ports.now(), origin: { kind: "human" },
+        if (scenario.endsWith("input") || scenario === "task attachment") {
+          if (scenario.startsWith("queued") || scenario === "task attachment") {
+            if (scenario === "queued agent input") {
+              const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+              const ledger = new FileClaudeDeliveryLedger();
+              const session = path.basename(r.f.transcriptPath, ".jsonl");
+              ledger.recordQueued(session, { id: "queued-agent-send", text: "Continue work", origin: { kind: "agent", role: "pipeline" } }, "turn-started");
+              ledger.confirmDelivered(session, "queued-agent-send", "queued-source");
+            }
+            r.records.push({ type: "attachment", timestamp: r.ports.now(), entrypoint: "sdk-cli", attachment: {
+              type: "queued_command", commandMode: scenario === "task attachment" ? "task-notification" : "prompt",
+              source_uuid: "queued-source", prompt: scenario === "queued agent input" ? "Continue work" : "Wait for review",
+              ...(scenario === "queued operator input" ? { origin: { kind: "human" } } : {}),
+            } });
+          } else r.records.push({ type: "user", timestamp: r.ports.now(),
+            ...(scenario === "operator input" ? { origin: { kind: "human" } } : {}),
             message: { role: "user", content: "Wait for review" } });
           r.write();
         }
@@ -169,7 +229,7 @@ test.each(["deliver", "operator input", "operator stop", "report", "control", "i
   try {
     await tickPipelines([], r.ports);
     if (scenario === "lost ACK") await tickPipelines([], r.ports);
-    const allowed = scenario === "deliver" || scenario === "lost ACK";
+    const allowed = ["deliver", "lost ACK", "queued agent input", "task attachment"].includes(scenario);
     expect(changed).toBe(true);
     expect({ commands, deliveries }).toEqual({ commands: scenario === "lost ACK" ? 2 : allowed ? 1 : 0, deliveries: allowed ? 1 : 0 });
     if (scenario === "lost ACK") expect(commandInputs[1]).toEqual(commandInputs[0]);
@@ -204,53 +264,11 @@ test("fresh controller processes retain the delivery budget and its exhaustion",
   try {
     await tickPipelines([], r.ports);
     expect(r.sends).toHaveLength(1);
-    const probe = path.join(path.dirname(r.f.transcriptPath), "restore-probe.ts");
-    const moduleUrl = (file: string) => new URL(file, import.meta.url).href;
-    fs.writeFileSync(probe, `
-      import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(moduleUrl("./engine.ts"))};
-      import { loadPipelines } from ${JSON.stringify(moduleUrl("./store.ts"))};
-      import { durableStageTurnEvidence } from ${JSON.stringify(moduleUrl("./durableEvidence.ts"))};
-      import { registerPipelineTick } from ${JSON.stringify(moduleUrl("./controllerSignal.ts"))};
-      registerPipelineTick(async () => {});
-      const lane = loadPipelines()[0];
-      const attempt = lane.runs[0].attempts[0];
-      const keys = [];
-      const ports = { ...defaultPipelinePorts(),
-        now: () => process.argv[2], monotonicNow: () => 0,
-        worktreePresent: () => true, headCwd: () => lane.worktreeDir,
-        pathForConversation: () => attempt.agentPath,
-        conversationIdForPath: () => attempt.conversationId,
-        sourcePathAllowed: () => true,
-        spawnReceipt: () => null, accountExhausted: () => false, allowedAccountIds: () => null,
-        conversationOutOfMemory: async () => null,
-        conversationAgentActive: async () => null, conversationTurnInterrupted: async () => "idle",
-        conversationRestartCutHeld: () => false, conversationInterruption: () => null,
-        conversationRestartCut: () => ({recordedAt: ${JSON.stringify(r.cutAt)}}),
-        conversationOperatorStopped: async () => false, conversationDeliveryOutstanding: () => false,
-        conversationDeliveryCompleted: () => true,
-        durableTurnEvidence: durableStageTurnEvidence,
-        resumeSeveredTurn: async input => {
-          if (!await input.continuationAllowed()) return false;
-          keys.push(input.clientMessageId); return true;
-        },
-        scheduleTick: () => {},
-      };
-      await tickPipelines([], ports);
-      const current = loadPipelines()[0];
-      console.log(JSON.stringify({keys, state: current.state, recovery: current.runs[0].attempts[0].restoreContinuation}));
-      await (await import(${JSON.stringify(moduleUrl("../links/taskPageWorker.ts"))})).shutdownTaskPageWorker();
-    `);
     const pids: number[] = [];
     for (const count of [2, 3, 3, 3]) {
       r.advance(WAIT);
-      const child = spawn(process.execPath, [probe, r.ports.now()], { env: { ...process.env, LLV_STRUCTURED_HOSTS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
-      pids.push(child.pid!);
-      let stdout = "", stderr = "";
-      child.stdout!.on("data", chunk => { stdout += chunk; });
-      child.stderr!.on("data", chunk => { stderr += chunk; });
-      const exit = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
-      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
-      const result = JSON.parse(stdout.trim());
+      const { result, pid } = await tickFromFreshController(r);
+      pids.push(pid);
       expect(result.recovery.count).toBe(count);
       expect(result.keys).toHaveLength(count === 2 || pids.length === 2 ? 1 : 0);
       expect(result.state).toBe(pids.length < 3 ? "running" : "needs_decision");
@@ -588,5 +606,77 @@ test.each(["normal Claude", "Codex", "final verdict"] as const)("%s retains its 
     expect(r.sends).toHaveLength(0);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation).toBeUndefined();
     if (kind === "final verdict") expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  } finally { await r.f.end(); }
+});
+
+test.each(["restart hold", "deploy hold", "operator stop"] as const)
+("a genuine final verdict settles before the restore %s", async hold => {
+  const r = await restoredStage();
+  try {
+    r.records.push({ type: "assistant", timestamp: new Date(Date.parse(r.cutAt) + 1000).toISOString(),
+      message: { role: "assistant", model: "claude-test", stop_reason: "end_turn", content: [
+        { type: "text", text: 'Done\n\n```json\n{"status":"pass","findings":[]}\n```' },
+      ] } });
+    r.write();
+    r.ports.conversationRestartCutHeld = () => hold === "restart hold";
+    r.ports.conversationInterruption = () => hold === "deploy hold" ? { state: "owed", recordedAt: r.cutAt, resolvedAt: null } : null;
+    if (hold === "operator stop") r.setStopped();
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+    expect(r.sends).toHaveLength(0);
+  } finally { await r.f.end(); }
+});
+
+test.each(["plain", "queued"] as const)("same-millisecond %s operator input prevents restore continuation across controller restart", async shape => {
+  const r = await restoredStage();
+  try {
+    r.records.push(shape === "plain" ? { type: "user", timestamp: r.cutAt, origin: { kind: "human" },
+      message: { role: "user", content: "Wait for my review before doing more work" } }
+      : { type: "attachment", timestamp: r.cutAt, attachment: { type: "queued_command", commandMode: "prompt",
+        origin: { kind: "human" }, prompt: "Wait for my review before doing more work" } });
+    r.write();
+    await tickPipelines([], r.ports);
+    expect(r.sends).toHaveLength(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation).toBeUndefined();
+    const { result } = await tickFromFreshController(r);
+    expect(result.keys).toEqual([]);
+    expect(result.recovery).toBeUndefined();
+  } finally { await r.f.end(); }
+});
+
+
+test.each(["plain", "queued"] as const)("same-time %s operator input cancels a persisted restore with an unknown prompt boundary", async shape => {
+  const r = await restoredStage();
+  try {
+    r.ports.durableTurnEvidence = async () => null;
+    await tickPipelines([], r.ports);
+    expect(r.sends).toHaveLength(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation?.promptBoundary).toBeNull();
+    r.records.push(shape === "plain" ? { type: "user", timestamp: r.cutAt, origin: { kind: "human" },
+      message: { role: "user", content: "Wait for review" } }
+      : { type: "attachment", timestamp: r.cutAt, attachment: { type: "queued_command", commandMode: "prompt",
+        origin: { kind: "human" }, prompt: "Wait for review" } });
+    r.write();
+    const { result } = await tickFromFreshController(r);
+    expect(result.keys).toEqual([]);
+    expect(result.state).toBe("needs_decision");
+    expect(result.recovery.promptBoundary).toBeNull();
+    expect(result.recovery.count).toBe(1);
+  } finally { await r.f.end(); }
+});
+
+
+test.each(["no input", "plain", "queued", "undated"] as const)("large restore history preserves %s input authority before the initial boundary", async shape => {
+  const r = await restoredStage();
+  try {
+    r.records.unshift({ type: "system", subtype: "historical-context", content: "x".repeat(9 * 1024 * 1024) });
+    if (shape !== "no input") r.records.push(shape !== "queued" ? { type: "user", ...(shape === "undated" ? {} : { timestamp: r.cutAt }), origin: { kind: "human" },
+      message: { role: "user", content: "Wait for review" } }
+      : { type: "attachment", timestamp: r.cutAt, attachment: { type: "queued_command", commandMode: "prompt",
+        origin: { kind: "human" }, prompt: "Wait for review" } });
+    r.write();
+    await tickPipelines([], r.ports);
+    expect(r.sends).toHaveLength(shape === "no input" ? 1 : 0);
+    if (shape !== "no input") expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation?.acceptedAt).toBeUndefined();
   } finally { await r.f.end(); }
 });

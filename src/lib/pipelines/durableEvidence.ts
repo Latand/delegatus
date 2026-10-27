@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { claudeQueuedPromptUser, claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
@@ -42,6 +42,10 @@ export type StageTurnEvidence = {
   /** Physical prompt ordinal at the requested cut, retained after later work. */
   requestedPromptBoundary?: number;
   lastExternalPromptIndex?: number;
+  /** Complete-artifact timestamp retained when the recovery window trims
+      prompt rows. Absence leaves the caller to inspect the delivered prompts. */
+  newestExternalPromptAt?: number | null;
+  hasUndatedExternalPrompt?: boolean;
   /** First cut of the open chain: the provider cuts after this attempt's last
       agent output. Null when agent output follows every cut. */
   firstProviderCutAt?: number | null;
@@ -556,6 +560,9 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
       } catch { /* Unavailable metadata leaves this prompt external. */ }
       return [{ ts, recordIndex, origin: automatic ? "pipeline" as const : "external" as const }];
     }
+    // Mid-turn deliveries use attachments; source_uuid retains the same
+    // authorship join and the enclosing row retains its physical position.
+    record = claudeQueuedPromptUser(record) ?? record;
     if (record.type !== "user") return [];
     const text = claudeUserText(recordValue(record.message)?.content).trim();
     if (!text && !recordsValue(recordValue(record.message)?.content).some(part => part.type === "image")) return [];
@@ -607,7 +614,7 @@ export function stageTurnEvidenceCurrent(evidence: StageTurnEvidence | null | un
 async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: number, requestedAt: number | undefined,
   fallbackTs: number, snapshot: string | null,
 ): Promise<{ records: RecordLike[] | null; firstCutAt: number | null; requestedCutOpen?: boolean; lastAgentEventAt: number | null; lastAgentOutputAt: number | null;
-  promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | null> {
+  promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; newestExternalPromptAt: number | null; hasUndatedExternalPrompt: boolean; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | null> {
   if (!snapshot) return null;
   let handle: fs.promises.FileHandle | undefined;
   try {
@@ -624,6 +631,8 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     let promptCount = 0;
     let requestedPromptBoundary: number | undefined;
     let lastExternalPromptIndex = -1;
+    let newestExternalPromptAt: number | null = null;
+    let hasUndatedExternalPrompt = false;
     let externalPromptAfterCut = false;
     let automaticPromptAfterCut = false;
     const authorship = codex ? undefined : claudeMessageProvenance(pathname);
@@ -646,7 +655,11 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
         externalPromptAfterCut = automaticPromptAfterCut = false;
       }
       for (const prompt of stagePrompts([record], codex, pathname, authorship)) {
-        if (prompt.origin === "external") lastExternalPromptIndex = promptCount;
+        if (prompt.origin === "external") {
+          lastExternalPromptIndex = promptCount;
+          newestExternalPromptAt = Math.max(newestExternalPromptAt ?? 0, prompt.ts);
+          hasUndatedExternalPrompt ||= prompt.ts <= 0;
+        }
         promptCount++;
         if (chain.firstCutAt() !== null) {
           if (prompt.origin === "external") externalPromptAfterCut = true;
@@ -681,7 +694,7 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
       || transcriptSnapshot(pathname) !== snapshot) return null;
     const requestedCutOpen = chain.requestedOpen();
     return { records: retainedBytes > MAX_REPORT_EVIDENCE_BYTES ? null : records, firstCutAt: chain.firstCutAt(), lastAgentEventAt, lastAgentOutputAt,
-      promptCount, requestedPromptBoundary, lastExternalPromptIndex, externalPromptAfterCut, automaticPromptAfterCut,
+      promptCount, requestedPromptBoundary, lastExternalPromptIndex, newestExternalPromptAt, hasUndatedExternalPrompt, externalPromptAfterCut, automaticPromptAfterCut,
       ...(requestedCutOpen === undefined ? {} : { requestedCutOpen }) };
   } catch { return null; }
   finally { await handle?.close().catch(() => undefined); }
@@ -768,7 +781,7 @@ export async function durableStageTurnEvidence(
   let windowRequestedCutOpen: boolean | undefined;
   let windowAgentEventAt: number | null | undefined;
   let windowAgentOutputAt: number | null | undefined;
-  let windowPrompts: { promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | undefined;
+  let windowPrompts: { promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; newestExternalPromptAt: number | null; hasUndatedExternalPrompt: boolean; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | undefined;
   let overflow: { firstCutAt: number | null; requestedCutOpen?: boolean } | null = null;
   if (evidenceRead.prefixTruncated && Number.isFinite(promptBoundary) && readTail === readStableTailRecords) {
     const window = await readRecoveryWindow(transcriptPath, codex, startedTime, afterCutAt, fallbackTs, snapshot);
@@ -824,7 +837,7 @@ export async function durableStageTurnEvidence(
     // Shutdown normalization may remove a human prompt whose turn was interrupted.
     // Cancellation evidence must retain that prompt even when terminal evidence does not.
     prompts: prompts.map(prompt => ({ ts: prompt.ts, origin: prompt.origin })),
-    ...(windowPrompts ? { promptCount: windowPrompts.promptCount, requestedPromptBoundary: windowPrompts.requestedPromptBoundary, lastExternalPromptIndex: windowPrompts.lastExternalPromptIndex }
+    ...(windowPrompts ? { promptCount: windowPrompts.promptCount, requestedPromptBoundary: windowPrompts.requestedPromptBoundary, lastExternalPromptIndex: windowPrompts.lastExternalPromptIndex, newestExternalPromptAt: windowPrompts.newestExternalPromptAt, hasUndatedExternalPrompt: windowPrompts.hasUndatedExternalPrompt }
       : !evidenceRead.prefixTruncated ? { promptCount: prompts.length,
         ...(requestedCutIndex >= 0 ? { requestedPromptBoundary: prompts.filter(prompt => prompt.recordIndex < requestedCutIndex).length } : {}),
         lastExternalPromptIndex: prompts.reduce((last, prompt, index) => prompt.origin === "external" ? index : last, -1) } : {}),
