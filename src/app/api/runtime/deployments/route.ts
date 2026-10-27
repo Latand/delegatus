@@ -173,7 +173,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const decision = await service.decide();
     authorize();
     if (decision.mode !== "managed") {
-      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey });
+      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey }, authorize);
       await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
         console.error("[deploy admission] could not record the seat wake", error);
       });

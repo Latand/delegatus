@@ -967,6 +967,34 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
   });
 
+  test.each([false, true])("attributable exact deployment rechecks authority after green lookup (revoked: %s)", async revoked => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    let allowed = true;
+    const attempt = h.service.deployRevision({ revision: tipSha, idempotencyKey: `attributable-${revoked}` },
+      () => { if (!allowed) throw new Error("proactive deployment authority revoked"); });
+    const observed = attempt.then(value => ({ value, error: null }), error => ({ value: null, error: error as Error }));
+    await reading;
+    allowed = !revoked;
+    releaseGreen({ state: "green" });
+    const result = await observed;
+    if (revoked) {
+      expect(result.error?.message).toBe("proactive deployment authority revoked");
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      expect(existsSync(record.requestFile)).toBe(false);
+    } else {
+      expect(result.value).toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+      h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+    }
+  });
+
   /* A launcher started in a multiplexer pane sits in that unit's cgroup.
      Restarting the unit would end every pane and bring no launcher back. */
   test.each(["built", "unbuilt"] as const)("a unit not proven to be this launcher's service is never restarted, by the dialog or by a seat: %s", async built => {
