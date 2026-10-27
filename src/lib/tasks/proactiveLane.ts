@@ -58,6 +58,35 @@ export function proactiveScopeReview(stage: PipelineStage | undefined): boolean 
   return !!stage && stage.kind === "run" && stage.effectiveRole.roleId === "reviewer"
     && stage.effectiveRole.access === "read-only" && !(stage.outputs?.length);
 }
+export function proactiveResultReview(stage: PipelineStage): boolean {
+  return stage.kind === "run" && stage.effectiveRole.roleId === "reviewer"
+    && stage.effectiveRole.access === "read-only" && !!stage.onFail;
+}
+
+/** Follow ordinary pass edges. Every writable success-path stage must reach
+ * a later result review before completion; array position grants no authority. */
+function proactiveResultReviewError(pipeline: Pipeline): string | null {
+  const stages = new Map(pipeline.stages.map(stage => [stage.id, stage]));
+  const seen = new Set<string>();
+  let current: PipelineStage | undefined = pipeline.stages[0];
+  let implementation = false, pending = false, reviewed = false;
+  while (current) {
+    if (seen.has(current.id)) return "proactive result-review success path must terminate";
+    seen.add(current.id);
+    if (current !== pipeline.stages[0]) {
+      if (current.kind === "run" && current.effectiveRole.access === "read-write") {
+        implementation = true; pending = true;
+      } else if (proactiveResultReview(current) && implementation) {
+        pending = false; reviewed = true;
+      }
+    }
+    if (current.next === null) break;
+    current = stages.get(current.next);
+    if (!current) return "proactive result-review success path is missing a stage";
+  }
+  return !reviewed || pending ? "proactive implementation requires a reachable ordinary result-review after its final writable stage" : null;
+}
+
 export function proactiveTaskHasReservedLane(task: BoardTask, file = TASKS_FILE): boolean {
   const store = collection(file, false);
   try { return !!store && rows(store, task.project).some(row => row.taskId === task.id); }
@@ -111,8 +140,8 @@ export async function reserveProactiveLane(pipeline: Pipeline, requestKey: strin
       const first = pipeline.stages[0];
       if (!proactiveScopeReview(first)) throw new Error("proactive lane must begin with independent read-only scope review");
       if (first!.runtime === "codex-cloud") throw new Error("proactive scope review requires the local read-only runtime");
-      if (!pipeline.stages.slice(1).some(stage => stage.kind === "run" && stage.effectiveRole.roleId === "reviewer"
-        && stage.effectiveRole.access === "read-only" && stage.onFail)) throw new Error("proactive implementation requires the ordinary result-review stage");
+      const reviewError = proactiveResultReviewError(pipeline);
+      if (reviewError) throw new Error(reviewError);
       const all = rows(store, task.project, true);
       const released = all.filter(row => {
         if (row.released) return true;
@@ -175,6 +204,8 @@ export function proactiveLaneError(task: BoardTask, pipeline: Pipeline | undefin
     if (!held?.length || held.some(row => row.taskId !== task.id || row.laneId !== pipeline.id)) return "proactive lane reservation is not owned";
     if (held.some(row => row.scopeRevision !== task.proactive!.scopeRevision || row.scopeHash !== proactiveScopeHash({ ...task, project: "" })
       || row.graph !== proactiveGraphDigest(pipeline))) return "proactive frozen task, graph or brief changed";
+    const reviewError = proactiveResultReviewError(pipeline);
+    if (reviewError) return reviewError;
     if (held.some(row => row.review === "hold")) return "proactive scope review is held for the operator";
     if (held.every(row => row.review === "pass")) return null;
     if (phase !== "effect" && held.every(row => row.reviewStage === stageId)

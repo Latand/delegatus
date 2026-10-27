@@ -46,7 +46,8 @@ export function proactiveExecutionError(tasks: readonly BoardTask[], file = TASK
         if (work.some(row => row.id !== task.id && proactiveAcceptedWorkWaiting(row, file))) return "accepted work has precedence over proactive work";
         const limit = effectiveWorkerLimit(task.project);
         if (readWorkerLimits().unreadable) return "proactive worker capacity is unreadable";
-        const identities = new Set(work.filter(row => row.id !== task.id && row.status !== "done")
+        // Card completion does not settle its retained worker or lane custody.
+        const identities = new Set(work.filter(row => row.id !== task.id)
           .flatMap(row => row.assignments.filter(a => a.state === "linked").map(a => a.conversationId ?? a.launchId).filter((id): id is string => !!id)));
         if (identities.size > 256) return "proactive worker evidence exceeds its bound";
         const workers = new Set<string>();

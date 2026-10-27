@@ -21,7 +21,7 @@ import { setCodexCloudEnvironmentId } from "@/lib/projects/settings";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { requestDigest } from "@/lib/mcp/server";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
-import { mergeAdmission } from "@/lib/forge/autoMerge";
+import { mergeAdmission, mergeEligible } from "@/lib/forge/autoMerge";
 import { mergeOnReviewSetting } from "@/lib/projects/settings";
 
 const clock = spyOn(Date, "now").mockImplementation(() => NOW);
@@ -32,7 +32,7 @@ const stages = [
   { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build the reviewed outcome", next: "review" },
   { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review the implemented outcome", next: null, onFail: { to: "build", maxRounds: 1 } },
 ] as const;
-async function fixture(name: string, cloud = false, repoDir = "/repo", project = `proactive-${name}`) {
+async function fixture(name: string, cloud = false, repoDir = "/repo", project = `proactive-${name}`, graph: readonly { id: string; [key: string]: unknown }[] = stages) {
   savePipelines([]);
   const h = harness();
   h.advanceWallClock(NOW - 1_000_000);
@@ -51,7 +51,7 @@ async function fixture(name: string, cloud = false, repoDir = "/repo", project =
     { project, startedAt: at, conversationId: seat.seat.conversationId!, seatEpoch: seat.seat.seatEpoch });
   agentRegistry().recordQuotaObservation(proactiveObservation());
   const request = { task: task.text, spec: "Retain the useful filter", repoDir, taskIds: [task.id], publication: cloud ? "remote-branch" as const : "internal" as const,
-    stages: structuredClone(stages).map(stage => cloud && stage.id === "build" ? { ...stage, runtime: "codex-cloud", engine: "codex", model: "gpt-6.1-sol" } : stage) as never };
+    stages: structuredClone(graph).map(stage => cloud && stage.id === "build" ? { ...stage, runtime: "codex-cloud", engine: "codex", model: "gpt-6.1-sol" } : stage) as never };
   const made = await createPipelineFromRequest(request, h.ports);
   if (!made.pipeline) throw new Error(made.error);
   const id = made.pipeline.id;
@@ -493,7 +493,7 @@ test.each(["parent", "child", "expiry", "reject", "continue", "adopt"])("native 
   } finally { await delivery.cleanup(); }
 });
 
-test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "closed-unmerged", "closed-ack"])("unadopted merge custody survives restart: %s", async kind => {
+test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "closed-unmerged", "closed-ack", "head-changed", "review-changed"])("unadopted merge custody survives restart: %s", async kind => {
   const f = await fixture(`merge-custody-${kind}`);
   await f.complete();
   const { sweepAutoMerge, MERGE_SETTLE_MS, MERGE_POLL_MS } = await import("@/lib/forge/autoMerge");
@@ -515,10 +515,26 @@ test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "clos
       if (args[1]?.includes("/branches/")) return args[1].includes("/rules/") ? "[]" : '["ci"]';
       throw new Error(`unexpected read ${args.join(" ")}`);
     },
-    write: async (_args, _repo, beforeDispatch) => { beforeDispatch?.(); writes++; boundary = structuredClone(findPipelineRecord(f.id)!); if (kind === "closed-ack") state = "CLOSED"; return ""; },
+    write: async (_args, _repo, beforeDispatch) => {
+      if (kind === "head-changed" || kind === "review-changed") {
+        const current = f.current();
+        if (kind === "head-changed") current.lastPassedCommit = "f".repeat(40);
+        else current.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.reviewHeadSha = "f".repeat(40);
+        savePipelines([current]);
+      }
+      beforeDispatch?.(); writes++; boundary = structuredClone(findPipelineRecord(f.id)!);
+      if (kind === "closed-ack") state = "CLOSED";
+      return "";
+    },
     finishTask: () => "missing",
   };
   for (let n = 0; n < 10 && !writes; n++) { await sweepAutoMerge(ports); now += MERGE_SETTLE_MS + MERGE_POLL_MS; }
+  if (kind === "head-changed" || kind === "review-changed") {
+    expect(writes).toBe(0);
+    expect(f.current().merge).toMatchObject({ state: "blocked", reason: expect.stringContaining("result-review evidence") });
+    expect(f.current().merge?.effectUncertain).toBeUndefined();
+    return;
+  }
   expect(writes).toBe(1);
   expect(boundary?.merge).toMatchObject({ state: "merging", effectUncertain: true });
   if (kind === "closed-ack") {
@@ -566,4 +582,141 @@ test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "clos
     });
     expect(next.error).toBeUndefined(); expect(next.pipeline?.id).not.toBe(f.id);
   }
+});
+
+
+test.each(["review-before-build", "unreachable-review", "write-after-review"])("proactive success graph requires result review after implementation: %s", async kind => {
+  const graph: { id: string; [key: string]: unknown }[] = structuredClone(stages).map(stage => ({ ...stage }));
+  if (kind === "review-before-build") {
+    graph[0]!.next = "review"; graph[2]!.next = "build"; graph[1]!.next = null;
+  } else if (kind === "unreachable-review") graph[1]!.next = null;
+  else {
+    graph[2]!.next = "final-build";
+    graph.push({ ...graph[1]!, id: "final-build", next: null });
+  }
+  await expect(fixture(`graph-${kind}`, false, "/repo", `graph-${kind}`, graph)).rejects.toThrow("result-review");
+});
+
+test("proactive success graph follows edges when stage array order differs", async () => {
+  const f = await fixture("graph-edges", false, "/repo", "graph-edges", [stages[0], stages[2], stages[1]]);
+  await f.complete();
+  expect(f.current().state).toBe("completed");
+  expect(mergeEligible(f.current())).toBe(true);
+});
+
+test.each(["different", "missing"])("proactive automatic merge requires evidence for its final head: %s", async kind => {
+  const f = await fixture(`review-head-${kind}`);
+  await f.complete();
+  const lane = f.current();
+  expect(mergeEligible(lane)).toBe(true);
+  const review = lane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!;
+  review.reviewHeadSha = kind === "different" ? "f".repeat(40) : null;
+  review.outputBaseHead = undefined;
+  if (review.report) review.report.provenance.head = null;
+  const admission = mergeAdmission(lane, NOW, { setting: () => ({ ...mergeOnReviewSetting(f.project), enabled: true, changedAt: f.at }),
+    pullRequestOf: () => ({ repository: "acme/fixture", number: 17 }), hasPublishedPrototype: () => false });
+  expect(admission).toEqual({ reason: "lane has not met the review merge bar" });
+});
+
+test.each(["assigned", "done"] as const)("retained live lane occupies worker capacity with card status %s", async status => {
+  const f = await fixture(`card-capacity-${status}`);
+  setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
+  const ordinary = mutateTasks(tasks => {
+    const made = createTask(tasks, { project: f.project, text: "Requested filter correction", placement: "unplaced" }, [],
+      { id: () => `ordinary-${status}`, now: () => f.at });
+    if (!made.ok) throw new Error(made.error);
+    return { tasks: made.tasks, result: made.task };
+  });
+  const made = await createPipelineFromRequest({ task: ordinary.text, repoDir: "/repo", taskIds: [ordinary.id], publication: "internal",
+    stages: [{ id: "work", kind: "run", role: { roleId: "builder" }, prompt: "Apply the requested correction", next: null }] }, f.h.ports);
+  if (!made.pipeline) throw new Error(made.error);
+  const ordinaryLane = made.pipeline;
+  const begun = beginLegacySpawnFixture(agentRegistry(), { engine: "codex", cwd: ordinaryLane.worktreeDir, taskIds: [ordinary.id],
+    conversationId: `conversation_ordinary_${status}`, role: "builder", origin: { kind: "container", container: "pipeline", containerId: ordinaryLane.id, creatorConversationId: null },
+    memberships: [{ kind: "pipeline", containerId: ordinaryLane.id, role: "builder", slot: "work:1", stageId: "work", stageOrder: 0, round: 1, parentConversationId: null }],
+    launchProfile: emptyLaunchProfile({ cwd: ordinaryLane.worktreeDir, model: "gpt-5.6-sol" }) });
+  if (begun.kind !== "created") throw new Error("fresh ordinary worker required");
+  mutateTasks(tasks => {
+    const result = patchTask(tasks, ordinary.id, { status }, f.at);
+    if (!result.ok) throw new Error(result.error);
+    result.task.assignments = [{ conversationId: begun.receipt.conversationId, launchId: begun.receipt.launchId,
+      state: "linked", path: null, panePid: null, at: f.at, error: null }];
+    return { tasks: result.tasks, result: undefined };
+  });
+  const spawn = f.h.ports.spawnAgent;
+  f.h.ports.spawnAgent = async (input, reserved, prepare) => {
+    if (input.membership.containerId === f.id) {
+      await reserved({ launchId: "held-proactive", conversationId: "conversation_held_proactive", accountId: "account-limited" });
+    }
+    return spawn(input, reserved, prepare);
+  };
+  await f.tick();
+  expect(f.h.spawnInputs.filter(input => input.membership.containerId === f.id)).toHaveLength(0);
+  expect(f.current().stateDetail).toContain("capacity is exhausted");
+  expect(loadPipelines().find(lane => lane.id === ordinaryLane.id)?.state).toBe("running");
+  expect((await closeAndDrain(ordinaryLane.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
+  expect(loadPipelines().find(lane => lane.id === ordinaryLane.id)?.closeReport?.status).toBe("settled");
+  expect(() => assertProactivePipelineExecution(f.current(), "dispatch")).not.toThrow();
+  expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+  await f.tick();
+  expect(f.h.spawnInputs.filter(input => input.membership.containerId === f.id)).toHaveLength(1);
+});
+
+
+test.each(["skipped", "accepted", "budget-spent"])("proactive result review retains explicit merge exceptions: %s", async kind => {
+  const f = await fixture(`review-exception-${kind}`);
+  await f.complete();
+  const lane = f.current();
+  const review = lane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!;
+  review.state = kind === "skipped" ? "skipped" : "failed";
+  if (kind === "accepted") lane.reviewAcceptances = [{ clientRequestId: "accepted-review", expectedRevision: "current",
+    stageId: "review", attempt: review.n, fixStageId: "build", fixAttempt: 1, reviewedHead: review.reviewHeadSha ?? null,
+    currentHead: lane.lastPassedCommit!, at: f.at, actor: { kind: "operator" } }];
+  if (kind === "budget-spent") {
+    review.budgetSpent = true;
+    lane.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.activatedBy = {
+      stageId: "review", attempt: review.n, edge: "fail", budgetSpent: true,
+    };
+  }
+  expect(mergeEligible(lane)).toBe(true);
+  if (kind === "accepted") {
+    lane.reviewAcceptances![0]!.currentHead = "f".repeat(40);
+    expect(mergeEligible(lane)).toBe(false);
+    lane.reviewAcceptances![0]!.currentHead = lane.lastPassedCommit!;
+  }
+  const summary = { ...lane.stages[0]!, id: "summary", next: null, onFail: null };
+  lane.stages.find(stage => stage.id === "review")!.next = summary.id;
+  lane.stages.push(summary);
+  expect(mergeEligible(lane)).toBe(true);
+  summary.effectiveRole = { ...lane.stages.find(stage => stage.id === "build")!.effectiveRole };
+  expect(mergeEligible(lane)).toBe(false);
+});
+
+
+test("proactive review evidence follows only the recorded publication integration", async () => {
+  const f = await fixture("review-integration");
+  await f.complete();
+  const lane = f.current();
+  const review = lane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!;
+  const passedSha = lane.lastPassedCommit!;
+  lane.lastPassedCommit = "f".repeat(40);
+  expect(mergeEligible(lane)).toBe(false);
+  review.publicationIntegration = { passedSha, acceptedSha: lane.lastPassedCommit, mainSha: "e".repeat(40) };
+  expect(mergeEligible(lane)).toBe(true);
+  review.publicationIntegration.passedSha = "d".repeat(40);
+  expect(mergeEligible(lane)).toBe(false);
+});
+
+
+test("a writable stage named review cannot authorize a proactive merge", async () => {
+  const f = await fixture("writable-review");
+  await f.complete();
+  const lane = f.current();
+  lane.runs.find(run => run.stageId === "review")!.attempts = [];
+  const builder = lane.stages.find(stage => stage.id === "build")!;
+  lane.stages.push({ ...builder, id: "fix-review", next: null, onFail: { to: "build", maxRounds: 1 } });
+  const buildRun = structuredClone(lane.runs.find(run => run.stageId === "build")!);
+  buildRun.stageId = "fix-review";
+  lane.runs.push(buildRun);
+  expect(mergeEligible(lane)).toBe(false);
 });

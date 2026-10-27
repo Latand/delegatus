@@ -1,3 +1,4 @@
+import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -98,7 +99,7 @@ export type TaskFinishOutcome = "moved" | "already-done" | "missing" | "refused"
 /** A review stage: a legacy review loop, or a read-only run stage that owns
     a fail edge (§3.4). */
 export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean {
-  if (pipeline.proactiveTaskIds?.length && pipeline.stages[0]?.id === stage.id) return false;
+  if (pipeline.proactiveTaskIds?.length) return pipeline.stages[0]?.id !== stage.id && proactiveResultReview(stage);
   if (stage.kind === "review-loop") return true;
   if (stage.kind !== "run" || !stage.onFail) return false;
   const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
@@ -106,6 +107,21 @@ export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean
      Its passed verdict is still the review gate; excluding it stranded
      completed lanes before they could acquire a merge record. */
   return /(?:^|[-_])review$/.test(stage.id) || (latest?.effectiveRole?.access ?? stage.effectiveRole?.access ?? stage.access ?? "read-write") === "read-only";
+}
+
+/** An explicit exception covers the final implementation only when its pass
+ * suffix cannot write another implementation head. */
+function reviewHasReadOnlySuffix(pipeline: Pipeline, stage: PipelineStage): boolean {
+  const seen = new Set([stage.id]);
+  let next = stage.next;
+  while (next !== null) {
+    if (seen.has(next)) return false;
+    seen.add(next);
+    const successor = pipeline.stages.find(row => row.id === next);
+    if (!successor || successor.kind !== "run" || successor.effectiveRole.access !== "read-only") return false;
+    next = successor.next;
+  }
+  return true;
 }
 
 /**
@@ -117,13 +133,26 @@ export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean
 export function mergeEligible(pipeline: Pipeline): boolean {
   if (pipeline.state !== "completed") return false;
   let reviewed = 0;
+  let implementedHeadCovered = !pipeline.proactiveTaskIds?.length;
   for (const stage of pipeline.stages) {
     if (!isReviewStage(pipeline, stage)) continue;
     const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
     if (!latest) continue;
     reviewed += 1;
-    if (latest.state === "passed" || latest.state === "skipped") continue;
-    if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
+    if (latest.state === "passed") {
+      // Proactive grants never infer head coverage from completion timestamps.
+      const head = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
+      const integration = latest.publicationIntegration;
+      if (head && (head === pipeline.lastPassedCommit || head === headBeforeLocalOutput(pipeline)
+        || integration?.passedSha === head && integration.acceptedSha === pipeline.lastPassedCommit)) implementedHeadCovered = true;
+      continue;
+    }
+    const acceptance = (pipeline.reviewAcceptances ?? []).find(row => row.stageId === stage.id && row.attempt === latest.n);
+    if (latest.state === "skipped" || acceptance) {
+      if (reviewHasReadOnlySuffix(pipeline, stage)
+        && (latest.state === "skipped" || acceptance?.currentHead === pipeline.lastPassedCommit)) implementedHeadCovered = true;
+      continue;
+    }
     if (latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
       const fix = pipeline.runs.find((run) => run.stageId === stage.onFail!.to)?.attempts.find((attempt) => !attempt.historical
         && attempt.state === "passed"
@@ -131,11 +160,14 @@ export function mergeEligible(pipeline: Pipeline): boolean {
         && attempt.activatedBy.budgetSpent === true
         && attempt.activatedBy.stageId === stage.id
         && attempt.activatedBy.attempt === latest.n);
-      if (fix) continue;
+      if (fix) {
+        if (reviewHasReadOnlySuffix(pipeline, stage)) implementedHeadCovered = true;
+        continue;
+      }
     }
     return false;
   }
-  return reviewed > 0;
+  return reviewed > 0 && implementedHeadCovered;
 }
 
 export { lanePullRequest };
@@ -690,7 +722,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
-    const beforeDispatch = () => assertProactivePipelineExecution(ports.loadPipelines().find(lane => lane.id === read.id) ?? read, "effect");
+    const beforeDispatch = () => {
+      const current = ports.loadPipelines().find(lane => lane.id === read.id);
+      if (read.proactiveTaskIds?.length && (!current || !mergeEligible(current)
+        || current.merge?.reviewedHead !== current.lastPassedCommit)) {
+        throw new Error("proactive merge requires result-review evidence for its implemented head");
+      }
+      assertProactivePipelineExecution(current ?? read, "effect");
+    };
     beforeDispatch();
     await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository,
       () => { beforeDispatch(); dispatched = true; });
