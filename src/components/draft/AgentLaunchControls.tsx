@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { accountWeeklyLeft, WeeklyMeter, weeklyLeftAria, weeklyLeftHint } from "@/components/accountWeekly";
+import { ultraRowOf, useCodexTierOffer } from "@/components/codexTierOffer";
 import { ReasoningControls, type SpeedChoice } from "@/components/ReasoningControls";
 import { engineTintOf } from "@/components/utils";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
-import { defaultModelFor } from "@/lib/agent/models";
+import { ENGINE_MODELS, defaultModelFor } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 
@@ -255,7 +256,7 @@ export function useAgentLaunchDraft(options: {
   const [effort, setEffortState] = useState(() => read("effort") || options.initialEffort || "");
   const [speed, setSpeedState] = useState<SpeedChoice>(() => {
     const stored = read("speed");
-    return stored === "fast" || stored === "standard" ? stored : "";
+    return stored === "fast" || stored === "standard" || stored === "ultrafast" ? stored : "";
   });
   const [accountId, setAccountIdState] = useState(() => read("accountId"));
 
@@ -564,10 +565,13 @@ export function AgentLaunchControls({
   draft,
   disabled,
   stacked,
+  inheritSpeed,
 }: {
   draft: AgentLaunchDraft;
   disabled?: boolean;
   stacked?: boolean;
+  /** A rotation draft: no speed choice keeps the incumbent's tier (see {@link ReasoningControls}). */
+  inheritSpeed?: boolean;
 }) {
   const { t } = useLocale();
   const catalogAccountId = draft.launchAccountId || draft.activeAccountId;
@@ -601,6 +605,11 @@ export function AgentLaunchControls({
     const selected = copilotModels.find((model) => model.id === draft.model);
     if (draft.effort && selected?.efforts && !selected.efforts.includes(draft.effort)) draft.setEffort("");
   }, [draft.engine, draft.model, draft.effort, copilotModels, draft.setModel, draft.setEffort]);
+  /* Ultrafast is offered as the launch account's own catalog lists it for the chosen model. */
+  const ultraOffer = useCodexTierOffer({ account: draft.launchAccountId, model: draft.model, enabled: draft.engine === "codex" });
+  const ultra = draft.engine === "codex"
+    ? ultraRowOf(t, ultraOffer, ENGINE_MODELS.codex.find((model) => model.id === draft.model)?.label ?? draft.model)
+    : null;
   if (!stacked) {
     return (
       <div className="flex flex-wrap items-center gap-1.5">
@@ -616,6 +625,8 @@ export function AgentLaunchControls({
           onEffort={draft.setEffort}
           onSpeed={draft.setSpeed}
           copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
+          ultra={ultra}
+          inheritSpeed={inheritSpeed}
         />
       </div>
     );
@@ -643,6 +654,8 @@ export function AgentLaunchControls({
             onEffort={draft.setEffort}
             onSpeed={draft.setSpeed}
             copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
+            ultra={ultra}
+            inheritSpeed={inheritSpeed}
           />
         </div>
       </Field>
