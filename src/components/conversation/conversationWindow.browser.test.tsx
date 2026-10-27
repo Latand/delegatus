@@ -2612,9 +2612,10 @@ describe("the runtime pill names the model the conversation runs on", () => {
 
 describe("the headers name the model the conversation runs on", () => {
   /*
-   * The pane's own header chip and the board reader's header chip over the
-   * production components, at the desktop width and one between it and the
-   * phone, both languages, both schemes.
+   * The pane's own header chip, the board reader's header chip and a relay
+   * chat reader's header chip over the production components, at the desktop
+   * width and one between it and the phone, both languages, both schemes; the
+   * relay reader at the phone width too.
    * `LLV_MODEL_FACE_SIDE=before` records what a checkout that names the engine
    * draws; the default records `after` and gates it. Frames go to
    * `.artifacts/runtime-model-face/`, which is not committed.
@@ -2628,6 +2629,7 @@ describe("the headers name the model the conversation runs on", () => {
     fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
   } as const;
   const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
+  const PHONE = { name: "phone-390", width: 390, height: 844 } as const;
 
   browserTest("the pane header and the reader header show the observed or requested model, or the engine's name, never the engine default", async () => {
     const out = path.resolve(".artifacts/runtime-model-face");
@@ -2638,17 +2640,23 @@ describe("the headers name the model the conversation runs on", () => {
     const browser = await chromium.connect(browserServer.wsEndpoint());
     const readings: Record<string, unknown> = {};
     try {
-      for (const [name, expected] of Object.entries(CASES)) for (const part of ["branch", "reader"] as const) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      for (const [name, expected] of Object.entries(CASES)) for (const part of ["branch", "reader", "relay"] as const) for (const viewport of part === "relay" ? [...VIEWPORTS, PHONE] : VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const { context, page, pageErrors } = await openFixture(browser,
-          `${served.base}?case=runtime-model-face-headers&lang=${lang}&file=${name}&part=${part}`, { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", false);
+          `${served.base}?case=runtime-model-face-headers&lang=${lang}&file=${name}&part=${part}`, { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.width < 600);
         const key = `${name}-${part}-${viewport.name}-${lang}-${scheme}`;
         try {
           await page.locator("[data-evidence-case]").waitFor({ timeout: 15_000 }).catch((error: Error) => { throw new Error(`${error.message}; page errors: ${pageErrors.join(" | ")}`); });
+          /* The relay chat opens from its row into the read-only reader, as an operator opens it. */
+          if (part === "relay") {
+            await page.locator("[data-relay-chat] button").first().click();
+            await page.locator("[data-relay-chat-reader]").waitFor({ timeout: 15_000 });
+          }
           await page.waitForTimeout(600);
           const reading = await page.evaluate((which) => {
             /* The identity chips the header draws: the model chip, and the engine's name where it names no model. */
             const chips = [...document.querySelectorAll<HTMLElement>(which === "reader"
               ? ".ch-engine, .ch-model"
+              : which === "relay" ? "[data-relay-chat-reader] .ch-engine, [data-relay-chat-reader] .ch-model"
               : '[data-testid="mobile-conv-meta"] span.rounded-full.font-mono, [data-testid="mobile-conv-meta"] span.rounded-full.font-bold')].filter((element) => element.getClientRects().length > 0);
             const range = document.createRange();
             const measured = chips.map((chip) => {

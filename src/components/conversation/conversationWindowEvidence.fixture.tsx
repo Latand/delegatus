@@ -9,6 +9,7 @@ import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { StagesSheet } from "@/components/kanban/StagesSheet";
 import { summarizePipeline } from "@/components/kanban/pipelineSummary";
 import { ReaderPlacement, ReaderPortals, ReaderSlot } from "@/components/kanban/KanbanReaders";
+import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -1466,11 +1467,25 @@ function modelFaceFile(which: string): FileEntry {
   } as FileEntry;
 }
 
-/** The two desktop headers that name a conversation's model: the pane's own and the board reader's. */
+/** The headers that name a conversation's model: the pane's own, the board reader's and a relay chat's reader. */
 function RuntimeModelFaceHeadersFixture() {
-  const file = modelFaceFile(params.get("file") ?? "luna");
+  /* Written seven minutes ago, so each header's age reads as a real conversation's does. */
+  const [file] = useState(() => ({ ...modelFaceFile(params.get("file") ?? "luna"), mtime: Math.floor(Date.now() / 1000) - 7 * 60 }));
   const [placement] = useState(() => new ReaderPlacement());
   const [now] = useState(() => Date.now());
+  if (params.get("part") === "relay") {
+    /* One relay chat over the same conversation; the driver opens it into the agent window's read-only reader. */
+    const chat = {
+      id: "model-face", relayId: "relay-1", relayName: "Support relay", targetId: "bot-1", targetName: "Support bot", chatKey: "QmF6x9Lk2pTw7RzA",
+      authority: "member" as const, engine: file.engine === "claude" ? "claude" as const : "codex" as const, turns: 3, compactions: 0, createdAt: "2026-10-09T08:00:00.000Z",
+      lastTurnAt: "2026-10-09T09:00:00.000Z", state: "idle" as const, file,
+    };
+    return (
+      <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+        <RelayChatsView relayId="relay-1" payload={{ relays: [{ id: "relay-1", name: "Support relay", origin: "https://relay.example" }], chats: [chat] }} />
+      </div>
+    );
+  }
   if (params.get("part") !== "reader") {
     return (
       <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas p-3 text-primary">
