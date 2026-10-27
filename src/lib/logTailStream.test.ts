@@ -157,6 +157,42 @@ describe("LogTailStreamSession", () => {
     }
   });
 
+  test("an incomplete UTF-8 append waits for growth without a catch-up loop", async () => {
+    const file = writeLog("utf8-growth.log", "");
+    const character = Buffer.from("😀");
+    fs.writeFileSync(file, character.subarray(0, 2));
+    const events: LogTailStreamEvent[] = [];
+    let reads = 0;
+    let notifyGrowth: () => void = () => undefined;
+    const heartbeat = Promise.withResolvers<void>();
+    const session = new LogTailStreamSession([{ id: "log", path: file, offset: 0 }], {
+      restatMs: 60_000,
+      heartbeatMs: 50,
+      readTailChunk: (...args) => { reads += 1; return readTailChunk(...args); },
+      watchFile: (_pathname, onChange) => {
+        notifyGrowth = onChange;
+        return { close: () => undefined };
+      },
+      onEvent: event => events.push(event),
+      onComment: () => { if (events.length > 0) heartbeat.resolve(); },
+    });
+    try {
+      session.start();
+      await Promise.race([heartbeat.promise, new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error("no heartbeat after initial read")), 2500);
+        void heartbeat.promise.then(() => clearTimeout(timer));
+      })]);
+      expect(reads).toBe(1);
+      expect(events.map(asChunk)).toEqual([{ start: 0, offset: 0, size: 2, data: "" }]);
+      fs.appendFileSync(file, character.subarray(2));
+      notifyGrowth();
+      await waitFor(() => events.length === 2);
+      expect(asChunk(events[1])).toEqual({ start: 0, offset: 4, size: 4, data: "😀" });
+    } finally {
+      session.close();
+    }
+  });
+
   test("file growth still arrives when native watching fails", async () => {
     const file = writeLog("watch-fails.log", "one\n");
     const events: LogTailStreamEvent[] = [];
