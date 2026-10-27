@@ -190,6 +190,29 @@ describe("the collector request the Viewer builds is one the worker accepts (#21
     });
   }, 30_000);
 
+  test("fresh snapshots retain a live host and remove it after its process exits", async () => {
+    const { pid, startIdentity } = sleeper();
+    const child = children.find(child => child.pid === pid)!;
+    const reader = createResourcesReader(buildResourceSnapshot, () => null, Date.now, lastResourceBuildDiagnostic, {
+      initial: null,
+      readFiles: async () => [],
+      readHostRecords: async () => [copilotHost(pid, startIdentity)],
+    });
+    for (let read = 0; read < 2; read++) {
+      const snapshot = await reader.read(true);
+      expect(snapshot.diagnostic.status).toBe("complete");
+      expect(snapshot.payload.sessionsStale).toBe(false);
+      expect(snapshot.payload.sessions.some(session => session.panePid === pid)).toBe(true);
+    }
+    const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+    child.kill("SIGKILL");
+    await exited;
+    const snapshot = await reader.read(true);
+    expect(snapshot.diagnostic.status).toBe("complete");
+    expect(snapshot.payload.sessionsStale).toBe(false);
+    expect(snapshot.payload.sessions.some(session => session.panePid === pid)).toBe(false);
+  }, 30_000);
+
   test("a request that drifts from the contract is refused before spawn and logged with its cause", async () => {
     const errors = spyOn(console, "error").mockImplementation(() => {});
     try {
