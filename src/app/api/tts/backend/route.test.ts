@@ -63,3 +63,18 @@ test.each(["", "a\nb", "x".repeat(129), 7, null])("refuses invalid voice %j", as
   expect((await POST(request({ backend: "elevenlabs", voice }))).status).toBe(400);
   expect(fs.existsSync(configFilePath("tts-backend"))).toBe(false);
 });
+
+for (const choice of [
+  { file: "tts-backend", body: { backend: "soniox" }, expected: "soniox" },
+  { file: "tts-model-fishaudio", body: { backend: "fishaudio", model: "s2.1-pro" }, expected: "s2.1-pro" },
+  { file: "tts-voice-soniox", body: { backend: "soniox", voice: "saved voice" }, expected: "saved voice" },
+]) test(`a failed ${choice.file} write keeps its error and releases admission for retry`, async () => {
+  const file = configFilePath(choice.file);
+  fs.mkdirSync(file, { recursive: true });
+  await expect(POST(request(choice.body))).rejects.toThrow("EISDIR");
+  expect(fs.existsSync(`${file}.write-lock`)).toBe(false);
+  expect(fs.readdirSync(`${file}.write-locks`)).toEqual([]);
+  fs.rmdirSync(file);
+  expect((await POST(request(choice.body))).status).toBe(200);
+  expect(fs.readFileSync(file, "utf8")).toBe(`${choice.expected}\n`);
+});
