@@ -488,6 +488,15 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   expect(recovered.merges().filter(args => args[2] === "12")).toHaveLength(1);
   expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
   receipt = "unreadable"; recovered.advance(MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS);
+  // Retry cleared the head clock. Missing proof must remain paced past the
+  // ordinary read-failure cap as well as a retained head's wait deadline.
+  for (let failure = 1; failure <= 3; failure++) {
+    await recovered.sweep();
+    expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true, readFailures: failure });
+    expect(Date.parse(recovered.merge(completed.id)!.nextReadAt!)).toBe(recovered.now() + MERGE_POLL_MS);
+    recovered.advance(MERGE_POLL_MS);
+  }
+  recovered.pipeline(completed.id).merge!.headSeenAt = iso(recovered.now() - MERGE_WAIT_LIMIT_MS);
   await recovered.sweep();
   expect(Date.parse(recovered.merge(completed.id)!.nextReadAt!)).toBe(recovered.now() + MERGE_POLL_MS);
   const calls = receiptReads;
