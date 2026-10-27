@@ -65,7 +65,7 @@ beforeEach(() => {
     if (url === "/api/accounts") {
       return new Response(JSON.stringify({
         claude: { active: "acct-a", accounts: ACCOUNTS, migration: null, autoBalance: null },
-        codex: { active: null, accounts: [], migration: null, autoBalance: null },
+        codex: { active: "acct-a", accounts: ACCOUNTS, migration: null, autoBalance: null },
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url === "/api/tmux") return await new Promise<Response>((resolve) => { answerReconfigure = resolve; });
@@ -416,5 +416,34 @@ test("a pick a message already engaged offers no cancel in the desktop popover's
   expect(document.querySelector("[data-runtime-popover-account]")?.textContent ?? "runs on Account A · next on Account B")
     .toBe("runs on Account A · next on Account B");
   expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  await act(async () => root.unmount());
+});
+
+/* A move is a reconfigure, and a reconfigure names a model. A conversation whose model is not known holds the
+   move and says why; one whose transcript has not reported a model yet moves on the model its launch asked for. */
+const codexFile: FileEntry = {
+  ...file,
+  path: "/state/accounts/codex/acct-a/sessions/2026/10/27/rollout-luna.jsonl",
+  root: "codex-sessions", name: "rollout-luna.jsonl", engine: "codex", fmt: "codex", model: null, launchModel: null,
+} as FileEntry;
+const codexSession = (): RuntimeSession => ({ ...session(null), sessionKey: { engine: "codex", sessionId: "session-intent" }, hostKind: "codex-app-server", artifactPath: codexFile.path });
+
+test("a move picked from the pill on a conversation with no known model sends no reconfigure and says why", async () => {
+  const { host, root } = await openSheet(<><TaskToastHost /><RuntimePill file={codexFile} surface="structured" runtimeSession={codexSession()} /></>);
+  act(() => { row("acct-b").click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  expect(header()).toBe("runs on Account A");
+  expect(host.textContent).toContain("No model reported yet — pick a model before moving to another account");
+  await act(async () => root.unmount());
+});
+
+test("a move picked from the pill before the transcript reports a model sends the launch's model", async () => {
+  const launched = { ...codexFile, launchModel: "gpt-6-luna" } as FileEntry;
+  const { root } = await openSheet(<RuntimePill file={launched} surface="structured" runtimeSession={codexSession()} />);
+  act(() => { row("acct-b").click(); });
+  expect(header()).toBe("runs on Account A · next on Account B");
+  expect(calls.filter((call) => call.url === "/api/tmux").map((call) => call.body))
+    .toMatchObject([{ action: "reconfigure", path: launched.path, accountId: "acct-b", model: "gpt-6-luna" }]);
   await act(async () => root.unmount());
 });

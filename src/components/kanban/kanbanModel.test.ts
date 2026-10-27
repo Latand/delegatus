@@ -10,7 +10,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
-import { buildTaskBands } from "@/components/scheme/taskBands";
+import { buildTaskBands, layoutTaskBands } from "@/components/scheme/taskBands";
 import { createTaskWorkflowProjector, projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { buildPhoneKanban } from "@/components/mobile/phoneKanbanModel";
 
@@ -88,6 +88,39 @@ function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task", deferDoneVisibility: true });
   return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, cardFilter: options.cardFilter, reasonFilter: options.reasonFilter, statusOverrides: options.overrides, now: NOW });
 }
+
+// Retained from the retired board suite: the supported board consumes the same band projection.
+test.each([false, true])("a direct-review deck stays with its primary subject band, task linked: %s", linked => {
+  const anchor = file(0);
+  const base = layout([anchor]);
+  const flow: import("../flows/reviewGroup").DirectReviewGroup = {
+    id: "direct-review::fixture", kind: "direct-review", project: "fixture", cwd: "/repo",
+    implementerPath: anchor.path, implementerConversationId: anchor.conversationId!,
+    roles: { implementer: { engine: "codex", model: null, effort: null }, reviewer: { engine: "codex", model: null, effort: null } },
+    state: "done_comment", stateDetail: null, rounds: [], createdAt: "2026-01-01T00:00:00Z", closedAt: null,
+  };
+  const deckKey = "deck::" + flow.id;
+  base.decks = [{ key: deckKey, flow, rounds: [], x: 700, y: 100, w: 600, h: 810 }];
+  base.byPath.set(deckKey, base.decks[0]!);
+  const tasks = linked ? [task("a", "assigned", [anchor.path], { createdAt: "2026-01-01T00:00:00Z" }),
+    task("b", "assigned", [anchor.path], { createdAt: "2026-01-02T00:00:00Z" })] : [];
+  const projection = projectTaskWorkflows(tasks, [], [], [anchor]);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled" });
+  const owners = bands.filter(band => band.members.some(member => member.key === deckKey));
+  expect(owners).toHaveLength(1);
+  expect(owners[0]!.members.some(member => member.key === anchor.path)).toBe(true);
+  const placed = layoutTaskBands(base, bands, { mode: "near", viewportWidth: 1440, reader: null,
+    expandedDecks: new Set([deckKey]), collapsedDecks: new Set() }).layout;
+  expect(placed.decks.map(deck => deck.key)).toEqual([deckKey]);
+  expect(placed.byPath.has(deckKey)).toBe(true);
+  const board = buildKanbanModel({ bands, tasks, pipelines: [], projection, files: [anchor], now: NOW });
+  const cards = [...board.unlinked, ...KANBAN_STATUSES.flatMap(status => board.columns[status].cards)];
+  expect(cards.filter(card => card.members.some(member => member.file.path === anchor.path))).toHaveLength(1);
+  // A retained deck never brings an absent subject back onto the board.
+  const missing = { ...base, nodes: [], byPath: new Map([[deckKey, base.decks[0]!]]) };
+  const missingBands = buildTaskBands(missing, { tasks: [], projection: projectTaskWorkflows([], [], [], []), untitled: "Untitled" });
+  expect(missingBands.flatMap(band => band.members)).toEqual([]);
+});
 
 test("unlinked card reuse follows working and cleared-attention deadlines, replacements and removal", () => {
   const build = createKanbanModel();

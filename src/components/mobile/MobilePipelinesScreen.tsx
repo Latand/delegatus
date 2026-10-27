@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 
 import { ChevronDown, ChevronRight } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { workingStageConversations } from "@/components/kanban/kanbanModel";

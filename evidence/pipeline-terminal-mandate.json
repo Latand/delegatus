@@ -1,0 +1,765 @@
+{
+  "issue": 3037,
+  "recordedAt": "2026-10-24T00:16:43.870388+00:00",
+  "baseline": "3d51b7bd151e4fc0df6e7249c5846d91fcc3bec6",
+  "mainAtCheck": "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+  "scope": "Live mandate contract and stored shipped-default upgrades",
+  "sourceSha256": {
+    "src/lib/orchestrator/prompt.ts": "be4fda0b3580f3f54a96767548d9890c70466644b67c878505c164a65054a330",
+    "src/lib/orchestrator/prompt.test.ts": "6a07e150fba8dc98db2c90b9e484045061f0d8fb683b5ca4d7189f547a1f8dbd"
+  },
+  "mandate": {
+    "version": 59,
+    "sha256": "c16c157ea7afb595eac8f1b6773c7f166771fd7c516ce7d1eb917a84136ad863",
+    "deliveredBytes": 30130,
+    "addedBytes": 18,
+    "envelopeBoundsChanged": false
+  },
+  "contractPaths": {
+    "freshDefault": "src/lib/orchestrator/prompt.ts:566; MCP bindings and desktop/mobile defaults",
+    "newSeatIntent": "src/lib/orchestrator/seatCommand.ts:1089 upgrades before admission and durable begin",
+    "delivery": "src/lib/orchestrator/prompt.ts:753 upgrades shipped content and renders the role table",
+    "rotationAndBudget": "src/lib/orchestrator/handoffDigest.ts sizes the upgraded delivery",
+    "pendingReplay": "src/lib/orchestrator/seatCommand.ts:1849 and orchestratorMandateWithRoleTable preserve the first bytes",
+    "displayReconciliation": "src/components/conversation/heldMandate.ts accepts upgraded and retained delivery forms"
+  },
+  "selection": {
+    "directPromptImporters": 25,
+    "fixtureConsumerExtras": 8,
+    "terminalRoutingExtra": 1,
+    "testCommand": [
+      "bun",
+      "run",
+      "test",
+      "<file>"
+    ],
+    "transport": "Initial batch: bash \"$OWNED_GATE\" gate-remote -- python3 -c <scratch batch>. Resumed batch: gate-remote -- env LLV_OWNED_RUN_TIMEOUT_MS=7200000 bash scripts/gate-slot.sh python3 -c <scratch batch>.",
+    "isolation": "Fresh HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, TMPDIR, LLV_STATE_DIR and engine homes for each file; closed loopback control URL; ordinary project preload and owned runner. One file per process with a new session and closed stdin.",
+    "baselineMethod": "Disposable detached clone with the same origin and dependencies; unchanged baseline production, final prompt detector copied. Every red head file runs whole on the baseline.",
+    "completion": "23 complete head file verdicts retained before transport interruption; 11 remaining files rerun in the completed resumed batch."
+  },
+  "checks": [
+    {
+      "label": "red-main-prompt",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/orchestrator/prompt.test.ts",
+        "-t",
+        "#3037"
+      ],
+      "exitCode": 1,
+      "seconds": 0.64,
+      "pass": 1,
+      "fail": 1,
+      "skip": 67,
+      "failures": [
+        [
+          "",
+          "fresh and upgraded mandates require the terminal review check before automatic merging (#3037)"
+        ]
+      ],
+      "errors": []
+    },
+    {
+      "label": "head-prompt",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/orchestrator/prompt.test.ts"
+      ],
+      "exitCode": 0,
+      "seconds": 0.7,
+      "pass": 69,
+      "fail": 0,
+      "skip": 0,
+      "failures": [],
+      "errors": []
+    },
+    {
+      "label": "typecheck",
+      "command": [
+        "bun",
+        "x",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exitCode": 0,
+      "seconds": 144.62,
+      "pass": 0,
+      "fail": 0,
+      "skip": 0,
+      "failures": [],
+      "errors": []
+    },
+    {
+      "label": "eslint",
+      "command": [
+        "bun",
+        "run",
+        "lint",
+        "--no-cache",
+        "src/lib/orchestrator/prompt.ts",
+        "src/lib/orchestrator/prompt.test.ts"
+      ],
+      "exitCode": 0,
+      "seconds": 2.26,
+      "pass": 0,
+      "fail": 0,
+      "skip": 0,
+      "failures": [],
+      "errors": []
+    }
+  ],
+  "totals": {
+    "files": 34,
+    "greenFiles": 23,
+    "baselineMatchedRedFiles": 11,
+    "passedTests": 986,
+    "preExistingFailures": 105,
+    "skippedTests": 352,
+    "introducedFailures": 0
+  },
+  "files": [
+    {
+      "file": "src/components/LogFeed.startingWindow.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 42,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/feed/MandateCard.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/feed/mandateMessage.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 7,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/kanban/kanbanBoard.browser.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 251,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/mobile/MobileOrchestratorSheet.render.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 7,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+      "head": {
+        "exitCode": 1,
+        "pass": 19,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 19,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "the row opens the tick sheet, whose Save rides the footer, and whose × puts the seat sheet back"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toBeNull()": 1
+      }
+    },
+    {
+      "file": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 97,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/mobile/mobileOrchestratorControls.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/mobile/mobileSeatCard.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/orchestrator/OrchestratorPanel.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 78,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/orchestrator/draftPrefill.dom.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/orchestrator/issue1681Evidence.browser.test.tsx",
+      "head": {
+        "exitCode": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 4,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/components/orchestrator/seatState.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 69,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/mcp/orchestratorTools.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 75,
+        "fail": 2,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 75,
+        "fail": 2,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "server 403 on seat creation retains its cause and closes the send as not executed",
+        "a definite message refusal after seat creation preserves both the cause and created recipient"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toMatchObject(expected)": 2
+      }
+    },
+    {
+      "file": "src/lib/mcp/seatAnswerBudgets.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 2,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 2,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "seat_tick_settings acknowledges a write in 300 B, edits one note line for under 300 B sent, and reads the note back once (#2030)"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toBeLessThanOrEqual(expected)": 1
+      }
+    },
+    {
+      "file": "src/lib/monitor/report.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 15,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatHostRecovery.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.agenda.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 68,
+        "fail": 14,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 68,
+        "fail": 14,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "a wake drops a lane closed during gathering and carries the current monitor note",
+        "a enabled change during gathering refreshes gated pull-request evidence",
+        "a interval change during gathering refreshes gated pull-request evidence",
+        "a newly eligible failed PR read preserves its outage accounting",
+        "a canceled successful PR refresh clears recovered outage accounting and starts the next run fresh",
+        "a launch that failed before it ran is a terminal child with a failed outcome, harvested once (#1465)",
+        "a wake the record says was delivered lands, on the plan the raising check wrote (#1465)",
+        "a wake the record proves was never delivered is dropped, and raised again in the same check (#1465)",
+        "a wake the record ended without proof keeps its identity inside its bound, carded once and never replaced, and is retired unresolved past it (#1465, #1746)",
+        "a wake nobody can account for is kept under its key past the deadline and carded once, until its bound is spent (#1465, #1746)",
+        "a snapshot that cannot be taken leaves the children unread: a wake names the gap, and nothing else owed is an error (#1465)",
+        "a child the registry cannot place is unknown: not open work, not harvested, and said so (#1465)",
+        "the seat's Copilot child with a conversation but no observed turn keeps child-unplaced visible (#2081)",
+        "a busy child whose host is gone is a stall the registry can see, reported after a second check (#1465)"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toMatchObject(expected)": 10,
+        "expect(received).toBe(expected)": 1,
+        "expect(received).toContain(expected)": 1,
+        "expect(received).toEqual(expected)": 1
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.catchUp.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "500 UUID outcomes and a mixed lane manifest fit transport and credit only after delivery"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toBe(expected)": 1
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.delivery.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 28,
+        "fail": 23,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 28,
+        "fail": 23,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "a JSON-mode registry leaves the seat readable and reports the children as unindexed (#1465)",
+        "a returned 409 or 503 refusal is fenced across rotation and the successor acknowledges once (#1465)",
+        "dead Viewer MCP withholds a recordless refusal retry under its original key until recovery",
+        "a dead-host original-key retry refreshes its snapshot and recovers without acknowledging early",
+        "a drain retains an unaccepted wake's original key until its retry is admitted",
+        "a paused old lookup cannot dispatch after a successor replaces the refused wake (#1465)",
+        "a dispatch paused before reservation blocks rotation until its returned refusal is fenced (#1465)",
+        "a wake stranded by a replaced seat is retired, and the successor's own wake goes out (#1594)",
+        "a late Claude confirmation closes a retired wake under its original key without sending or crediting it",
+        "a wake the settlement ended unrecorded fences inside its bound, the board names the operation, the record's reason and the journal's silence, and the bound is what ends it (#1746)",
+        "a journal answer that proves nothing keeps the fence: a late admission the queue fenced, and an old host's unverified failure",
+        "the journal's own terminal verdict outranks a record settled without it: rejected releases the fence and the next wake goes out",
+        "a journal verdict the record cannot take still releases: a reservation compacted to its owner row is not what the replacement needs",
+        "a replacement released in its turn is raised under a third key, distinct from both before it (#1672)",
+        "a delivery whose terminal acknowledgement the record never received lands on the journal's word, on the plan the raising check wrote",
+        "a send the host admitted and rejected outright is released in the same check, whatever disposition the record kept",
+        "the permitted recovery for the stranded shape is supersession: the attempt retires whole and the successor is woken (#1594)",
+        "a released wake is raised again as a new message the journal admits, through the real transport, and lands exactly once (#1672)",
+        "a wake waits out the seat's running turn instead of interrupting it, and reaches the seat once, when it is idle",
+        "the #1672 shape — a key anchored eight days back that no evidence can settle — is retired on its bound and the first check past it delivers a wake (#1746)",
+        "the wake that replaces an attempt retired on its age is the project's only one in flight (#1746)",
+        "the wake replacing an attempt retired on its age stays inside the bound the runtime journal admits, and reaches the seat (#1771)",
+        "a wake whose identity crosses the bound is admitted by the real journal through the real transport, and lands (#1771)"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toMatchObject(expected)": 15,
+        "expect(received).toEqual(expected)": 4,
+        "expect(received).toHaveLength(expected)": 2
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.policy.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 86,
+        "fail": 6,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 86,
+        "fail": 6,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "an old refused wake after restart remains accounted for with queued",
+        "an old refused wake after restart remains accounted for with uncertain",
+        "an old refused wake after restart remains accounted for with admission closed",
+        "a parked lane and an unreadable pull-request source produce a wake naming both",
+        "a gh that throws beside a parked lane still wakes the seat, and names what it could not see",
+        "a send the layer refused without a record is re-dispatched under its original key by the next check (#1465)"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toBe(expected)": 2,
+        "expect(received).toContain(expected)": 1,
+        "expect(received).toMatchObject(expected)": 1,
+        "expect(received).toEqual(expected)": 1,
+        "expect(received).toHaveLength(expected)": 1
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 21,
+        "fail": 31,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 21,
+        "fail": 31,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "idle reported usage rotates through the normal command once, preserving handoff, lineage and project settings",
+        "seat tick launches its successor through the production spawn defer without a request scope",
+        "busy seat receives one steer-or-queue nudge at fifteen minutes and rotates only after the turn ends",
+        "stalled seat with busy liveness keeps authority until positive idle evidence",
+        "stalled seat with unknown liveness keeps authority until positive idle evidence",
+        "a large estimate waits until the transcript reports usage",
+        "failures keep the incumbent, report once per epoch and retry after the persisted cooldown",
+        "a turn starting during usage read defers automatic replacement until completion",
+        "a turn starting during handoff digest defers automatic replacement until completion",
+        "a lost outcome write recovers the accepted key and finishes a refused card without a second rotation",
+        "wakes off withholds the busy nudge and still permits idle automatic rotation",
+        "a provisional successor rollback is reported once and its failure card stays open until disabled",
+        "a manual rotation winning between decision and command supersedes the automatic attempt",
+        "an update-held launch replays its own pending intent and key at the next safe check",
+        "an update-held attempt waits on stalled/busy before replay",
+        "an update-held attempt waits on stalled/unknown before replay",
+        "positive idle liveness corrects a stale busy registry turn at admission",
+        "a turn starting while spawn is awaited keeps incumbent authority and reports one failed replacement",
+        "panel reconciliation during spawn preserves a predecessor that started a turn",
+        "a fresh process reconciles a lost automatic request with a busy predecessor",
+        "a fresh process reconciles a lost automatic request with a unknown predecessor",
+        "a fresh process reconciles a lost automatic request with a idle predecessor",
+        "a turn-held attempt executed after an hour keeps a full cooldown after rotated, including restart",
+        "a turn-held attempt executed after an hour keeps a full cooldown after failed, including restart",
+        "a update-held attempt executed after an hour keeps a full cooldown after rotated, including restart",
+        "a update-held attempt executed after an hour keeps a full cooldown after failed, including restart",
+        "an idle seat keeps its five-minute cadence for unchanged running children and lanes (#2346)",
+        "quiet unparented and cold-inbox work explains interval eligibility in settings and the board (#2346)",
+        "a deploy admitted before a lost reply still wakes its idle seat exactly once (#2346)",
+        "delivered task obligations cannot hide a running child's recurring interval (#2346)",
+        "a recovered idle writer wakes its settled deploy before timeout and once across controller restart: closed-idle"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toHaveLength(expected)": 16,
+        "expect(received).toMatchObject(expected)": 3,
+        "expect(received).toContain(expected)": 3,
+        "expect(received).toBe(expected)": 5,
+        "expect(received).rejects.toThrow(expected)": 1
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 83,
+        "fail": 23,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 83,
+        "fail": 23,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "a child whose last record predates the seat by weeks is skipped on the harvest and on the stall path (#1783)",
+        "an unreadable child is listed when it finished and named once when it stalled (#1783, #1881)",
+        "a failure this seat's own worker had an hour ago is listed, once (#1783)",
+        "a stall one seat was shown is shown again to the seat that succeeds it (#1783)",
+        "a board whose only children are ineligible ends quiet rather than raising an interval wake (#1783)",
+        "a report the seat filed under the project's old key, before the key was folded, discharges the owed outcome",
+        "a known Telegram refusal retries independently with allowed=%s and bridge=%s",
+        "first failure rotates once to the allowed account with handoff and one independent notice",
+        "a drain beginning during handoff holds automatic helpers, successors and notices until release",
+        "automatic recovery carries drain admission to a refused successor and resumes the same pending intent",
+        "an update drain holds rotation and notice until the first check after release",
+        "a readable authentication successor wakes while its predecessor's board notice full",
+        "a readable authentication successor wakes while its predecessor's board notice throws",
+        "a failed authentication successor gets its own notice while its predecessor's reported board card is owed",
+        "a failed authentication successor gets its own notice while its predecessor's drain-held board card is owed",
+        "a successor authentication failure stays independent of its predecessor's held notice",
+        "a rotation that lands before its outcome write is recovered from the durable request identity",
+        "a refused allowed-account rotation parks the seat and tells the operator the refusal",
+        "a failed launch receipt returned with HTTP 200 cannot claim authentication recovery",
+        "login before provisional successor materialization uses its launch credential baseline",
+        "a provisional authentication rotation keeps the incident through rollback and restart",
+        "a lost rotation-outcome write cannot clear authentication when the accepted successor rolls back",
+        "a provisional authentication rotation resolves only after successor materialization"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toEqual(expected)": 5,
+        "expect(received).toBeGreaterThan(expected)": 1,
+        "expect(received).toHaveLength(expected)": 4,
+        "expect(received).toBe(expected)": 9,
+        "expect(received).toContain(expected)": 2,
+        "expect(received).toBeUndefined()": 1
+      }
+    },
+    {
+      "file": "src/lib/orchestrator/handoffDigest.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 19,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/orchestrator/operatorDecisionForms.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/orchestrator/prompt.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 69,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/orchestrator/seatCommand.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 115,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 115,
+        "fail": 1,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "rotation rejects an explicit successor model outside the engine catalog before spawning"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toBe(expected)": 1
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.terminalBudget.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 9,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/roles/registry.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 34,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/roles/workerLimit.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/runtime/claudeMessageProvenance.test.ts",
+      "head": {
+        "exitCode": 1,
+        "pass": 14,
+        "fail": 2,
+        "skip": 0,
+        "errors": []
+      },
+      "base": {
+        "exitCode": 1,
+        "pass": 14,
+        "fail": 2,
+        "skip": 0,
+        "errors": []
+      },
+      "matchingFailureIdentities": true,
+      "failureNames": [
+        "rotation UUID retains custom mandate from active seat with stamped operator origin",
+        "rotation UUID retains custom mandate from history with stamped operator origin"
+      ],
+      "matchingAssertionKinds": true,
+      "assertionKinds": {
+        "expect(received).toEqual(expected)": 2
+      }
+    },
+    {
+      "file": "src/lib/runtime/deliveredMessageOccurrences.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 17,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    },
+    {
+      "file": "src/lib/voiceCompanion/provider.test.ts",
+      "head": {
+        "exitCode": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0,
+        "errors": []
+      }
+    }
+  ],
+  "recovery": {
+    "firstTransportExit": 255,
+    "resumedTransportExit": 0,
+    "resumedRanCount": 11,
+    "cleanup": "The recorded interrupted owned-runner birth identity was stopped through its cleanup handler. The private root and exported checkout were absent, and no matching run or private-root process remained before resuming.",
+    "resumedTransport": "Independent SSH connections; the project gate-slot wrapper runs on the remote test machine, and child runners bind to the batch parent birth identity.",
+    "localAdmissionRetry": {
+      "exitCode": 143,
+      "verdict": "unstarted batch cancelled after prolonged CPU admission waits",
+      "cleanup": "The wrapper reported four surviving host-process observations at cancellation; all four recorded identities were confirmed gone before remote admission was started."
+    },
+    "localInspection": "An unbounded XML diagnostic reader exited 137 at the local 4 GB memory guard. Bounded streaming inspection completed successfully. Completed remote verdicts were already retained and were unaffected."
+  },
+  "priorEvidence": "evidence/pipeline-terminal-review.json; this record supersedes its prompt test result for the changed mandate",
+  "overlapAudit": [
+    3298,
+    3200
+  ],
+  "stageReportSummary": "Fixes #3037. Synchronized the live review and merge clauses in src/lib/orchestrator/prompt.ts:561 with the terminal policy: the last fix gets one terminal check, pass completes, fail parks, and automatic merging requires that check. Nonterminal advance behavior is preserved. Version 59, its fingerprint, exact shipped-text upgrades and contrary assertions are updated; pending intents retain their first bytes. The new mandate detector fails against the unchanged main prompt and passes here; all 69 prompt tests pass with both existing envelope guards. Sequential isolated gate-remote checks: TypeScript and touched-file ESLint exit 0; 34 whole test files checked (23 green, 11 with 105 matching baseline failures), zero introduced failures. The terminal-routing suite passes nine cases. Commands, file verdicts, hashes and the interrupted-run recovery are recorded in evidence/pipeline-terminal-mandate.json. Earlier successor-publication and terminal-runtime evidence remains in evidence/pipeline-terminal-review.json; its six source hashes still match. Plain commits use the normal hooks. No push, issue comments or workflow edits."
+}
