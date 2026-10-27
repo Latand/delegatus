@@ -1,15 +1,11 @@
 "use client";
 
-import { isDirectGroup } from "@/components/flows/reviewGroup";
-
 import { useEffect, useMemo, useState } from "react";
 
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
-import type { Round } from "@/lib/flows/types";
+import type { Flow, Round } from "@/lib/flows/types";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
-import { openReviewHistory } from "./ReviewHistory";
 import { BranchPane } from "@/components/BranchPane";
 import { ChevronDown, FoldVertical } from "@/components/icons";
 import { EngineBadge } from "@/components/EngineMark";
@@ -47,10 +43,10 @@ export interface DeckRound {
   file: FileEntry | null;
 }
 
-function roundLabel(t: TFunction, round: Round, archived = false): string {
+function roundLabel(t: TFunction, round: Round): string {
   if (round.error) return t("roundDeck.roundAborted", { n: round.n });
   if (round.verdict) return t("roundDeck.roundVerdict", { n: round.n, verdict: `${VERDICT_GLYPHS[round.verdict]} ${round.verdict}` });
-  return archived ? t("reviewHistory.noVerdict") : t("roundDeck.roundInProgress", { n: round.n });
+  return t("roundDeck.roundInProgress", { n: round.n });
 }
 
 /** Spine of a stacked (non-front) round: pull it to bring the round forward. */
@@ -58,13 +54,11 @@ function RoundTab({
   round,
   depth,
   pulse,
-  archived,
   onPull,
 }: {
   round: Round;
   depth: number;
   pulse: boolean;
-  archived: boolean;
   onPull: () => void;
 }) {
   const { t } = useLocale();
@@ -81,7 +75,7 @@ function RoundTab({
         transform: `scale(${1 - depth * 0.035}) translateZ(${-depth * 34}px)`,
         transitionDelay: `${depth * 0.03}s`,
       }}
-      title={round.error ? `${roundLabel(t, round, archived)}: ${round.error}` : roundLabel(t, round, archived)}
+      title={round.error ? `${roundLabel(t, round)}: ${round.error}` : roundLabel(t, round)}
       onClick={onPull}
     >
       <span
@@ -91,7 +85,7 @@ function RoundTab({
         R{round.n} <RoundStateIcon verdict={round.verdict} error={!!round.error} className="h-2.5 w-2.5" />
       </span>
       <span className="min-w-0 flex-1 truncate text-[10.5px] font-semibold text-muted">
-        {round.error ? t("roundDeck.aborted") : round.verdict ? round.verdict : t(archived ? "reviewHistory.noVerdict" : "roundDeck.reviewInProgress")}
+        {round.error ? t("roundDeck.aborted") : round.verdict ? round.verdict : t("roundDeck.reviewInProgress")}
         {round.findingsCount != null && round.findingsCount > 0 ? ` · ${t("roundDeck.findings", { count: round.findingsCount })}` : ""}
       </span>
       {pulse ? <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-success" aria-hidden /> : null}
@@ -215,9 +209,9 @@ export function RoundDeck({
   const shown = stacked.slice(0, TAB_MAX);
   const hidden = stacked.length - shown.length;
   const tone = verdictTone(front.round.verdict);
-  const archived = !isDirectGroup(flow);
+  const finished = front.round.verdict !== null || !!front.round.error;
   const liveBehind =
-    !archived && latest && front.key !== latest.key && latest.round.verdict === null && !latest.round.error
+    latest && front.key !== latest.key && latest.round.verdict === null && !latest.round.error
       ? latest
       : null;
   const groupAria = groupLabel
@@ -227,7 +221,7 @@ export function RoundDeck({
     <button
       type="button"
       data-review-deck-collapse
-      className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       aria-label={t("roundDeck.collapseStack", { count: rounds.length })}
       aria-expanded="true"
       title={t("roundDeck.collapseStack", { count: rounds.length })}
@@ -260,7 +254,7 @@ export function RoundDeck({
           {t("roundDeck.roundsCount", { count: rounds.length })}
         </span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-muted">
-          {lastRound.error ? t("roundDeck.aborted") : lastRound.verdict ? `${VERDICT_GLYPHS[lastRound.verdict]} ${lastRound.verdict}` : t(isDirectGroup(flow) ? "roundDeck.reviewInProgress" : "reviewHistory.noVerdict")}
+          {lastRound.error ? t("roundDeck.aborted") : lastRound.verdict ? `${VERDICT_GLYPHS[lastRound.verdict]} ${lastRound.verdict}` : t("roundDeck.reviewInProgress")}
           {lastRound.findingsCount != null && lastRound.findingsCount > 0 ? ` · ${t("roundDeck.findings", { count: lastRound.findingsCount })}` : ""}
         </span>
         <EngineBadge engine={flow.roles.reviewer?.engine ?? "claude"} className="px-1.5 text-[9px] font-bold" />
@@ -282,26 +276,20 @@ export function RoundDeck({
       {/* Front card. Key by round: swapping rounds remounts the pane with the
           scheme fade instead of morphing one feed into another. */}
       <div key={front.key} className="scheme-enter deck-front relative z-[11] flex h-full flex-col">
-        <nav aria-label={t("reviewHistory.rounds")} className="flex shrink-0 items-center gap-1 rounded-t-lg border border-border bg-card p-1">
-          <select className="min-h-11 min-w-0 flex-1 bg-card text-xs" aria-label={t("reviewHistory.rounds")} title={roundLabel(t, front.round, archived)} value={front.key} onChange={event => setFrontKey(event.target.value)}>
-            {rounds.map((item, index) => <option key={item.key} value={item.key}>{roundLabel(t, item.round, archived)} · {index + 1}/{rounds.length}</option>)}
-          </select>
-          {archived ? <button type="button" className="min-h-11 shrink-0 px-2 text-xs text-accent" onClick={() => openReviewHistory(flow.id, front.round.n)}>{t("reviewHistory.open")}</button> : null}
-          {collapseControl}
-        </nav>
         {front.file ? (
           <BranchPane
             file={front.file}
             tasks={[]}
             isRoot={false}
             dormant={dormant}
-            readOnly
+            noComposer={flow.reviewerMode === "headless" || finished}
+            headerActions={collapseControl}
             banner={
               <div
                 className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border px-2.5 text-[10.5px] font-bold"
                 style={{ backgroundColor: tone.soft, color: tone.color }}
               >
-                {roundLabel(t, front.round, archived)}
+                {roundLabel(t, front.round)}
                 {front.round.findingsCount != null && front.round.findingsCount > 0 ? (
                   <span className="font-semibold opacity-80">· {t("roundDeck.findings", { count: front.round.findingsCount })}</span>
                 ) : null}
@@ -315,9 +303,10 @@ export function RoundDeck({
           />
         ) : (
           <div className="relative flex h-full flex-col items-center justify-center gap-1 rounded-[10px] border border-border bg-card shadow-1">
-            <span className="text-[12px] font-semibold text-muted">{roundLabel(t, front.round, archived)}</span>
+            <div className="absolute right-1.5 top-1.5">{collapseControl}</div>
+            <span className="text-[12px] font-semibold text-muted">{roundLabel(t, front.round)}</span>
             <span className="text-[11px] text-muted">
-              {front.round.error ? front.round.error : t(archived ? "reviewHistory.artifactMissing" : "roundDeck.spawningReviewer")}
+              {front.round.error ? front.round.error : t("roundDeck.spawningReviewer")}
             </span>
           </div>
         )}
@@ -329,7 +318,6 @@ export function RoundDeck({
           round={item.round}
           depth={index}
           pulse={liveBehind?.key === item.key}
-          archived={archived}
           onPull={() => setFrontKey(item.key)}
         />
       ))}

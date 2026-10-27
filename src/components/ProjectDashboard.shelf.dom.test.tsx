@@ -111,7 +111,7 @@ const task: BoardTask = {
 const dashboardProps = () => ({
   files: [], flows: [], pipelines: [], workflows: [], tasks: [task],
   project: "atlas", loaded: true, openNonce: 0, archived: false, catalogKnown: false,
-  projectCwd: "/workspace/atlas", catalogConversationCount: 0,
+  projectCwd: "/home/user/Projects/atlas", catalogConversationCount: 0,
   onArchive: () => {}, onUnarchive: () => {},
 });
 
@@ -267,8 +267,8 @@ test("the desktop has no + Pipeline of its own, and the phone's New pipeline sub
       expect(pipelineItem).not.toBeNull();
       flushSync(() => pipelineItem.click());
 
-      expect(await waitFor(() => document.querySelector('[data-pipeline-picker-state="ready"]') !== null)).toBe(true);
-      const blank = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      expect(await waitFor(() => host.querySelector('[data-pipeline-picker-state="ready"]') !== null)).toBe(true);
+      const blank = [...host.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent?.includes(translate("en", "pipelineTemplates.blank")))!;
       flushSync(() => blank.click());
       expect(await waitFor(() => posts.length === 1)).toBe(true);

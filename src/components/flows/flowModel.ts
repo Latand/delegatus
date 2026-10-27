@@ -1,15 +1,16 @@
-import { isDirectGroup } from "@/components/flows/reviewGroup";
+import { markFlowClosedLocally } from "./useEffectiveFlows";
 export { useEffectiveFlows } from "./useEffectiveFlows";
 
-import { getLocale, type Locale, type TFunction, translate } from "@/lib/i18n";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
-import type { FlowRoleKey, FlowState, ReviewVerdict, Round } from "@/lib/flows/types";
+import { getLocale, type Locale, type MessageKey, type TFunction, translate } from "@/lib/i18n";
+import type { Flow, FlowAction, FlowRoleKey, FlowState, ReviewVerdict, RoleConfig, Round } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
 import { conversationFileIndex, currentMemberPath, withoutArchivedPredecessors } from "@/lib/accounts/identity";
 
+import { isConversation } from "@/components/projectModel";
+import { formatRateLimitTime } from "@/components/rateLimit";
 import { resolveTranscriptClaims, transcriptClaimResolver } from "@/components/transcriptClaims";
 
-/** Compatibility event accepted from cached clients during archive refresh. */
+/** Fired after any successful flow PATCH so pollers refresh immediately. */
 export const FLOWS_CHANGED_EVENT = "llv:flows-changed";
 
 /**
@@ -274,11 +275,11 @@ export function foldClaimedReviewers(
 
 const EMPTY_PROTECTED: ReadonlySet<string> = new Set();
 
-/** Cached creation affordances remain disabled after flow retirement. */
+/** A conversation that can host a new flow: a root claude/codex session without one. */
 export function canStartFlow(file: FileEntry, activeByImplementer: ReadonlyMap<string, Flow>): boolean {
-  void file;
-  void activeByImplementer;
-  return false;
+  if (activeByImplementer.has(file.path)) return false;
+  if (file.engine !== "claude" && file.engine !== "codex") return false;
+  return isConversation(file);
 }
 
 /** Localized lifecycle-state label; keys live under flowState.* in the dicts. */
@@ -286,18 +287,57 @@ export function stateLabel(t: TFunction, state: FlowState): string {
   return t(`flowState.${state}`);
 }
 
-export function flowPresentation(t: TFunction, flow: Flow, _locale: Locale) {
+/** States that ask for the user's attention on the strip and the switchboard. */
+export const ATTENTION_STATES: ReadonlySet<FlowState> = new Set([
+  "spawn_pending",
+  "relay_pending",
+  "needs_decision",
+  "paused",
+  "approved",
+]);
+
+/** Flow states in which one of the loop sides is visibly doing work. */
+export const BUSY_FLOW_STATES: ReadonlySet<FlowState> = new Set(["spawning", "reviewing", "relaying", "fixing"]);
+
+/** The one action the current state is waiting on, rendered prominent on the
+    strip and in the loop hub's controls. */
+export const PENDING_ACTIONS: Partial<Record<FlowState, { labelKey: MessageKey; action: FlowAction }>> = {
+  waiting_ready: { labelKey: "flowStrip.startReview", action: "advance" },
+  spawn_pending: { labelKey: "flowStrip.spawnReviewer", action: "advance" },
+  relay_pending: { labelKey: "flowStrip.relayNotes", action: "advance" },
+  needs_decision: { labelKey: "flowStrip.retryRound", action: "retry-round" },
+  done_comment: { labelKey: "flowStrip.anotherRound", action: "another-round" },
+};
+
+export function flowPresentation(t: TFunction, flow: Flow, locale: Locale) {
+  if (flow.block?.reason === "rate_limited") {
+    /* A block the provider named no reset for says so, and names the recheck
+       it is bounded by (#611): presenting that instant as a reset time would
+       be a deadline nobody gave, and saying only "waiting" would hide that the
+       wait is bounded and being rechecked. */
+    const detail = flow.block.resetAt
+      ? t("flowState.rate_limit_until", { time: formatRateLimitTime(flow.block.resetAt, locale) })
+      : flow.block.recheckAt
+        ? t("flowState.rate_limit_reset_unknown", { time: formatRateLimitTime(flow.block.recheckAt, locale) })
+        : t("flowState.rate_limit_wait");
+    return {
+      label: t("flowState.blocked_rate_limited"),
+      detail,
+      attention: true,
+      pending: null,
+    };
+  }
   return {
-    label: isDirectGroup(flow) ? stateLabel(t, flow.state) : t(flow.state === "paused" || flow.rounds.some(round => round.relayPendingSettlement || round.relayRetryRequiresIdempotency) ? "reviewHistory.unresolved" : "reviewHistory.retired"),
+    label: stateLabel(t, flow.state),
     detail: flow.stateDetail,
-    attention: false,
-    pending: null,
+    attention: ATTENTION_STATES.has(flow.state),
+    pending: PENDING_ACTIONS[flow.state] ?? null,
   };
 }
 
 /** The loop side working right now — drives the role tags on the scheme. */
 export function activeLoopRole(flow: Flow): FlowRoleKey | null {
-  if (!isDirectGroup(flow) || flow.block) return null;
+  if (flow.block) return null;
   if (flow.state === "spawning" || flow.state === "reviewing") return "reviewer";
   if (flow.state === "waiting_ready" || flow.state === "relaying" || flow.state === "fixing") return "implementer";
   return null;
@@ -305,7 +345,7 @@ export function activeLoopRole(flow: Flow): FlowRoleKey | null {
 
 /** The cycle leg traffic is on: forward = implementer → reviewer. */
 export function activeLoopLeg(flow: Flow): "forward" | "back" | null {
-  if (!isDirectGroup(flow) || flow.block) return null;
+  if (flow.block) return null;
   if (flow.state === "spawn_pending" || flow.state === "spawning" || flow.state === "reviewing") return "forward";
   if (flow.state === "relay_pending" || flow.state === "relaying" || flow.state === "fixing") return "back";
   if (flow.state === "waiting_ready") return flow.rounds.length ? "back" : null;
@@ -326,7 +366,32 @@ export function verdictTone(verdict: ReviewVerdict | null): { color: string; sof
   return { color: "var(--color-muted)", soft: "var(--color-sunken)" };
 }
 
-/** Cached callers get a local retirement refusal without attempting a write. */
-export async function patchFlow(_id: string, _body: unknown): Promise<string> {
-  return translate(getLocale(), "reviewHistory.retired");
+export async function patchFlow(
+  id: string,
+  body: {
+    action: FlowAction;
+    mode?: "auto" | "manual";
+    rounds?: number;
+    note?: string;
+    roles?: { reviewer?: Partial<RoleConfig> };
+  },
+): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/flows/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      /* A close clears the reviewer side optimistically; every mutation asks
+         the poller to refresh now instead of waiting out its interval. */
+      if (body.action === "close") markFlowClosedLocally(id);
+      window.dispatchEvent(new Event(FLOWS_CHANGED_EVENT));
+      return null;
+    }
+    const json = (await res.json().catch(() => null)) as { error?: string } | null;
+    return json?.error ?? translate(getLocale(), "flowModel.failed", { status: res.status });
+  } catch {
+    return translate(getLocale(), "common.serverUnavailable");
+  }
 }

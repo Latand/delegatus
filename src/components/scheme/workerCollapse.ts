@@ -1,5 +1,4 @@
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
-import type { Round } from "@/lib/flows/types";
+import type { Flow, Round } from "@/lib/flows/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES } from "@/lib/board/types";

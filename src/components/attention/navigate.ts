@@ -1,4 +1,3 @@
-import { openReviewHistory } from "@/components/flows/ReviewHistory";
 import { frameWasRead } from "@/lib/attention/frames";
 import { navigableAnchorKeys, resolveFocusTarget, type FocusFrameIndex } from "@/lib/attention/resolve";
 import { focusTargetAnchorKeys, isGeometricTarget } from "@/lib/attention/targets";
@@ -187,11 +186,6 @@ export async function runFocusHandoff(
     else shell.openProject(project);
   }
 
-  // Archive reading is independent of board placement and camera support.
-  if (request.intent === "open" && request.target.kind === "flowRound") {
-    openReviewHistory(request.target.flowId, request.target.round);
-  }
-
   let board = await boardForProject(bus, project, timing);
   let resolved = resolveFocusTarget(request.target, usableFrame(request.frameAtCreation), board?.index ?? null);
 
@@ -256,10 +250,10 @@ export async function runFocusHandoff(
      somewhere it can take anyone — and saying so is better than a card that
      claims the operator arrived. */
   if (!moved) return { resolution: "lost", moved: false, frame: null };
-  /* A conversation's `open` also opens its transcript; `show` frames it and
-     stops there. Archived rounds opened independently above. Other targets
-     are board objects the frame puts on screen; geometric targets are refused
-     the open intent at creation. QUIETLY: `moveTo` above is this handoff's one and
+  /* `open` also opens the target's own surface; `show` frames it and stops
+     there. Only a conversation has a surface to open — a geometric target is
+     refused the intent at creation, and the rest are board objects the frame
+     itself puts on screen. QUIETLY: `moveTo` above is this handoff's one and
      only camera move, so the open contributes the card and the history entry
      and never a second glide. A navigator without the quiet half gets
      `placePath` — materialization without the competing move — rather than

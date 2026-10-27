@@ -3,7 +3,7 @@ import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";

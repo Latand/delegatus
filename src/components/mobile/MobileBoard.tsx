@@ -7,7 +7,7 @@ import type { ConversationCatalogData } from "@/hooks/useConversationCatalog";
 import { captureCatalogPosition, MobileCatalogTail, restoreCatalogPosition, type CatalogPosition } from "./MobileInlineCatalog";
 import { Bot } from "lucide-react";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { formatResetClock } from "../rateLimit";

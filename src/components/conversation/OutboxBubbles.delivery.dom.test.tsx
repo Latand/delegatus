@@ -617,18 +617,3 @@ test("a raw sentence the receipt repeats behind another wrapper is printed once"
   expect(host.querySelector("[data-outbox-transport]")).toBeNull();
   expect(host.querySelector("[data-outbox-detail]")!.textContent!.split(cause)).toHaveLength(2);
 });
-
-
-test.each([false, true])("archive message rows retain evidence without delivery actions (uncertain: %s)", async uncertain => {
-  const { ConversationMessageRow } = await import("./OutboxBubbles");
-  let effects = 0;
-  const action = () => { effects++; };
-  const host = await render(<ConversationMessageRow readOnly entry={entry(uncertain
-    ? { state: "delivering", operationId: "retained-operation", deliveryUncertain: true }
-    : { state: "failed", error: "Retained refusal" })} t={translator("en")} nowMs={SUBMITTED_AT + PAST_BOUND_MS}
-    actions={{ onRetry: action, onCancel: action, onClear: action, onEdit: action, onCheck: action, onDiscard: action }} />);
-  expect(host.textContent).toContain("status of the merge queue");
-  await disclosed(host);
-  expect(host.querySelector("[data-outbox-retry], [data-outbox-edit], [data-outbox-check], [data-outbox-cancel], [data-outbox-clear], [data-outbox-discard]")).toBeNull();
-  expect(effects).toBe(0);
-});

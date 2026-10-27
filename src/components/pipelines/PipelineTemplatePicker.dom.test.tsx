@@ -40,7 +40,7 @@ function mount(node: React.ReactNode): HTMLElement {
   const root = createRoot(host);
   roots.add(root);
   flushSync(() => root.render(node));
-  return document.body;
+  return host;
 }
 
 async function settle(): Promise<void> {
@@ -81,7 +81,7 @@ test("checks the selected directory before enabling templates and stays mounted 
   expect(template.disabled).toBe(false);
   expect(host.textContent).toContain("architect");
   expect(host.textContent).toContain("builder");
-  expect(host.textContent).toContain("reviewer");
+  expect(host.textContent).toContain("⟳ reviewer");
 
   flushSync(() => template.click());
   expect(host.querySelector("[data-pipeline-picker-state]")?.getAttribute("data-pipeline-picker-state")).toBe("creating");

@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { useModalLayer } from "@/components/modalLayer";
 
 import { X } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
@@ -48,7 +46,6 @@ export function PipelineTemplatePicker({
   const [state, setState] = useState<PickerState>(() =>
     repoDir.trim() ? { phase: "checking" } : { phase: "blocked", code: "missing", path: "" });
   const generation = useRef(0);
-  const focusRepositoryOnOpen = useRef(!repoDir.trim());
 
   useEffect(() => {
     const requestedRepo = repoInput.trim();
@@ -87,16 +84,15 @@ export function PipelineTemplatePicker({
     });
   };
 
-  const panel = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    const dialog = panel.current!;
-    // showModal moves focus itself; retain the opener before it does.
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.showModal();
-    if (focusRepositoryOnOpen.current) dialog.querySelector<HTMLInputElement>("input")?.focus();
-    return () => { dialog.close(); if (opener?.isConnected) opener.focus(); };
-  }, []);
-  useModalLayer({ containerRef: panel, onClose: () => { if (!creating) onClose(); }, manageFocus: false });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || creating) return;
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [creating, onClose]);
   const templates = PIPELINE_TEMPLATES.filter((template) => template.id !== "blank");
   const blockedPath = state.phase === "blocked" ? (state.path || shownRepoDir).trim() : "";
   const blockedMessage = state.phase === "blocked"
@@ -104,36 +100,20 @@ export function PipelineTemplatePicker({
       ? t(`pipelinePreflight.${state.code}`, { path: blockedPath })
       : t("pipelinePreflight.empty"))
     : null;
-  return createPortal(
+  return (
     <div
       data-pipeline-picker-state={state.phase}
-      data-scheme-ui
-      onPointerDown={event => event.stopPropagation()}
-      className={`fixed inset-0 ${Z.modal} flex items-end justify-center sm:items-center`}
+      className={`fixed inset-0 ${Z.modal} flex items-end justify-center bg-black/40 sm:items-center`}
       role="presentation"
       onClick={(event) => {
-        event.stopPropagation();
         if (event.target === event.currentTarget && !creating) onClose();
       }}
     >
-      <dialog
-        ref={panel}
-        tabIndex={-1}
-        onCancel={event => event.preventDefault()}
-        onClick={event => {
-          if (event.target !== event.currentTarget || creating) return;
-          const box = event.currentTarget.getBoundingClientRect();
-          if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) onClose();
-        }}
-        onKeyDown={event => {
-          if (event.key === "Tab") return;
-          event.stopPropagation();
-          if (event.key === "Escape") { event.preventDefault(); if (!creating) onClose(); }
-        }}
+      <div
         role="dialog"
         aria-modal="true"
         aria-label={t("pipelineTemplates.title")}
-        className="fixed inset-x-0 bottom-0 top-auto mx-auto my-0 max-h-[100dvh] w-full max-w-[460px] overflow-y-auto overscroll-contain rounded-t-surface border-0 bg-card text-primary backdrop:bg-black/40 sm:top-0 sm:bottom-0 sm:my-auto sm:h-fit p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 sm:rounded-surface sm:pb-3"
+        className="w-full max-w-[460px] rounded-t-surface bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 sm:rounded-surface sm:pb-3"
       >
         <div className="mb-1 flex items-center gap-2">
           <div className="min-w-0 flex-1">
@@ -154,7 +134,6 @@ export function PipelineTemplatePicker({
           <span className="text-label font-semibold text-secondary">{t("pipelineTemplates.repoDir")}</span>
           <input
             value={shownRepoDir}
-            title={shownRepoDir}
             disabled={creating}
             autoFocus={!repoDir.trim()}
             onInput={(event) => {
@@ -226,7 +205,7 @@ export function PipelineTemplatePicker({
             <span className="text-label text-muted">{t("pipelineTemplates.blankHint")}</span>
           </button>
         </div>
-      </dialog>
-    </div>, document.body,
+      </div>
+    </div>
   );
 }

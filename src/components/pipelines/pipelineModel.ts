@@ -6,8 +6,7 @@ import { applyPipelineSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles"
 import { getLocale, translate, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
-import type { FlowEngine } from "@/lib/flows/types";
+import type { Flow, FlowEngine } from "@/lib/flows/types";
 import { PIPELINE_DISALLOWED_ROLE_IDS } from "@/lib/pipelines/types";
 import type {
   CreatePipelineRequest,
@@ -537,18 +536,30 @@ export function renderableFlowIds(flows: Flow[], placedPaths: ReadonlySet<string
   );
 }
 
-/** Legacy stage chips open the archive by durable id, even after the deck or
- * source transcript disappears. Native run stages retain scan-bound navigation. */
+/**
+ * How a stage chip / "open transcript" reveals an attempt on the board. A
+ * review-loop stage stores the reviewer transcript in `agentPath`;
+ * foldClaimedReviewers then removes that transcript from the board and folds it
+ * into the flow's round deck, so opening the raw path reveals nothing. Route
+ * those to the embedded flow (deck + round focus); a plain run stage opens its
+ * own node by path. `renderableFlows` disables the flow target for a
+ * closed/missing flow, and `renderablePaths` disables the run target for a
+ * transcript that has left the scanned file set, so every unreachable action is
+ * disabled and none silently no-ops (AC4).
+ */
 export function stageOpenTarget(
   stage: PipelineStage,
   attempt: PipelineStageAttempt | null,
-  _renderableFlows?: ReadonlySet<string>,
+  renderableFlows?: ReadonlySet<string>,
   renderablePaths?: ReadonlySet<string>,
 ): { kind: "flow"; flowId: string } | { kind: "path"; path: string } | null {
   if (!attempt) return null;
-  /* Retired attempts retain their original archive address. */
+  /* A review-loop stage's agentPath is always the reviewer transcript the board
+     folds into the round deck, so never route to it — the flow (or nothing) is
+     the only valid target. Only a run stage opens its own node by path. */
   if (stage.kind === "review-loop") {
     if (!attempt.flowId) return null;
+    if (renderableFlows && !renderableFlows.has(attempt.flowId)) return null;
     return { kind: "flow", flowId: attempt.flowId };
   }
   if (!attempt.agentPath) return null;
@@ -1062,7 +1073,7 @@ export const PIPELINE_TEMPLATES: readonly PipelineTemplate[] = [
     stages: [
       { kind: "run", roleId: "architect", access: "read-only", prompt: "{{task}}" },
       { kind: "run", roleId: "builder", access: "read-write", prompt: "{{prev.output}}" },
-      { kind: "run", roleId: "reviewer", access: "read-only", prompt: "{{prev.output}}" },
+      { kind: "review-loop", roleId: "reviewer", access: "read-only", prompt: "{{task}}" },
     ],
   },
   {
@@ -1070,7 +1081,7 @@ export const PIPELINE_TEMPLATES: readonly PipelineTemplate[] = [
     labelKey: "pipelineTemplates.buildReview",
     stages: [
       { kind: "run", roleId: "builder", access: "read-write", prompt: "{{task}}" },
-      { kind: "run", roleId: "reviewer", access: "read-only", prompt: "{{prev.output}}" },
+      { kind: "review-loop", roleId: "reviewer", access: "read-only", prompt: "{{task}}" },
     ],
   },
   {
@@ -1285,7 +1296,7 @@ export async function createPipeline(req: CreatePipelineRequest): Promise<Pipeli
  * the same rule the builder's own submit follows.
  */
 export function templateStageInputs(template: PipelineTemplate): PipelineStageInput[] {
-  const stages = draftStagesToInput(
+  return draftStagesToInput(
     template.stages.map((stage, index) => ({
       key: `tpl-${index}`,
       kind: stage.kind,
@@ -1298,14 +1309,6 @@ export function templateStageInputs(template: PipelineTemplate): PipelineStageIn
       roleParams: {},
     })),
   );
-  for (const reviewer of [...stages]) {
-    if (reviewer.role?.roleId !== "reviewer") continue;
-    const taken = new Set(stages.map(stage => stage.id));
-    const fixerId = deriveStageId("run", reviewer.id + "-fix", taken);
-    reviewer.onFail = { to: fixerId, maxRounds: DEFAULT_FAIL_EDGE_ROUNDS, onExhausted: "advance" };
-    stages.push({ id: fixerId, kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "{{prev.output}}", next: reviewer.id });
-  }
-  return stages;
 }
 
 /** The default action every fresh draft carries (#353): one implement
@@ -1564,10 +1567,14 @@ export function optimisticAddStage(pipeline: Pipeline, input: PipelineStageInput
   return { ...pipeline, stages: pruneStageEdges(stages) };
 }
 
-/** Add review inserts one native reviewer run after an existing stage. */
+/** Whether the board's Add review may insert after the stage at `index`
+    (#2187 §3.2): a review-loop there keeps the chain startable, and the plan
+    has room for the two stages the engine stores it as. */
 export function canAddReviewAfter(pipeline: Pick<Pipeline, "stages">, index: number): boolean {
-  return Number.isInteger(index) && index >= 0 && index < pipeline.stages.length
-    && pipeline.stages.length < MAX_PIPELINE_STAGES;
+  if (pipeline.stages.length + 2 > MAX_PIPELINE_STAGES) return false;
+  const kinds: PipelineStageKind[] = pipeline.stages.map((stage) => stage.kind);
+  kinds.splice(index + 1, 0, "review-loop");
+  return reviewLoopChainValid(kinds);
 }
 
 /** Default for a newly added review. The server echo carries any stored selection. */

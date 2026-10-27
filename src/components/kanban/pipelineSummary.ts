@@ -1,4 +1,4 @@
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Flow } from "@/lib/flows/types";
 import { failEdgeRoundsUsed as stageFailEdgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
 import { latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/lib/pipelines/stageChip";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";

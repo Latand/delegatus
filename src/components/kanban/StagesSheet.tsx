@@ -3,8 +3,7 @@
 import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { openReviewHistory } from "@/components/flows/ReviewHistory";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { PipelineAttemptState, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
@@ -496,9 +495,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {rounds.length ? (
         <div className="rounds" aria-label={t("kanban.stages.rounds")}>
           {rounds.map((round) => (
-            <button type="button" key={round.n} onClick={() => { if (shown?.flowId) openReviewHistory(shown.flowId, round.n); }} className={`rchip min-h-6 pointer-coarse:min-h-11 ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`}>
+            <span key={round.n} className={`rchip ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`}>
               {t("kanban.stages.round", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })}
-            </button>
+            </span>
           ))}
         </div>
       ) : null}

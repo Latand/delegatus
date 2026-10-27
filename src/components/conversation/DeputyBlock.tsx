@@ -140,14 +140,14 @@ function clock(iso: string): string {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 
-export function DeputyBlock({ deputy: receivedDeputy, engine = "claude", readOnly = false }: { deputy: SeatDeputyView; engine?: string; readOnly?: boolean }) {
+export function DeputyBlock({ deputy: receivedDeputy, engine = "claude" }: { deputy: SeatDeputyView; engine?: string }) {
   const { t } = useLocale();
   const [retried, setRetried] = useState<SeatDeputyView | null>(null);
   const deputy = retried?.askId === receivedDeputy.askId && (retried.attempt ?? 0) > (receivedDeputy.attempt ?? 0) ? retried : receivedDeputy;
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const retry = async () => {
-    if (retrying || readOnly) return;
+    if (retrying) return;
     setRetrying(true);
     setRetryError(null);
     try {
@@ -249,7 +249,7 @@ export function DeputyBlock({ deputy: receivedDeputy, engine = "claude", readOnl
           <span className="font-semibold text-secondary">{t("deputy.addressee")}</span>
         </div>
         {deputy.ask.origin.kind === "operator" ? (
-          <FeedMessageRow readOnly={readOnly} entry={null} canonical={{ text: deputy.ask.text }} />
+          <FeedMessageRow entry={null} canonical={{ text: deputy.ask.text }} />
         ) : (
           /* An agent wrote this ask (the voice gateway relaying), so it is the
              feed's internal card naming the sender's role, never the
@@ -269,7 +269,7 @@ export function DeputyBlock({ deputy: receivedDeputy, engine = "claude", readOnl
       {warn ? (
         <div data-deputy-failure className="my-1 flex min-w-0 flex-wrap items-center gap-2 text-caption text-warning">
           <p className="min-w-0 flex-1 basis-48 wrap-anywhere">{deputy.error || t(OUTCOME_KEYS[deputy.outcome!])}</p>
-          {deputy.retryable && !readOnly ? <button type="button" data-deputy-retry disabled={retrying} onClick={() => { void retry(); }}
+          {deputy.retryable ? <button type="button" data-deputy-retry disabled={retrying} onClick={() => { void retry(); }}
             className="min-h-11 shrink-0 rounded-control border border-strong px-3 font-semibold text-primary hover:bg-hover disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent">
             {t(retrying ? "deputy.retrying" : "deputy.retry")}
           </button> : null}

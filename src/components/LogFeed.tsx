@@ -373,8 +373,6 @@ interface Props {
   follow: boolean;
   setFollow: (follow: boolean) => void;
   compact?: boolean;
-  /** Archive and relay readers expose no host or delivery actions. */
-  readOnly?: boolean;
   /** A known retired recipient keeps its messages readable without offering another send. */
   sendBlockedReason?: string | null;
   /** Opens a fresh editable draft from a terminal structured launch receipt —
@@ -395,7 +393,7 @@ interface Props {
 export const JUMP_FADE_PX = 44;
 const JUMP_FADE = `linear-gradient(to bottom, #000 calc(100% - ${JUMP_FADE_PX}px), transparent)`;
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, readOnly = false, sendBlockedReason = null, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, sendBlockedReason = null, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -2124,7 +2122,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     {mandateCard ? (
                       <MandateCard item={{ kind: "mandate", ts: mandateCard.ts, text: mandateCard.text, mandate: mandateCard.mandate }} />
                     ) : null}
-                    {launchSettled ? null : <LaunchChips launch={launch!} onRetry={readOnly ? undefined : onLaunchRetry} />}
+                    {launchSettled ? null : <LaunchChips launch={launch!} onRetry={onLaunchRetry} />}
                   </div>
                 );
               }
@@ -2136,7 +2134,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   : row.leads && deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
                 return <LiveTurnRows key={row.key} items={row.items} lead={lead} />;
               }
-              if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} readOnly={readOnly} />;
+              if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
               if (row.kind === "message") {
                 /* The operator's own message, in the one shape it ever has.
                    `entry` is the local submission while it is unresolved,
@@ -2158,8 +2156,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                       canonical={row.canonical}
                       switchHold={outboxSwitchHold}
                       session={outboxSession}
-                      actions={readOnly ? undefined : outboxActions}
-                      readOnly={readOnly}
+                      actions={outboxActions}
                     />
                     {row.responseDurationMs !== undefined ? <ResponseDuration durationMs={row.responseDurationMs} /> : null}
                   </div>
@@ -2272,7 +2269,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 it would be drawn below the skeleton and step up to the
                 transcript's end when the read lands. It arrives with the rows,
                 already where it rests. */}
-            {readOnly || (compact && feedState === "loading") ? null : <ConversationAttention file={file} />}
+            {compact && feedState === "loading" ? null : <ConversationAttention file={file} />}
             {feed.items.length && !file.pendingQuestion && !file.waitingInput && endedQuestion ? (
               <div className="my-4 rounded-[8px] border border-border bg-sunken px-4 py-3 text-[13px] font-semibold text-muted">{endedQuestion}</div>
             ) : null}

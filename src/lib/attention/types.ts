@@ -81,7 +81,6 @@ export type FocusTarget =
   | { kind: "conversation"; path: string }
   | { kind: "pipeline"; pipelineId: string }
   | { kind: "stage"; pipelineId: string; stageId: string }
-  /** Compatibility address of a recorded, read-only review round. */
   | { kind: "flowRound"; flowId: string; round: number }
   | { kind: "task"; taskId: string }
   | { kind: "draft"; draftId: string }

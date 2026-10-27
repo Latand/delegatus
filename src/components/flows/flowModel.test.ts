@@ -363,7 +363,7 @@ describe("reviewer folding across recorded path spellings (#943 follow-up)", () 
   });
 });
 
-test("a recorded quota block has no current attention or pending action", () => {
+test("a quota-blocked flow presents the transient block and suppresses its pending action", () => {
   const limited = flow({
     implementerPath: "/implementer",
     reviewerPath: "/reviewer",
@@ -378,14 +378,14 @@ test("a recorded quota block has no current attention or pending action", () => 
   const t = (key: string) => key;
 
   expect(flowPresentation(t as never, limited, "en")).toEqual({
-    label: "reviewHistory.retired",
-    detail: null,
-    attention: false,
+    label: "flowState.blocked_rate_limited",
+    detail: "flowState.rate_limit_until",
+    attention: true,
     pending: null,
   });
 });
 
-test("a cached provider wait stays recorded history without a live recheck", () => {
+test("issue 611: a block the provider gave no reset for says so and names its recheck", () => {
   const unknownReset = flow({
     implementerPath: "/implementer",
     reviewerPath: "/reviewer",
@@ -404,9 +404,9 @@ test("a cached provider wait stays recorded history without a live recheck", () 
      looked at again at the recheck. A reset time nobody gave would be worse
      than the bare "waiting" copy it replaces. */
   expect(flowPresentation(t as never, unknownReset, "en")).toEqual({
-    label: "reviewHistory.retired",
-    detail: null,
-    attention: false,
+    label: "flowState.blocked_rate_limited",
+    detail: "flowState.rate_limit_reset_unknown",
+    attention: true,
     pending: null,
   });
 });

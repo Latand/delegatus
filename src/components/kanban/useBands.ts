@@ -3,7 +3,7 @@
 import { useMemo, useRef } from "react";
 
 import { useLocale } from "@/lib/i18n";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";

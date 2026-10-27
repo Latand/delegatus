@@ -1,5 +1,5 @@
 import type { BoardMutationV1 } from "@/lib/board/mutations";
-import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Flow } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
 
 import { projectKey } from "./projectModel";
@@ -78,7 +78,6 @@ export function reviewerCloseMutations(input: ReviewerAutoCloseInput): Extract<B
   const out: Extract<BoardMutationV1, { kind: "close" }>[] = [];
   for (const file of input.files) {
     if (projectKey(file) !== input.project) continue;
-    if (file.durableLineage?.memberships.some(member => member.kind === "pipeline")) continue;
     /* Only a reviewer holding a board membership the projection cannot fold. */
     if (!pinned.has(file.path) || hidden.has(file.path)) continue;
     /* Durable reviewer lineage, or a claimed reviewer round of a flow. */

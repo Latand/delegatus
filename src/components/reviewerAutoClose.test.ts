@@ -207,13 +207,3 @@ describe("reviewerCloseMutations", () => {
     expect(after.explicitManual).toHaveLength(0);
   });
 });
-
-test("historical review approval never closes a pinned pipeline reviewer", () => {
-  const file = reviewer("/current-reviewer");
-  file.durableLineage!.memberships = [{ kind: "pipeline", containerId: "lane-one", stageId: "review", stageOrder: 1, round: null, parentConversationId: null, slot: "review:2", role: "reviewer" }];
-  const input = baseInput({ files: [file], explicitManual: [file.path], flows: [{
-    id: "old-review", rounds: [{ n: 1, reviewerPath: file.path, verdict: "APPROVE" }],
-  } as Flow] });
-  expect(reviewerCloseMutations(input)).toEqual([]);
-  expect(input.explicitManual).toEqual([file.path]);
-});
