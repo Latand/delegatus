@@ -998,7 +998,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       expect(result.value).toMatchObject({ state: "accepted", revision: tipSha });
       expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
     }
-    h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+    await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+    await until(() => existsSync(record.requestFile));
   });
 
   test("HTTP proactive deployment retains its authority check through the service's green wait", async () => {
@@ -1037,7 +1038,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       await decide("adopt");
       expect((await deployPost(request())).status).toBe(202);
       expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
-      h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+      await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+      await until(() => existsSync(record.requestFile));
     } finally {
       registry.failStructuredSpawn(begun.receipt.launchId, "fixture completed before dispatch", { announce: false });
       greenReady = true; releaseGreen?.({ state: "green" });
