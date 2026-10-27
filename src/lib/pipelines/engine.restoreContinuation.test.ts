@@ -58,7 +58,8 @@ async function restoredStage() {
   };
 }
 
-test("native restore bookkeeping keeps its cut and continues the same Claude stage before unavailable-host grace settlement", async () => {
+test.each(["unhosted", "missing"] as const)
+("native restore bookkeeping keeps its cut and continues the same Claude stage before unavailable-host grace settlement (%s projection)", async projection => {
   const r = await restoredStage();
   try {
     // Real host persistence and production host-unavailability read, after grace.
@@ -72,7 +73,9 @@ test("native restore bookkeeping keeps its cut and continues the same Claude sta
     r.ports.conversationAgentActive = production.conversationAgentActive;
     r.ports.conversationTurnInterrupted = production.conversationTurnInterrupted;
     expect(await production.conversationHostUnavailableSince!(r.f.attempt.conversationId!)).toBe(new Date(Date.parse(r.cutAt) + 300).toISOString());
-    await withRuntimeSnapshot({ sessions: [{ conversationId: r.f.attempt.conversationId, host: "unhosted", turn: "idle", attentionIds: [] }] },
+    expect(await durableStageTurnEvidence("claude", r.f.transcriptPath)).toMatchObject({ turn: "busy" });
+    await withRuntimeSnapshot({ sessions: projection === "missing" ? []
+      : [{ conversationId: r.f.attempt.conversationId, host: "unhosted", turn: "idle", attentionIds: [] }] },
       async () => { await tickPipelines([], r.ports); });
     const lane = loadPipelines()[0]!;
     expect({ state: lane.state, error: lane.runs[0]!.attempts[0]!.error, sendCount: r.sends.length })
