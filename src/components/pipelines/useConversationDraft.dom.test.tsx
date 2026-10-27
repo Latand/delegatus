@@ -156,7 +156,8 @@ const escape = (element: Element | null) => {
 const row = (host: HTMLElement) => host.querySelector<HTMLElement>('.menu [data-cm-item="fromConversation"]');
 const rowText = (host: HTMLElement) => {
   const item = row(host);
-  return item ? [item.querySelector(".lbl")?.firstChild?.textContent, item.querySelector(".why:not(.warn)")?.textContent ?? null, item.querySelector(".why.warn")?.textContent ?? null, item.getAttribute("aria-disabled") === "true"] : null;
+  /* The conversation's name, then its branch on a line of its own, then what holds the row back. */
+  return item ? [item.querySelector(".lbl")?.firstChild?.textContent, item.querySelector(".why:not(.warn):not([data-branch-name])")?.textContent ?? null, item.querySelector("[data-branch-name]")?.textContent ?? null, item.querySelector(".why.warn")?.textContent ?? null, item.getAttribute("aria-disabled") === "true"] : null;
 };
 /* Where focus is, by its opening tag: a failed match then prints a line, never a whole DOM node. */
 const tag = (element: Element | null | undefined) => (element ? element.outerHTML.slice(0, element.outerHTML.indexOf(">") + 1) : "none");
@@ -172,7 +173,7 @@ test("the card's ⋯ names the newest conversation and its branch once the serve
   expect(route.previews).toEqual([]);
   await openMenu(host);
   expect(route.previews).toEqual([`/api/pipelines/from-conversation?conversationId=${exportConversation.conversationId}&taskId=t-export`]);
-  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes · fix/csv-export-retry", null, false]);
+  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes", "fix/csv-export-retry", null, false]);
   /* The row sits after the priorities and before Appearance, as frame 3a draws it. */
   const order = [...host.querySelectorAll<HTMLElement>(".menu [data-cm-segments], .menu [data-cm-item='fromConversation'], .menu [data-cm-section]")].map((node) => node.getAttribute("data-cm-segments") ?? node.getAttribute("data-cm-item") ?? node.getAttribute("data-cm-section"));
   expect(order.indexOf("fromConversation")).toBe(order.indexOf("priority") + 1);
@@ -189,7 +190,7 @@ test("a dirty source is a disabled row with its reason; a card holding no conver
   route.preview = { status: 200, body: source({ canCreate: false, refusal: { code: "SOURCE_HAS_CHANGES", error: "Commit the conversation's changes before creating a pipeline." } }) };
   const { host } = mount();
   await openMenu(host);
-  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes · fix/csv-export-retry", "Commit the conversation's changes first.", true]);
+  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes", "fix/csv-export-retry", "Commit the conversation's changes first.", true]);
   click(row(host));
   expect(route.posts).toEqual([]);
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
@@ -215,7 +216,7 @@ test("choosing the row posts once, shows the draft being prepared on the card, a
   expect(card(host).querySelector("[data-draft-message]")).toBeNull();
   /* The row on a menu opened again holds while the request is on its way. */
   await openMenu(host);
-  expect(rowText(host)?.[3]).toBe(true);
+  expect(rowText(host)?.[4]).toBe(true);
   escape(host.querySelector(".menu [role^='menuitem']"));
 
   route.release.shift()!(json(201, { ok: true, pipeline: draft() }));
@@ -316,7 +317,7 @@ test("a create with no answer: the row names the request's own source and asks f
   /* The menu now reads another branch; the row still names the pending request's. */
   route.preview = { status: 200, body: source({ branch: "other-branch", sourceRevision: "rev-2" }) };
   await openMenu(host);
-  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes · fix/csv-export-retry", "No answer yet. Choosing it asks for the same pipeline again.", false]);
+  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes", "fix/csv-export-retry", "No answer yet. Choosing it asks for the same pipeline again.", false]);
   click(row(host));
   await tick();
   expect(route.posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-1"], ["key-1", "rev-1"]]);
@@ -349,7 +350,7 @@ test("a card that already holds this conversation's draft opens it instead of ma
   route.preview = { status: 200, body: source() };
   const { host } = mount({ pipelines: [draft()] });
   await openMenu(host);
-  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes · fix/csv-export-retry", null, false]);
+  expect(rowText(host)).toEqual(["Pipeline from conversation…", "CSV export retry and streaming writes", "fix/csv-export-retry", null, false]);
   click(row(host));
   await tick();
   expect(route.posts).toEqual([]);

@@ -691,7 +691,9 @@ test("«Pipeline from conversation…» on the phone: a create with no answer ke
     const row = () => q(body, '[data-phone-task-menu="fromConversation"]');
     flushSync(() => nav.openSheet("menu"));
     await sleep(20);
-    expect(q(body, "[data-phone-from-conversation-hint]")?.textContent).toBe("CSV export retry · fix/csv-export-retry");
+    /* The conversation's name, and its branch on a line of its own. */
+    const hint = () => [q(body, "[data-phone-from-conversation-hint] > span:first-child")?.textContent, q(body, "[data-phone-from-conversation-hint] [data-branch-name]")?.textContent];
+    expect(hint()).toEqual(["CSV export retry", "fix/csv-export-retry"]);
     click(row());
     await sleep(20);
     expect(nav.getState().sheet).toBeNull();
@@ -701,8 +703,8 @@ test("«Pipeline from conversation…» on the phone: a create with no answer ke
     branch = "other-branch";
     flushSync(() => nav.openSheet("menu"));
     await sleep(20);
-    expect([q(body, "[data-phone-from-conversation-hint]")?.textContent, q(body, '[data-phone-task-menu-note="fromConversation"]')?.textContent, (row() as HTMLButtonElement | null)?.disabled])
-      .toEqual(["CSV export retry · fix/csv-export-retry", en("kanban.fromConversation.unknownRow"), false]);
+    expect([...hint(), q(body, '[data-phone-task-menu-note="fromConversation"]')?.textContent, (row() as HTMLButtonElement | null)?.disabled])
+      .toEqual(["CSV export retry", "fix/csv-export-retry", en("kanban.fromConversation.unknownRow"), false]);
     click(row());
     await sleep(20);
     expect(posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-fix/csv-export-retry"], ["key-1", "rev-fix/csv-export-retry"]]);

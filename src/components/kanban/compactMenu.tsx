@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AlignLeft, ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, EyeOff, Link2, ListPlus, Maximize2, Minus, Pencil, Workflow } from "lucide-react";
 
 import { useSwapGuard } from "@/components/menuSwapGuard";
+import { BranchName } from "@/components/pipelines/BranchName";
 import { useLocale } from "@/lib/i18n";
 import { TASK_COLORS } from "@/lib/tasks/types";
 
@@ -34,7 +35,7 @@ const PRIORITY_ICON: Record<string, ReactNode> = {
 const keySign = (kbd: string) => (kbd === "Enter" ? "↵" : kbd);
 
 function Row({ action, hint, onPick }: { action: MenuAction; hint: boolean; onPick: (action: MenuAction) => void }) {
-  const lines = hint && (action.why || action.warn);
+  const lines = hint && (action.why || action.branch || action.warn);
   return (
     <button
       type="button"
@@ -55,6 +56,7 @@ function Row({ action, hint, onPick }: { action: MenuAction; hint: boolean; onPi
         {/* The key sits by the name, raised, the way a cell's sits by its icon. */}
         {action.kbd ? <span className="kbd" aria-hidden>{keySign(action.kbd)}</span> : null}
         {hint && action.why ? <span className="why">{action.why}</span> : null}
+        {hint && action.branch ? <BranchName branch={action.branch} className="why" /> : null}
         {/* What a choice waits on is never folded into a tooltip. */}
         {action.warn ? <span className="why warn">{action.warn}</span> : null}
       </span>

@@ -183,7 +183,7 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
               </div>
             ) : null}
             <div className="draft-acts">
-              <span className="hint">{t("kanban.draft.hint")}</span>
+              <span className="hint keys">{t("kanban.draft.hint")}</span>
               <button type="button" className="btn quiet" data-draft-cancel={key} onClick={cancel}>{t("common.cancel")}</button>
               <button type="button" className="btn primary" data-draft-save={key} disabled={!canSave} onClick={() => save()}>{t("kanban.draft.save")}</button>
             </div>

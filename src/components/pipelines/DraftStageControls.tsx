@@ -200,6 +200,7 @@ export function DraftStageConfigure({ pipeline, stage }: { pipeline: Pipeline; s
     <StagePlaceholderPane
       slot={{ key: `pipeline-config::${pipeline.id}::${stage.id}`, pipeline, stage, index: pipeline.stages.indexOf(stage), total: pipeline.stages.length, presentation: "placeholder", x: 0, y: 0, w: 0, h: 0 }}
       interactive
+      flow
     />
   );
 }

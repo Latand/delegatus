@@ -2219,3 +2219,15 @@
 .kb[data-surface="phone-first-message"] .msg.user .bubble { max-width: none; background: var(--surface-card); }
 .kb[data-surface="phone-first-message"] .msg.user.draft.editing .bubble { width: 100%; }
 .kb[data-surface="phone-first-message"] .bstatus { padding: 2px 2px 0; }
+/* Its Edit sits in the box's footer row (frame 3b), so every line of the
+   message runs the box's full width. */
+.kb[data-surface="phone-first-message"] .msg.user.draft:not(.editing) .bubble { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.kb[data-surface="phone-first-message"] .msg.user.draft .btext::before { content: none; }
+.kb[data-surface="phone-first-message"] .msg.user.draft .bedit { position: static; align-self: flex-end; }
+/* A touch screen has no keyboard to take ⌘/Ctrl+Enter or Esc: Cancel and Save stand alone. */
+.kb[data-surface="phone-first-message"] .draft-acts { justify-content: flex-end; }
+.kb[data-surface="phone-first-message"] .draft-acts .hint.keys { display: none; }
+@media (pointer: coarse) {
+  .kb .draft-acts { justify-content: flex-end; }
+  .kb .draft-acts .hint.keys { display: none; }
+}

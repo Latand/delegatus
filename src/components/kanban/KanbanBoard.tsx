@@ -1592,20 +1592,21 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const existing = card.pipelines.find((entry) => entry.pipeline.state === "draft" && entry.pipeline.conversationSource?.conversationId === menuSource.conversationId);
     if (existing) {
       /* The Builder's first message opens and takes focus. */
-      return [{ ...base, keepFocus: true, why: `${fileTitle} · ${existing.pipeline.conversationSource!.branch}`, onSelect: () => openConversationDraft(card.id, existing.pipeline) }];
+      return [{ ...base, keepFocus: true, why: fileTitle, branch: existing.pipeline.conversationSource!.branch, onSelect: () => openConversationDraft(card.id, existing.pipeline) }];
     }
     const state = sourcePreview.state;
     /* A request on its way, or one that may have landed, keeps its own source:
        the row names it and never posts under a new key. */
     const attempt = conversationDrafts.attempt(task.id);
-    const pending = attempt ? `${cleanTitle(attempt.source.title, 90) || fileTitle} · ${attempt.source.branch}` : fileTitle;
+    /* The conversation's name on one line and its branch on the next, as frame 3a draws them. */
+    const pending = attempt ? { why: cleanTitle(attempt.source.title, 90) || fileTitle, branch: attempt.source.branch } : { why: fileTitle };
     if (attempt?.phase === "creating" || attempt?.phase === "checking") {
-      return [{ ...base, why: pending, disabled: true, onSelect: () => {} }];
+      return [{ ...base, ...pending, disabled: true, onSelect: () => {} }];
     }
     if (attempt?.phase === "unknown") {
       /* The resend opens the card the same way the first send did, so its
          preparing notice and any refusal are drawn where the operator looks. */
-      return [{ ...base, why: pending, warn: t("kanban.fromConversation.unknownRow"), onSelect: () => {
+      return [{ ...base, ...pending, warn: t("kanban.fromConversation.unknownRow"), onSelect: () => {
         setCardFolds((current) => withCardOpen(current, card.id, true));
         void conversationDrafts.retry(task.id);
       } }];
@@ -1621,11 +1622,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       } }];
     }
     const source = state.source;
-    const named = `${cleanTitle(source.title, 90) || fileTitle} · ${source.branch}`;
-    if (!source.canCreate) return [{ ...base, why: named, warn: conversationRefusalText(t, source.refusal ?? null), disabled: true, onSelect: () => {} }];
+    const named = { why: cleanTitle(source.title, 90) || fileTitle, branch: source.branch };
+    if (!source.canCreate) return [{ ...base, ...named, warn: conversationRefusalText(t, source.refusal ?? null), disabled: true, onSelect: () => {} }];
     return [{
       ...base,
-      why: named,
+      ...named,
       onSelect: () => {
         setCardFolds((current) => withCardOpen(current, card.id, true));
         void conversationDrafts.create(task.id, source);

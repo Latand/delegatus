@@ -22,6 +22,7 @@ import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { BranchName } from "@/components/pipelines/BranchName";
 import { conversationSourceFile, type ConversationDraftAttempt, type ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationRefusalText, useConversationDraftAttempt, useConversationPreview, useDroppedFocus, useLandedDraft } from "@/components/pipelines/useConversationDraft";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
@@ -900,11 +901,12 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
        the row names it and never posts under a new key. */
     const creating = draftAttempt?.phase === "creating" || draftAttempt?.phase === "checking";
     const unanswered = !existing && draftAttempt?.phase === "unknown";
-    const held = !existing && (creating || unanswered) && draftAttempt ? `${cleanTitle(draftAttempt.source.title, 90) || fileTitle} · ${draftAttempt.source.branch}` : null;
+    const held = !existing && (creating || unanswered) && draftAttempt ? { title: cleanTitle(draftAttempt.source.title, 90) || fileTitle, branch: draftAttempt.source.branch } : null;
     const source = state?.kind === "ready" ? state.source : null;
-    const hint = existing ? `${fileTitle} · ${existing.conversationSource!.branch}`
-      : held ?? (source ? `${cleanTitle(source.title, 90) || fileTitle} · ${source.branch}`
-        : !state || state.kind === "pending" ? t("kanban.fromConversation.checking", { title: fileTitle }) : fileTitle);
+    /* The conversation's name on one line and its branch on the next, as frame 3a draws them. */
+    const hint: { title: string; branch?: string } = existing ? { title: fileTitle, branch: existing.conversationSource!.branch }
+      : held ?? (source ? { title: cleanTitle(source.title, 90) || fileTitle, branch: source.branch }
+        : { title: !state || state.kind === "pending" ? t("kanban.fromConversation.checking", { title: fileTitle }) : fileTitle });
     const reason = existing || creating ? null
       : unanswered ? t("kanban.fromConversation.unknownRow")
         : state?.kind === "failed" ? conversationRefusalText(t, state.refusal)
@@ -918,7 +920,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
           label={(
             <span className="flex flex-col gap-0.5 py-1.5">
               <span className="block whitespace-normal [overflow-wrap:anywhere]">{t("kanban.fromConversation.menu")}</span>
-              <span className="block whitespace-normal text-label font-normal text-muted [overflow-wrap:anywhere]" data-phone-from-conversation-hint="">{hint}</span>
+              <span className="block whitespace-normal text-label font-normal text-muted" data-phone-from-conversation-hint="">
+                <span className="block [overflow-wrap:anywhere]">{hint.title}</span>
+                {hint.branch ? <BranchName branch={hint.branch} /> : null}
+              </span>
             </span>
           )}
           disabled={!enabled}

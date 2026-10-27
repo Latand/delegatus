@@ -651,8 +651,8 @@ export function MobilePipelineScreen({
     };
     return (
       <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: names.get(configStage.id) ?? configStage.id })} onClose={close}>
-        <div data-mobile2-stage-config={configStage.id} className="flex h-[min(620px,72dvh)] min-h-0 flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
-          <StagePlaceholderPane slot={slot} interactive />
+        <div data-mobile2-stage-config={configStage.id} className="flex flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
+          <StagePlaceholderPane slot={slot} interactive flow />
         </div>
       </MobileSheet>
     );
@@ -710,8 +710,8 @@ export function MobilePipelineScreen({
             nav.openSheet("stage");
           }}
           onWorkLinks={() => nav.openSheet("links")}
+          afterStages={fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : undefined}
         />
-        {fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : null}
         {fromConversation && firstStage ? (
           <section data-phone-draft-first-message={firstStage.id} className="flex shrink-0 flex-col gap-1.5">
             <h3 className="m-0 flex min-h-[30px] items-center text-ui font-semibold text-secondary">

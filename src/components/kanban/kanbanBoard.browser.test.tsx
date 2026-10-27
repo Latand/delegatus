@@ -40173,6 +40173,47 @@ describe("start a pipeline from a conversation", () => {
       if (combo.locale === "uk") expect(read.map((entry) => entry.text).join(" ")).toMatch(/[А-Яа-яІіЇїЄєҐґ]/);
     };
     const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(combo.locale, key, params);
+    /* The menu row's conversation name, and its branch on the line under it, broken only after a «/» (frame 3a). */
+    const hintLines = (scope: string) => page.evaluate((scope) => {
+      const branch = document.querySelector<HTMLElement>(`${scope} [data-branch-name]`);
+      const title = branch?.previousElementSibling ?? null;
+      const segments = [...(branch?.querySelectorAll<HTMLElement>("[data-branch-segment]") ?? [])];
+      return {
+        title: title?.textContent ?? null,
+        branch: branch?.textContent ?? null,
+        titleAbove: Boolean(title && branch && title.getBoundingClientRect().bottom <= branch.getBoundingClientRect().top + 0.5),
+        brokenSegments: segments.filter((segment) => segment.getClientRects().length !== 1 || segment.scrollWidth > segment.clientWidth + 0.5).map((segment) => segment.textContent),
+        lines: new Set(segments.map((segment) => Math.round(segment.getBoundingClientRect().top))).size,
+      };
+    }, scope);
+    const hintScope = phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"]';
+    const expectHint = async (record: string) => {
+      const hint = await hintLines(hintScope);
+      states[record] = hint;
+      expect({ title: hint.title, branch: hint.branch, titleAbove: hint.titleAbove, brokenSegments: hint.brokenSegments }).toEqual({ title: SOURCE_TITLE[combo.locale], branch: BRANCH, titleAbove: true, brokenSegments: [] });
+    };
+    /* The opened configuration: the stage's own role selected, every header control inside the pane, nothing clipped in its body. */
+    const expectConfigure = async (pane: string) => {
+      const read = await page.evaluate((pane) => {
+        const root = document.querySelector<HTMLElement>(pane)!;
+        const card = root.querySelector<HTMLElement>("[data-pipeline-stage-card]")!;
+        const box = card.getBoundingClientRect();
+        const select = root.querySelector<HTMLSelectElement>("select");
+        const body = root.querySelector<HTMLElement>("[data-stage-pane-body]")!;
+        return {
+          role: select?.value ?? null,
+          roleText: select?.selectedOptions[0]?.textContent ?? null,
+          headerOutside: [...card.querySelectorAll<HTMLElement>("header button")].filter((button) => {
+            const rect = button.getBoundingClientRect();
+            return rect.left < box.left - 0.5 || rect.right > box.right + 0.5;
+          }).map((button) => button.getAttribute("aria-label")),
+          bodyClipped: body.scrollHeight > body.clientHeight + 1,
+        };
+      }, pane);
+      states.configureRead = read;
+      expect(read).toEqual({ role: "reviewer", roleText: read.roleText, headerOutside: [], bodyClipped: false });
+      expect(read.roleText).not.toBe(t("draft.noRole"));
+    };
     const openTask = async () => {
       if (phone(combo)) {
         await page.locator('[data-phone-kanban-tab="assigned"]').click();
@@ -40193,8 +40234,8 @@ describe("start a pipeline from a conversation", () => {
       await openTask();
       /* 1. The menu names the conversation and its branch. */
       const row = await openMenu();
-      expect(await row.textContent()).toContain(`${SOURCE_TITLE[combo.locale]} · ${BRANCH}`);
-      await shot("menu", [phone(combo) ? '[data-phone-from-conversation-hint]' : '.menu [data-cm-item="fromConversation"] .lbl'], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      await expectHint("menuHint");
+      await shot("menu", [phone(combo) ? '[data-phone-from-conversation-hint]' : '.menu [data-cm-item="fromConversation"] .lbl', `${hintScope} [data-branch-name]`], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
       /* 2. Preparing, held until the driver answers. */
       post = "hold";
       await row.click();
@@ -40208,6 +40249,20 @@ describe("start a pipeline from a conversation", () => {
       await page.locator('[data-draft-start="p-export"]').first().waitFor();
       const startTarget = phone(combo) ? '[data-mobile2-dock] [data-draft-start="p-export"]' : '[data-draft-start="p-export"]';
       await shot("draft", ['[data-draft-message="p-export:builder"] .btext', startTarget], [startTarget, '[data-draft-edit="p-export:builder"]']);
+      /* The phone's Edit sits in the message box's footer row: no line of the message wraps around it (frame 3b). */
+      const editLayout = await page.evaluate(() => {
+        const message = document.querySelector('[data-draft-message="p-export:builder"]')!;
+        const text = message.querySelector<HTMLElement>(".btext")!;
+        const edit = message.querySelector<HTMLElement>("[data-draft-edit]")!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        const firstTop = Math.min(...rects.map((rect) => rect.top));
+        const firstRight = Math.max(...rects.filter((rect) => Math.abs(rect.top - firstTop) < 2).map((rect) => rect.right));
+        return { editBelowText: edit.top >= Math.max(...rects.map((rect) => rect.bottom)) - 0.5, firstLineRight: Math.round(firstRight), textRight: Math.round(text.getBoundingClientRect().right), editRight: Math.round(edit.right) };
+      });
+      states.editLayout = editLayout;
+      if (phone(combo)) expect(editLayout.editBelowText).toBe(true);
       /* 4. Editing the first message. */
       await page.locator('[data-draft-edit="p-export:builder"]').first().click();
       const field = page.locator('[data-draft-field="p-export:builder"]').first();
@@ -40215,12 +40270,16 @@ describe("start a pipeline from a conversation", () => {
       await field.press("End");
       await field.type(combo.locale === "uk" ? " Не змінювати заголовки колонок." : " Do not rename the column headers.");
       expect(await page.locator('[data-draft-start="p-export"]').first().isDisabled()).toBe(true);
+      /* ⌘/Ctrl+Enter and Esc are told where a keyboard is: on the board, never on the phone. */
+      const keysHint = page.locator('[data-draft-message="p-export:builder"] .draft-acts .hint.keys').first();
+      expect(await keysHint.isVisible()).toBe(!phone(combo));
       await shot("editing", ['[data-draft-save="p-export:builder"]', '[data-draft-start-note="blocked"]'], ['[data-draft-save="p-export:builder"]', '[data-draft-cancel="p-export:builder"]']);
       /* 5. Another client changed the message first: the conflict says so. */
       await page.evaluate((prompt) => { (window as unknown as { evidence: { changeStageBeforeNextPatch: unknown } }).evidence.changeStageBeforeNextPatch = { pipelineId: "p-export", stageId: "builder", prompt }; }, `{{task}}\n\n${THEIRS[combo.locale]}`);
       await page.locator('[data-draft-save="p-export:builder"]').first().click();
       await page.locator("[data-draft-changed]").first().waitFor();
       /* The conflict notice is the board's own; its links are measured where a finger presses them. */
+      expect(await keysHint.isVisible()).toBe(!phone(combo));
       await shot("conflict", ["[data-draft-changed] .msg-text"], phone(combo) ? ["[data-draft-changed] button"] : []);
       await page.locator("[data-draft-changed] button").first().click();
       await page.locator("[data-draft-changed]").waitFor({ state: "detached" });
@@ -40231,6 +40290,8 @@ describe("start a pipeline from a conversation", () => {
       }
       await page.locator("[data-draft-add-stage-toggle]").first().click();
       await page.locator("[data-draft-add-stage-roles]").waitFor();
+      /* On the phone «+ Stage» follows the last stage row, before the loop note and Attach. */
+      if (phone(combo)) expect(await page.evaluate(() => document.querySelector("[data-draft-add-stage]")?.previousElementSibling?.matches("ol.pb-stages") ?? false)).toBe(true);
       await shot("stages", ["[data-draft-add-stage-roles]", "[data-draft-add-stage-toggle]"], ["[data-draft-add-stage-toggle]", '[data-draft-add-role="verifier"]']);
       await page.locator('[data-draft-add-role="verifier"]').first().click();
       await page.locator("[data-draft-add-stage-roles]").waitFor({ state: "detached" });
@@ -40240,6 +40301,7 @@ describe("start a pipeline from a conversation", () => {
         await page.locator('[data-mobile2-stage-config="reviewer"]').waitFor();
         await page.locator(`[data-mobile2-stage-config="reviewer"] button[aria-label="${t("groupOverride.applyStage")}"]`).click();
         await page.locator('[data-mobile2-stage-config="reviewer"] [role="radiogroup"]').first().waitFor();
+        await expectConfigure('[data-mobile2-stage-config="reviewer"]');
         await shot("configure", ["[data-mobile2-sheet-header] h2", '[data-mobile2-stage-config="reviewer"] [role="radiogroup"]'], ['[data-mobile2-stage-config="reviewer"] [role="radiogroup"] [role="radio"]']);
         await page.locator("[data-mobile2-close]").first().click();
         await page.locator('[data-mobile2-stage-config="reviewer"]').waitFor({ state: "detached" });
@@ -40249,6 +40311,7 @@ describe("start a pipeline from a conversation", () => {
         /* The existing pane opens its role and runtime choices behind its own settings button. */
         await page.locator(`[data-draft-configure-pane="reviewer"] button[aria-label="${t("groupOverride.applyStage")}"]`).click();
         await page.locator('[data-draft-configure-pane="reviewer"] [role="radiogroup"]').first().waitFor();
+        await expectConfigure('[data-draft-configure-pane="reviewer"]');
         await shot("configure", ['[data-draft-configure="reviewer"]', '[data-draft-configure-pane="reviewer"] [role="radiogroup"]'], ['[data-draft-configure="reviewer"]']);
         await page.locator("[data-sheet-close]").first().click();
         await page.locator("[data-stages-sheet]").waitFor({ state: "detached" });
@@ -40294,11 +40357,11 @@ describe("start a pipeline from a conversation", () => {
         again = page.locator('.menu [data-cm-item="fromConversation"]:not([aria-disabled="true"])');
         await again.waitFor();
       }
-      expect(await again.textContent()).toContain(`${SOURCE_TITLE[combo.locale]} · ${BRANCH}`);
+      await expectHint("unknownMenuHint");
       expect(await again.textContent()).not.toContain(`${BRANCH}-v2`);
       const unknownNote = phone(combo) ? '[data-phone-task-menu-note="fromConversation"]' : '.menu [data-cm-item="fromConversation"] .why.warn';
       expect(await page.locator(unknownNote).textContent()).toBe(t("kanban.fromConversation.unknownRow"));
-      await shot("unknown-menu", [phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"] .why:not(.warn)', unknownNote], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      await shot("unknown-menu", [phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"] .why:not(.warn)', `${hintScope} [data-branch-name]`, unknownNote], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
       post = "changed";
       if (phone(combo)) await again.click();
       else {
@@ -40351,8 +40414,9 @@ describe("start a pipeline from a conversation", () => {
     }
   }
 
-  for (const width of [1440, 915, 390]) {
-    browserTest(`every state at ${width} px in en and uk, light and dark`, async () => {
+  /* The three named widths, and a 700 px-tall desktop between 1440 and 915. */
+  for (const [width, height] of [[1440, 900], [1000, 700], [915, 900], [390, 844]] as const) {
+    browserTest(`every state at ${width}×${height} in en and uk, light and dark`, async () => {
       const out = path.resolve(".artifacts/start-pipeline-from-conversation");
       fs.mkdirSync(out, { recursive: true });
       const server = await serveEvidenceFixture(out);
@@ -40360,7 +40424,7 @@ describe("start a pipeline from a conversation", () => {
       const cases: unknown[] = [];
       try {
         for (const locale of ["en", "uk"] as const) {
-          for (const scheme of ["light", "dark"] as const) cases.push(await capture(browser, server.base, { width, height: width < 600 ? 844 : 900, locale, scheme }, out));
+          for (const scheme of ["light", "dark"] as const) cases.push(await capture(browser, server.base, { width, height, locale, scheme }, out));
         }
       } finally { await browser.close(); server.stop(); }
       fs.mkdirSync("evidence/start-pipeline-from-conversation", { recursive: true });

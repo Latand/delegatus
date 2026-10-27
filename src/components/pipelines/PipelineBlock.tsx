@@ -599,6 +599,8 @@ export interface PipelineBlockProps {
       head of the lane's tail, and the line that says what holds it back. */
   start?: React.ReactNode;
   startNote?: React.ReactNode;
+  /** Stages density: a control right under the last stage row, before the loops and Attach. */
+  afterStages?: React.ReactNode;
 }
 
 export interface StageConversation {
@@ -877,7 +879,7 @@ function ScreenBlock(props: PipelineBlockProps & {
   answers: PipelineAnswers | null;
   root: Record<string, string | undefined>;
 }) {
-  const { summary, nowMs, names, nameOf, suffixes, answers } = props;
+  const { summary, nowMs, names, nameOf, suffixes, answers, afterStages } = props;
   const { t } = useLocale();
   const { pipeline } = summary;
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
@@ -1137,6 +1139,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         ) : null}
         {chips.map((chip, index) => (folded.has(chip.stage.id) ? null : row(chip, index)))}
       </ol>
+      {afterStages}
       {summary.loops.length ? (
         <ul className="pb-loops">
           {summary.loops.map((loop) => (

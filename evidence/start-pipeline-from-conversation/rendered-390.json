@@ -4,6 +4,13 @@
     {
       "label": "390-en-light",
       "states": {
+        "menuHint": {
+          "title": "CSV export retry and streaming writes",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "menu": {
           "defining": [
             {
@@ -12,7 +19,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             }
           ],
           "targets": [
@@ -22,7 +37,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "Pipeline from conversation…CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -47,8 +62,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 331,
-              "height": 166,
+              "width": 336,
+              "height": 151,
               "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
             },
             {
@@ -79,6 +94,12 @@
             }
           ],
           "overflow": false
+        },
+        "editLayout": {
+          "editBelowText": true,
+          "firstLineRight": 342,
+          "textRight": 363,
+          "editRight": 363
         },
         "editing": {
           "defining": [
@@ -180,6 +201,12 @@
             }
           ],
           "overflow": false
+        },
+        "configureRead": {
+          "role": "reviewer",
+          "roleText": "Reviewer",
+          "headerOutside": [],
+          "bodyClipped": false
         },
         "configure": {
           "defining": [
@@ -303,6 +330,13 @@
           ],
           "overflow": false
         },
+        "unknownMenuHint": {
+          "title": "CSV export retry and streaming writes",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "unknown-menu": {
           "defining": [
             {
@@ -311,7 +345,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             },
             {
               "selector": "[data-phone-task-menu-note=\"fromConversation\"]",
@@ -329,7 +371,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "Pipeline from conversation…CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -451,6 +493,13 @@
     {
       "label": "390-en-dark",
       "states": {
+        "menuHint": {
+          "title": "CSV export retry and streaming writes",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "menu": {
           "defining": [
             {
@@ -459,7 +508,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             }
           ],
           "targets": [
@@ -469,7 +526,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "Pipeline from conversation…CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -494,8 +551,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 331,
-              "height": 166,
+              "width": 336,
+              "height": 151,
               "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
             },
             {
@@ -526,6 +583,12 @@
             }
           ],
           "overflow": false
+        },
+        "editLayout": {
+          "editBelowText": true,
+          "firstLineRight": 342,
+          "textRight": 363,
+          "editRight": 363
         },
         "editing": {
           "defining": [
@@ -627,6 +690,12 @@
             }
           ],
           "overflow": false
+        },
+        "configureRead": {
+          "role": "reviewer",
+          "roleText": "Reviewer",
+          "headerOutside": [],
+          "bodyClipped": false
         },
         "configure": {
           "defining": [
@@ -750,6 +819,13 @@
           ],
           "overflow": false
         },
+        "unknownMenuHint": {
+          "title": "CSV export retry and streaming writes",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "unknown-menu": {
           "defining": [
             {
@@ -758,7 +834,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             },
             {
               "selector": "[data-phone-task-menu-note=\"fromConversation\"]",
@@ -776,7 +860,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+              "text": "Pipeline from conversation…CSV export retry and streaming writesfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -898,6 +982,13 @@
     {
       "label": "390-uk-light",
       "states": {
+        "menuHint": {
+          "title": "Повтор експорту CSV і потоковий запис",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "menu": {
           "defining": [
             {
@@ -906,7 +997,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             }
           ],
           "targets": [
@@ -916,7 +1015,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -941,8 +1040,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 335,
-              "height": 185,
+              "width": 336,
+              "height": 170,
               "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
             },
             {
@@ -973,6 +1072,12 @@
             }
           ],
           "overflow": false
+        },
+        "editLayout": {
+          "editBelowText": true,
+          "firstLineRight": 364,
+          "textRight": 363,
+          "editRight": 363
         },
         "editing": {
           "defining": [
@@ -1074,6 +1179,12 @@
             }
           ],
           "overflow": false
+        },
+        "configureRead": {
+          "role": "reviewer",
+          "roleText": "Рев'юер",
+          "headerOutside": [],
+          "bodyClipped": false
         },
         "configure": {
           "defining": [
@@ -1197,6 +1308,13 @@
           ],
           "overflow": false
         },
+        "unknownMenuHint": {
+          "title": "Повтор експорту CSV і потоковий запис",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "unknown-menu": {
           "defining": [
             {
@@ -1205,7 +1323,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             },
             {
               "selector": "[data-phone-task-menu-note=\"fromConversation\"]",
@@ -1223,7 +1349,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -1345,6 +1471,13 @@
     {
       "label": "390-uk-dark",
       "states": {
+        "menuHint": {
+          "title": "Повтор експорту CSV і потоковий запис",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "menu": {
           "defining": [
             {
@@ -1353,7 +1486,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             }
           ],
           "targets": [
@@ -1363,7 +1504,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
@@ -1388,8 +1529,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 335,
-              "height": 185,
+              "width": 336,
+              "height": 170,
               "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
             },
             {
@@ -1420,6 +1561,12 @@
             }
           ],
           "overflow": false
+        },
+        "editLayout": {
+          "editBelowText": true,
+          "firstLineRight": 364,
+          "textRight": 363,
+          "editRight": 363
         },
         "editing": {
           "defining": [
@@ -1521,6 +1668,12 @@
             }
           ],
           "overflow": false
+        },
+        "configureRead": {
+          "role": "reviewer",
+          "roleText": "Рев'юер",
+          "headerOutside": [],
+          "bodyClipped": false
         },
         "configure": {
           "defining": [
@@ -1644,6 +1797,13 @@
           ],
           "overflow": false
         },
+        "unknownMenuHint": {
+          "title": "Повтор експорту CSV і потоковий запис",
+          "branch": "fix/csv-export-retry-after-503-streaming",
+          "titleAbove": true,
+          "brokenSegments": [],
+          "lines": 1
+        },
         "unknown-menu": {
           "defining": [
             {
@@ -1652,7 +1812,15 @@
               "cut": false,
               "width": 328,
               "height": 33,
-              "text": "Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
+            },
+            {
+              "selector": "[data-phone-from-conversation-hint] [data-branch-name]",
+              "missing": false,
+              "cut": false,
+              "width": 328,
+              "height": 17,
+              "text": "fix/csv-export-retry-after-503-streaming"
             },
             {
               "selector": "[data-phone-task-menu-note=\"fromConversation\"]",
@@ -1670,7 +1838,7 @@
               "cut": false,
               "width": 390,
               "height": 67,
-              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий записfix/csv-export-retry-after-503-streaming"
             }
           ],
           "overflow": false
