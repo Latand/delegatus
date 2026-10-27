@@ -353,6 +353,10 @@ export class TeamStore {
           at TEXT NOT NULL,
           text_digest TEXT
         );
+        CREATE TABLE IF NOT EXISTS conversation_member_authority (
+          conversation_id TEXT PRIMARY KEY,
+          member_id TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS workspaces (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
@@ -812,8 +816,16 @@ export class TeamStore {
   }
 
   latestConversationMember(conversationId: string): string | null {
+    const admitted = this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM conversation_member_authority WHERE conversation_id = ?").get(conversationId);
+    if (admitted) return admitted.member_id;
     return this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM message_authors WHERE conversation_id = ? ORDER BY at DESC, rowid DESC LIMIT 1")
       .get(conversationId)?.member_id ?? null;
+  }
+
+  /** Authorization is independent of the browser's optional, reusable feed id. */
+  admitConversationMember(conversationId: string, memberId: string): void {
+    this.db.query(`INSERT INTO conversation_member_authority(conversation_id, member_id) VALUES (?, ?)
+      ON CONFLICT(conversation_id) DO UPDATE SET member_id = excluded.member_id`).run(conversationId, memberId);
   }
 
   /** Activity's launch-chain fallback needs one author, without decoding messages. */

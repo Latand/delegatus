@@ -1,7 +1,23 @@
 import type { MessageAuthorClaim, PriorSubmission, TeamActor } from "./contract";
 import { recordMessageAuthor } from "./events";
 import { existingTeamStore } from "./store";
-import { recordConversationEvent } from "./subjects";
+import { conversationSubject, recordConversationEvent } from "./subjects";
+
+/** Persist before handing a person's input to an agent, including answers and
+ * queue edits. A refused or uncertain dispatch conservatively keeps the fence.
+ * Feed attribution remains first-author-wins and is settled separately. */
+export function admitConversationMember(actor: TeamActor, conversationId: string | null, path?: string | null): void {
+  if (actor.kind !== "member") return;
+  const store = existingTeamStore();
+  const member = store?.member(actor.memberId);
+  if (!store || member?.status !== "active") throw new Error("conversation authority is unavailable");
+  const id = conversationId || conversationSubject({ path })?.id;
+  if (!id) {
+    if (member.role === "owner") return;
+    throw new Error("conversation authority target is unavailable");
+  }
+  store.admitConversationMember(id, actor.memberId);
+}
 
 /*
  * Who sent a message (sign-in-and-team §7.1), in two steps around the send.

@@ -3,6 +3,7 @@ import { workspaceDirectory } from "./workspaces";
 import { requireWorkspaceManager } from "./workspaceAccess";
 import { TeamError } from "./members";
 import type { Member } from "./contract";
+import { projectReportDestinations } from "@/lib/projects/settings";
 
 export interface WorkspaceDefaults {
   accounts: { claude: string[]; codex: string[] };
@@ -38,10 +39,31 @@ export function readWorkspaceDefaults(store: TeamStore, id: string): WorkspaceDe
   return parseWorkspaceDefaults(raw === undefined ? {} : raw);
 }
 
-export function setWorkspaceDefaults(store: TeamStore, actor: Member, id: string, input: unknown): WorkspaceDefaults {
+export async function setWorkspaceDefaults(store: TeamStore, actor: Member, id: string, input: unknown): Promise<WorkspaceDefaults> {
   const value = parseWorkspaceDefaults(input);
+  requireWorkspaceManager(store, actor, id);
+  // Keep bot startup out of account/default reads. Only a report-chat write
+  // needs its posting catalog; recheck membership after loading it.
+  const chats = value.reportChat ? (await import("@/lib/telegram/bot/service")).telegramBotService().listChats().chats : [];
   return store.transaction(() => {
     requireWorkspaceManager(store, actor, id);
+    if (value.reportChat) {
+      const resolve = (reference: string) => chats.find(chat => chat.chat === reference || chat.chatId === reference || chat.alias === reference
+        || (reference.startsWith("@") && chat.username?.toLowerCase() === reference.slice(1).toLowerCase()));
+      const chosen = resolve(value.reportChat.chat);
+      if (!chosen?.postAllowed) throw new TeamError("chat_not_allowed", "choose a known chat where the bot may post", 409);
+      if (store.member(actor.id)?.role !== "owner") {
+        const directory = workspaceDirectory(store);
+        const reserved = store.members().some(member => member.role === "owner" && member.telegram?.userId === chosen.chatId)
+          || directory.workspaces.some(workspace => workspace.id !== id
+          && resolve(readWorkspaceDefaults(store, workspace.id).reportChat?.chat ?? "")?.chatId === chosen.chatId)
+          || projectReportDestinations().some(destination => directory.workspaceOf(destination.project) !== id
+            && resolve(destination.chat)?.chatId === chosen.chatId);
+        if (reserved) throw new TeamError("chat_reserved", "that report chat belongs to another workspace or the installation", 403);
+      }
+      value.reportChat = { chat: chosen.alias ?? chosen.chat ?? chosen.chatId, name: value.reportChat.name,
+        ...(chosen.isForum && value.reportChat.topicId ? { topicId: value.reportChat.topicId } : {}) };
+    }
     store.putWorkspaceDefaults(id, value);
     return readWorkspaceDefaults(store, id);
   });

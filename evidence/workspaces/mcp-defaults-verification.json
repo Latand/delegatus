@@ -9063,5 +9063,2026 @@
       "baselineRuns": 0,
       "retainedEarlierAudit": false
     }
-  ]
+  ],
+  "securityFixRound": {
+    "recordedAt": "2026-10-27T00:28:13.172845+00:00",
+    "reviewedRevision": "c82bb0be568131b7a63913296d84e4864175edd4",
+    "baseline": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+    "commands": {
+      "tests": "scripts/gate-slot.sh bun run test <explicit-file>",
+      "types": "scripts/gate-slot.sh bunx --no-install tsc --noEmit --incremental false",
+      "execution": "serial; checkEnvironment then isolatedEnvironment in detached Git copies with private HOME/XDG/TMPDIR/LLV_STATE_DIR"
+    },
+    "coverage": [
+      "Server-admitted member authority before composer, runtime, native queue, question-answer and retired-seat redirect effects; independent of first-author feed ids.",
+      "External callers without a capability retain existing reach; unresolved and conflicting capabilities refuse.",
+      "One lazy seat snapshot per parent-chain resolution, no seats read without workspaces; unreadable seat authority refuses.",
+      "Report writes require postable catalog chats; manager choices resolve aliases, ids and usernames before reserving foreign, installation and owner-private destinations."
+    ],
+    "performance": {
+      "fixture": "500 active seats; each mandate is 3500 ASCII characters; schema 1; no revocations or pending rows; identical serialized bytes on both sides; in-memory registry parent chain; list_tasks from an unbound worker",
+      "before": "reviewedRevision workspacePrincipal.ts",
+      "after": "sourceFiles below",
+      "observations": [
+        {
+          "runtime": "v26.3.0",
+          "bun": "1.4.0",
+          "seats": 500,
+          "bytes": 1981186,
+          "samples": 20,
+          "warmup": 3,
+          "unit": "ms",
+          "registry": "in-memory chain",
+          "aggregate": "median"
+        },
+        {
+          "depth": 1,
+          "before": 21.31077099999993,
+          "after": 14.989206500000023
+        },
+        {
+          "depth": 4,
+          "before": 73.48114999999984,
+          "after": 15.501526999999896
+        },
+        {
+          "depth": 10,
+          "before": 140.6173305000002,
+          "after": 12.074793499999942
+        },
+        {
+          "soloSeatsReads": 0
+        }
+      ],
+      "reproduction": "Extract benchmarkSource as bench.ts beside a detached Git source copy named head with matching dependencies; run through scripts/gate-slot.sh bun bench.ts. The script isolates state before importing production code.",
+      "benchmarkSource": "import fs from \"node:fs\";\nimport path from \"node:path\";\nimport { spawnSync } from \"node:child_process\";\nimport { checkEnvironment } from \"./head/scripts/gate-cache.ts\";\nimport { isolatedEnvironment } from \"./head/scripts/local-gate.ts\";\nconst root=path.join(import.meta.dir,\"benchmark-state\");\nObject.assign(process.env,isolatedEnvironment(root,checkEnvironment(process.env)),{TMPDIR:root});\nconst head=path.join(import.meta.dir,\"head\");\nconst beforePrincipal=path.join(head,\"src/lib/team/workspacePrincipal.before.ts\");\nconst beforeFence=path.join(head,\"src/lib/mcp/workspaceFence.before.ts\");\nfs.writeFileSync(beforePrincipal,spawnSync(\"git\",[\"show\",\"c82bb0be568131b7a63913296d84e4864175edd4:src/lib/team/workspacePrincipal.ts\"],{cwd:head,encoding:\"utf8\"}).stdout);\nfs.writeFileSync(beforeFence,fs.readFileSync(path.join(head,\"src/lib/mcp/workspaceFence.ts\"),\"utf8\").replace('\"@/lib/team/workspacePrincipal\"','\"@/lib/team/workspacePrincipal.before\"'));\nconst {teamStore,resetTeamStoreForTests}=await import(\"./head/src/lib/team/store.ts\");\nconst {createWorkspace}=await import(\"./head/src/lib/team/workspaces.ts\");\nconst {statePath}=await import(\"./head/src/lib/configDir.ts\");\nconst {emptyLaunchProfile}=await import(\"./head/src/lib/accounts/migration/contracts.ts\");\nconst before=(await import(beforeFence)).withWorkspaceMcpFence;\nconst after=(await import(\"./head/src/lib/mcp/workspaceFence.ts\")).withWorkspaceMcpFence;\nconst store=teamStore();\nconst at=\"2026-10-20T09:00:00.000Z\";\nconst owner={id:\"m_owner\",name:\"Owner\",role:\"owner\" as const,status:\"active\" as const,color:\"teal\" as const,telegram:null,createdAt:at,createdBy:\"claim\",revokedAt:null};\nstore.insertMember(owner);createWorkspace(store,owner,{id:`w_${\"a\".repeat(32)}`,name:\"Alpha\",projects:[\"project-alpha\"]});\nconst seats:Record<string,unknown>={};\nfor(let i=0;i<500;i++) {\n const project=`project-seat-${String(i).padStart(4,\"0\")}`;\n seats[project]={project,seatEpoch:i+1,conversationId:`conversation_seat_${i}`,path:`seat-${i}.jsonl`,engine:null,model:null,runtimeIdentityFrozen:false,mandate:\"x\".repeat(3500),promptVersion:null,predecessorConversationId:null,triggeredBy:null,state:\"active\",intent:{clientRequestId:`seed-${i}`,mode:\"existing\",launchId:null,error:null},designatedAt:at,activatedAt:at};\n}\nconst payload=JSON.stringify({schemaVersion:1,nextSeatEpoch:501,seats,seatLineage:[],pending:{},revocations:[],history:[],rollbacks:{}});\nconst file=statePath(\"orchestrator-seats.json\");fs.writeFileSync(file,payload);\nconsole.log(JSON.stringify({runtime:process.version,bun:Bun.version,seats:500,bytes:Buffer.byteLength(payload),samples:20,warmup:3,unit:\"ms\",registry:\"in-memory chain\",aggregate:\"median\"}));\nconst result=[];\nfor(const depth of [1,4,10]) {\n const conversations=Object.fromEntries(Array.from({length:depth},(_,i)=>[`conversation_${i}`,{id:`conversation_${i}`,generations:[{launchProfile:emptyLaunchProfile({cwd:root,project:\"project-alpha\",...(i+1<depth?{parentConversationId:`conversation_${i+1}`}:{})})}]}]));\n const deps={attentionAuthority:()=>({kind:\"worker\",conversationId:\"conversation_0\",role:\"builder\"}),workspaceConversation:(id:string)=>conversations[id]??null};\n const target={callTool:async()=>({ok:true,toolName:\"list_tasks\",clientRequestId:null,replayed:false})};\n const row:Record<string,number>={depth};\n for(const [name,wrap] of [[\"before\",before],[\"after\",after]] as const) {\n  const service=wrap(target,deps);const times=[];\n  for(let i=0;i<23;i++){const start=performance.now();await service.callTool(\"list_tasks\",{});if(i>=3)times.push(performance.now()-start);}\n  times.sort((a,b)=>a-b);row[name]=(times[9]+times[10])/2;\n }\n result.push(row);console.log(JSON.stringify(row));\n}\n// A solo caller uses the same ten-generation chain and nonempty seats file.\nresetTeamStoreForTests();fs.renameSync(statePath(\"team/team.sqlite\"),statePath(\"saved-team.sqlite\"));\nlet reads=0;const realRead=fs.readFileSync;fs.readFileSync=((name:any,...args:any[])=>{if(name===file)reads++;return (realRead as any)(name,...args);}) as typeof fs.readFileSync;\nconst lookup=(id:string)=>{const index=Number(id.slice(\"conversation_\".length));return {id,generations:[{launchProfile:emptyLaunchProfile({cwd:root,project:\"project-alpha\",...(index<9?{parentConversationId:`conversation_${index+1}`}:{})})}]};};\nawait after({callTool:async()=>({ok:true})},{attentionAuthority:()=>({kind:\"worker\",conversationId:\"conversation_0\",role:\"builder\"}),workspaceConversation:lookup}).callTool(\"list_tasks\",{});\nfs.readFileSync=realRead;console.log(JSON.stringify({soloSeatsReads:reads}));\nfs.unlinkSync(beforePrincipal);fs.unlinkSync(beforeFence);\n"
+    },
+    "failureControls": [
+      {
+        "name": "delivery-authority",
+        "status": 1,
+        "failures": [
+          "a member's empty input fences an owner conversation before dispatch and after restart",
+          "a member's reused input fences an owner conversation before dispatch and after restart",
+          "a member's answer input fences an owner conversation before dispatch and after restart",
+          "a member's dialog-key input fences an owner conversation before dispatch and after restart",
+          "a member's permission input fences an owner conversation before dispatch and after restart",
+          "a failed authority write refuses a member delivery before the host is called: message",
+          "a failed authority write refuses a member delivery before the host is called: answer",
+          "a failed authority write refuses a member delivery before the host is called: dialog-key",
+          "a failed authority write refuses a member delivery before the host is called: permission"
+        ]
+      },
+      {
+        "name": "external-caller",
+        "status": 1,
+        "failures": [
+          "an external caller without a capability keeps project reads while broken capabilities refuse"
+        ]
+      },
+      {
+        "name": "seat-snapshot",
+        "status": 1,
+        "failures": [
+          "one seat snapshot resolves a deep parent chain, and a later resolution rereads revocation",
+          "solo resolves without reading seats",
+          "team without workspaces resolves without reading seats",
+          "unreadable seat authority never becomes installation reach"
+        ]
+      },
+      {
+        "name": "chat-ownership",
+        "status": 1,
+        "failures": [
+          "managers cannot select a foreign or installation destination through an alias, id or username",
+          "the defaults endpoint refuses a manager's foreign and unknown report chats without changing defaults"
+        ]
+      },
+      {
+        "name": "seat-unreadable",
+        "status": 1,
+        "failures": [
+          "an unreadable seat file refuses an unbound caller without revealing foreign tasks"
+        ]
+      }
+    ],
+    "checks": [
+      {
+        "check": "workspace-fence-final",
+        "exit": 0
+      },
+      {
+        "check": "workspace-principal-final",
+        "exit": 0
+      },
+      {
+        "check": "types-final",
+        "exit": 0
+      },
+      {
+        "check": "answer-fixture-final",
+        "exit": 0
+      }
+    ],
+    "sourceFiles": [
+      {
+        "file": "docs/design/workspaces.md",
+        "sha256": "6a225d587a6ff64cecf9f81c84b63d79441616e8ab119d14d36703b55d47405c"
+      },
+      {
+        "file": "src/app/api/answer/route.test.ts",
+        "sha256": "297242b0ef1771785dfdfffb867f201d72b3f8fa32291e30bd181e449cd884cb"
+      },
+      {
+        "file": "src/app/api/answer/route.ts",
+        "sha256": "5ba5f28fd8427df0bcc41a6d64cf74670c1c4eff88fcaee7ed6c795ea3489ca1"
+      },
+      {
+        "file": "src/app/api/conversation-host/handlers.ts",
+        "sha256": "24ea416e976d9591cffa9d861680a1305db0ab640f3a99b31c032cdddc385d0a"
+      },
+      {
+        "file": "src/app/api/team/workspaces/[id]/defaults/route.ts",
+        "sha256": "8213239c5cd422e11590cca4a4967ec7b82f58bb5128fbcc0eaa97dd04592778"
+      },
+      {
+        "file": "src/lib/mcp/spawnAccount.test.ts",
+        "sha256": "4129106c7227151ceb1f97e526be462c505d434f9caafa1f9e1599748f3c6562"
+      },
+      {
+        "file": "src/lib/mcp/workspaceFence.test.ts",
+        "sha256": "0f2a61454389dd6ccf018a717cae448e7f3738adae398fafd8f84356232e53c2"
+      },
+      {
+        "file": "src/lib/mcp/workspaceFence.ts",
+        "sha256": "4d018ba087ffa35af8ff774fa03588e691a7814eaae36287387282d4764a9ab6"
+      },
+      {
+        "file": "src/lib/orchestrator/seatChannel.test.ts",
+        "sha256": "f5bb3b8cbb622f61aa303a655ce456b563a5643c40267343ddb8d4157d0bfc03"
+      },
+      {
+        "file": "src/lib/orchestrator/seatChannel.ts",
+        "sha256": "9b0f2a94867b90eb7d3290a8aaa7ad23c84077e79cc7b90a92fe4affe4448892"
+      },
+      {
+        "file": "src/lib/projects/settings.ts",
+        "sha256": "e5a1b05005298e75228a39109a7cc8e23a1957130f767363ca3c5e5b171e6958"
+      },
+      {
+        "file": "src/lib/runtime/http.team.test.ts",
+        "sha256": "428f88c6914ae9f4093064f8810b8d51f90390b83e6d041279c9d153661c0b30"
+      },
+      {
+        "file": "src/lib/runtime/http.ts",
+        "sha256": "ec5706853b17f56225d555b7853afe0ec06434189c14e72bde46968944af1458"
+      },
+      {
+        "file": "src/lib/runtime/nativeQueueHttp.team.test.ts",
+        "sha256": "f8b3af32367b21bcd525ed43b90358a708301335ce5afcbfdb5dd951da25d985"
+      },
+      {
+        "file": "src/lib/runtime/nativeQueueHttp.ts",
+        "sha256": "d6d3f7ebea51968e9f547b7b36d7ba04231ff0241046cd809858d5c95399c6d5"
+      },
+      {
+        "file": "src/lib/team/authorship.ts",
+        "sha256": "8800e3954ec7069efa99928d84c5fb7573481fdde040a59dbbcff38879d12d0f"
+      },
+      {
+        "file": "src/lib/team/store.ts",
+        "sha256": "bb4d795c096007419f0fef696a4a4af4ff3fcf7999a773f6e52dbe4fadfa317d"
+      },
+      {
+        "file": "src/lib/team/workspaceDefaults.test.ts",
+        "sha256": "91818fd771b4404bc21cd4ab9d5da36f194e161c8051eb9ed44a5d4e0fd19523"
+      },
+      {
+        "file": "src/lib/team/workspaceDefaults.ts",
+        "sha256": "2dafff1dfbaffd6ea87fcc938adde90e99ebc05e8236c2f7fd17a92ab8b2bf26"
+      },
+      {
+        "file": "src/lib/team/workspacePrincipal.test.ts",
+        "sha256": "83d7098509c7fe099deeea0d4e410ddb15c32db2709b673e4bd3dd04d68e70be"
+      },
+      {
+        "file": "src/lib/team/workspacePrincipal.ts",
+        "sha256": "54871b9ce0704e62f962f42e2ebadc7c0c38813362d38d88d83162479a017c01"
+      },
+      {
+        "file": "src/lib/telegram/bot/reportReplies.test.ts",
+        "sha256": "fc493015efa9a7d19eb87362e25c054721a379909008edef867d9f066112ccf6"
+      }
+    ],
+    "selection": {
+      "files": 103,
+      "green": 90,
+      "baselineObserved": 12,
+      "unresolved": 0,
+      "optInSkipped": 1
+    },
+    "files": [
+      {
+        "file": "scripts/rebuild.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 36,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/access/phone/route.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 48,
+          "fail": 2
+        },
+        "failures": [
+          "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+          "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 48,
+              "fail": 2
+            },
+            "failures": [
+              "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+              "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 48,
+              "fail": 2
+            },
+            "failures": [
+              "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+              "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 48,
+              "fail": 2
+            },
+            "failures": [
+              "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+              "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 48,
+              "fail": 2
+            },
+            "failures": [
+              "a Viewer booting with phone access remembered comes up gated (#2024) > a container restarted under a live mapping gates on the same key file and restores the link",
+              "a deploy's probes authenticate against a release gated by phone access (#2024) > a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/app/api/activity/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/activity/tokens/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/answer/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 3,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/conversation-host/longText.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 2,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/conversation-host/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 10,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/external-relay/owner-history/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/keys/compatibilityWriters.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 20,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/keys/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 23,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/links/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 7,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/orchestrator/reports/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 2,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/pipelines/[id]/review/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 11,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/runtime/operations/[operationId]/settlement.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/spawn/route.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 70,
+          "fail": 23
+        },
+        "failures": [
+          "Claude selection handles a fallback race with automatic credential rotation",
+          "Claude selection handles a fallback race with exhausted pin",
+          "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+          "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+          "Claude selection handles a fallback race with pin catalog change",
+          "Claude selection handles a fallback race with pin credential removal",
+          "Claude selection handles a fallback race with pin credential rotation",
+          "Claude selection handles a fallback race with pin rejected refresh rotation",
+          "Claude selection handles a fallback race with pin unreadable credential",
+          "Claude selection handles a fallback race with unavailable pin",
+          "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+          "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+          "Viewer draft and per-project orchestrator seat pass public spawn admission",
+          "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+          "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+          "a pinned Claude health probe handles pinned catalog before reserving once",
+          "a pinned Claude health probe handles pinned credential before reserving once",
+          "a pinned Claude health probe handles pinned removed credential before reserving once",
+          "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+          "a pinned Claude health probe handles unrelated refusal before reserving once",
+          "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+          "a queued pinned account survives restart and launches exactly once on the pin after admission",
+          "an automatic bound-project health revision race stays retryable and preserves the same request key"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 70,
+              "fail": 23
+            },
+            "failures": [
+              "Claude selection handles a fallback race with automatic credential rotation",
+              "Claude selection handles a fallback race with exhausted pin",
+              "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+              "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+              "Claude selection handles a fallback race with pin catalog change",
+              "Claude selection handles a fallback race with pin credential removal",
+              "Claude selection handles a fallback race with pin credential rotation",
+              "Claude selection handles a fallback race with pin rejected refresh rotation",
+              "Claude selection handles a fallback race with pin unreadable credential",
+              "Claude selection handles a fallback race with unavailable pin",
+              "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+              "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+              "Viewer draft and per-project orchestrator seat pass public spawn admission",
+              "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+              "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+              "a pinned Claude health probe handles pinned catalog before reserving once",
+              "a pinned Claude health probe handles pinned credential before reserving once",
+              "a pinned Claude health probe handles pinned removed credential before reserving once",
+              "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+              "a pinned Claude health probe handles unrelated refusal before reserving once",
+              "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+              "a queued pinned account survives restart and launches exactly once on the pin after admission",
+              "an automatic bound-project health revision race stays retryable and preserves the same request key"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 70,
+              "fail": 23
+            },
+            "failures": [
+              "Claude selection handles a fallback race with automatic credential rotation",
+              "Claude selection handles a fallback race with exhausted pin",
+              "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+              "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+              "Claude selection handles a fallback race with pin catalog change",
+              "Claude selection handles a fallback race with pin credential removal",
+              "Claude selection handles a fallback race with pin credential rotation",
+              "Claude selection handles a fallback race with pin rejected refresh rotation",
+              "Claude selection handles a fallback race with pin unreadable credential",
+              "Claude selection handles a fallback race with unavailable pin",
+              "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+              "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+              "Viewer draft and per-project orchestrator seat pass public spawn admission",
+              "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+              "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+              "a pinned Claude health probe handles pinned catalog before reserving once",
+              "a pinned Claude health probe handles pinned credential before reserving once",
+              "a pinned Claude health probe handles pinned removed credential before reserving once",
+              "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+              "a pinned Claude health probe handles unrelated refusal before reserving once",
+              "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+              "a queued pinned account survives restart and launches exactly once on the pin after admission",
+              "an automatic bound-project health revision race stays retryable and preserves the same request key"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 70,
+              "fail": 23
+            },
+            "failures": [
+              "Claude selection handles a fallback race with automatic credential rotation",
+              "Claude selection handles a fallback race with exhausted pin",
+              "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+              "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+              "Claude selection handles a fallback race with pin catalog change",
+              "Claude selection handles a fallback race with pin credential removal",
+              "Claude selection handles a fallback race with pin credential rotation",
+              "Claude selection handles a fallback race with pin rejected refresh rotation",
+              "Claude selection handles a fallback race with pin unreadable credential",
+              "Claude selection handles a fallback race with unavailable pin",
+              "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+              "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+              "Viewer draft and per-project orchestrator seat pass public spawn admission",
+              "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+              "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+              "a pinned Claude health probe handles pinned catalog before reserving once",
+              "a pinned Claude health probe handles pinned credential before reserving once",
+              "a pinned Claude health probe handles pinned removed credential before reserving once",
+              "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+              "a pinned Claude health probe handles unrelated refusal before reserving once",
+              "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+              "a queued pinned account survives restart and launches exactly once on the pin after admission",
+              "an automatic bound-project health revision race stays retryable and preserves the same request key"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 70,
+              "fail": 23
+            },
+            "failures": [
+              "Claude selection handles a fallback race with automatic credential rotation",
+              "Claude selection handles a fallback race with exhausted pin",
+              "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+              "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+              "Claude selection handles a fallback race with pin catalog change",
+              "Claude selection handles a fallback race with pin credential removal",
+              "Claude selection handles a fallback race with pin credential rotation",
+              "Claude selection handles a fallback race with pin rejected refresh rotation",
+              "Claude selection handles a fallback race with pin unreadable credential",
+              "Claude selection handles a fallback race with unavailable pin",
+              "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+              "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+              "Viewer draft and per-project orchestrator seat pass public spawn admission",
+              "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+              "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+              "a pinned Claude health probe handles pinned catalog before reserving once",
+              "a pinned Claude health probe handles pinned credential before reserving once",
+              "a pinned Claude health probe handles pinned removed credential before reserving once",
+              "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+              "a pinned Claude health probe handles unrelated refusal before reserving once",
+              "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+              "a queued pinned account survives restart and launches exactly once on the pin after admission",
+              "an automatic bound-project health revision race stays retryable and preserves the same request key"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/app/api/streams/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/subscription-api-consent/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 13,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/task-spend/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/team/routes.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/team/workspaces.routes.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 7,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/telegram/bot/confirmation/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 11,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/tmux/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 39,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/voice-companion/calls/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 5,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/voice-companion/memory/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 1,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/voice-companion/session/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 13,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/voice-companion/settings/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/app/api/voice-tools/route.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 12,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/components/TmuxComposer.deadHostComposerUsable.dom.test.tsx",
+        "exit": 0,
+        "counts": {
+          "pass": 13,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/components/TmuxComposer.operationReadBack.dom.test.tsx",
+        "exit": 1,
+        "counts": {
+          "pass": 22,
+          "fail": 2
+        },
+        "failures": [
+          "a real uncertain delivery clears its en composer banner on canonical readback after restart",
+          "a real uncertain delivery clears its uk composer banner on canonical readback after restart"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 22,
+              "fail": 2
+            },
+            "failures": [
+              "a real uncertain delivery clears its en composer banner on canonical readback after restart",
+              "a real uncertain delivery clears its uk composer banner on canonical readback after restart"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 22,
+              "fail": 2
+            },
+            "failures": [
+              "a real uncertain delivery clears its en composer banner on canonical readback after restart",
+              "a real uncertain delivery clears its uk composer banner on canonical readback after restart"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 22,
+              "fail": 2
+            },
+            "failures": [
+              "a real uncertain delivery clears its en composer banner on canonical readback after restart",
+              "a real uncertain delivery clears its uk composer banner on canonical readback after restart"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 22,
+              "fail": 2
+            },
+            "failures": [
+              "a real uncertain delivery clears its en composer banner on canonical readback after restart",
+              "a real uncertain delivery clears its uk composer banner on canonical readback after restart"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+        "exit": 0,
+        "counts": {
+          "pass": 7,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+        "exit": 0,
+        "counts": {
+          "pass": 0,
+          "skip": 104,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "opt-in-skipped"
+      },
+      {
+        "file": "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx",
+        "exit": 0,
+        "counts": {
+          "pass": 21,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/activity/ingest.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 12,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/activity/pull.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 23,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/activity/requestLedger.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 11,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/activity/tokenAttribution.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 5,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/agent/operatorAuthority.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 23,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/agent/spawnCommand.contention.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 13,
+          "fail": 3
+        },
+        "failures": [
+          "seat credential capture leaves neighboring spawn, resume and send admission available",
+          "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+          "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 13,
+              "fail": 3
+            },
+            "failures": [
+              "seat credential capture leaves neighboring spawn, resume and send admission available",
+              "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+              "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 13,
+              "fail": 3
+            },
+            "failures": [
+              "seat credential capture leaves neighboring spawn, resume and send admission available",
+              "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+              "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 13,
+              "fail": 3
+            },
+            "failures": [
+              "seat credential capture leaves neighboring spawn, resume and send admission available",
+              "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+              "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 13,
+              "fail": 3
+            },
+            "failures": [
+              "seat credential capture leaves neighboring spawn, resume and send admission available",
+              "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+              "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/attention/nativeAssociation.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 20,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/boardMaintenance/run.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 41,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/bridge/reportLog.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 9,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/bridge/service.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 25,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/externalRelay/prototypeAnswer.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 16,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/flows/retirement.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 16,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/forge/autoMerge.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 95,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/forge/autoMergeStore.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 104,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/forge/autoRefresh.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 96,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/forge/taskFinish.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 18,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/mcp/autonomy.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 8,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/mcp/bindings.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 118,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/mcp/bridgeReportOrigin.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 9,
+          "fail": 1
+        },
+        "failures": [
+          "(unnamed)"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 9,
+              "fail": 1
+            },
+            "failures": [
+              "(unnamed)"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 9,
+              "fail": 1
+            },
+            "failures": [
+              "(unnamed)"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 9,
+              "fail": 1
+            },
+            "failures": [
+              "(unnamed)"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 9,
+              "fail": 1
+            },
+            "failures": [
+              "(unnamed)"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/mcp/bridgeReportShape.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 60,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/mcp/orchestratorTools.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 75,
+          "fail": 2
+        },
+        "failures": [
+          "a definite message refusal after seat creation preserves both the cause and created recipient",
+          "server 403 on seat creation retains its cause and closes the send as not executed"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 75,
+              "fail": 2
+            },
+            "failures": [
+              "a definite message refusal after seat creation preserves both the cause and created recipient",
+              "server 403 on seat creation retains its cause and closes the send as not executed"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 75,
+              "fail": 2
+            },
+            "failures": [
+              "a definite message refusal after seat creation preserves both the cause and created recipient",
+              "server 403 on seat creation retains its cause and closes the send as not executed"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 75,
+              "fail": 2
+            },
+            "failures": [
+              "a definite message refusal after seat creation preserves both the cause and created recipient",
+              "server 403 on seat creation retains its cause and closes the send as not executed"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 75,
+              "fail": 2
+            },
+            "failures": [
+              "a definite message refusal after seat creation preserves both the cause and created recipient",
+              "server 403 on seat creation retains its cause and closes the send as not executed"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/mcp/originalKeySendRecovery.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 11,
+          "fail": 1
+        },
+        "failures": [
+          "an oversized send to a reclaimed host keeps its refusal reason through MCP recovery"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 11,
+              "fail": 1
+            },
+            "failures": [
+              "an oversized send to a reclaimed host keeps its refusal reason through MCP recovery"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 11,
+              "fail": 1
+            },
+            "failures": [
+              "an oversized send to a reclaimed host keeps its refusal reason through MCP recovery"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 11,
+              "fail": 1
+            },
+            "failures": [
+              "an oversized send to a reclaimed host keeps its refusal reason through MCP recovery"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 11,
+              "fail": 1
+            },
+            "failures": [
+              "an oversized send to a reclaimed host keeps its refusal reason through MCP recovery"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/mcp/reportTools.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1
+        },
+        "failures": [
+          "get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 5,
+              "fail": 1
+            },
+            "failures": [
+              "get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 5,
+              "fail": 1
+            },
+            "failures": [
+              "get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 5,
+              "fail": 1
+            },
+            "failures": [
+              "get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 5,
+              "fail": 1
+            },
+            "failures": [
+              "get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/mcp/spawnAccount.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 16,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/mcp/workspaceFence.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 33,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/monitor/seatTickController.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 106,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/orchestrator/seatChannel.nativeQueue.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 1,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/orchestrator/seatChannel.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 21,
+          "fail": 2
+        },
+        "failures": [
+          "a fresh process resumes open records outside the recent-rotation window",
+          "legacy child relays refuse a root seat revoked while transcript lookup waits"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 20,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 20,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          },
+          {
+            "repeat": 3,
+            "counts": {
+              "pass": 20,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          },
+          {
+            "repeat": 4,
+            "counts": {
+              "pass": 20,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 22,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 22,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          },
+          {
+            "repeat": 3,
+            "counts": {
+              "pass": 22,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          },
+          {
+            "repeat": 4,
+            "counts": {
+              "pass": 22,
+              "fail": 1
+            },
+            "failures": [
+              "legacy child relays refuse a root seat revoked while transcript lookup waits"
+            ]
+          }
+        ],
+        "transientHeadOnlyFailures": {
+          "failures": [
+            "a fresh process resumes open records outside the recent-rotation window"
+          ],
+          "observation": "Absent in the last two full-file head confirmations; no baseline attribution is claimed for this earlier failure."
+        },
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/pipelines/engine.cloud.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 51,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/projects/reportDestination.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 8,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 7,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 58,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/agentMemorySettings.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 5,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.activityLedger.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 5,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.admissionLookup.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 11,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.attachments.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 9,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.inject.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 10,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.longText.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 9,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.refusedDelivery.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 8,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.retryProgress.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 21,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.team.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 10,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/http.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 74,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/inboxWriters.integration.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 7,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/nativeQueueHttp.files.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 17,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/nativeQueueHttp.team.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/nativeQueueRuntime.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 62,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/releaseInterruption.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 127,
+          "fail": 7
+        },
+        "failures": [
+          "Codex exit bookkeeping after a cut owes no second continuation, and a resumed turn cut again owes its own",
+          "a claude turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+          "a codex turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+          "a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation",
+          "an agent resumed after one restart and cut mid-turn by the next gets its own one continuation",
+          "background work a continuation reported as killed is never cut again, and the turn that is cut mid-tool gets what it is owed",
+          "background work a continuation reported as killed is never cut again, and the turn that launches a new background job gets what it is owed"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 127,
+              "fail": 7
+            },
+            "failures": [
+              "Codex exit bookkeeping after a cut owes no second continuation, and a resumed turn cut again owes its own",
+              "a claude turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a codex turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation",
+              "an agent resumed after one restart and cut mid-turn by the next gets its own one continuation",
+              "background work a continuation reported as killed is never cut again, and the turn that is cut mid-tool gets what it is owed",
+              "background work a continuation reported as killed is never cut again, and the turn that launches a new background job gets what it is owed"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 127,
+              "fail": 7
+            },
+            "failures": [
+              "Codex exit bookkeeping after a cut owes no second continuation, and a resumed turn cut again owes its own",
+              "a claude turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a codex turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation",
+              "an agent resumed after one restart and cut mid-turn by the next gets its own one continuation",
+              "background work a continuation reported as killed is never cut again, and the turn that is cut mid-tool gets what it is owed",
+              "background work a continuation reported as killed is never cut again, and the turn that launches a new background job gets what it is owed"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 127,
+              "fail": 7
+            },
+            "failures": [
+              "Codex exit bookkeeping after a cut owes no second continuation, and a resumed turn cut again owes its own",
+              "a claude turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a codex turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation",
+              "an agent resumed after one restart and cut mid-turn by the next gets its own one continuation",
+              "background work a continuation reported as killed is never cut again, and the turn that is cut mid-tool gets what it is owed",
+              "background work a continuation reported as killed is never cut again, and the turn that launches a new background job gets what it is owed"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 127,
+              "fail": 7
+            },
+            "failures": [
+              "Codex exit bookkeeping after a cut owes no second continuation, and a resumed turn cut again owes its own",
+              "a claude turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a codex turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+              "a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation",
+              "an agent resumed after one restart and cut mid-turn by the next gets its own one continuation",
+              "background work a continuation reported as killed is never cut again, and the turn that is cut mid-tool gets what it is owed",
+              "background work a continuation reported as killed is never cut again, and the turn that launches a new background job gets what it is owed"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/runtime/sendSettlement.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 95,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 1,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/state/declaredIndexes.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 34,
+          "skip": 2,
+          "fail": 2
+        },
+        "failures": [
+          "every persistent index declaration has a reopen fixture",
+          "restricted registry opens refuse repair of every missing constructor index"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 34,
+              "fail": 2
+            },
+            "failures": [
+              "every persistent index declaration has a reopen fixture",
+              "restricted registry opens refuse repair of every missing constructor index"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 34,
+              "fail": 2
+            },
+            "failures": [
+              "every persistent index declaration has a reopen fixture",
+              "restricted registry opens refuse repair of every missing constructor index"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 34,
+              "fail": 2
+            },
+            "failures": [
+              "every persistent index declaration has a reopen fixture",
+              "restricted registry opens refuse repair of every missing constructor index"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 34,
+              "fail": 2
+            },
+            "failures": [
+              "every persistent index declaration has a reopen fixture",
+              "restricted registry opens refuse repair of every missing constructor index"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/state/retainedFiles.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 3,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/cli.team.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/passkeys.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 11,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/streams.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/team.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 53,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/telegramSignIn.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 10,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/workspaceAccess.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 31,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/workspaceDefaults.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 8,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/workspacePrincipal.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 4,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/team/workspaces.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 18,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/telegram/bot/reportReplies.test.ts",
+        "exit": 1,
+        "counts": {
+          "pass": 31,
+          "fail": 1
+        },
+        "failures": [
+          "Telegram intake reaches the real durable seat reservation and runtime journal, and recovers after reopening both"
+        ],
+        "baseline": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 30,
+              "fail": 1
+            },
+            "failures": [
+              "Telegram intake reaches the real durable seat reservation and runtime journal, and recovers after reopening both"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 30,
+              "fail": 1
+            },
+            "failures": [
+              "Telegram intake reaches the real durable seat reservation and runtime journal, and recovers after reopening both"
+            ]
+          }
+        ],
+        "confirmations": [
+          {
+            "repeat": 1,
+            "counts": {
+              "pass": 31,
+              "fail": 1
+            },
+            "failures": [
+              "Telegram intake reaches the real durable seat reservation and runtime journal, and recovers after reopening both"
+            ]
+          },
+          {
+            "repeat": 2,
+            "counts": {
+              "pass": 31,
+              "fail": 1
+            },
+            "failures": [
+              "Telegram intake reaches the real durable seat reservation and runtime journal, and recovers after reopening both"
+            ]
+          }
+        ],
+        "outcome": "baseline-observed"
+      },
+      {
+        "file": "src/lib/telegram/reportSpawn.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 5,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/transfer/transfer.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 16,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/transfer/transferExits.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 23,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/voiceCompanion/callHistory.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 8,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/voiceCompanion/delivery.team.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 11,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/lib/voiceCompanion/http.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 3,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/proxy.team.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 32,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/runtime-host/deliveryTerminalization.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 33,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      },
+      {
+        "file": "src/runtime-host/nativeQueueJournal.test.ts",
+        "exit": 0,
+        "counts": {
+          "pass": 2,
+          "fail": 0
+        },
+        "failures": [],
+        "outcome": "green"
+      }
+    ]
+  }
 }

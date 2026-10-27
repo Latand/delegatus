@@ -86,6 +86,37 @@ for (const [key, origin] of [
     .toMatchObject({ kind: "found", receipt: { state: "delivered", redirectedTo: { operationId: record.toOperationId } } });
 }, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
+for (const revoked of [false, true]) test(`a member-directed seat redirect preserves authority or refuses revocation: ${revoked}`, async () => fixture(async (runtime, ports) => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { admitConversationMember } = await import("@/lib/team/authorship");
+  const store = teamStore();
+  const memberId = "m_member_redirect";
+  store.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: AT, createdBy: "claim", revokedAt: null });
+  try {
+    designate(runtime);
+    admitConversationMember({ kind: "member", memberId }, runtime.conversationId);
+    // No feed-author row: this authority came from server-side admission.
+    const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
+      clientMessageId: "reused-redirect-key", text: "Workspace request", images: [], origin: { kind: "operator" }, policy: "queue" });
+    if (!original?.ok) throw new Error("fixture admission failed");
+    designate(runtime, true);
+    if (revoked) store.updateMember({ ...store.member(memberId)!, status: "revoked", revokedAt: AT });
+    const enqueue = ports.enqueue;
+    let redirects = 0;
+    ports.enqueue = request => {
+      redirects++;
+      expect(store.latestConversationMember(runtime.successor!.conversationId)).toBe(memberId);
+      return enqueue(request);
+    };
+    await reconcileSeatChannel(orchestratorRevocations().at(-1)!, ports);
+    expect(redirects).toBe(revoked ? 0 : 1);
+    expect(seatChannelRecord(original.operationId)?.outcome).toBe(revoked ? "dropped" : "redirected");
+    resetTeamStoreForTests();
+    expect(teamStore().latestConversationMember(runtime.successor!.conversationId)).toBe(revoked ? null : memberId);
+  } finally { resetTeamStoreForTests(); }
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
+
 test("epoch-bound board reports are failed with a record and never redirected", async () => fixture(async (runtime, ports) => {
   designate(runtime);
   const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,

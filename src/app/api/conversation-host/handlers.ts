@@ -57,6 +57,7 @@ import {
   type ConversationHostDependencies,
 } from "./dependencies";
 import { recordDeliveryIngress } from "@/lib/runtime/deliveryProgress";
+import { admitConversationMember } from "@/lib/team/authorship";
 
 interface TargetResponse {
   target: string | null;
@@ -381,7 +382,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     /* Answering an agent's question is a person acting: in team mode it
        needs a member, and the audit names them (sign-in-and-team §7.1). */
     const answering = explicitAction === "dialog-key" || explicitAction === "permission" || explicitAction === "answer";
-    const person = answering ? teamActor(req) : null;
+    const person = answering ? trustedActor ?? teamActor(req) : null;
     if (person) {
       const anonymous = refuseAnonymous(person);
       if (anonymous) return anonymous;
@@ -390,7 +391,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId.trim().slice(0, 128) : "";
       const target = { pid, hasPid, filePath, conversationId };
       try {
-        await recordAuthorizedOperatorActivity(
+        const activity = await recordAuthorizedOperatorActivity(
           dependencies,
           req,
           target,
@@ -398,6 +399,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
           "dialog",
           inProcessPerson,
         );
+        admitConversationMember(person!, activity.conversationId || conversationId, filePath);
       } catch (error) {
         if (error instanceof OperatorActivityTargetConflictError) {
           return NextResponse.json({ error: error.message }, { status: 409 });
@@ -609,6 +611,11 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   const structuredEnabled = structuredHostsEnabled();
   if (structuredEnabled) {
     const revoked = actorRejection(); if (revoked) return revoked;
+  }
+  try { admitConversationMember(sender, authoredConversation, filePath); }
+  catch {
+    await releaseAttachments("refused");
+    return NextResponse.json({ error: "conversation authority could not be recorded" }, { status: 503 });
   }
   const selected = await dispatchConversationMessage({
     path: filePath,

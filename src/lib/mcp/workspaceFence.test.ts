@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { emptyLaunchProfile, migrationSuccessorLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryFile } from "@/lib/agent/registry";
-import { resetTeamStoreForTests, teamStore, teamStoreFile, type TeamStore } from "@/lib/team/store";
+import { resetTeamStoreForTests, teamStore, teamStoreFile, TeamStore } from "@/lib/team/store";
 import { createWorkspace, placeProject } from "@/lib/team/workspaces";
 import { setWorkspaceDefaults } from "@/lib/team/workspaceDefaults";
 import type { Member } from "@/lib/team/contract";
@@ -27,6 +27,9 @@ import { runAsMcpHttpCaller } from "./callerContext";
 import { viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 import { createMcpToolService, createProductionViewerMcpService, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
+import { nativeCallerRefusal } from "@/lib/attention/nativeCaller";
+import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
+import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 
 const W1 = `w_${"a".repeat(32)}`, W2 = `w_${"b".repeat(32)}`;
 const AT = "2026-10-20T09:00:00.000Z";
@@ -191,7 +194,11 @@ test("owner and unscoped installation seat retain their existing reach", async (
     snapshot.conversations[id] = conversation(id, own, false) as never;
     dependencies.attentionAuthority = () => ({ kind: "root", conversationId: id });
     if (role === "owner") store.recordMessageAuthor({ clientMessageId: "owner-turn", conversationId: id, memberId: owner.id, at: AT, textDigest: null });
-    else snapshot.conversations[id].agentRole = "orchestrator";
+    else {
+      beginOrchestratorSeatIntent({ project: own, mandate: "Run installation work", clientRequestId: "installation-seat", mode: "existing", conversationId: id, now: AT });
+      completeOrchestratorSeatIntent({ project: own, clientRequestId: "installation-seat", conversationId: id, path: `${id}.jsonl`, now: AT });
+      dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: id, role: "orchestrator" });
+    }
     rebuild();
     expect((await call("get_task", { taskId: "task_1" })).ok).toBe(true);
     const listed = await call("list_tasks", { full: true });
@@ -201,7 +208,7 @@ test("owner and unscoped installation seat retain their existing reach", async (
 });
 
 test("named launch and migration accounts cannot escape the workspace pool", async () => {
-  setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-a"] } });
+  await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-a"] } });
   for (const key of ["accountId", "targetAccountId"]) {
     expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", [key]: "account-b" })).toMatchObject(REFUSED);
     for (const engine of ["claude", "copilot", "unknown"]) {
@@ -214,10 +221,80 @@ test("named launch and migration accounts cannot escape the workspace pool", asy
   expect(dispatched).toEqual(["/api/conversations/conversation_member/migration"]);
 });
 
-test("an unidentified caller cannot use a forged source or member id to obtain installation reach", async () => {
+test("an external caller without a capability keeps project reads while broken capabilities refuse", async () => {
   dependencies.attentionAuthority = () => ({ kind: "unidentified" });
   rebuild();
-  expect(await call("get_task", { taskId: "task_1", src: "conversation_member.jsonl", memberId: owner.id })).toMatchObject(REFUSED);
+  expect((await call("list_tasks", { project: own })).ok).toBe(true);
+  for (const reason of ["capability-unresolved", "capability-conflict"] as const) {
+    dependencies.attentionAuthority = () => ({ kind: "unidentified", admission: nativeCallerRefusal(reason) });
+    rebuild();
+    expect(await call("list_tasks", { project: own })).toMatchObject(REFUSED);
+    expect(await call("get_task", { taskId: "task_1", src: "conversation_member.jsonl", memberId: owner.id })).toMatchObject(REFUSED);
+  }
+});
+
+for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"] as const) {
+  test(`a member's ${delivery} input fences an owner conversation before dispatch and after restart`, async () => {
+    snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+    store.recordMessageAuthor({ clientMessageId: "reused-id", conversationId: "conversation_elsewhere", memberId: owner.id, at: AT, textDigest: null });
+    let effects = 0;
+    const assertFenced = async () => {
+      effects++;
+      expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+    };
+    setConversationHostDependenciesForTests({
+      completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
+      recordOperatorRequest: () => null,
+      collectImagePayloads: () => ({ images: [], error: null }),
+      conversationActions: ["answer", "dialog-key", "permission"],
+      applyConversationAction: async () => { await assertFenced(); return { status: 200, body: { ok: true } } as never; },
+      enqueueStructuredMessage: async () => { await assertFenced(); return { ok: true, structured: true, outcome: "queued", target: null, operationId: "member-delivery" } as never; },
+      deliverConversationMessage: async () => { await assertFenced(); return { ok: true, outcome: "held", target: null }; },
+    });
+    try {
+      expect((await call("get_task", { taskId: "task_1" })).ok).toBe(true);
+      const body = { conversationId: "conversation_member", text: "workspace request",
+        ...(delivery === "reused" ? { clientMessageId: "reused-id" } : {}),
+        ...(["answer", "dialog-key", "permission"].includes(delivery) ? { action: delivery, key: "Enter", answer: {} } : {}) };
+      const response = await conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
+        method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify(body),
+      }), { actor: { kind: "member", memberId: member.id } });
+      expect(response.status).toBe(200);
+      expect(effects).toBe(1);
+      store.pruneEvents(Date.parse("2028-10-20T09:00:00.000Z"));
+      resetTeamStoreForTests(); store = teamStore();
+      rebuild();
+      expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+      expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
+      const reader = `import { conversationWorkspacePrincipal } from ${JSON.stringify(path.resolve("src/lib/team/workspacePrincipal.ts"))}; console.log(JSON.stringify(conversationWorkspacePrincipal(${JSON.stringify(snapshot)}, "conversation_member")));`;
+      const child = spawnSync(process.execPath, ["-e", reader], { env: process.env, encoding: "utf8" });
+      expect(child.status).toBe(0);
+      expect(JSON.parse(child.stdout.trim())).toEqual({ memberId: member.id, workspaceId: W1 });
+    } finally { setConversationHostDependenciesForTests(null); }
+  });
+}
+
+
+for (const action of ["message", "answer", "dialog-key", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
+  let effects = 0;
+  setConversationHostDependenciesForTests({
+    completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
+    recordOperatorRequest: () => null,
+    conversationActions: ["answer", "dialog-key", "permission"],
+    applyConversationAction: async () => { effects++; return { status: 200, body: { ok: true } } as never; },
+    collectImagePayloads: () => ({ images: [], error: null }),
+    enqueueStructuredMessage: async () => { effects++; return null; },
+    deliverConversationMessage: async () => { effects++; return { ok: true, outcome: "held", target: null }; },
+  });
+  const write = spyOn(TeamStore.prototype, "admitConversationMember").mockImplementation(() => { throw new Error("fixture write refused"); });
+  try {
+    const response = await conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json" },
+      body: JSON.stringify({ conversationId: "conversation_member", text: "workspace request", ...(action === "message" ? {} : { action }) }),
+    }), { actor: { kind: "member", memberId: member.id } });
+    expect(response.status).toBe(503);
+    expect(effects).toBe(0);
+  } finally { write.mockRestore(); setConversationHostDependenciesForTests(null); }
 });
 
 test("the latest recorded member fences a legacy conversation when author timestamps tie", async () => {
@@ -237,6 +314,15 @@ test("a durable member binding stays fenced when its authority store disappears"
   expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
   expect(await call("get_task", { taskId: "task_0" })).toMatchObject(REFUSED);
   expect(dispatched).toEqual([]);
+});
+
+test("an unreadable seat file refuses an unbound caller without revealing foreign tasks", async () => {
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{");
+  expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  const result = await call("get_task", { taskId: "task_1" });
+  expect(result).toMatchObject({ ok: false, code: "workspace_unavailable", retryable: true });
+  expect(JSON.stringify(result)).not.toContain("Foreign secret");
 });
 
 test("expired author history retains legacy workspace authority across a fresh process", async () => {

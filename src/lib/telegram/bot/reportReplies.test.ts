@@ -107,24 +107,24 @@ test("workspace directive chats fence admission and a queued reply after readine
   const actor = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, now.getTime()).member;
   const id = `w_${"a".repeat(32)}`;
   createWorkspace(team, actor, { id, name: "Alpha", projects: ["fixture-project"] });
-  setWorkspaceDefaults(team, actor, id, { directiveChats: ["another-chat"] });
+  await setWorkspaceDefaults(team, actor, id, { directiveChats: ["another-chat"] });
   await poll([reply()]);
   expect(store.pendingReportReplies()).toHaveLength(0);
   expect(delivered).toHaveLength(0);
-  setWorkspaceDefaults(team, actor, id, { directiveChats: ["fixture-reports"] });
+  await setWorkspaceDefaults(team, actor, id, { directiveChats: ["fixture-reports"] });
   ready = false;
   await poll([reply({}, 3)]);
   expect(store.pendingReportReplies()).toHaveLength(1);
   ready = true;
   ports.ready = async () => {
-    setWorkspaceDefaults(team, actor, id, { directiveChats: ["another-chat"] });
+    await setWorkspaceDefaults(team, actor, id, { directiveChats: ["another-chat"] });
     return true;
   };
   await poll([]);
   expect(delivered).toHaveLength(0);
   expect(store.pendingReportReplies()).toHaveLength(0);
   ports.ready = async () => true;
-  setWorkspaceDefaults(team, actor, id, { directiveChats: ["fixture-reports"] });
+  await setWorkspaceDefaults(team, actor, id, { directiveChats: ["fixture-reports"] });
   await poll([reply({ message_id: 21 }, 4)]);
   expect(delivered).toHaveLength(1);
 });

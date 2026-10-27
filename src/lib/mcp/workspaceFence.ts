@@ -58,7 +58,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
     try {
       const store = existingTeamStore();
       const authority = dependencies.attentionAuthority();
-      if (authority.kind === "unidentified" && store?.workspaceRows().length) denied();
+      if (authority.kind === "unidentified" && ["capability-unresolved", "capability-conflict"].includes(authority.admission?.reason ?? "")) denied();
       const callerId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
       const lookup = dependencies.workspaceConversation ?? ((id: string) => {
         const current = dependencies.registrySnapshot();

@@ -234,7 +234,7 @@ test("a workspace launch uses its default account pool and refuses an explicit p
   const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
   const id = `w_${"a".repeat(32)}`;
   createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
-  setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-b"] } });
+  await setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-b"] } });
   try {
     await withClient(async (client, { routeDependencies }) => {
       const resolve = routeDependencies.resolveSpawnAccount;
@@ -266,7 +266,7 @@ test("a workspace launch uses its default account pool and refuses an explicit p
       const select = routeDependencies.resolveHealthySpawnAccount;
       routeDependencies.resolveHealthySpawnAccount = async (...input) => {
         const selected = await select(...input);
-        setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-a"] } });
+        await setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-a"] } });
         return selected;
       };
       expect((await direct("workspace-member-pool-edited")).status).toBe(409);

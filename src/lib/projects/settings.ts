@@ -271,6 +271,12 @@ export function reportTelegramChoice(project: string): ReportTelegramChoice | nu
   return stored ? { ...stored } : null;
 }
 
+/** Explicit destinations also reserve chats for projects outside a workspace. */
+export function projectReportDestinations(): { project: string; chat: string }[] {
+  return Object.entries(readProjects()).flatMap(([project, entry]) => entry.reportTelegram?.chat
+    ? [{ project: canonicalProject(project), chat: entry.reportTelegram.chat }] : []);
+}
+
 /** The chat the operator chose for the project's reports, null for none. */
 export function reportTelegram(project: string): ReportTelegramSetting | null {
   const choice = reportTelegramChoice(project);

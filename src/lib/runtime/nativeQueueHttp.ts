@@ -9,6 +9,7 @@ import { agentRegistry, DeliveryReservationConflictError, type AgentRegistry, ty
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, refuseAnonymous, settleMessageAuthor, teamActor } from "@/lib/team";
+import { admitConversationMember } from "@/lib/team/authorship";
 import type { TeamActor } from "@/lib/team/contract";
 import { structuredDeliveryHostForConversation } from "./structuredDeliveryController";
 import type { NativeQueueSnapshot } from "./nativeCodexQueue";
@@ -223,6 +224,14 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
           ? recordDirectWait(progress, registry!, owner, { reason: "checking", detail: HANDING_OFF, nextWakeMs: null })
           : standing.standing === "continue" ? standing.record : null;
         recordDeliveryIngress(owner.command.operationId, ingressAt, progress);
+      }
+      if (command.kind === "native-queue" && (command.action === "add" || command.action === "update")) {
+        try { admitConversationMember(person, command.conversationId); }
+        catch {
+          outcome = "refused";
+          if (owner) await endRow(owner.command.operationId, "conversation authority could not be recorded");
+          return NextResponse.json({ error: "conversation authority could not be recorded" }, { status: 503 });
+        }
       }
       const result = await client.command(command);
       outcome = result.receipt.status === "rejected" ? "refused" : "accepted";

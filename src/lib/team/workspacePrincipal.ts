@@ -5,7 +5,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { existingTeamStore, type TeamStore } from "./store";
 import { workspaceDirectory } from "./workspaces";
 import { workspaceScope } from "./workspaceAccess";
-import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeatsOrUnknown } from "@/lib/orchestrator/seats";
 
 export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
 
@@ -14,11 +14,24 @@ export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
  * survives revocation and project moves; those can only remove its authority. */
 export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspacePrincipal | null {
   const seen = new Set<string>();
+  // One lazy seat snapshot per resolution. Solo installations never read it;
+  // persisted launch bindings still fail closed if their team store vanishes.
+  let seatPrincipals: Map<string | null, WorkspacePrincipal | undefined> | undefined;
+  const hasWorkspaces = Boolean(store?.workspaceRows().length);
+  const seatPrincipal = (id: string) => {
+    if (!hasWorkspaces) return undefined;
+    if (!seatPrincipals) {
+      const seats = activeOrchestratorSeatsOrUnknown();
+      if (!seats) throw new Error("workspace seat authority is unavailable");
+      seatPrincipals = new Map(seats.map(seat => [seat.conversationId, seat.workspace]));
+    }
+    return seatPrincipals.get(id);
+  };
   while (id && !seen.has(id)) {
     seen.add(id);
     const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
     const profile = conversation?.generations.at(-1)?.launchProfile;
-    const principal = profile?.workspace ?? activeOrchestratorSeats().find(seat => seat.conversationId === id)?.workspace;
+    const principal = profile?.workspace ?? seatPrincipal(id);
     if (principal) {
       const member = store?.member(principal.memberId);
       return member?.status === "active" && member.role === "owner" ? null : principal;

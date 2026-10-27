@@ -966,9 +966,20 @@ A team launch records `LaunchProfile.workspace = { memberId, workspaceId }`
 from authenticated server attribution. Task-card launches, pipeline stages,
 seat creation and rotation carry it too; migration and resume retain the
 profile. Pipeline and pending-seat records retain the same scope across
-restart. Existing member-directed conversations resolve their latest recorded
-message author. Owner conversations and installation-owned seats without a
-member binding retain their existing reach.
+restart. Existing member-directed conversations resolve their latest server-admitted
+member input, including sends without a browser message id, reused ids, queue
+edits and question answers. That per-conversation authority is persisted before
+dispatch and is independent of the feed's first-author attribution. Retired-seat
+redirects carry that authority to the successor before enqueueing, and refuse a
+revoked member. An uncertain
+or refused dispatch conservatively retains the admitted member fence. Older
+conversations fall back to their latest recorded message author. Owner
+conversations and installation-owned seats without a member binding retain
+their existing reach.
+
+Authority resolution shares one lazy seat snapshot across the parent chain.
+Solo installations and teams without workspaces skip that read. Unreadable
+seat authority returns a retryable refusal.
 
 History pruning keeps the latest author row for each conversation as authority,
 including tied timestamps in admission order. Older message rows and unbound
@@ -991,7 +1002,11 @@ and duplicate metadata.
 `GET` and `PUT /api/team/workspaces/[id]/defaults` admit the owner and that
 workspace's managers. The durable value holds `accounts` (Claude and Codex
 lists), `reportChat` (chat, report name and optional topic), and
-`directiveChats`. Empty account lists preserve the unrestricted shared pool.
+`directiveChats`. A report chat must be known and postable in the bot catalog.
+Managers cannot select another workspace's destination, an explicit report
+destination of a project outside their workspace, or the owner's linked private
+chat; aliases, ids and usernames resolve to the same chat. The owner may select
+any postable destination. Empty account lists preserve the unrestricted shared pool.
 Per-project account bindings narrow a workspace's allowed pool; an empty
 intersection permits no account. An explicit report choice takes precedence,
 including "Log only". Defaults are inherited at the existing project

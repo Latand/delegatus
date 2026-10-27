@@ -27,6 +27,6 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<NextResponse>
   try {
     const { id } = await ctx.params;
     const input = await readJson(req);
-    return teamJson({ defaults: setWorkspaceDefaults(authed.store, authed.live.member, id, input) });
+    return teamJson({ defaults: await setWorkspaceDefaults(authed.store, authed.live.member, id, input) });
   } catch (error) { return teamErrorResponse(error); }
 }
