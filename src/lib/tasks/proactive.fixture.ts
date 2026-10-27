@@ -13,7 +13,10 @@ if (import.meta.main) {
   const now = Date.parse(startedAt);
   try {
     let result: unknown;
-    if (action === "lane-error") {
+    if (action === "pipeline-record") {
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      result = findPipelineRecord(key!);
+    } else if (action === "lane-error") {
       const { proactiveTaskExecutionError } = await import("./proactiveExecution");
       const { findPipelineRecord } = await import("@/lib/pipelines/store");
       const saved = await Bun.file(key!).json();

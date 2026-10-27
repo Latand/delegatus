@@ -367,21 +367,25 @@ test("a quiescent closed outcome admits its successor in the same allowance and 
   expect(readProactiveAllowance(f.project, f.at, NOW)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
 });
 
-test("closing a lane cannot release its outcome while a merge receipt is in flight", async () => {
-  const f = await fixture("merge-reservation");
+test.each([["merging", false], ["blocked", true], ["blocked", false]] as const)("closed outcome release respects its merge receipt: %s / uncertain %s", async (state, effectUncertain) => {
+  const f = await fixture(`merge-reservation-${state}-${effectUncertain}`);
   await f.complete();
   const lane = f.current();
   const setting = { ...mergeOnReviewSetting(f.project), enabled: true, changedAt: f.at };
   const admitted = mergeAdmission(lane, NOW, { setting: () => setting,
     pullRequestOf: () => ({ repository: "acme/fixture", number: 17 }), hasPublishedPrototype: () => false });
   if (!("merge" in admitted)) throw new Error(admitted.reason);
-  lane.merge = admitted.merge; lane.merge.state = "merging";
+  lane.merge = admitted.merge; lane.merge.state = state; lane.merge.effectUncertain = effectUncertain;
   savePipelines([lane]);
   expect((await closeAndDrain(f.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
   expect(f.current().closeReport?.status).toBe("settled");
   const result = await createPipelineFromRequest(f.request, f.h.ports, {
     creationRequest: { key: "pending-merge-successor", digest: requestDigest("create_pipeline", f.request) },
   });
-  expect(result.error).toContain("reserved");
+  if (state === "merging" || effectUncertain) expect(result.error).toContain("reserved");
+  else {
+    expect(result.error).toBeUndefined();
+    expect(() => assertProactivePipelineExecution(result.pipeline!, "effect")).toThrow("requires independent scope review");
+  }
   expect(readProactiveAllowance(f.project, f.at, NOW)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
 });

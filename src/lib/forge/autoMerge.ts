@@ -392,7 +392,7 @@ type Step =
  * place (the head clock, the names seen) and answers the next move.
  */
 export function decideMerge(merge: PipelineMerge, view: PullRequestView, required: readonly string[], now: number): Step {
-  if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" ? "auto-merge" : "outside" };
+  if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" || merge.effectUncertain ? "auto-merge" : "outside" };
   if (view.state === "CLOSED") return { kind: "block", reason: MERGE_REASONS.closed };
   if (changesRequested(view)) return { kind: "block", reason: MERGE_REASONS.changesRequested };
   if (view.isDraft || view.mergeStateStatus === "DRAFT") return { kind: "block", reason: MERGE_REASONS.draft };
@@ -521,6 +521,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
+    if (merge.effectUncertain && view.state === "OPEN") {
+      await commit(ports, read, live => {
+        live.state = "blocked";
+        live.reason = "The merge outcome is unconfirmed; waiting for its actual receipt";
+        live.nextReadAt = iso(now + MERGE_POLL_MS);
+      });
+      return;
+    }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
       ? (await prHeadBehindReviewedHead(read, view.headRefOid))
       : null;
@@ -598,7 +606,12 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     await commit(ports, read, (live) => {
       live.readFailures = failures;
       live.readAt = iso(now);
-      if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
+      if (live.effectUncertain) {
+        live.state = "blocked";
+        live.reason = "The merge outcome is unconfirmed; its receipt is unreadable";
+        live.nextReadAt = iso(now + MERGE_POLL_MS);
+      }
+      else if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
       else if (failures >= MERGE_READ_FAILURE_LIMIT) block(live, MERGE_REASONS.unreachable, now);
       else live.nextReadAt = iso(now + MERGE_POLL_MS);
     });
@@ -617,6 +630,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   };
   if (step.kind === "merged") {
     await commit(ports, read, (live) => {
+      delete live.effectUncertain;
       bookkeeping(live);
       live.state = "merged";
       live.by = step.by;
@@ -631,7 +645,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   if (step.kind === "block") {
-    await commit(ports, read, (live) => { bookkeeping(live); block(live, step.reason, now); });
+    await commit(ports, read, (live) => {
+      if (view?.state === "CLOSED") delete live.effectUncertain;
+      bookkeeping(live); block(live, step.reason, now);
+    });
     return;
   }
   if (step.kind === "wait") {
@@ -668,12 +685,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   });
   if (!recorded) return;
   let failure: string | null = null;
+  let dispatched = false;
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
     const beforeDispatch = () => assertProactivePipelineExecution(ports.loadPipelines().find(lane => lane.id === read.id) ?? read, "effect");
     beforeDispatch();
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository, beforeDispatch);
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository,
+      () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */
     failure = error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
@@ -688,6 +707,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   if (!current?.merge) return;
   await commit(ports, current, (live) => {
     if (after?.state === "MERGED") {
+      delete live.effectUncertain;
       live.state = "merged";
       live.by = "auto-merge";
       live.postMergeWatch = true;
@@ -696,6 +716,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       live.mergedAt = after?.mergedAt ?? iso(ports.now());
       live.reason = null;
       live.nextReadAt = null;
+      return;
+    }
+    if (read.proactiveTaskIds?.length && dispatched && !after) {
+      live.effectUncertain = true;
+      live.state = "blocked";
+      live.reason = "The merge outcome is unconfirmed; waiting for its actual receipt";
+      live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
       return;
     }
     if (failure) block(live, failure, ports.now());
@@ -856,6 +883,11 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     }
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
+    if (merge?.effectUncertain) {
+      const due = Date.parse(merge.nextReadAt ?? "");
+      if (!Number.isFinite(due) || due <= now) await stepLane(pipeline, ports, false);
+      continue;
+    }
     if (merge && (!PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.refresh?.pipelineId)) {
       laneStatus(ports, pipeline.id, mergeStatus(merge));
     }
@@ -1010,6 +1042,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   for await (const pipeline of mergeRows(rows)) {
     performanceSpans.sync("forge.auto-merge.queue", () => {
       const merge = pipeline.merge;
+      if (merge?.effectUncertain) return;
       const activeRefresh = Boolean(pipeline.refreshOf) && pipeline.state !== "completed"
         && pipeline.state !== "closed" && pipeline.state !== "needs_decision";
       if (!activeRefresh && (pipeline.state !== "completed" || !merge

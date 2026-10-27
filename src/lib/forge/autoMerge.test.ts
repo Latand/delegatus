@@ -411,6 +411,79 @@ test("proactive scope approval cannot count as the implementation's result revie
   expect(mergeEligible(record)).toBe(true);
 });
 
+test.each([false, true])("an unconfirmed proactive merge survives restart and only reconciles its receipt (revoked: %s)", async revoked => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { buildPipeline, savePipelines, findPipelineRecord, isStoredPipeline } = await import("@/lib/pipelines/store");
+  const project = `unconfirmed-merge-${revoked}`;
+  const { task } = await admitProactiveTask({ ...candidate("unconfirmed-merge"), project }, { ...context(), project }, undefined, authority());
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task));
+  const completed = lane(`unconfirmed-${revoked}`);
+  completed.taskIds = [task.id]; completed.proactiveTaskIds = [task.id];
+  const h = harness({ lanes: [completed], prs: [openPr(11)] });
+  const run = h.ports.run;
+  const write = h.ports.write;
+  let began = false;
+  h.ports.run = async args => {
+    if (began && args[0] === "pr" && args[1] === "view") throw new Error("fixture receipt unavailable");
+    return run(args);
+  };
+  h.ports.write = async (args, repository, beforeDispatch) => {
+    const result = await write(args, repository, beforeDispatch);
+    began = true;
+    if (revoked) await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+    throw new Error(`fixture acknowledgement lost after ${result.length} response bytes`);
+  };
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3);
+  expect(h.merges()).toHaveLength(1);
+  expect(h.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
+  const stored = buildPipeline({ id: completed.id, task: completed.task, taskIds: completed.taskIds, project,
+    repoDir: "/repo", stages: completed.stages, srcPath: null, srcConversationId: null, now: iso(T0) });
+  stored.state = "completed"; stored.cursor = null; stored.closedAt = iso(T0);
+  stored.lastPassedCommit = HEAD_A; stored.proactiveTaskIds = [task.id]; stored.merge = h.merge(completed.id);
+  expect(isStoredPipeline({ ...stored, merge: { ...stored.merge, effectUncertain: "invalid" } })).toBe(false);
+  savePipelines([stored]);
+  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), "unused", stored.id, "pipeline-record"],
+    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+  let decoded: Pipeline;
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(err);
+    decoded = JSON.parse(out.split("RESULT ")[1]!);
+    expect(decoded.merge).toEqual(findPipelineRecord(stored.id)!.merge);
+    expect(decoded.merge?.effectUncertain).toBe(true);
+  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
+  const recovered = harness({ lanes: [{ ...completed, merge: decoded!.merge }], prs: [openPr(11)] });
+  let receipt: "OPEN" | "MERGED" | "unreadable" = "OPEN";
+  let receiptReads = 0;
+  const read = recovered.ports.run;
+  recovered.ports.run = async args => {
+    if (args[0] === "pr" && args[1] === "view") {
+      receiptReads++;
+      if (receipt === "unreadable") throw new Error("fixture receipt unavailable");
+      return harness({ lanes: [], prs: [openPr(11, { state: receipt })] }).ports.run(args);
+    }
+    return read(args);
+  };
+  recovered.advance(MERGE_SETTLE_MS + MERGE_POLL_MS * 5);
+  await recovered.sweep();
+  expect(recovered.merges()).toHaveLength(0);
+  expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
+  receipt = "unreadable"; recovered.advance(MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS);
+  await recovered.sweep();
+  expect(Date.parse(recovered.merge(completed.id)!.nextReadAt!)).toBe(recovered.now() + MERGE_POLL_MS);
+  const calls = receiptReads;
+  await recovered.sweep();
+  expect(receiptReads).toBe(calls);
+  receipt = "MERGED"; recovered.advance(MERGE_POLL_MS);
+  await recovered.sweep();
+  expect(recovered.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
+  expect(recovered.merge(completed.id)?.effectUncertain).toBeUndefined();
+  expect(recovered.merges()).toHaveLength(0);
+  savePipelines([{ ...stored, merge: recovered.merge(completed.id) }]);
+  expect(findPipelineRecord(stored.id)?.merge?.effectUncertain).toBeUndefined();
+});
+
 describe("outstanding human reviews (#2866)", () => {
   test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND", "DIRTY", "UNKNOWN", "DRAFT"])("CHANGES_REQUESTED blocks in %s", async (mergeStateStatus) => {
     const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus, reviewDecision: "CHANGES_REQUESTED" })] });
