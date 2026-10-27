@@ -279,7 +279,7 @@ export async function createConversationDraft(req: NextRequest, input: Conversat
   try {
     if (source.sourceRevision !== input.sourceRevision) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
     if (source.dirty) refuse("SOURCE_HAS_CHANGES", "Commit the conversation's changes before creating a pipeline.");
-    const excerpt = conversationExcerpt(source.pinned, source.conversation.engine);
+    const excerpt = withViewerOperation("pipelines.from-conversation.capture", () => conversationExcerpt(source.pinned, source.conversation.engine));
     const capturedAt = ports.now();
     const heading = `{{task}}\n\nConversation: ${source.title}\nSource: ${source.conversation.id}\nCaptured: ${capturedAt}\n`;
     const quotations = [excerpt.first ? `First user request:\n${excerpt.first}` : "",
