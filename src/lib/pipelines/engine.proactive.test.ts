@@ -330,6 +330,7 @@ test("a quiescent closed outcome admits its successor in the same allowance and 
   await f.tick(); await f.pass();
   expect((await closeAndDrain(f.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
   expect(f.current().closeReport?.status).toBe("settled");
+  expect(() => assertProactivePipelineExecution(f.current(), "effect")).toThrow("closed or hidden");
   const result = await createPipelineFromRequest(f.request, f.h.ports, {
     creationRequest: { key: "proactive-successor", digest: requestDigest("create_pipeline", f.request) },
   });

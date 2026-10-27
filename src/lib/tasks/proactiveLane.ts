@@ -166,6 +166,7 @@ export function proactiveLaneError(task: BoardTask, pipeline: Pipeline | undefin
   const authorityError = proactiveLiveAuthorityError(task, file, ports);
   if (authorityError) return authorityError;
   if (!pipeline) return "proactive starts remain disabled outside their reserved scope-reviewed lane";
+  if (pipeline.state === "closed" || pipeline.closedAt || pipeline.hiddenAt) return "proactive lane is closed or hidden";
   const store = collection(file, false);
   try {
     const held = store && rows(store, task.project);
