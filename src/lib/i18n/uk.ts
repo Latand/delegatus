@@ -5414,6 +5414,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.fromConversation.startRefused": "Не запущено: {reason}",
   "kanban.fromConversation.startUnknown": "Запуск без відповіді. Перевірте, перш ніж натискати ще раз.",
   "kanban.fromConversation.firstMessage": "Перше повідомлення: {stage}",
+  "kanban.fromConversation.status": "Опис із розмови · ще не надіслано",
   "kanban.fromConversation.addStage": "Етап",
   "kanban.fromConversation.addStageAria": "Додати етап після {stage}",
   "kanban.fromConversation.addStageTitle": "Додати етап після {stage}",

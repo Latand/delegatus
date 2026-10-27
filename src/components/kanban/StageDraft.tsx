@@ -66,13 +66,17 @@ export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
   );
 }
 
-/** The first message: the stage's own words, edited in place until it starts. */
-export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
+/** The first message: the stage's own words, edited in place until it starts.
+    `fromConversation` is for a surface whose heading already names the first
+    message (the phone's draft screen): its waiting line names where the words
+    came from instead (frame 3b). */
+export function StageDraftMessage({ pipeline, stage, name, drafts, ports, fromConversation = false }: {
   pipeline: Pipeline;
   stage: PipelineStage;
   name: string;
   drafts: StageDrafts;
   ports: PipelinePorts;
+  fromConversation?: boolean;
 }) {
   const { t } = useLocale();
   const key = stageDraftKey(pipeline.id, stage.id);
@@ -216,7 +220,7 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
       <span className={`bstatus ${status}`} role="status" data-draft-status={status}>
         <ClockGlyph />
         <span>
-          {t(status === "ended" ? "kanban.draft.statusEnded" : status === "starting" ? "kanban.draft.statusStarting" : status === "started" ? "kanban.draft.stateStarted" : "kanban.draft.status")}
+          {t(status === "ended" ? "kanban.draft.statusEnded" : status === "starting" ? "kanban.draft.statusStarting" : status === "started" ? "kanban.draft.stateStarted" : fromConversation ? "kanban.fromConversation.status" : "kanban.draft.status")}
           {saved ? t("kanban.draft.edited", { time: clockTime(saved) }) : ""}
         </span>
       </span>

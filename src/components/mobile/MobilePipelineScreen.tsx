@@ -719,7 +719,7 @@ export function MobilePipelineScreen({
             </h3>
             {/* The board's own editor and store, so Save, conflicts and an unconfirmed write behave as on the card. */}
             <div className="kb" data-surface="phone-first-message">
-              <StageDraftMessage pipeline={pipeline} stage={firstStage} name={names.get(firstStage.id) ?? firstStage.id} drafts={drafts} ports={ports} />
+              <StageDraftMessage pipeline={pipeline} stage={firstStage} name={names.get(firstStage.id) ?? firstStage.id} drafts={drafts} ports={ports} fromConversation />
             </div>
           </section>
         ) : null}

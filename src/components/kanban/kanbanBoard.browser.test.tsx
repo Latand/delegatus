@@ -40263,6 +40263,10 @@ describe("start a pipeline from a conversation", () => {
       });
       states.editLayout = editLayout;
       if (phone(combo)) expect(editLayout.editBelowText).toBe(true);
+      /* The phone's heading names the first message, so its status line names the source instead (frame 3b); the card has no heading. */
+      const firstMessageStatus = await page.locator('[data-draft-message="p-export:builder"] .bstatus').first().textContent();
+      states.firstMessageStatus = firstMessageStatus;
+      expect(firstMessageStatus).toBe(t(phone(combo) ? "kanban.fromConversation.status" : "kanban.draft.status"));
       /* 4. Editing the first message. */
       await page.locator('[data-draft-edit="p-export:builder"]').first().click();
       const field = page.locator('[data-draft-field="p-export:builder"]').first();

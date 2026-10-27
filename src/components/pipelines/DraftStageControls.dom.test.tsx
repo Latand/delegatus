@@ -123,6 +123,8 @@ test("the phone's draft screen shows the Builder's first message under the stage
   const { host, patches } = mount(draft());
   expect(q(host, "[data-phone-draft-first-message] h3")?.textContent).toBe("Builder's first message");
   expect(q(host, '[data-phone-draft-first-message] [data-draft-message="p-export:builder"] .btext')?.textContent).toBe("CSV export fails past 50k rows.");
+  /* The heading already says «first message»; the line under the box names where the words came from (frame 3b). */
+  expect(q(host, "[data-phone-draft-first-message] .bstatus")?.textContent).toBe("From the conversation · not sent yet");
   const start = q(host, '[data-mobile2-dock] [data-draft-start="p-export"]') as HTMLButtonElement;
   expect([start.textContent, start.disabled]).toEqual(["Start pipeline", false]);
 

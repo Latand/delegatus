@@ -5506,6 +5506,7 @@ export const en = {
   "kanban.fromConversation.startRefused": "Not started: {reason}",
   "kanban.fromConversation.startUnknown": "Start got no answer. Check before pressing it again.",
   "kanban.fromConversation.firstMessage": "{stage}'s first message",
+  "kanban.fromConversation.status": "From the conversation · not sent yet",
   "kanban.fromConversation.addStage": "Stage",
   "kanban.fromConversation.addStageAria": "Add a stage after {stage}",
   "kanban.fromConversation.addStageTitle": "Add a stage after {stage}",

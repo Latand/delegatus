@@ -101,6 +101,7 @@
           "textRight": 363,
           "editRight": 363
         },
+        "firstMessageStatus": "From the conversation · not sent yet",
         "editing": {
           "defining": [
             {
@@ -590,6 +591,7 @@
           "textRight": 363,
           "editRight": 363
         },
+        "firstMessageStatus": "From the conversation · not sent yet",
         "editing": {
           "defining": [
             {
@@ -1079,6 +1081,7 @@
           "textRight": 363,
           "editRight": 363
         },
+        "firstMessageStatus": "Опис із розмови · ще не надіслано",
         "editing": {
           "defining": [
             {
@@ -1568,6 +1571,7 @@
           "textRight": 363,
           "editRight": 363
         },
+        "firstMessageStatus": "Опис із розмови · ще не надіслано",
         "editing": {
           "defining": [
             {

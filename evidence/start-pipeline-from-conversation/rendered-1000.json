@@ -101,6 +101,7 @@
           "textRight": 896,
           "editRight": 913
         },
+        "firstMessageStatus": "First message · not sent yet",
         "editing": {
           "defining": [
             {
@@ -581,6 +582,7 @@
           "textRight": 896,
           "editRight": 913
         },
+        "firstMessageStatus": "First message · not sent yet",
         "editing": {
           "defining": [
             {
@@ -1061,6 +1063,7 @@
           "textRight": 902,
           "editRight": 913
         },
+        "firstMessageStatus": "Перше повідомлення · ще не надіслано",
         "editing": {
           "defining": [
             {
@@ -1541,6 +1544,7 @@
           "textRight": 902,
           "editRight": 913
         },
+        "firstMessageStatus": "Перше повідомлення · ще не надіслано",
         "editing": {
           "defining": [
             {
