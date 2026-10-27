@@ -7,6 +7,8 @@ import { processIdentityStatus, type ProcessIdentity } from "@/lib/processIdenti
 import { redactBounded } from "@/lib/monitor/redact";
 import type { AgentMemoryCell } from "./agentMemory";
 import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
+import { bindHostExitWriter } from "./hostExit";
+import { spawnNativeWaitOwner } from "./nativeWaitOwner";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -52,10 +54,28 @@ export async function spawnManagedEngine(command: string, args: string[], option
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
   transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
-  const base = memory?.wrapSpawn(transportSpawn) ?? transportSpawn ?? ((cmd, argv, opts) => spawn(cmd, argv, { ...opts, stdio: ["pipe", "pipe", "pipe"] }));
+  options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
+  const waiters: Array<ReturnType<typeof spawnNativeWaitOwner>> = [];
+  const transport: EngineSpawn = transportSpawn ?? ((cmd, argv, opts) => {
+    const child = spawnNativeWaitOwner(cmd, argv, opts);
+    waiters.push(child);
+    return child;
+  });
+  const base = memory?.wrapSpawn(transport) ?? transport;
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
   const capabilityEnv = sourceEnv.LLV_GATE_SLOT_LEASE ? { ...(options.env ?? process.env), LLV_GATE_SLOT_LEASE: sourceEnv.LLV_GATE_SLOT_LEASE } : undefined;
-  return await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+  try {
+    const child = await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+    for (const waiter of waiters) waiter.retainExit(!signalDomain(child));
+    return child;
+  } catch (error) {
+    // Setup owns cleanup and its refusal. No host row will retain these slots.
+    for (const waiter of waiters) {
+      try { await waiter.abortLaunch(); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "managed engine startup cleanup failed"); }
+    }
+    throw error;
+  }
 }
 
 /** Why this handle's engine runs without the boundary, if it does. */
@@ -237,15 +257,20 @@ export function nativeProcessId(child: SignalDomainHandle): number | undefined {
 
 /** TERM reaches the verified native process. Escalation ends the owned PID
  * namespace, including descendants that changed session or were reparented. */
-export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals): boolean | undefined {
+export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals, beforeSignal?: () => void | (() => void)): boolean | undefined {
   const domain = signalDomain(child);
   if (!domain) return undefined;
   const target = signal === "SIGKILL" ? domain.init : domain.native;
   const status = processIdentityStatus(target);
   if (status === "dead") return true;
   if (status !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) return false;
+  const withdraw = beforeSignal?.();
+  if (processIdentityStatus(target) !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) {
+    withdraw?.();
+    return false;
+  }
   try { process.kill(target.pid, signal); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  catch (error) { withdraw?.(); return (error as NodeJS.ErrnoException).code === "ESRCH"; }
 }
 
 /** File-backed headless callers retain their synchronous handle API. The
@@ -282,7 +307,7 @@ export function spawnHeadlessSignalSandbox(command: string, args: string[], opti
   return child;
 }
 
-function launcherFile(): string {
+export function launcherFile(): string {
   // The cache is visible on both sides of the container-to-host transition.
   // Source also ships in the npm bin directory and in the standalone image.
   const source = resolveSignalTooling().launcher;
@@ -332,7 +357,7 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
         const candidates = bridge ? [path.join(directory, "dist/gate")] : [path.join(directory, "scripts"), path.join(directory, "dist/gate")];
         for (const scripts of candidates) {
           try {
-            for (const name of ["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts"]) fs.accessSync(path.join(scripts, name), fs.constants.R_OK);
+            for (const name of ["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "gate-wait.ts"]) fs.accessSync(path.join(scripts, name), fs.constants.R_OK);
             if (!fs.readFileSync(path.join(scripts, "owned-runner.ts"), "utf8").includes("runSandboxGate")
               || !fs.readFileSync(path.join(scripts, "gate-slot.sh"), "utf8").includes("LLV_SIGNAL_SANDBOX")) continue;
             return bridge ? cacheHostTooling(launcher, scripts)
@@ -352,7 +377,7 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
  * bundled tools have no checkout imports and are published atomically into
  * the home mounted at the same path on both sides of the transition. */
 function cacheHostTooling(launcher: string, scripts: string): { launcher: string; gate: string } {
-  const files = new Map([...["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts"].map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
+  const files = new Map([...["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts", "gate-wait.ts"].map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
     ["launch.py", fs.readFileSync(launcher)] as const]);
   const digest = createHash("sha256");
   for (const [name, body] of files) digest.update(name).update(body);
@@ -382,6 +407,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   if ("off" in prepared) {
     // Main's launch path: the engine under its memory and CPU wrapper only.
     const child = start(command, args, options);
+    await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
     recordSignalBoundaryOff(child, prepared.off, "managed");
     return child;
   }
@@ -401,8 +427,11 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   child.once("close", () => { closed = true; });
   // The launcher reports an unprotected fallback before its readiness budget
   // ends. Only a launcher that cannot run at all reaches this deadline.
-  const deadline = Date.now() + SIGNAL_READINESS_MS + SIGNAL_ACK_MS;
   try {
+    // A fast launcher can close while its independent waiter discovers the PID.
+    // Observe diagnostics and close before awaiting that readiness barrier.
+    await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
+    const deadline = Date.now() + SIGNAL_READINESS_MS + SIGNAL_ACK_MS;
     for (;;) {
       if (failure) throw failure;
       if (fs.existsSync(receipt)) {
@@ -416,6 +445,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         const domain = parsed.domain;
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
+        if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
         return child;
       }

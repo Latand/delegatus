@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "companion-routes-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -12,7 +13,7 @@ const { GET, PUT } = await import("./route");
 const { PUT: keyPUT } = await import("../key/route");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 function request(method: string, body?: unknown, extra: Record<string, string> = {}) {
-  return new NextRequest("http://127.0.0.1/api/voice-companion/settings", { method, headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra },
+  return new NextRequest("http://127.0.0.1/api/voice-companion/settings", { method, headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
 }
 test("settings and the write-only key route enforce operator authority and never echo a key", async () => {

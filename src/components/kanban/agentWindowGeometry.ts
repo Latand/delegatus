@@ -99,8 +99,11 @@ export function readerReady(container: HTMLElement | null): boolean {
 
 /**
  * Calls `onReady(key)` once the reader for `key` is ready to be shown: in the
- * same commit for one that already is, else after it has stayed ready for two
- * frames, or after `READER_READY_LIMIT_MS` whatever it holds.
+ * same commit for one that already is (it waited laid out in the park, at the
+ * reader's size), else once its feed has held one box and one scroll position
+ * for two frames after it became ready, or after `READER_READY_LIMIT_MS`
+ * whatever it holds. A first read becomes ready before the feed has followed
+ * its tail or restored its place, and the reader must not be shown between.
  */
 export function useReaderReady(placement: ReaderPlacement, key: string | null, onReady: (key: string) => void): void {
   const ready = useRef(onReady);
@@ -115,8 +118,13 @@ export function useReaderReady(placement: ReaderPlacement, key: string | null, o
     }
     const started = performance.now();
     let frames = 0;
+    let previous: string | null = null;
     let frame = requestAnimationFrame(function tick() {
-      frames = readerReady(placement.containerOf(key)) ? frames + 1 : 0;
+      const container = placement.containerOf(key);
+      const feed = container?.querySelector<HTMLElement>("[data-log-feed-scroller]");
+      const sample = !readerReady(container) ? null : feed ? `${feed.clientWidth}:${feed.clientHeight}:${feed.scrollHeight}:${feed.scrollTop}` : "ready";
+      frames = sample !== null && sample === previous ? frames + 1 : 0;
+      previous = sample;
       if (frames >= 2 || performance.now() - started >= READER_READY_LIMIT_MS) {
         ready.current(key);
         return;

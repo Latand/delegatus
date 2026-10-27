@@ -53,7 +53,7 @@ import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
-import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
+import { appendComposerDraft, RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
 import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
@@ -112,6 +112,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "retired-orchestrator"
   | "file-confirmation"
   | "seat-inbox"
   | "parallel-failure"
@@ -1116,6 +1117,51 @@ function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture 
   createRoot(root).render(scene);
 }
 
+function mountRetiredOrchestrator(root: HTMLElement): void {
+  fakeHost.engine = "claude";
+  fakeHost.lines = [LIFE_OPENING];
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({ useLogTail: () => ({
+    lines: fakeHost.lines, linesStart: 0, size: fakeHost.lines.length, loading: false, error: null,
+    tickTime: null, paused: false, setPaused() {}, clear() {}, hasMore: false, loadingOlder: false,
+    loadOlder: async () => 0, prependGen: 0,
+  }) });
+  installFakeComposerHost();
+  const file = { ...lifeFile(), title: "Orchestrator", activity: "idle" as const, mtime: Date.now() / 1000 };
+  const originalFetch = window.fetch;
+  let rotated = false;
+  let sends = 0;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), location.origin);
+    if (init?.method === "POST" && /^\/api\/(?:tmux|runtime\/send|orchestrator\/message)$/.test(url.pathname)) sends += 1;
+    if (url.pathname === "/api/orchestrator/seat") {
+      if (rotated && params.get("detailFailure") === "1" && url.searchParams.get("scope") !== "all") {
+        return Response.json({ error: "temporarily unavailable" }, { status: 503 });
+      }
+      const current = rotated ? "conversation_current" : file.conversationId;
+      return Response.json({
+        seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
+          state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
+        exists: true, viewerMcpRegistered: true,
+        previous: rotated ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
+        all: { conversationIds: [current], paths: [rotated ? "/fixtures/current.jsonl" : file.path],
+          previous: { conversationIds: rotated ? [file.conversationId] : [], paths: rotated ? [file.path] : [] } },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof window.fetch;
+  enqueueOutbox(file.conversationId!, { id: "retired-message", text: "Saved operator message", images: 0, at: Date.now() });
+  updateOutbox(file.conversationId!, "retired-message", { state: "failed", error: "recipient replaced", settledAt: Date.now() });
+  appendComposerDraft(file.conversationId!, "Unsent draft stays here");
+  Object.assign(window, { retiredOrchestrator: {
+    rotate: () => { rotated = true; document.dispatchEvent(new Event("visibilitychange")); },
+    sends: () => sends,
+  } });
+  createRoot(root).render(<main data-evidence-case="retired-orchestrator" className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+    <BranchPane file={file} tasks={[]} isRoot chromeInMenu />
+  </main>);
+}
+
 /** The composer's side of the fake host: a hosted structured session, its
     receipts and the transport behind Send. */
 function installFakeComposerHost(): void {
@@ -2002,6 +2048,7 @@ else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
+else if (root && requested === "retired-orchestrator") mountRetiredOrchestrator(root);
 else if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "payload-notice") mountPayloadNotice(root);
 else if (root && (requested === "long-history" || requested === "codex-history")) mountLongHistory(root);

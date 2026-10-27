@@ -13,14 +13,15 @@ import { accessKeyWithheld } from "@/lib/team";
  * - the perimeter first: same origin and a pinned Host (`rejectCrossOrigin`);
  * - no agent: a caller presenting any spawn capability, valid or not, is
  *   refused, and so is a Viewer service's own request;
- * - a browser page: a browser stamps `sec-fetch-site: same-origin` on the
- *   page's own fetch, which a page elsewhere cannot forge and a spawned
- *   process's plain request does not carry (`operatorBrowserRequest`);
+ * - a browser page: the request carries the verified session cookie the
+ *   page's navigation opened, or a team member's session
+ *   (`operatorBrowserRequest`); Fetch Metadata such as `sec-fetch-site` adds
+ *   nothing, because any local client can set it;
  * - on a team install, the owner only: a member sees states, never values.
  *
- * A process of the operator's own uid can still read the 0600 files directly,
- * and forge the browser's header; these routes add no reach on the machine
- * itself, and they never hand a value to anything that named itself an agent.
+ * A process of the operator's own uid can still read the 0600 files directly;
+ * these routes add no reach on the machine itself, and they never hand a value
+ * to anything that named itself an agent.
  */
 
 const NO_STORE = { "Cache-Control": "no-store" };

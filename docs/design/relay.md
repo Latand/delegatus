@@ -3406,3 +3406,46 @@ Agent failures retain a scrubbed diagnostic in the local answer record and
 journal, including the launch or observation step and exit code/signal when
 available. No specific cause for a short pre-transcript launch failure is
 assumed without a receipt or host error identifying it.
+
+### Codex Cloud target engine
+
+New targets select `codex-cloud`, model `gpt-6.1-sol`. Existing targets keep
+their engine. Each answer round sends the existing composed prompt to a fresh
+app-server WebSocket thread, with `approvalPolicy: never` and
+`serviceTier: ultrafast`. Restricted answers disable shell, apps and subagents.
+Service tools remain request-bound relay calls through the structured reply
+loop; they are not connected directly to the Cloud environment. Heartbeat
+steps, completion delivery and the 30-day answer record remain in the runner.
+
+The install configures `LLV_CODEX_CLOUD_URL` (a secure app-server WebSocket),
+optional `LLV_CODEX_CLOUD_TOKEN`, and `LLV_CODEX_CLOUD_ENVIRONMENT_ID` (an
+answer environment configuration id). A target can override the latter with
+`cloudEnvironmentId`. `LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS` is a JSON object
+mapping project keys to repository environment configuration ids. Repository
+bindings take precedence over the general answer environment. Owner requests
+use full access in that repository environment; without a project environment
+configuration they use the verified local project repository. A missing,
+deleted or reassigned checkout refuses local execution with a configuration
+failure. The transport resolves the configured environment's repository cwd,
+sends both in `environments`, and verifies the returned environment instance,
+configuration and cwd before starting a turn.
+
+Cloud admission does not consult local account capacity. A confirmed Cloud
+refusal or exhausted limit invokes the local path once per request. A lost
+connection after a turn starts does not prove failure and cannot duplicate an
+owner task. An interrupted turn must report terminal status before fallback.
+Before dispatch the runner persists an uncertain Cloud execution fence. A
+confirmed failure clears it for fallback; a completed turn keeps it until the
+service accepts completion. Disconnection, process death and the orphan sweep
+retain it, so identical redelivery starts no Cloud or local turn.
+A service acknowledgement alone cannot settle uncertain Cloud execution.
+Local continuations revalidate the active generation's physical repository at
+admission and dispatch. Cloud and local owner service tools share one request
+loop, preserving recorded actions and unknown outcomes across fallback.
+One execution deadline covers all owner tool rounds and local fallback,
+including waits for service tools. Structured owner replies pass through the
+same output scrubber as transcript answers before history or delivery. The
+configured Cloud transport credential is withheld in raw and encoded forms.
+If scrubbing changes the text, its original mention offsets are discarded.
+The Cloud transport is isolated in `src/lib/externalRelay/cloud.ts`; tests
+replace it with a fake and never connect to Cloud.

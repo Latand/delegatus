@@ -3096,6 +3096,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
 for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
   const { NextRequest } = await import("next/server");
   const { PATCH } = await import("@/app/api/external-relay/relays/[id]/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
   const completions: unknown[] = [], stops: string[] = [];
   let notify!: () => void, release!: () => void;
   const reached = new Promise<void>(r => { notify = r; });
@@ -3124,7 +3125,7 @@ for (const phase of ["running", "pending"] as const) test(`owner cutoff through 
     await reached;
     const origin = "http://127.0.0.1:8899";
     const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
-      method: "PATCH", headers: { origin, host: "127.0.0.1:8899", "content-type": "application/json" },
+      method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899", "content-type": "application/json" },
       body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
     }), { params: Promise.resolve({ id: paired.id }) });
     expect(response.status).toBe(200);
@@ -4767,4 +4768,28 @@ test.each(["mention", "photo"])("v2 %s contract refusal remains decisive without
     expect(await completeRelayRequest(relay(`${server.origin}/v1`), "refused_composition", body, () => Date.now() + 5000)).toEqual({ body, delivery: "refused" });
     expect(bodies).toEqual([body]);
   } finally { await server.close(); }
+});
+
+test("a Cloud relay answer arrives while local account admission is occupied", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.engine = "codex-cloud";
+  paired.targets[0]!.model = "gpt-6.1-sol";
+  paired.targets[0]!.cloudEnvironmentId = "answer-env";
+  const previous = accountManager.resolveHeadlessSpawn;
+  let localSelections = 0;
+  accountManager.resolveHeadlessSpawn = (() => {
+    localSelections++;
+    throw new Error("local account admission is occupied");
+  }) as typeof previous;
+  try {
+    const result = await runClaimedRequest(paired, { ...sampleRequest, request_id: "cloud_local_busy" }, undefined, {
+      cloudTransport: async () => JSON.stringify({ action: "reply", text: "Cloud answer", reply_to: "m1" }),
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
+    expect(localSelections).toBe(0);
+  } finally {
+    accountManager.resolveHeadlessSpawn = previous;
+    await server.close();
+  }
 });

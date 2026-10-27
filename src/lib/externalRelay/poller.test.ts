@@ -818,12 +818,12 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
       { ...configured("kept"), name: "Renamed", fallback: "none" },
       {
         id: "added", name: "New", answered_by: "service", fallback: "service",
-        enabled: true, engine: null, model: null, effort: null, project: null,
+        enabled: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: null,
         concurrency: 1, hardCapMinutes: 30,
       },
     ]);
-    // "gone" is no longer offered and "added" waits for its settings.
-    expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }]);
+    // "gone" is no longer offered and "added" remains routed to the service.
+    expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }, { target_id: "added", free: 1 }]);
     // The claim lists what this install implements (§A.2 rule 11).
     expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");

@@ -18,6 +18,11 @@ type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
 type Input = Parameters<CloudStageClient["submit"]>[0];
 export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
+/** A submission failed before sending any model-turn request. */
+export class CloudSubmissionNotStartedError extends HostedCloudError {}
+class CloudEnvironmentMissingError extends HostedCloudError {
+  constructor() { super("Codex Cloud environment missing", "invalid"); }
+}
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
   socket: (auth: Auth) => WebSocket;
@@ -98,6 +103,7 @@ async function catalogue(url: string, auth: Auth, scope: HostedCloudGuard, depen
   guard(scope);
   if (!response.ok) {
     try { await response.body?.cancel(); } catch { /* The HTTP refusal is already decisive. */ }
+    if (response.status === 404) throw new CloudEnvironmentMissingError();
     throw hostedHttpFailure(response.status);
   }
   let detail: Row;
@@ -331,10 +337,12 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       if (!receipt) guard(session.scope);
       return result;
     } catch (error) {
-      if (input.signal.aborted || session?.scope.signal.aborted) throw new Error("Codex Cloud operation timed out");
+      if (input.signal.aborted || session?.scope.signal.aborted) throw new HostedCloudError("Codex Cloud operation timed out", "unavailable");
       // Never forward dependency errors, URLs, auth stderr or raw RPC payloads.
-      throw new Error(error instanceof Error && /^Codex Cloud [A-Za-z0-9 ()/-]+$/.test(error.message)
-        ? error.message : "Codex Cloud transport failed");
+      const message = error instanceof Error && /^Codex Cloud [A-Za-z0-9 ()/-]+$/.test(error.message)
+        ? error.message : "Codex Cloud transport failed";
+      if (error instanceof HostedCloudError) throw new HostedCloudError(message, error.category);
+      throw new Error(message);
     } finally { session?.close(); }
   }
   async function command(client: HostedConnection, environment: Row, script: string) {
@@ -372,9 +380,22 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     throw new Error("Codex Cloud recorded turn not found");
   }
   return {
+    hasEnvironment: async input => {
+      guard(input);
+      const auth = await dependencies.authenticate(input.account, input.signal);
+      guard(input);
+      try { await resolveHostedCloudEnvironment(input.environmentId, auth, input, dependencies); return true; }
+      catch (error) {
+        guard(input);
+        if (error instanceof CloudEnvironmentMissingError
+          || error instanceof HostedCloudError && ["cloud-limit", "account-limit"].includes(error.category)) return false;
+        throw error;
+      }
+    },
     supportsModel: (model, effort) => model === MODEL && (effort === null || ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)),
     submit: input => {
       if (input.serviceTier != null) return Promise.reject(new Error("Codex Cloud explicit service tier unsupported"));
+      let turnRequested = false;
       return using(input, async (client, auth, scope) => {
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
@@ -401,6 +422,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const head = await command(client, environment,
         `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
       requireCloud(head.trim() === input.headSha, "published branch head mismatch");
+      turnRequested = true;
       const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
         approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
         input: [{ type: "text", text: input.prompt, text_elements: [] }] }, true);
@@ -408,15 +430,24 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
       return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`,
         thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
-      }, true);
+      }, true).catch(error => {
+        if (!turnRequested && error instanceof HostedCloudError) throw new CloudSubmissionNotStartedError(error.message, error.category);
+        throw error;
+      });
     },
     poll: input => using(input, async (client, auth) => {
       const { turn, model } = await status(client, input);
       const hasError = turn.error != null;
       if (turn.status === "completed" && !hasError) return { state: "completed", model };
-      if (hasError || ["failed", "interrupted"].includes(String(turn.status))) return { state: "failed",
-        error: hasError ? turnFailure(turn.error, auth) : `Codex Cloud turn ${turn.status}`, model };
+      if (turn.status === "failed" || turn.status === "interrupted") {
+        // This observation releases execution custody to local fallback. An
+        // error payload alone cannot prove the provider stopped its turn.
+        const message = row(turn.error).message;
+        requireCloud(!hasError || typeof message === "string" && message.trim().length > 0, "turn error malformed");
+        return { state: "failed", error: hasError ? turnFailure(turn.error, auth) : `Codex Cloud turn ${turn.status}`, model };
+      }
       requireCloud(turn.status === "inProgress", "turn status unknown");
+      requireCloud(!hasError, "nonterminal turn has an error");
       return { state: "pending", model };
     }),
     readFinalMessage: input => using(input, async (client, auth) => {
@@ -441,13 +472,12 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       }
       throw new Error("Codex Cloud item pagination limit");
     }),
-    // Slice 1 never asks for a diff. Keep export capability explicit for the next
-    // transport consumer; no staging, follow-up model turn or patch application.
+    // Export all changed paths, including new files. The lane owns the commit.
     readDiff: input => using(input, async (client, auth) => {
       const { turn, environment } = await status(client, input);
       requireCloud(turn.status === "completed" && turn.error == null, "turn is not completed");
       const snapshot = `delegatus-review-${input.thread!.turnId}.patch`;
-      const script = `import hashlib,json,pathlib,subprocess\np=pathlib.Path(subprocess.check_output(['git','rev-parse','--absolute-git-dir']).decode().strip())/${JSON.stringify(snapshot)}\nwith p.open('wb') as f: subprocess.run(['git','diff','--binary','--full-index','--no-ext-diff','--no-textconv',${JSON.stringify(input.headSha)},'--'],stdout=f,check=True)\nb=p.read_bytes()\nassert len(b)<=16777216\nprint(json.dumps({'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}))`;
+      const script = `import hashlib,json,pathlib,subprocess\np=pathlib.Path(subprocess.check_output(['git','rev-parse','--absolute-git-dir']).decode().strip())/${JSON.stringify(snapshot)}\nsubprocess.run(['git','add','--intent-to-add','--','.'],check=True)\nwith p.open('wb') as f: subprocess.run(['git','diff','--binary','--full-index','--no-ext-diff','--no-textconv',${JSON.stringify(input.headSha)},'--'],stdout=f,check=True)\nb=p.read_bytes()\nassert len(b)<=16777216\nprint(json.dumps({'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}))`;
       const manifest = row(JSON.parse(await command(client, environment, `python3 -c ${shell(script)}`)));
       requireCloud(Number.isSafeInteger(manifest.bytes) && Number(manifest.bytes) >= 0 && Number(manifest.bytes) <= MAX_FRAME
         && /^[a-f0-9]{64}$/.test(String(manifest.sha256)), "diff manifest invalid");
@@ -461,7 +491,8 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
         chunks.push(bytes); digest.update(bytes);
       }
       requireCloud(digest.digest("hex") === manifest.sha256, "diff checksum mismatch");
-      const patch = Buffer.concat(chunks).toString("utf8");
+      const bytes = Buffer.concat(chunks), patch = bytes.toString("utf8");
+      requireCloud(Buffer.from(patch, "utf8").equals(bytes), "diff text encoding invalid");
       requireCloud(!patch.includes(auth.token), "diff contains credential");
       return patch;
     }),

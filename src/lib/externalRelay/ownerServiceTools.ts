@@ -49,6 +49,8 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
   let closing: Promise<void> | null = null;
   const adapter = {
     requestId: request.request_id, relayId: relay.id, targetId: target.id,
+    // Cloud JSON calls and a local fallback share effects, budgets and deduplication.
+    loop,
     get records() { return loop.records; },
     get actionSent() { return loop.actionSent; },
     get sawUnknown() { return loop.sawUnknown; },

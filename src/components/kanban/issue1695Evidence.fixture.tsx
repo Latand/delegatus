@@ -29,7 +29,7 @@ import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
-import { RulesWindow } from "@/components/roleMemory/LearnedRules";
+import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceConversationPanel } from "@/components/VoiceConversation";
@@ -3447,6 +3447,9 @@ const OLDER_FAILS = params.get("olderfails") === "1";
    good, so what the click took away comes back with the reason. */
 const DISMISS_REFUSED = params.get("dismissrefused") === "1";
 const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&boardhold=1` never answers the board's first read, so the project stays on its loading
+   skeleton and the bar of a leaf without a board, for the header's narrow-window case. */
+const BOARD_HOLD = params.get("boardhold") === "1";
 /* `&settingsrefuse=1`: every write to the voice companion's settings is refused
    with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
 const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
@@ -4060,6 +4063,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The lane review case answers these from the driver's own server, through
+     the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
+  if (new URLSearchParams(location.search).has("laneReview")
+    && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
+    return serverFetch(url.pathname + url.search, init);
+  }
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
@@ -4392,6 +4401,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    if (BOARD_HOLD) return new Promise<Response>(() => {});
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/view/presence" && method === "POST") {
@@ -5051,6 +5061,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
+/* `&replydelay=MS` answers every read and write MS later, so a driver can show that what it measures
+   waits for the state it needs and never for a guessed time (the header's narrow-window case). */
+const REPLY_DELAY = Number(params.get("replydelay")) || 0;
+if (REPLY_DELAY > 0) {
+  const answer = window.fetch;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    await new Promise((resolve) => setTimeout(resolve, REPLY_DELAY));
+    return answer(input, init);
+  }) as typeof fetch;
+}
+
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
 const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
@@ -5279,7 +5300,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

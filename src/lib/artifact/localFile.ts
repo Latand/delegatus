@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
 
 /*
@@ -66,44 +68,38 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
   return fenced.some((store) => underRoot(candidate, store));
 }
 
-/** Which root admits a path: home, or an evidence root for a raster image. */
-export type Admission = "home" | "evidence";
+/** Exact project folders and worktrees, plus the product-owned stage scratch. */
+function projectRoots(): string[] {
+  return [...new Set([...knownProjectFileRoots(), ...projectCurationSnapshot().manualProjects.map(entry => entry.root), statePath("scratch")])]
+    .filter(root => path.isAbsolute(root) && !underRoot(homeRoot(), path.resolve(root)));
+}
 
-/**
- * Whether a path may be read, and under which root. The home root admits
- * every previewable artifact; an evidence root admits raster images only.
- * Callers check the path as written here, then its realpath with
- * `realpathAdmitted`.
- */
+export type Admission = "project" | "evidence";
+
+/** Check lexical containment before resolving links; evidence roots admit rasters only. */
 export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
   if (inFencedStore(candidate, roots.fenced)) return null;
-  if (underRoot(candidate, roots.home)) return "home";
+  if (roots.projects.some(root => underRoot(candidate, root))) return "project";
   return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
 }
 
-/**
- * Whether a path's realpath stays inside what the path as written was
- * admitted as, against the realpathed roots (`realAllowedRoots`). A home path
- * may resolve into either root, so a link out of home into an evidence root
- * still reads only an image. A path only an evidence root admitted must
- * resolve to an image under an evidence root: `/var/tmp` is world-writable, and
- * a link planted there must not read a home file the home root would serve.
- */
+/** A link must stay within admitted roots. Evidence links still resolve to rasters. */
 export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
   const resolved = admittedAs(real, roots);
-  if (lexical === "home") return resolved !== null;
+  if (lexical === "project") return resolved !== null;
   return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
 }
 
 export interface AllowedRoots {
   home: string;
+  projects: string[];
   evidence: string[];
   /** Fenced stores, which no root admits. */
   fenced: string[];
 }
 
 export function lexicalAllowedRoots(): AllowedRoots {
-  return { home: homeRoot(), evidence: evidenceRoots(), fenced: fencedStores() };
+  return { home: homeRoot(), projects: projectRoots(), evidence: evidenceRoots(), fenced: fencedStores() };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -111,8 +107,7 @@ export async function realAllowedRoots(): Promise<AllowedRoots> {
   return realAllowedRootsSync();
 }
 
-/** {@link realAllowedRoots} without an await: a handful of realpath calls,
-    for a caller that must not queue behind a busy server's other work. */
+/** Resolve the current roots synchronously for album readers. */
 export function realAllowedRootsSync(): AllowedRoots {
   const real = (root: string) => {
     try {
@@ -127,7 +122,8 @@ export function realAllowedRootsSync(): AllowedRoots {
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();
   const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
-  return { home, evidence, fenced };
+  const projects = projectRoots().map(real).filter((root): root is string => root !== null && !underRoot(home, root));
+  return { home, projects, evidence, fenced };
 }
 
 /* macOS refuses an open with this flag (`ELOOP`) when any component of the

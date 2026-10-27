@@ -251,7 +251,7 @@ function seatOwnedLaneSection(lanes: readonly SeatTickSeatOwnedLane[], now: numb
   const flat = (value: string) => redactMonitorText(value).replace(/\s+/g, " ").trim();
   const clip = (value: string, limit: number) => value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
   const rows = [...lanes].sort((a, b) => (a.sinceMs ?? Infinity) - (b.sinceMs ?? Infinity) || a.id.localeCompare(b.id));
-  for (const limit of compact ? [90, 60, 40, 24, 16, 12, 11, 10, 8, 4] : [90, 60, 40, 24]) {
+  for (const limit of compact ? [90, 60, 40, 24, 16, 12, 11, 10, 8, 4, 0] : [90, 60, 40, 24]) {
     const lines = ["", `Waiting on seat (${rows.length}${compact ? "" : "; oldest first"}):`, ...rows.map(lane => {
       const minutes = lane.sinceMs === null ? null : Math.max(0, Math.floor((now - lane.sinceMs) / 60_000));
       const age = minutes === null ? "age unknown" : minutes < 60 ? `${minutes}m`
@@ -261,7 +261,10 @@ function seatOwnedLaneSection(lanes: readonly SeatTickSeatOwnedLane[], now: numb
       const colon = reason.indexOf(":");
       const why = colon < 0 ? clip(reason, Math.max(limit, 12))
         : `${reason.slice(0, colon)}: ${clip(reason.slice(colon + 1).trim(), Math.max(limit, 13))}`;
-      return [`- ${flat(lane.id)}`, clip(flat(lane.title), limit), why, age].join(compact ? "|" : " | ");
+      // At the tightest bound the title preview yields to source diagnostics.
+      // Every identity, stop class, cause preview and age still reaches the seat;
+      // the agenda below carries a complete detail or explicit summary.
+      return [`- ${flat(lane.id)}`, ...(limit ? [clip(flat(lane.title), limit)] : []), why, age].join(compact ? "|" : " | ");
     })];
     if (lines.join("\n").length <= budget) return lines;
   }
@@ -299,6 +302,8 @@ export function seatTickWakeMessage(input: {
       without it, and the seat is told what is missing from the picture rather
       than left to act on a partial one it cannot see the edges of. */
   gaps?: readonly SeatTickEvidenceGap[];
+  /** Optional reads omitted when their share of this check was spent. */
+  sourceBudgetNote?: string | null;
   /** Panel instructions, delivered in full on every scheduler wake. */
   operatorInstructions?: string | null;
   instructionLines?: SeatTickInstructionLine[];
@@ -376,6 +381,7 @@ export function seatTickWakeMessage(input: {
   const turbo = turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged);
   const reservation = (compactRoster = false, compactRules = false) => {
     const sections = [
+      (input.sourceBudgetNote ? ["", input.sourceBudgetNote] : []),
       compactRules ? autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged, true) : autonomy,
       compactRules ? turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged, undefined, true) : turbo,
       (compactRoster && input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}. Re-read if delayed.`] : snapshotSection(input.snapshotAt, !!input.workers)),
@@ -498,6 +504,7 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
  */
 export function seatTickProposalMessage(input: {
   project: string;
+  sourceBudgetNote?: string | null;
   workers?: WakeWorkers;
   /** Oldest evidence time, preserved across transport retention and replay. */
   snapshotAt?: string;
@@ -536,6 +543,7 @@ export function seatTickProposalMessage(input: {
      the next tick reads to recognize the card it already asked for, so losing
      it to a long issue list would mint a second proposal card. */
   return boundedSeatTickMessage(lines, [
+    ...(input.sourceBudgetNote ? ["", input.sourceBudgetNote] : []),
     ...snapshotSection(input.snapshotAt, !!input.workers),
     "",
     `Produce ONE ranked list of at most ${input.items} actions, each with the evidence behind it, and post it as a single board card in inbox for this project.`,

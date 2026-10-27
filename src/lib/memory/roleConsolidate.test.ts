@@ -40,3 +40,31 @@ test("the exact hard ceiling retains everything and emergency selection protects
   expect(retainRules(rules, at, new Set(), scopeChars(rules) / 1.25, policy).archived).toEqual([]);
   expect(retainRules(rules, at, new Set(), scopeChars(rules.slice(0, 2)) / 1.25, policy).archived).toEqual(["b"]);
 });
+
+
+test("emergency eviction skips pending corrections and ranks the remaining evidence", () => {
+  const pending = rule("p", { operatorCorrection: true });
+  const rewritten = rule("q", { operatorCorrection: true, curatedAt: at, changedAt: "2026-10-25T00:00:00.000Z" });
+  const supported = rule("a", { curatedAt: at });
+  const applied = rule("b");
+  const unused = rule("c", { curatedAt: at });
+  const newest = rule("z", { createdAt: "2026-10-25T00:00:00.000Z" });
+  const rules = [pending, supported, applied, unused, rewritten, newest];
+  const evidence = new Map([
+    ["p", { tasks: 0, applied: 0 }], ["q", { tasks: 0, applied: 0 }],
+    ["a", { tasks: 2, applied: 0 }], ["b", { tasks: 1, applied: 2 }],
+    ["c", { tasks: 1, applied: 0 }], ["z", { tasks: 0, applied: 0 }],
+  ]);
+  const bound = scopeChars([pending, rewritten, supported, newest]) / 1.25;
+  const result = retainRules(rules, "2026-10-26T00:00:00.000Z", new Set(), bound, { canCurate: false, evidence: () => evidence });
+  expect(result.archived).toEqual(["c", "b"]);
+  expect(result.active.map(r => r.id).sort()).toEqual(["a", "p", "q", "z"]);
+  expect(scopeChars(result.active)).toBeLessThanOrEqual(bound * 1.25);
+  expect(result.changed.map(r => [r.id, r.state, r.reason])).toEqual([["c", "archived", "budget"], ["b", "archived", "budget"]]);
+});
+
+test("reviewed corrections remain eligible for evidence-ranked emergency eviction", () => {
+  const reviewed = rule("a", { operatorCorrection: true, curatedAt: at });
+  const newest = rule("b", { createdAt: "2026-10-25T00:00:00.000Z" });
+  expect(retainRules([reviewed, newest], at, new Set(), 20, { canCurate: false, evidence: () => new Map() }).archived).toEqual(["a"]);
+});

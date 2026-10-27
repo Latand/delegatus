@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -73,7 +74,7 @@ function seedCaller(role: string, parentConversationId: ViewerConversationId | n
 function pipelineRequest(body: Record<string, unknown>, headers: Record<string, string> = {}): NextRequest {
   return new NextRequest("http://127.0.0.1:8898/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1:8898", "content-type": "application/json", ...headers },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1:8898", "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -100,19 +101,19 @@ test("a declared reviewer src is rejected even without a capability header", asy
   expect(await response.json()).toMatchObject({ code: "reviewer_origin_spawn" });
 });
 
-test("an authenticated builder caller without src derives durable creator lineage", async () => {
+test("an authenticated builder retains durable creator lineage through MCP", async () => {
   const caller = seedCaller("builder");
   const authenticated = await POST(pipelineRequest(
     { task: "derived creator", repoDir: process.cwd(), autoStart: false, stages: [] },
     { "x-llv-spawn-capability": caller.capability },
   ));
-  expect(authenticated.status).toBe(201);
-  expect(await authenticated.json()).toMatchObject({
-    pipeline: {
-      srcPath: caller.path,
-      srcConversationId: caller.conversationId,
-    },
-  });
+  expect(authenticated.status).toBe(403);
+  expect(await authenticated.json()).toMatchObject({ error: expect.stringContaining("operator-only") });
+  const domain = { ...productionDomainDependencies, callerAttribution: () => ({ kind: "agent" as const, conversationId: caller.conversationId, role: "builder" }) };
+  const mcp = createMcpToolService(viewerMcpBindings(undefined, undefined, domain), new MemoryMcpReceiptStore());
+  const result = await mcp.callTool("create_pipeline", { clientRequestId: "derived-creator", task: "derived creator", src: caller.path, repoDir: process.cwd(), autoStart: false, stages: [] });
+  expect(result).toMatchObject({ ok: true });
+  expect(getPipelines().pipelines.find(pipeline => pipeline.task === "derived creator")).toMatchObject({ srcPath: caller.path, srcConversationId: caller.conversationId });
 });
 
 test("an unattributed caller must pass src when creating a pipeline", async () => {
@@ -166,7 +167,7 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   const seated = await executeOrchestratorSeatRequest({ project, clientRequestId: "seat-authority-a", mandate: "edited mandate", engine: "codex", model: "gpt-6-sol", cwd: process.cwd() }, deps);
   expect(seated.status).toBe(200);
   const request = (caller: typeof a, task: string) => ({ task, repoDir: process.cwd(), src: caller.path, autoStart: false, stages: [] });
-  const predecessorCreate = await POST(pipelineRequest(request(a, "incumbent lane"), { "x-llv-spawn-capability": a.capability }));
+  const predecessorCreate = await POST(pipelineRequest(request(a, "incumbent lane")));
   expect(predecessorCreate.status).toBe(201);
   const predecessor = await predecessorCreate.json() as { pipeline: { id: string } };
   next = b;
@@ -192,7 +193,7 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   expect(JSON.stringify(refusedAction)).toContain(b.conversationId);
 
   const oldAction = await PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
-    method: "PATCH", headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
+    method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
     body: JSON.stringify({ action: "pause" }),
   }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
   expect(oldAction.status).toBe(403);
@@ -201,7 +202,7 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   for (const action of ["resolve-decision", "continue-review", "accept-head"] as const) {
     const sendAction = (capability?: string) => PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
       method: "PATCH",
-      headers: { host: "127.0.0.1:8898", "content-type": "application/json", ...(capability ? { "x-llv-spawn-capability": capability } : {}) },
+      headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1:8898", "content-type": "application/json", ...(capability ? { "x-llv-spawn-capability": capability } : {}) },
       body: JSON.stringify({ action, actor: { kind: "operator" } }),
     }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
     expect((await sendAction(builder.capability)).status).toBe(403);
@@ -236,7 +237,8 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   }));
   expect(operatorCreate.status).toBe(201);
   const created = await POST(pipelineRequest(request(b, "successor lane"), { "x-llv-spawn-capability": b.capability }));
-  expect(created.status).toBe(201);
+  expect(created.status).toBe(403);
+  expect(await created.json()).toMatchObject({ error: expect.stringContaining("operator-only") });
   actor = b;
   const successorCreate = await mcp.callTool("create_pipeline", { clientRequestId: "successor-create", ...request(b, "new seat lane") });
   expect(successorCreate).toMatchObject({ ok: true });
@@ -267,7 +269,7 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
       expect(sourceCreate.status).toBe(503);
       expect(await sourceCreate.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
       const httpAction = await PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
-        method: "PATCH", headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
+        method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
         body: JSON.stringify({ action: "pause" }),
       }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
       expect(httpAction.status).toBe(503);

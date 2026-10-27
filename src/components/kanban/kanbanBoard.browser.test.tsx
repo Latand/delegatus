@@ -31,7 +31,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureLaneReviewFrames, captureTaskTimelinePrototype, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -41,10 +41,10 @@ import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
 import { measureStageChain, stageChainFailures, wideStageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
-import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
+import { sampleAnswer, sampleMemory, sampleRule, sampleScope } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
-import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
+import type { RoleMemoryProjectView, RuleRevisionView, RuleView } from "@/lib/memory/roleTypes";
 import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
@@ -67,6 +67,20 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+/* docs/design/lane-diff-comments.md: the lane review sheet, entered from the
+   card's ⋯, in every state at 1440, 1024 and 640 px, both languages and themes. */
+describe("lane diff comments", () => {
+  browserTest("the review sheet's states, pinned to a real repository, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/lane-diff-comments/desktop");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const result = await captureLaneReviewFrames(browser, out, false);
+    expect(result.failures).toEqual([]);
+    expect(result.readings.length).toBe(3 * 2 * 2 * 10);
+  }, 600_000);
+});
 
 describe("retained worktree drilldown", () => {
   browserTest("resource entry, paging, variants and read failures fit desktop, 1000 px and 390 px in both languages and themes", async () => {
@@ -1438,6 +1452,56 @@ describe("subscription API consent", () => {
   }, 120_000);
 });
 
+describe("telemetry opt-outs", () => {
+  browserTest("locked telemetry hides notices in both languages, themes and product widths", async () => {
+    const out = path.resolve(".artifacts/telemetry-opt-outs"); fs.mkdirSync(out, { recursive: true });
+    let locked = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": () => Response.json({ enabled: !locked, locked, noticeDismissed: false }),
+      "/api/subscription-api-consent": { version: 1, enabled: false, source: "default" },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) for (const off of [false, true]) {
+        locked = off;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1&lang=${lang}`, viewport, theme, lang, "reduce", phone);
+        try {
+          if (off) {
+            await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+            await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+            await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
+          } else {
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+          }
+          const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
+          const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
+          await toggle.waitFor();
+          expect(await toggle.isDisabled()).toBe(off);
+          expect(await toggle.isChecked()).toBe(!off);
+          const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
+          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
+          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          if (!off) await page.locator("[data-telemetry-notice]").waitFor();
+          const noticeCount = await page.locator("[data-telemetry-notice]").count();
+          expect(noticeCount).toBe(off ? 0 : 1);
+          await page.screenshot({ path: path.join(out, `${name}-page.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, viewport, locked: off, noticeCount, switchDisabled: off, settingsNotice: !off });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/telemetry", { recursive: true });
+      const sources = ["src/components/telemetry/TelemetrySettings.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/telemetry/opt-outs.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'telemetry opt-outs'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("swarm release rules", () => {
   browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
     const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });
@@ -1770,6 +1834,94 @@ describe("memory profile window: one top, whole rows, level order, named topic",
         readings.push({ width, scheme, lang, seen });
       }
       fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
+/* The opening case's memory: builder keeps the sample's scopes and gains a swarm level, revisions by an agent role and by the curator with an earlier text each, and curator passes; merger and orchestrator hold this-project and every-project scopes. */
+function richMemory(): RoleMemoryProjectView {
+  const rules = sampleMemory();
+  const at = "2026-10-11T00:01:00.000Z";
+  const [one, two] = rules.scopes[0]!.active;
+  const earlier = (rule: RuleView, revisedBy: RuleRevisionView) => [{ id: `${rule.id}-v1`, rule: "Check the owner before a replay.", why: rule.why, hints: [], createdAt: "2026-01-01", revisedBy }];
+  one!.revisedBy = { by: "agent", at, roleId: "architect" }; one!.versions = earlier(one!, { by: "curator", at });
+  two!.revisedBy = { by: "curator", at }; two!.versions = earlier(two!, { by: "agent", at, roleId: "merger" });
+  for (const roleId of ["merger", "orchestrator"]) for (const scope of [`role:garden:${roleId}`, `role:*:${roleId}`]) rules.scopes.push({ ...sampleScope(scope, [{ ...sampleRule(`${roleId}-${scope.includes("*") ? "all" : "here"}`, `A ${roleId} rule for ${scope.includes("*") ? "every" : "this"} project.`), roleId }]) });
+  rules.scopes.push({ ...sampleScope("swarm:builder", [{ ...sampleRule("swarm-one", "Name the file a change reaches before changing it."), roleId: "builder" }]), kind: "swarm", roleId: "builder" });
+  const counts = { calls: 1, changed: 2, rewritten: 1, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 };
+  rules.curation = { lastAt: at, nextAt: null, newLessons: 0, passes: [{ id: "pass-1", state: "succeeded", claimedAt: at, endedAt: at, failure: null, counts }, { id: "pass-2", state: "failed", claimedAt: at, endedAt: at, failure: null, counts }] };
+  return rules;
+}
+
+describe("memory profile window: opening under slow data", () => {
+  browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
+    const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let rulesReads = 0, rulesAnswered = 0, profileAnswered = 0;
+    const profileReads: string[] = [];
+    let release!: () => void; let gate = Promise.resolve();
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      /* The first read answers at once (the menu row's count); the window's refresh and the profile wait for the test to release them. */
+      "/api/role-memory": async () => { if (++rulesReads > 1) await gate; rulesAnswered++; return Response.json(rules); },
+      "/api/role-memory/profile": async (request: Request) => {
+        profileReads.push(request.method);
+        await gate; profileAnswered++;
+        const view: MemoryProfileView = service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en");
+        view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null;
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const costumes = (page: Page, selector: string) => page.locator(selector).evaluateAll(nodes => nodes.map(node => node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null));
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        rulesReads = 0; rulesAnswered = 0; profileAnswered = 0; profileReads.length = 0;
+        gate = new Promise<void>(resolve => { release = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1&via=row`, { width, height }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-learned-rules-open]").waitFor();
+          await page.waitForFunction(() => /\d/.test(document.querySelector("[data-learned-rules-count]")?.textContent ?? ""));
+          const answeredBefore = rulesAnswered;
+          const started = Date.now();
+          await page.locator("[data-learned-rules-open]").click();
+          await page.locator("[data-memory-profile]").waitFor();
+          /* Ordering, not elapsed time: the body is drawn while the window's rules read and the profile read are both still held. */
+          expect({ rulesAnswered, profileAnswered }).toEqual({ rulesAnswered: answeredBefore, profileAnswered: 0 });
+          fs.appendFileSync(path.join(out, "opening-ms.log"), `${width} ${scheme} ${lang} ${Date.now() - started}\n`);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          expect(await page.locator("[data-memory-profile] h3").first().innerText()).toBe(translate(lang, "memoryProfile.reading"));
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-reading.png`) });
+          release();
+          await page.locator("[data-profile-summarize]").waitFor();
+          expect(profileReads).toEqual(["GET"]);
+          const slices = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-slice"), label: node.querySelector("h4, p")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
+          for (const slice of slices) expect(slice.costume !== null).toBe(slice.kind === "role" || slice.kind === "swarm");
+          /* Repeated roles across scopes each wear their own costume. */
+          const byRole = slices.filter(slice => slice.kind === "role" || slice.kind === "swarm").map(slice => slice.costume);
+          expect(byRole.filter(id => id === "builder").length).toBeGreaterThanOrEqual(3);
+          for (const id of ["merger", "orchestrator"]) expect(byRole.filter(costume => costume === id).length).toBe(2);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-loaded.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-section]").first().waitFor();
+          /* The curator's history summary and each pass wear the curator; the swarm heading wears its role. */
+          await page.locator("[data-curation-history] summary").click();
+          expect(await costumes(page, "[data-curation-history] summary")).toEqual(["curator"]);
+          expect(await costumes(page, "[data-curation-pass]")).toEqual(["curator", "curator"]);
+          expect(await costumes(page, "[data-rules-swarm]")).toEqual(["builder"]);
+          for (const row of await page.locator("[data-learned-rule] button[aria-expanded]").all()) await row.click();
+          for (const summary of await page.locator("[data-rule-versions] summary").all()) await summary.click();
+          const provenance = await page.locator("[data-rule-provenance]").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
+          const earlierLines = await page.locator("[data-rule-versions] li").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
+          /* Rules by another role than their scope's own also wear their author, so the revisions are checked by inclusion. */
+          expect(provenance).toEqual(expect.arrayContaining(["architect", "curator"]));
+          expect(earlierLines.sort()).toEqual(["curator", "merger"]);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { release(); await context.close(); }
+      }
     } finally { await browser.close(); server.stop(); }
   });
 });
@@ -2921,8 +3073,8 @@ describe("#1695 K1+K2 kanban board", () => {
     /** How far the board's right edge reaches past the window. */
     beyondWindow: number;
     /** Sideways scroll of the whole page, and the widest element causing it
-        that is not part of the board. Recorded, not gated: at a 640 px window
-        the Viewer's own header row overflows on every face (#1698). */
+        that is not part of the board. Recorded here; the header's own case
+        («the board header fits a narrow 640–700 px window») gates it (#1698). */
     pageOverflow: number;
     pageOverflowOutsideBoard: string | null;
     card: { paddingLeft: string; radius: string; titleSize: string; titleWeight: string; menuHeight: number; tileWidth: number | null } | null;
@@ -9383,7 +9535,7 @@ describe("columns balanced on large screens, stage pills and heads on one line",
     });
     const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pb-pills .pb-pill')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
       /* The pill's name is .pb-name since the one pipeline block (#2072). */
-      const name = pill.querySelector(".pb-name, .pname");
+      const name = pill.querySelector(".pb-name");
       const model = pill.querySelector(".imodel");
       const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
       const r = box(pill);
@@ -34030,17 +34182,15 @@ describe("Celestia clone creation in the relay card", () => {
     const out = path.resolve(".artifacts/celestia-clone-create");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const portrait = async (from: string, to: string) => {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs><rect width="160" height="160" fill="url(#g)"/><circle cx="80" cy="70" r="34" fill="#ffffff" fill-opacity="0.85"/><rect x="38" y="112" width="84" height="40" rx="20" fill="#ffffff" fill-opacity="0.85"/></svg>`;
       return `data:image/jpeg;base64,${(await sharp(Buffer.from(svg)).jpeg({ quality: 80 }).toBuffer()).toString("base64")}`;
     };
     const candidates = await Promise.all([["#3b4a8f", "#8a6fd1"], ["#173b4f", "#3c8fb0"], ["#7a3a1c", "#e08a3c"], ["#24563a", "#7cc08a"]]
       .map(async ([from, to], index) => ({ storage_key: `avatars/${index + 1}.png`, preview: await portrait(from!, to!) })));
-    const combos = [
-      { width: 1440, scheme: "light", lang: "uk" }, { width: 1440, scheme: "dark", lang: "en" },
-      { width: 390, scheme: "dark", lang: "uk" }, { width: 390, scheme: "light", lang: "en" },
-    ] as const;
+    const combos = ([390, 915, 1440] as const).flatMap(width => (["en", "uk"] as const)
+      .flatMap(lang => (["light", "dark"] as const).map(scheme => ({ width, lang, scheme }))));
     const readings: Record<string, unknown>[] = [];
     try {
       for (const { width, scheme, lang } of combos) {
@@ -34117,7 +34267,7 @@ describe("Celestia clone creation in the relay card", () => {
               return win;
             }) as unknown as typeof window.open;
             Object.assign(window, { cloneFake: {
-              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!)]; },
+              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })]; },
               create: (name: string) => {
                 fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
@@ -34163,7 +34313,16 @@ describe("Celestia clone creation in the relay card", () => {
 
           await page.evaluate(() => (window as unknown as Fake).cloneFake.withClones());
           await frame("list", "[data-external-relay-target='beta']");
+          expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1 Sol");
           expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
+
+          for (const [id, key] of [["beta", "externalRelay.target.ownerTierCloudHint"], ["league", "externalRelay.target.ownerTierHint"]] as const) {
+            const target = card.locator(`[data-external-relay-target='${id}']`);
+            await target.locator("[data-external-relay-target-fold]").click();
+            expect(await target.locator("[data-external-relay-owner-tier-hint]").textContent()).toBe(translate(lang, key));
+            await frame(`${id === "beta" ? "cloud" : "local"}-settings`, `[data-external-relay-target='${id}'][data-open]`);
+            await target.locator("[data-external-relay-target-fold]").click();
+          }
 
           await card.locator("[data-clone-open]").click();
           const name = lang === "uk" ? "Нічна Сова" : "Night Owl";
@@ -34191,9 +34350,9 @@ describe("Celestia clone creation in the relay card", () => {
           await card.locator("[data-clone-setup-failed]").waitFor({ state: "detached", timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
-          /* The new clone takes the signed-in engine with its default model, answered here. */
-          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Opus 5.5" }).waitFor({ timeout: 15_000 });
-          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "claude", model: "opus", answered_by: "install" });
+          /* The new clone takes the Cloud default, answered here. */
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1 Sol" }).waitFor({ timeout: 15_000 });
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
           expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
           await frame("created", "[data-clone-created]");
           expect(await card.locator("[data-clone-created]").textContent()).toContain(translate(lang, "externalRelay.clone.created", { name, username: lang === "uk" ? "nichna_sova_bot" : "night_owl_bot" }));
@@ -38423,6 +38582,773 @@ describe("sound captions", () => {
   }
 });
 
+/*
+ * Opening a conversation (board task d5e2680a, operator 2026-09-30: the open
+ * «is glitchy and jumps»). From the press, every animation frame records
+ * whether the conversation is drawn, the drawn window's opacity, and the
+ * drawn feed's geometry: its scroll position and the place of its last row.
+ * Once drawn, nothing in the feed may move by itself: the first drawn frame
+ * shows the conversation where it comes to rest. Opened from a card's stage
+ * at 1440×900 (the agent window) and at 390×844 (the phone's chat screen),
+ * with and without reduced motion, a short and a long conversation each, in
+ * en and uk, light and dark.
+ *
+ *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "conversation open motion"
+ *
+ * `LLV_OPEN_MOTION_FRAMES=<dir>` writes each open's screencast frames as PNGs
+ * with an ffmpeg concat list (`frames.txt`) that plays them back as recorded;
+ * the readings go to
+ * `evidence/conversation-open/open-motion.json`.
+ */
+describe("conversation open motion", () => {
+  const OUT = path.resolve(".artifacts/conversation-open");
+  const FRAMES = process.env.LLV_OPEN_MOTION_FRAMES;
+  /* `opacity` is what the read brought (the last drawn row, or the feed content without rows), times every ancestor's;
+     `skeleton` the drawn skeleton's, or null; `question` the reply card's opacity, or null; `questionTop` its top edge. */
+  interface Sample { t: number; drawn: boolean; opacity: number; skeleton: number | null; question: number | null; questionTop: number | null; state: string | null; top: number | null; scroll: number | null; client: number | null; last: number | null; rows: number; held: string | null }
+  const installSampler = (page: Page, phone: boolean) => page.evaluate((onPhone) => {
+    const state = { samples: [] as unknown[], stopped: false, started: performance.now() };
+    const shown = (element: Element | null) => {
+      let opacity = 1;
+      for (let node = element; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
+      return Math.round(opacity * 100) / 100;
+    };
+    const tick = () => {
+      if (state.stopped) return;
+      /* What is on screen: the agent window once it is no longer held, or the phone's chat screen. */
+      const surface = onPhone
+        ? document.querySelector<HTMLElement>('[data-mobile2-screen="chat"]')
+        : document.querySelector<HTMLElement>("[data-agent-window] .agent-window");
+      const reader = onPhone ? surface : surface?.querySelector<HTMLElement>(".reader-slot:not([data-incoming]) [data-kanban-reader]") ?? null;
+      const feed = reader?.querySelector<HTMLElement>("[data-log-feed-scroller]") ?? null;
+      const content = reader?.querySelector<HTMLElement>("[data-feed-state]") ?? null;
+      const skeleton = content?.querySelector<HTMLElement>('[data-skeleton="feed"]') ?? null;
+      const rows = feed ? [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")].filter((row) => row.getBoundingClientRect().height > 0) : [];
+      const top = feed?.getBoundingClientRect().top ?? 0;
+      state.samples.push({
+        t: Math.round(performance.now() - state.started),
+        drawn: surface !== null && getComputedStyle(surface).visibility === "visible",
+        opacity: rows.length ? shown(rows.at(-1)!) : content ? shown(content) : 0,
+        skeleton: skeleton ? shown(skeleton) : null,
+        question: (() => {
+          const card = content?.querySelector<HTMLElement>("#question") ?? null;
+          return card && card.getBoundingClientRect().height > 0 ? shown(card) : null;
+        })(),
+        questionTop: (() => {
+          const card = content?.querySelector<HTMLElement>("#question") ?? null;
+          return card && card.getBoundingClientRect().height > 0 ? Math.round(card.getBoundingClientRect().top * 10) / 10 : null;
+        })(),
+        state: content?.dataset.feedState ?? null,
+        top: feed ? Math.round(feed.scrollTop) : null,
+        scroll: feed ? feed.scrollHeight : null,
+        client: feed ? feed.clientHeight : null,
+        last: rows.length ? Math.round(rows.at(-1)!.getBoundingClientRect().bottom - top) : null,
+        rows: rows.length,
+        /* The desktop's reader while the window is held, laid out and not drawn: its state and its feed's box. */
+        held: (() => {
+          const waiting = onPhone ? null : document.querySelector<HTMLElement>("[data-agent-window-pending] [data-kanban-reader]");
+          const box = waiting?.querySelector<HTMLElement>("[data-log-feed-scroller]");
+          return waiting ? `${waiting.querySelector<HTMLElement>("[data-feed-state]")?.dataset.feedState ?? "-"} ${box ? `${box.clientWidth}:${box.clientHeight}:${box.scrollHeight}:${Math.round(box.scrollTop)}` : "-"}` : null;
+        })(),
+      });
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    Object.assign(window, { openMotion: state });
+  }, phone);
+  const stopSampler = (page: Page) => page.evaluate(() => {
+    const state = (window as unknown as { openMotion: { samples: unknown[]; stopped: boolean } }).openMotion;
+    state.stopped = true;
+    return state.samples as Sample[];
+  });
+  const settled = (sample: Sample) => sample.state === "items" || sample.state === "empty" || sample.state === "error";
+  /* The drawn frames: where the settled feed moved from one frame to the next, how its content came in, and how long a skeleton showed. */
+  const motionOf = (samples: Sample[]) => {
+    const drawn = samples.filter((sample) => sample.drawn && sample.state !== null);
+    const rested = drawn.filter(settled);
+    const place = (sample: Sample) => `${sample.top}:${sample.scroll}:${sample.client}:${sample.last}:${sample.rows}`;
+    const moves = rested.filter((sample, index) => index > 0 && place(sample) !== place(rested[index - 1]!));
+    const firstDrawnAt = drawn[0]?.t ?? null;
+    const at = (sample: Sample | undefined) => sample && { t: sample.t, state: sample.state, opacity: sample.opacity, skeleton: sample.skeleton, top: sample.top, scroll: sample.scroll, client: sample.client, last: sample.last, rows: sample.rows };
+    /* A content frame drawn whole straight after a frame that showed the skeleton: the swap the eye reads as a jump. */
+    const swaps = drawn.filter((sample, index) => index > 0 && settled(sample) && sample.opacity >= 0.99 && !settled(drawn[index - 1]!) && (drawn[index - 1]!.skeleton ?? 0) > 0.05);
+    return {
+      firstDrawnAt,
+      first: at(drawn[0]),
+      firstSettled: at(rested[0]),
+      rest: at(rested.at(-1)),
+      moves: moves.map(at),
+      swaps: swaps.map(at),
+      fade: rested.filter((sample) => sample.opacity < 0.99).map((sample) => sample.opacity),
+      skeletonShown: drawn.filter((sample) => (sample.skeleton ?? 0) > 0.05).map((sample) => ({ t: sample.t - firstDrawnAt!, opacity: sample.skeleton })),
+      /* The reply card once it showed whole: every later drawn frame that hid it or dimmed it, loading and arrival alike. */
+      question: (() => {
+        const from = drawn.findIndex((sample) => (sample.question ?? 0) >= 0.99);
+        return {
+          shownAt: from < 0 ? null : drawn[from]!.t - firstDrawnAt!,
+          shownWhileLoading: drawn.some((sample) => !settled(sample) && (sample.question ?? 0) >= 0.99),
+          /* Every distinct top edge the card stood at, from the first frame that drew it: one means it never stepped. */
+          tops: drawn.filter((sample) => sample.questionTop !== null).reduce<Array<{ t: number; state: string | null; top: number }>>((seen, sample) => {
+            if (!seen.length || Math.abs(seen.at(-1)!.top - sample.questionTop!) > 0.5) seen.push({ t: sample.t - firstDrawnAt!, state: sample.state, top: sample.questionTop! });
+            return seen;
+          }, []),
+          blinks: from < 0 ? [] : drawn.slice(from).filter((sample) => (sample.question ?? 0) < 0.99).map((sample) => ({ t: sample.t - firstDrawnAt!, state: sample.state, question: sample.question })),
+        };
+      })(),
+      loadingFrames: drawn.filter((sample) => !settled(sample)).length,
+      /* Each box the held reader stood in, with the time it first stood so. */
+      held: samples.filter((sample, index) => sample.held !== null && sample.held !== samples[index - 1]?.held).map((sample) => `${sample.t} ${sample.held}`),
+    };
+  };
+
+  browserTest("conversation open motion: the first drawn frame is where the conversation rests, at 1440 and 390, with and without reduced motion", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const opens = [
+      { name: "long", stage: "verify", task: "t-search" },
+      { name: "short", stage: "implement", task: "t-links" },
+    ] as const;
+    try {
+      for (const width of [1440, 390] as const) {
+        const phone = width === 390;
+        for (const motion of ["no-preference", "reduce"] as const) {
+          for (const [lang, scheme] of [["en", "light"], ["uk", "dark"]] as const) {
+            const label = `${width}-${motion}-${lang}-${scheme}`;
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: phone ? 844 : 900 }, scheme, lang, motion, phone, phone ? 2 : 1);
+            try {
+              const cardOf = (task: string) => phone ? `[data-phone-card="task:${task}"]` : `${card(task)}`;
+              await page.waitForSelector(`${cardOf("t-search")} >> visible=true`, { timeout: 30_000 });
+              await page.waitForTimeout(600);
+              for (const open of opens) {
+                const name = `${label}-${open.name}`;
+                const pill = page.locator(`${cardOf(open.task)} [${phone ? "data-stage-open" : "data-stage"}="${open.stage}"]`).first();
+                await pill.scrollIntoViewIfNeeded();
+                await page.waitForTimeout(300);
+                const cdp = await context.newCDPSession(page);
+                const frames: Array<{ data: string; time: number }> = [];
+                cdp.on("Page.screencastFrame", (event) => {
+                  frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
+                  void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => { /* A last frame may land after the context closes. */ });
+                });
+                if (FRAMES) await cdp.send("Page.startScreencast", { format: "png", maxWidth: width, maxHeight: phone ? 844 : 900, everyNthFrame: 1 });
+                await installSampler(page, phone);
+                if (phone) {
+                  const box = (await pill.boundingBox())!;
+                  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+                } else await pill.click();
+                await page.waitForTimeout(1_800);
+                const samples = await stopSampler(page);
+                if (FRAMES) {
+                  await cdp.send("Page.stopScreencast");
+                  const dir = path.join(FRAMES, name);
+                  fs.rmSync(dir, { recursive: true, force: true });
+                  fs.mkdirSync(dir, { recursive: true });
+                  frames.forEach((frame, index) => fs.writeFileSync(path.join(dir, `${String(index).padStart(3, "0")}.png`), Buffer.from(frame.data, "base64")));
+                  const manifest = frames.map((frame, index) => `file '${String(index).padStart(3, "0")}.png'\nduration ${Math.max(0.001, ((frames[index + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
+                  /* An ffmpeg concat list: each frame for as long as it stood. */
+                  fs.writeFileSync(path.join(dir, "frames.txt"), `${manifest}\n`);
+                }
+                await cdp.detach().catch(() => {});
+                const reading = motionOf(samples);
+                readings[name] = { ...reading, frames: samples.length };
+                const fail = (message: string) => failures.push(`${name}: ${message}`);
+                if (reading.firstDrawnAt === null || !reading.firstSettled) fail("the conversation was never drawn at rest");
+                if (reading.moves.length) fail(`${reading.moves.length} drawn frames moved the feed by itself: first ${JSON.stringify(reading.firstSettled)}, then ${JSON.stringify(reading.moves.slice(0, 4))}`);
+                /* Within the first 200 ms a skeleton waits out of sight, so a quick read never flashes it. */
+                const early = reading.skeletonShown.filter((shown) => shown.t < 200);
+                if (early.length) fail(`the skeleton showed ${early.length} frames within 200 ms of the screen: ${JSON.stringify(early.slice(0, 3))}`);
+                /* A reply card already on screen is not dimmed or hidden while the transcript arrives around it. */
+                if (reading.question.blinks.length) fail(`the reply card blinked ${reading.question.blinks.length} frames after it showed: ${JSON.stringify(reading.question.blinks.slice(0, 3))}`);
+                /* ...and keeps its place: drawn once, at the place the arrived feed rests it. */
+                if (reading.question.tops.length > 1) fail(`the reply card stepped after it was first drawn: ${JSON.stringify(reading.question.tops)}`);
+                if (motion === "no-preference") {
+                  if (reading.swaps.length) fail(`the transcript swapped in whole for a drawn skeleton: ${JSON.stringify(reading.swaps[0])}`);
+                  /* Desktop: the window fades in. The phone: a transcript read for the first time fades in. */
+                  if ((!phone || reading.loadingFrames > 0) && !reading.fade.length) fail(`the conversation came in at full opacity: ${JSON.stringify(reading.firstSettled)}`);
+                } else if (reading.fade.length || reading.skeletonShown.some((shown) => (shown.opacity ?? 1) < 0.99)) fail(`reduced motion still fades: ${JSON.stringify({ fade: reading.fade, skeleton: reading.skeletonShown.slice(0, 3) })}`);
+                /* Back to the board. */
+                if (phone) await page.locator("[data-mobile2-back]").first().click();
+                else await page.keyboard.press("Escape");
+                await page.waitForTimeout(600);
+              }
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/conversation-open", { recursive: true });
+    fs.writeFileSync("evidence/conversation-open/open-motion.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx", label: process.env.LLV_OPEN_MOTION_LABEL ?? null, readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+describe("the board header fits a narrow 640–700 px window", () => {
+  /*
+   * The project board's one header bar at the narrowest desktop windows
+   * (#1698): at 640 px the Viewer's project rail leaves the bar under 400 px.
+   * The real Viewer over `issue1695Evidence.fixture.tsx?scenario=accounts`
+   * (account switches bound to the project, three waiting items on the
+   * island), in Chromium, at 640, 670, 700 and 1440 px, en and uk, light and
+   * dark; and the bar of a leaf without a board (`&boardhold=1` keeps the
+   * project on its loading skeleton) at the same widths:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "narrow 640"
+   *
+   * Gated, because only a laid-out page settles it:
+   *   - the page never scrolls sideways, and the bar's row never runs past its own box;
+   *   - every control of the bar lies whole inside the bar and the window, and no two of them overlap;
+   *   - every line of text in the bar and in its open menus lies inside the box that clips it,
+   *     unless that box ends it with an ellipsis, measured from text ranges; a placeholder the
+   *     field shows fits the field;
+   *   - each menu of the bar (create, filter, recent agents, ⋯) opens inside the window and clear of
+   *     the row's texts and controls, and what a short row gave up is a row of ⋯ that works:
+   *     Orchestrator, the recent agents' list, New task;
+   *   - the recent agents' list reached from ⋯ by the keyboard takes the focus, keeps Tab inside it,
+   *     and Escape closes it and hands the focus back to ⋯; so does the list opened from its icon at
+   *     1440 px when the window then narrows under it and the row folds the icon into ⋯;
+   *   - the needs-you toast hanging under the row stays inside the window.
+   *
+   * No fixed sleep stands for readiness: each reading waits for what the fixture gives the bar (the
+   * working count, the accounts, the waiting chip), for its fonts, and for the row and any open menu
+   * to keep one geometry with no running transition for several frames; each action waits for the
+   * state it should change. `LLV_HEADER_REPLY_DELAY_MS=1500` answers every fixture request that much
+   * later (`&replydelay=`), and the same gates must hold.
+   *
+   * Measurements go to `evidence/board-header-narrow/header.json`; frames to
+   * `.artifacts/board-header-narrow/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/board-header-narrow");
+  const EVIDENCE = path.resolve("evidence/board-header-narrow");
+  const VIEWPORTS = [
+    { width: 640, height: 720 },
+    { width: 670, height: 720 },
+    { width: 700, height: 720 },
+    { width: 1440, height: 900 },
+  ] as const;
+  const BOARD_BAR = '.kb .bar[data-bar="project"]';
+  const LEAF_BAR = "[data-project-bar]";
+  const POPOVERS = '[role="menu"], [role="dialog"], [data-bar-filter-menu], [data-bar-recent-list], [data-bar-more-menu], [data-attention-toast]';
+  /* The menus the bar opens; the toast is not one, it rests under the row. */
+  const OPEN_MENUS = '.kb .menu[role="menu"], [data-bar-filter-menu], [data-bar-recent-list], [data-bar-more-menu]';
+  /* What the accounts fixture puts in each bar before it is read: who works (or the reach), the
+     account switches (in the row or folded), the waiting chip and ⋯. */
+  const BOARD_READY = ["h1", ":is([data-bar-working], [data-bar-reach])", "[data-project-accounts]", "[data-attention-count]", "[data-bar-more]"];
+  const LEAF_READY = ["h1", '[data-bar-group="status"]', "[data-project-accounts]", "[data-attention-count]", "[data-bar-more]"];
+  const REPLY_DELAY = Number(process.env.LLV_HEADER_REPLY_DELAY_MS) || 0;
+  const delayed = REPLY_DELAY > 0 ? `&replydelay=${REPLY_DELAY}` : "";
+  const MENUS = [
+    { name: "create", trigger: "[data-bar-create]", panel: '.menu[role="menu"]' },
+    { name: "filter", trigger: "[data-bar-filter-toggle]", panel: "[data-bar-filter-menu]" },
+    { name: "recent", trigger: "[data-bar-recent-toggle]", panel: "[data-bar-recent-list]" },
+    { name: "more", trigger: "[data-bar-more]", panel: "[data-bar-more-menu]" },
+  ] as const;
+
+  interface Box { x: number; y: number; w: number; h: number }
+  interface TextCut { text: string; by: string }
+  interface HeaderReading {
+    pageOverflow: number;
+    bar: Box & { scrollWidth: number; clientWidth: number; fit: string };
+    controls: { label: string; box: Box }[];
+    cutText: TextCut[];
+    ellipsised: string[];
+    scrollEdge: string[];
+    placeholders: { text: string; shown: boolean; textWidth: number; room: number }[];
+    toast: Box | null;
+  }
+
+  /* Every text line under `selector`, against the window and each ancestor up to it that clips its overflow. */
+  const readCuts = (page: Page, selector: string, skip: string) => page.evaluate(([rootSelector, skipSelector]) => {
+    const root = document.querySelector<HTMLElement>(rootSelector);
+    const cutText: { text: string; by: string }[] = [];
+    const ellipsised: string[] = [];
+    const scrollEdge: string[] = [];
+    if (!root) return { cutText, ellipsised, scrollEdge };
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = (node.textContent ?? "").trim();
+      const owner = node.parentElement;
+      if (!text || !owner || (skipSelector && owner.closest(skipSelector))) continue;
+      let hidden = false;
+      for (let at: Element | null = owner; at; at = at.parentElement) {
+        const style = getComputedStyle(at);
+        if (style.display === "none" || style.visibility === "hidden") { hidden = true; break; }
+      }
+      if (hidden) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((r) => r.width > 0);
+      const clips: { el: Element; r: DOMRect }[] = [{ el: document.documentElement, r: new DOMRect(0, 0, window.innerWidth, window.innerHeight) }];
+      const scrollers: DOMRect[] = [];
+      for (let at: Element | null = owner; at && at !== root.parentElement; at = at.parentElement) {
+        const style = getComputedStyle(at);
+        if (/auto|scroll/.test(style.overflowY) || /auto|scroll/.test(style.overflowX)) scrollers.push(at.getBoundingClientRect());
+        else if (style.overflowX !== "visible" || style.overflowY !== "visible") clips.push({ el: at, r: at.getBoundingClientRect() });
+      }
+      for (const rect of rects) {
+        /* A line a scroller holds out of view is scrolled away, not cut; one its edge crosses is recorded apart. */
+        const within = (r: DOMRect) => rect.left >= r.left - 0.5 && rect.right <= r.right + 0.5 && rect.top >= r.top - 0.5 && rect.bottom <= r.bottom + 0.5;
+        const apart = (r: DOMRect) => rect.bottom <= r.top || rect.top >= r.bottom || rect.right <= r.left || rect.left >= r.right;
+        if (scrollers.some(apart)) continue;
+        if (!scrollers.every(within)) { if (!scrollEdge.includes(text)) scrollEdge.push(text); continue; }
+        for (const clip of clips) {
+          const out = rect.left < clip.r.left - 0.5 || rect.right > clip.r.right + 0.5 || rect.top < clip.r.top - 0.5 || rect.bottom > clip.r.bottom + 0.5;
+          if (!out) continue;
+          const ends = clip.el instanceof HTMLElement && getComputedStyle(clip.el).textOverflow === "ellipsis" && clip.el.scrollWidth > clip.el.clientWidth;
+          if (ends) { if (!ellipsised.includes(text)) ellipsised.push(text); continue; }
+          cutText.push({ text: text.slice(0, 60), by: clip.el === document.documentElement ? "window" : `${clip.el.tagName.toLowerCase()}.${(clip.el.getAttribute("class") ?? "").split(" ").slice(0, 3).join(".")}` });
+        }
+      }
+    }
+    return { cutText, ellipsised, scrollEdge };
+  }, [selector, skip] as const);
+
+  const readHeader = async (page: Page, bar: string): Promise<HeaderReading> => {
+    const shape = await page.evaluate(([selector, popovers]) => {
+      const round = (value: number) => Math.round(value * 10) / 10;
+      const box = (r: DOMRect) => ({ x: round(r.x), y: round(r.y), w: round(r.width), h: round(r.height) });
+      const root = document.querySelector<HTMLElement>(selector)!;
+      const shown = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) return false;
+        for (let at: Element | null = el; at; at = at.parentElement) {
+          const style = getComputedStyle(at);
+          if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+        }
+        return true;
+      };
+      const label = (el: Element) => (el.getAttribute("aria-label") ?? el.getAttribute("placeholder") ?? el.textContent ?? el.tagName).replace(/\s+/g, " ").trim().slice(0, 60);
+      /* The row's own controls and its two texts, the project name and the status; what hangs under the row is read apart. */
+      const controls = [...root.querySelectorAll<HTMLElement>('button, input, h1, [data-bar-group="status"]')]
+        .filter((el) => !el.closest(popovers) && shown(el))
+        .filter((el, _, all) => !all.some((other) => other !== el && other.contains(el) && other.tagName === "BUTTON"))
+        .map((el) => ({ label: label(el), box: box(el.getBoundingClientRect()) }));
+      /* A placeholder is drawn without a text node: its words against the field's content box. */
+      const canvas = document.createElement("canvas").getContext("2d")!;
+      const placeholders = [...root.querySelectorAll<HTMLInputElement>("input[placeholder]")].filter(shown).map((input) => {
+        const style = getComputedStyle(input);
+        const ghost = getComputedStyle(input, "::placeholder");
+        canvas.font = `${ghost.fontStyle} ${ghost.fontWeight} ${ghost.fontSize} ${ghost.fontFamily}`;
+        return {
+          text: input.placeholder,
+          shown: ghost.color !== "rgba(0, 0, 0, 0)" && ghost.color !== "transparent",
+          textWidth: round(canvas.measureText(input.placeholder).width),
+          room: round(input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+        };
+      });
+      const toast = [...root.querySelectorAll<HTMLElement>("[data-attention-toast]")].find(shown);
+      return {
+        pageOverflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+        bar: { ...box(root.getBoundingClientRect()), scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, fit: root.getAttribute("data-fit") ?? "" },
+        controls,
+        placeholders,
+        toast: toast ? box(toast.getBoundingClientRect()) : null,
+      };
+    }, [bar, POPOVERS] as const);
+    const cuts = await readCuts(page, bar, POPOVERS);
+    return { ...shape, ...cuts };
+  };
+
+  const inside = (a: Box, b: Box) => a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x + a.w <= b.x + b.w + 0.5 && a.y + a.h <= b.y + b.h + 0.5;
+  const overlaps = (a: Box, b: Box) => a.x < b.x + b.w - 0.5 && b.x < a.x + a.w - 0.5 && a.y < b.y + b.h - 0.5 && b.y < a.y + a.h - 0.5;
+  const boxOf = async (page: Page, selector: string): Promise<Box | null> => {
+    const found = await page.locator(selector).first().boundingBox().catch(() => null);
+    return found ? { x: Math.round(found.x), y: Math.round(found.y), w: Math.round(found.width), h: Math.round(found.height) } : null;
+  };
+  /* `selector` keeps one geometry, and no transition or animation of it runs, over several frames:
+     the bar's steps, its controls and anything open under it. Animations that never end (a pulse)
+     move no box and are not waited for. */
+  const stillAt = (page: Page, selector: string) => page.waitForFunction((target) => {
+    const root = document.querySelector<HTMLElement>(target);
+    if (!root || document.fonts.status !== "loaded") return false;
+    const boxes = [root, ...root.querySelectorAll<HTMLElement>("button, input, h1, [data-bar-group], [data-bar-recent-list], [data-bar-more-menu], [data-bar-filter-menu]")]
+      .map((el) => { const r = el.getBoundingClientRect(); return `${r.x.toFixed(1)},${r.y.toFixed(1)},${r.width.toFixed(1)},${r.height.toFixed(1)}`; })
+      .join(";");
+    const running = root.getAnimations({ subtree: true }).some((a) => a.playState === "running" && a.effect?.getComputedTiming().iterations !== Infinity);
+    const signature = `${root.getAttribute("data-fit") ?? ""}|${root.scrollWidth}|${boxes}`;
+    const memo = window as unknown as { __stillAt?: Record<string, { signature: string; frames: number }> };
+    const seen = (memo.__stillAt ??= {});
+    const was = seen[target];
+    seen[target] = { signature, frames: !running && was?.signature === signature ? was.frames + 1 : 0 };
+    return seen[target].frames >= 4;
+  }, selector, { polling: "raf", timeout: 15_000 });
+  /* The bar has what the fixture gives it and stopped moving. */
+  const barReady = async (page: Page, bar: string, ready: readonly string[]) => {
+    for (const part of ready) await page.locator(`${bar} ${part}`).first().waitFor({ state: "attached", timeout: 30_000 });
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    await stillAt(page, bar);
+  };
+  const noMenuOpen = (page: Page) => page.waitForFunction((menus) => !document.querySelector(menus), OPEN_MENUS, { timeout: 5_000 });
+  const closeMenus = async (page: Page, viewport: { width: number; height: number }, bar: string) => {
+    await page.keyboard.press("Escape");
+    if (await page.locator(OPEN_MENUS).count()) await page.mouse.click(viewport.width / 2, viewport.height - 20);
+    await noMenuOpen(page);
+    await stillAt(page, bar);
+  };
+
+  /* The row's geometry, its texts and the toast under it. */
+  const gateRow = (tag: string, reading: HeaderReading, viewport: { width: number; height: number }, failures: string[]) => {
+    const windowBox: Box = { x: 0, y: 0, w: viewport.width, h: viewport.height };
+    if (reading.pageOverflow > 0) failures.push(`${tag}: the page scrolls sideways by ${reading.pageOverflow}px`);
+    if (reading.bar.scrollWidth > reading.bar.clientWidth + 0.5) failures.push(`${tag}: the bar's row is ${reading.bar.scrollWidth}px in a ${reading.bar.clientWidth}px bar (fit "${reading.bar.fit}")`);
+    if (reading.bar.h > 48.5) failures.push(`${tag}: the bar is ${reading.bar.h}px tall, not one 48px row`);
+    if (reading.controls.length < 4) failures.push(`${tag}: the bar drew ${reading.controls.length} controls`);
+    for (const control of reading.controls) {
+      if (!inside(control.box, reading.bar)) failures.push(`${tag}: «${control.label}» lies outside the bar ${JSON.stringify(control.box)}`);
+      if (!inside(control.box, windowBox)) failures.push(`${tag}: «${control.label}» leaves the window ${JSON.stringify(control.box)}`);
+    }
+    reading.controls.forEach((a, i) => reading.controls.slice(i + 1).forEach((b) => {
+      if (overlaps(a.box, b.box)) failures.push(`${tag}: «${a.label}» overlaps «${b.label}»`);
+    }));
+    for (const cut of reading.cutText) failures.push(`${tag}: «${cut.text}» is cut by ${cut.by} with no ellipsis`);
+    for (const text of reading.scrollEdge) failures.push(`${tag}: «${text}» is cut by a scroll edge in the row`);
+    for (const ghost of reading.placeholders) {
+      if (ghost.shown && ghost.textWidth > ghost.room + 0.5) failures.push(`${tag}: the placeholder «${ghost.text}» needs ${ghost.textWidth}px in a ${ghost.room}px field`);
+    }
+    if (reading.toast && !inside(reading.toast, windowBox)) failures.push(`${tag}: the needs-you toast leaves the window ${JSON.stringify(reading.toast)}`);
+  };
+
+  /* The row's own texts, as text ranges, and its controls, which a menu opened from it must leave uncovered. */
+  const rowMarks = (page: Page, bar: string) => page.evaluate(([selector, popovers]) => {
+    const root = document.querySelector<HTMLElement>(selector);
+    const marks: { label: string; box: { x: number; y: number; w: number; h: number } }[] = [];
+    if (!root) return marks;
+    const visible = (el: Element) => {
+      for (let at: Element | null = el; at; at = at.parentElement) {
+        const style = getComputedStyle(at);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+      }
+      return true;
+    };
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const owner = node.parentElement;
+      const text = (node.textContent ?? "").trim();
+      if (!text || !owner || owner.closest(popovers) || !visible(owner)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const r of range.getClientRects()) if (r.width > 0) marks.push({ label: `text «${text.slice(0, 40)}»`, box: { x: r.x, y: r.y, w: r.width, h: r.height } });
+    }
+    for (const el of root.querySelectorAll<HTMLElement>("button, input")) {
+      const r = el.getBoundingClientRect();
+      if (el.closest(popovers) || r.width < 1 || r.height < 1 || !visible(el)) continue;
+      marks.push({ label: `control «${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 40)}»`, box: { x: r.x, y: r.y, w: r.width, h: r.height } });
+    }
+    return marks;
+  }, [bar, POPOVERS] as const);
+
+  /* A menu opened from the row: inside the window, clear of the row's texts and controls, its texts whole. */
+  const gateMenu = async (page: Page, tag: string, name: string, panel: string, bar: string, viewport: { width: number; height: number }, failures: string[]): Promise<(Box & { scrollEdge: string[] }) | null> => {
+    const opened = await page.locator(panel).first().waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false);
+    if (!opened) { failures.push(`${tag}: the ${name} menu did not open`); return null; }
+    await stillAt(page, bar);
+    const box = await boxOf(page, panel);
+    if (!box) { failures.push(`${tag}: the ${name} menu did not open`); return null; }
+    if (!inside(box, { x: 0, y: 0, w: viewport.width, h: viewport.height })) failures.push(`${tag}: the ${name} menu leaves the window ${JSON.stringify(box)}`);
+    /* The exact box, as the menu covers it: rounding would hide a 3 px cover of a text line. */
+    const exact = await page.locator(panel).first().boundingBox();
+    if (exact) for (const mark of await rowMarks(page, bar)) {
+      if (overlaps({ x: exact.x, y: exact.y, w: exact.width, h: exact.height }, mark.box)) failures.push(`${tag}: the ${name} menu covers the row's ${mark.label} (menu top ${exact.y.toFixed(1)}, its bottom ${(mark.box.y + mark.box.h).toFixed(1)})`);
+    }
+    const { cutText, scrollEdge } = await readCuts(page, panel, "");
+    for (const cut of cutText) failures.push(`${tag}: in the ${name} menu «${cut.text}» is cut by ${cut.by} with no ellipsis`);
+    /* ⋯ tells its rows apart: no two share both their icon and their leading word. */
+    if (panel === "[data-bar-more-menu]") {
+      const twins = await page.evaluate((target) => {
+        const seen = new Map<string, string>();
+        const twin: string[] = [];
+        for (const row of document.querySelectorAll<HTMLElement>(`${target} button`)) {
+          if (!row.getClientRects().length) continue;
+          const icon = [...(row.querySelector("svg")?.classList ?? [])].find((name) => name.startsWith("lucide-")) ?? "";
+          const text = (row.textContent ?? "").trim();
+          if (!icon || !text) continue;
+          const key = `${icon}|${text.split(/\s+/)[0].toLowerCase()}`;
+          if (seen.has(key)) twin.push(`«${seen.get(key)}» and «${text.slice(0, 40)}» (${icon})`);
+          else seen.set(key, text.slice(0, 40));
+        }
+        return twin;
+      }, panel);
+      for (const twin of twins) failures.push(`${tag}: ⋯ has two rows with one icon and leading word: ${twin}`);
+    }
+    /* A list opened while the row has folded its icon ends at ⋯'s right edge, inside the window. */
+    if (panel === "[data-bar-recent-list]" && (await page.locator(`${bar}[data-fit~="panels"]`).count())) {
+      const more = await page.locator(`${bar} [data-bar-more]`).first().boundingBox();
+      const list = await page.locator(panel).first().boundingBox();
+      if (more && list && Math.abs(list.x + list.width - (more.x + more.width)) > 1) failures.push(`${tag}: the ${name} list ends at x=${(list.x + list.width).toFixed(1)}, ⋯ at x=${(more.x + more.width).toFixed(1)}`);
+    }
+    return { ...box, scrollEdge };
+  };
+
+  browserTest("every control and line of the bar fits the window, and its menus open inside it", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), "llv-header-narrow-")));
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const scheme of ["light", "dark"] as const) {
+            const name = `${viewport.width}-${lang}-${scheme}`;
+            const narrow = viewport.width < 1000;
+
+            /* ---- The board's bar. */
+            const tag = `${viewport.width} ${lang} ${scheme}`;
+            const opened = await openFixture(browser, `${server.base}?scenario=accounts${delayed}`, viewport, scheme, lang);
+            try {
+              const { page, pageErrors } = opened;
+              await barReady(page, BOARD_BAR, BOARD_READY);
+              const reading = await readHeader(page, BOARD_BAR);
+              await page.screenshot({ path: path.join(OUT, `${name}.png`) });
+              await page.screenshot({ path: path.join(OUT, `${name}-bar.png`), clip: { x: 0, y: 0, width: viewport.width, height: 120 } });
+              gateRow(tag, reading, viewport, failures);
+
+              const menus: Record<string, (Box & { scrollEdge: string[] }) | null> = {};
+              for (const menu of MENUS) {
+                const trigger = page.locator(`${BOARD_BAR} ${menu.trigger}`).first();
+                if (!(await trigger.count()) || !(await trigger.isVisible())) { menus[menu.name] = null; continue; }
+                await trigger.click();
+                menus[menu.name] = await gateMenu(page, tag, menu.name, menu.panel, BOARD_BAR, viewport, failures);
+                if (narrow) await page.screenshot({ path: path.join(OUT, `${name}-menu-${menu.name}.png`) });
+                await closeMenus(page, viewport, BOARD_BAR);
+              }
+
+              /* What the row gave up is a working row of ⋯. */
+              const fit = reading.bar.fit.split(" ").filter(Boolean);
+              const folded: Record<string, unknown> = { fit };
+              const openMore = async () => {
+                await page.click(`${BOARD_BAR} [data-bar-more]`);
+                await page.locator("[data-bar-more-menu]").waitFor({ state: "visible", timeout: 5_000 });
+                await stillAt(page, BOARD_BAR);
+              };
+              /* Clicks a row of ⋯; the caller waits for what the row does. */
+              const moreRow = async (row: string) => {
+                await openMore();
+                const found = await page.locator(`[data-bar-more-menu] ${row}`).count();
+                if (!found) { await closeMenus(page, viewport, BOARD_BAR); return false; }
+                await page.click(`[data-bar-more-menu] ${row}`);
+                return true;
+              };
+              if (fit.includes("panels")) {
+                if (!(await moreRow("[data-bar-more-recent]"))) failures.push(`${tag}: the row gave up the recent agents and ⋯ has no row for them`);
+                else {
+                  folded.recent = await gateMenu(page, tag, "recent agents (from ⋯)", "[data-bar-recent-list]", BOARD_BAR, viewport, failures);
+                  await page.screenshot({ path: path.join(OUT, `${name}-more-recent.png`) });
+                  await closeMenus(page, viewport, BOARD_BAR);
+                }
+
+                /* The same list by the keyboard: ⋯ by Enter, Tab to the row, Enter; the list takes the
+                   focus, Tab stays in it, Escape closes it and gives the focus back to ⋯. */
+                const active = () => page.evaluate(() => {
+                  const el = document.activeElement;
+                  return { more: Boolean(el?.hasAttribute("data-bar-more")), row: Boolean(el?.hasAttribute("data-bar-more-recent")), inList: Boolean(el?.closest("[data-bar-recent-list]")), label: (el?.getAttribute("aria-label") ?? el?.textContent ?? el?.tagName ?? "").trim().slice(0, 40) };
+                });
+                await page.focus(`${BOARD_BAR} [data-bar-more]`);
+                await page.keyboard.press("Enter");
+                await page.locator("[data-bar-more-menu]").waitFor({ state: "visible", timeout: 5_000 });
+                let tabs = 0;
+                while (tabs < 12 && !(await active()).row) { await page.keyboard.press("Tab"); tabs += 1; }
+                const keyboard: Record<string, unknown> = { tabsToRow: tabs };
+                if (!(await active()).row) failures.push(`${tag}: Tab from ⋯ never reached its Recent agents row`);
+                else {
+                  await page.keyboard.press("Enter");
+                  const listed = await page.locator("[data-bar-recent-list]").waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false);
+                  if (!listed) failures.push(`${tag}: Enter on Recent agents in ⋯ opened no list`);
+                  else {
+                    await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-bar-recent-list]")), undefined, { timeout: 5_000 }).catch(() => undefined);
+                    keyboard.onOpen = await active();
+                    if (!(keyboard.onOpen as { inList: boolean }).inList) failures.push(`${tag}: the recent agents' list opened from ⋯ left the focus on «${(keyboard.onOpen as { label: string }).label}»`);
+                    /* Tab moves on to the list's agents once they are there. */
+                    await page.locator("[data-bar-recent-list] :is(button, a[href], input):not([data-bar-recent-close])").first().waitFor({ state: "visible", timeout: 10_000 });
+                    await page.keyboard.press("Tab");
+                    keyboard.afterTab = await active();
+                    if (!(keyboard.afterTab as { inList: boolean }).inList) failures.push(`${tag}: Tab in the recent agents' list opened from ⋯ left it for «${(keyboard.afterTab as { label: string }).label}»`);
+                    await page.keyboard.press("Escape");
+                    const gone = await page.locator("[data-bar-recent-list]").waitFor({ state: "detached", timeout: 5_000 }).then(() => true, () => false);
+                    keyboard.escapeCloses = gone;
+                    if (!gone) failures.push(`${tag}: Escape does not close the recent agents' list opened from ⋯`);
+                    keyboard.afterEscape = await active();
+                    if (gone && !(keyboard.afterEscape as { more: boolean }).more) failures.push(`${tag}: Escape on the recent agents' list left the focus on «${(keyboard.afterEscape as { label: string }).label}», not ⋯`);
+                  }
+                }
+                folded.keyboard = keyboard;
+                await closeMenus(page, viewport, BOARD_BAR);
+
+                /* The list opened by the keyboard from its icon on a desktop window, then the window
+                   narrows under it: the row folds the icon that held the focus into ⋯, the focus moves
+                   to the list's ✕, and Escape closes the list onto ⋯. */
+                const wide = VIEWPORTS[VIEWPORTS.length - 1];
+                const resize: Record<string, unknown> = { from: wide.width };
+                await page.setViewportSize(wide);
+                await page.waitForFunction((bar) => !document.querySelector(bar)?.matches('[data-fit~="panels"]'), BOARD_BAR, { timeout: 10_000 });
+                await stillAt(page, BOARD_BAR);
+                await page.focus(`${BOARD_BAR} [data-bar-recent-toggle]`);
+                await page.keyboard.press("Enter");
+                const shown = await page.locator("[data-bar-recent-list]").waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false);
+                if (!shown) failures.push(`${tag}: Enter on the recent agents' icon at ${wide.width} px opened no list`);
+                else {
+                  await page.setViewportSize(viewport);
+                  await page.waitForFunction((bar) => Boolean(document.querySelector(bar)?.matches('[data-fit~="panels"]')), BOARD_BAR, { timeout: 10_000 });
+                  await stillAt(page, BOARD_BAR);
+                  resize.kept = await page.locator("[data-bar-recent-list]").count() > 0;
+                  await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-bar-recent-list]")), undefined, { timeout: 5_000 }).catch(() => undefined);
+                  resize.onFold = await active();
+                  if (resize.kept && !(resize.onFold as { inList: boolean }).inList) failures.push(`${tag}: narrowing from ${wide.width} px under the open recent agents' list left the focus on «${(resize.onFold as { label: string }).label}»`);
+                  if (resize.kept) {
+                    resize.list = await gateMenu(page, tag, "recent agents (kept over a narrowing)", "[data-bar-recent-list]", BOARD_BAR, viewport, failures);
+                    await page.screenshot({ path: path.join(OUT, `${name}-resize-recent.png`) });
+                    /* Escape at once, from where the fold left the focus: Tab from the ✕ is the case above. */
+                    await page.keyboard.press("Escape");
+                    const gone = await page.locator("[data-bar-recent-list]").waitFor({ state: "detached", timeout: 5_000 }).then(() => true, () => false);
+                    resize.escapeCloses = gone;
+                    if (!gone) failures.push(`${tag}: Escape does not close the recent agents' list kept over a narrowing`);
+                  }
+                  resize.afterEscape = await active();
+                  if (!(resize.afterEscape as { more: boolean }).more) failures.push(`${tag}: after a narrowing under the recent agents' list the focus is on «${(resize.afterEscape as { label: string }).label}», not ⋯`);
+                }
+                folded.resize = resize;
+                await closeMenus(page, viewport, BOARD_BAR);
+
+                const pressed = async () => {
+                  await openMore();
+                  const row = page.locator("[data-bar-more-menu] [data-bar-more-orchestrator]");
+                  const value = (await row.count()) ? await row.getAttribute("aria-pressed") : null;
+                  await closeMenus(page, viewport, BOARD_BAR);
+                  return value;
+                };
+                /* A click on the row closes ⋯ and flips the seat: wait for both before reading it again. */
+                const flipped = async (from: string) => {
+                  await noMenuOpen(page);
+                  const to = from === "true" ? "false" : "true";
+                  await page.locator(`${BOARD_BAR} [data-orchestrator-toggle][aria-pressed="${to}"]`).waitFor({ state: "attached", timeout: 5_000 }).catch(() => undefined);
+                  await stillAt(page, BOARD_BAR);
+                };
+                const before = await pressed();
+                if (before === null || !(await moreRow("[data-bar-more-orchestrator]"))) failures.push(`${tag}: the row gave up Orchestrator and ⋯ has no row for it`);
+                else {
+                  await flipped(before);
+                  const after = await pressed();
+                  await openMore();
+                  await page.screenshot({ path: path.join(OUT, `${name}-more-panels.png`) });
+                  /* Back as it was, through the same row. */
+                  await page.click("[data-bar-more-menu] [data-bar-more-orchestrator]");
+                  if (after !== null) await flipped(after);
+                  const back = await pressed();
+                  if (after === before || back !== before) failures.push(`${tag}: the Orchestrator row of ⋯ does not toggle the seat (${before} → ${after} → ${back})`);
+                  folded.orchestrator = { before, after, back };
+                }
+              } else if (narrow) failures.push(`${tag}: the row kept its panel group at a narrow window (fit "${reading.bar.fit}")`);
+              if (fit.includes("create")) {
+                if (!(await moreRow('[data-bar-more-create="task"]'))) failures.push(`${tag}: the row gave up + and ⋯ has no New task row`);
+                else {
+                  const composer = await page.locator("[data-kanban-new-task]").first().waitFor({ state: "visible", timeout: 5_000 }).then(() => 1, () => 0);
+                  if (!composer) failures.push(`${tag}: New task in ⋯ opened no composer`);
+                  else await stillAt(page, BOARD_BAR);
+                  await page.screenshot({ path: path.join(OUT, `${name}-more-new-task.png`) });
+                  folded.newTask = { composer };
+                  await page.keyboard.press("Escape");
+                  if (composer) await page.locator("[data-kanban-new-task]").waitFor({ state: "detached", timeout: 5_000 }).catch(() => failures.push(`${tag}: Escape left the New task composer open`));
+                }
+                if (!(await page.locator(`${BOARD_BAR} [data-bar-more]`).count())) failures.push(`${tag}: ⋯ is gone`);
+                await openMore();
+                if (!(await page.locator('[data-bar-more-menu] [data-bar-more-create="agent"]').count())) failures.push(`${tag}: the row gave up + and ⋯ has no New agent row`);
+                await closeMenus(page, viewport, BOARD_BAR);
+              }
+              if (!narrow && fit.some((step) => ["panels", "create", "find"].includes(step))) failures.push(`${tag}: a desktop window took the narrow steps (fit "${reading.bar.fit}")`);
+
+              frames[tag] = { viewport, ...reading, menus, folded };
+              if (pageErrors.length) failures.push(`${tag}: ${pageErrors.join(" | ")}`);
+            } catch (error) {
+              failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+            } finally {
+              await opened.context.close();
+            }
+
+            /* ---- The bar of a leaf without a board: the project still loading. */
+            const leafTag = `${tag} loading`;
+            const leaf = await openFixture(browser, `${server.base}?scenario=accounts&boardhold=1${delayed}`, viewport, scheme, lang);
+            try {
+              const { page, pageErrors } = leaf;
+              await barReady(page, LEAF_BAR, LEAF_READY);
+              const reading = await readHeader(page, LEAF_BAR);
+              await page.screenshot({ path: path.join(OUT, `${name}-loading-bar.png`), clip: { x: 0, y: 0, width: viewport.width, height: 120 } });
+              gateRow(leafTag, reading, viewport, failures);
+              /* The trail is the row's right end at every step, as on the board and at 1440 px. */
+              const trailEnd = Math.max(...reading.controls.map((control) => control.box.x + control.box.w));
+              if (trailEnd < viewport.width - 16.5) failures.push(`${leafTag}: the last control ends at x=${trailEnd.toFixed(1)}, ${(viewport.width - trailEnd).toFixed(1)}px short of the window's right edge (fit "${reading.bar.fit}")`);
+              /* What each step leaves of the row, so a step taken without need shows in the evidence. */
+              const stepTable = narrow ? await page.evaluate(([selector, all]) => {
+                const bar = document.querySelector<HTMLElement>(selector)!;
+                const was = bar.getAttribute("data-fit") ?? "";
+                const rows = [];
+                for (let count = 0; count <= all.length; count += 1) {
+                  bar.setAttribute("data-fit", all.slice(0, count).join(" "));
+                  const cut = [...bar.querySelectorAll<HTMLElement>("h1, [data-bar-whole]")].filter((text) => text.scrollWidth > text.clientWidth + 0.5).map((text) => text.textContent?.trim().slice(0, 20));
+                  const search = bar.querySelector<HTMLElement>('[data-testid="dash-search"]')?.getBoundingClientRect().width ?? 0;
+                  rows.push({ steps: count, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth, search: Math.round(search), cut });
+                }
+                bar.setAttribute("data-fit", was);
+                return rows;
+              }, [LEAF_BAR, ["accounts", "labels", "chip", "tight", "panels", "create", "find"]] as const) : null;
+              /* No step is taken while the row would fit without it. */
+              const lastStep = reading.bar.fit.split(" ").filter(Boolean).pop();
+              if (narrow && lastStep && !["accounts", "labels"].includes(lastStep)) {
+                const fitsWithout = await page.evaluate(([selector, step]) => {
+                  const bar = document.querySelector<HTMLElement>(selector)!;
+                  const was = bar.getAttribute("data-fit") ?? "";
+                  bar.setAttribute("data-fit", was.split(" ").filter((token) => token && token !== step).join(" "));
+                  const whole = [...bar.querySelectorAll<HTMLElement>("h1, [data-bar-whole]")].every((text) => text.scrollWidth <= text.clientWidth + 0.5);
+                  const fits = bar.scrollWidth <= bar.clientWidth + 0.5 && whole;
+                  bar.setAttribute("data-fit", was);
+                  return fits;
+                }, [LEAF_BAR, lastStep] as const);
+                if (fitsWithout) failures.push(`${leafTag}: the row gave up «${lastStep}» although it fits without (fit "${reading.bar.fit}")`);
+              }
+              /* A normal desktop window keeps the base's width policy: under 1700 px the accounts are in ⋯
+                 and the toggles are icons, and only a narrow window takes the board's further steps. */
+              const leafFit = reading.bar.fit.split(" ").filter(Boolean);
+              if (reading.bar.w < 1700 && !(leafFit.includes("accounts") && leafFit.includes("labels"))) failures.push(`${leafTag}: a ${reading.bar.w}px bar shows its labels or accounts (fit "${reading.bar.fit}")`);
+              if (!narrow && leafFit.some((step) => !["accounts", "labels"].includes(step))) failures.push(`${leafTag}: a desktop window took the narrow steps (fit "${reading.bar.fit}")`);
+              const status = await page.locator(`${LEAF_BAR} [data-bar-group="status"]`).first().textContent();
+              if ((status ?? "").trim() !== translate(lang, "common.loadingCap") && (status ?? "").trim() !== translate(lang, "dash.updating")) failures.push(`${leafTag}: the status says «${status}» while the board loads`);
+              let more: (Box & { scrollEdge: string[] }) | null = null;
+              if (await page.locator(`${LEAF_BAR} [data-bar-more]`).isVisible()) {
+                await page.click(`${LEAF_BAR} [data-bar-more]`);
+                more = await gateMenu(page, leafTag, "more", "[data-bar-more-menu]", LEAF_BAR, viewport, failures);
+                if (reading.bar.fit.split(" ").includes("panels") && !(await page.locator("[data-bar-more-menu] [data-bar-more-orchestrator]").count())) failures.push(`${leafTag}: the row gave up Orchestrator and ⋯ has no row for it`);
+                if (narrow) await page.screenshot({ path: path.join(OUT, `${name}-loading-menu-more.png`) });
+                await closeMenus(page, viewport, LEAF_BAR);
+              } else failures.push(`${leafTag}: ⋯ is not on screen`);
+              frames[leafTag] = { viewport, ...reading, status, more, stepTable };
+              if (pageErrors.length) failures.push(`${leafTag}: ${pageErrors.join(" | ")}`);
+            } catch (error) {
+              failures.push(`${leafTag}: ${String(error).split("\n")[0]}`);
+            } finally {
+              await leaf.context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "header.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 describe("installer guide: old state, project search, newcomer clarity", () => {
   browserTest("each new state of the setup guide is whole on screen in both languages and themes", async () => {
     const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(os.tmpdir(), "installer-guide-")));
@@ -38572,6 +39498,20 @@ describe("new task default deadline", () => {
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureTaskDueFrames(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+/* docs/design/task-timeline/prototype-v2/: the task summary and timeline
+   prototype's three variants over the real board card, at 1440 and 820 px,
+   in both languages and themes. */
+describe("task summary and timeline prototype v2", () => {
+  browserTest("three treatments of the summary block and the stages' lines fit the opened card whole", async () => {
+    const out = path.resolve(process.env.LLV_TIMELINE_OUT ?? ".artifacts/task-timeline-v2/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskTimelinePrototype(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });

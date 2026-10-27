@@ -219,3 +219,12 @@ test("maintenance and curator read-only settings access cannot change the curati
     expect(permit("seat_tick_settings", { curation: { intervalHours: 1 } }).allowed).toBe(false);
   }
 });
+
+
+test("restricted roles may submit correction lessons while ordinary memory writes stay refused", async () => {
+  const { permitMaintainerTool, permitIssueReporterTool, permitCuratorTool } = await import("./toolAllowlist");
+  for (const permit of [permitMaintainerTool, permitIssueReporterTool, permitCuratorTool]) {
+    expect(permit("leave_lesson", { correction: true, lesson: { scope: "project", rule: "Verify the requested output before reporting completion.", why: "The operator corrected the output format." } })).toEqual({ allowed: true });
+    expect(permit("leave_lesson", { none: "Nothing learned." }).allowed).toBe(false);
+  }
+});
