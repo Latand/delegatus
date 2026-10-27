@@ -39525,6 +39525,7 @@ describe("task progress estimate", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings: Record<string, unknown>[] = [];
     const failures: string[] = [];
+    let phoneEdgeChecks = 0;
     const frames = [
       { name: "phone-390", width: 390, height: 844, phone: true },
       { name: "desktop-820", width: 820, height: 900, phone: false },
@@ -39697,6 +39698,30 @@ describe("task progress estimate", () => {
                   return [...range.getClientRects()].every((rect) => rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight);
                 });
                 if (!whole) fail("the opened task's estimate line is cut by the window");
+                /* The estimate stacks under the status line and the task's meta: their first glyphs share one left edge. */
+                const edges = await page.evaluate(() => {
+                  const firstGlyph = (element: Element | null) => {
+                    if (!element) return null;
+                    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                      const at = (text.textContent ?? "").search(/\S/);
+                      if (at < 0) continue;
+                      const range = document.createRange(); range.setStart(text, at); range.setEnd(text, at + 1);
+                      return range.getBoundingClientRect().left;
+                    }
+                    return null;
+                  };
+                  return {
+                    estimate: firstGlyph(document.querySelector("[data-phone-task-progress]")),
+                    motion: firstGlyph(document.querySelector(".motion-line[data-motion-full]")),
+                    meta: firstGlyph(document.querySelector(".card-meta-line.phone:not([data-phone-task-progress])")),
+                  };
+                });
+                readings.push({ label, card: spec.id, phoneTaskEdges: edges });
+                if (edges.motion !== null) phoneEdgeChecks += 1;
+                for (const [name, edge] of [["status", edges.motion], ["meta", edges.meta]] as const) {
+                  if (edge !== null && edges.estimate !== null && Math.abs(edge - edges.estimate) > 0.5) fail(`opened task's estimate starts at x=${edges.estimate}, its ${name} line at x=${edge}`);
+                }
                 await page.screenshot({ path: path.join(out, `${label}-${spec.id}-task.png`) });
               }
               await page.goBack();
@@ -39725,6 +39750,7 @@ describe("task progress estimate", () => {
                   const host = document.querySelector(selector)!;
                   const own: string[] = [];
                   const foreign: string[] = [];
+                  const restated: string[] = [];
                   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
                   for (let text = walker.nextNode(); text; text = walker.nextNode()) {
                     if (!text.textContent?.trim() || bubbleNode.contains(text)) continue;
@@ -39737,9 +39763,26 @@ describe("task progress estimate", () => {
                         const stack = document.elementsFromPoint(Math.max(rect.left, box.left) + x / 2, Math.max(rect.top, box.top) + y / 2);
                         const parent = text.parentElement!;
                         if (!stack.some((element) => parent.contains(element))) continue;
+                        /* The one-line form may lie over the state words its first phrase restates; nothing else of its card. */
+                        if (host.contains(text) && bubbleNode.getAttribute("data-beside") === "line" && parent.closest(".card-state-words")) { restated.push(text.textContent.trim().slice(0, 40)); break; }
                         (host.contains(text) ? own : foreign).push(text.textContent.trim().slice(0, 40)); break;
                       }
                     }
+                  }
+                  /* Outlined controls of its own card (stage chips, buttons): their boxes stay clear, not only their words.
+                     The dot and the bar are the state line's own marks and stay clear too. */
+                  const controls: string[] = [];
+                  for (const mark of host.querySelectorAll(".card-state .card-state-dot, .card-state .task-progress")) {
+                    const rect = mark.getBoundingClientRect();
+                    if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0) controls.push(mark.className);
+                  }
+                  for (const element of host.querySelectorAll<HTMLElement>("*")) {
+                    const style = getComputedStyle(element);
+                    const outlined = (["Top", "Right", "Bottom", "Left"] as const).some((side) => parseFloat(style[`border${side}Width`]) > 0 && !/rgba\([^)]*,\s*0\)|transparent/.test(style[`border${side}Color`]));
+                    if (!outlined || element.closest(".card-state")) continue;
+                    const rect = element.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0) controls.push(`${element.className}`.slice(0, 40) || element.tagName);
                   }
                   const cardBox = host.getBoundingClientRect();
                   /* The words that open each drawn line of the estimate: a narrow bubble wraps after a «·», never before one. */
@@ -39757,9 +39800,13 @@ describe("task progress estimate", () => {
                     lineStarts,
                     text: line.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
                     box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width }, insideCard: box.right <= cardBox.right && box.bottom <= cardBox.bottom && box.left >= cardBox.left && box.top >= cardBox.top - 1,
-                    own, foreign,
+                    own, foreign, controls, restated,
                     card: { left: cardBox.left, top: cardBox.top, right: cardBox.right, bottom: cardBox.bottom },
                     stateLineTop: host.querySelector(".card-state")!.getBoundingClientRect().top,
+                    /* The band beside the state line: the title's last drawn line above it, the first chip below it. */
+                    titleBottom: Math.max(...[...host.querySelectorAll("h3")].flatMap((title) => { const range = document.createRange(); range.selectNodeContents(title); return [...range.getClientRects()].map((rect) => rect.bottom); })),
+                    chipTop: Math.min(...[...host.querySelectorAll(".pb-pill")].map((chip) => chip.getBoundingClientRect().top)),
+                    beside: bubbleNode.getAttribute("data-beside"),
                   };
                 }, cardSelector);
                 readings.push({ label, card: spec.id, cardState: closed ? "closed" : "open", popover: popRead });
@@ -39767,6 +39814,7 @@ describe("task progress estimate", () => {
                 if (!popRead.inside) fail(`${closed ? "closed" : "open"} card: popover leaves the window`);
                 if (popRead.foreign.length) fail(`${closed ? "closed" : "open"} card: popover covers another card's text ${JSON.stringify(popRead.foreign)}`);
                 if (popRead.own.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's text ${JSON.stringify(popRead.own)}`);
+                if (popRead.controls.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's controls ${JSON.stringify(popRead.controls)}`);
                 if (!popRead.insideCard) fail(`${closed ? "closed" : "open"} card: popover leaves its card`);
                 if (popRead.lineStarts.some((start) => start.startsWith("·"))) fail(`${closed ? "closed" : "open"} card: a popover line opens with a separator ${JSON.stringify(popRead.lineStarts)}`);
                 await page.screenshot({ path: path.join(out, `${label}-${spec.id}-popover-${closed ? "closed" : "open"}.png`) });
@@ -39789,6 +39837,7 @@ describe("task progress estimate", () => {
         } finally { await context.close(); }
       }
     } finally { await browser.close(); server.stop(); }
+    if (phoneEdgeChecks === 0) failures.push("no opened phone task had a status line to align the estimate with");
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 900_000);

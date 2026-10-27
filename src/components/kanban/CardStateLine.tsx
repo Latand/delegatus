@@ -28,31 +28,44 @@ const withinCard = (dot: Element | null) => dot?.closest(".card")?.getBoundingCl
    «Where the desktop popover opens»): the bubble's top level with the line, 4px
    above it, 12px after the words of every row it spans, its right edge and
    bottom 4px inside its card, so on a narrow column its words wrap there. Where
-   the row under the state line holds words beside it, it rises a pixel at a
-   time while it still spans the state line, into the band between the title
-   and that row; set beside, it takes the compact padding that lets two lines
-   fit that band. Where nothing fits it opens above or below the dot as before. */
+   the row under the state line holds words or chips beside it, it rises a pixel
+   at a time while it still spans the state line, into the band between the
+   title and that row; set beside, it takes the compact padding that lets two
+   lines fit that band. A closed card's band is too short for two lines: there
+   the bubble says both on one line (the design's own «status · estimate»), after
+   the state words, or, where that line is wider than the room after them, over
+   the state words it restates. Where nothing fits it opens above or below the
+   dot as before. */
 const POP_INSET = 4;
 const POP_AFTER_WORDS = 12;
 const POP_MIN_WIDTH = 120;
 const POP_MAX_WIDTH = 320;
 const POP_WINDOW_EDGE = 8;
 
-/** What the bubble must not cover in its card: every line of words, every icon and the bar. */
-function cardInk(card: Element): DOMRect[] {
-  const rects: DOMRect[] = [];
+/** Outlined controls whose box, not only their words, stays clear, by POP_INSET above and below: stage chips, buttons and chips. */
+const CARD_OUTLINED = ".pb-pill, .btn, .project-chip, .origin-chip";
+
+/** What the bubble must not cover in its card: every line of words, every icon, the bar and every outlined control. */
+function cardInk(card: Element, line: Element): { rect: DOMRect; stateWords: boolean }[] {
+  const ink: { rect: DOMRect; stateWords: boolean }[] = [];
+  const words = line.querySelector(".card-state-words");
+  for (const element of card.querySelectorAll(CARD_OUTLINED)) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) ink.push({ rect: new DOMRect(rect.left, rect.top - POP_INSET, rect.width, rect.height + 2 * POP_INSET), stateWords: false });
+  }
   const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!node.textContent?.trim()) continue;
     const range = document.createRange();
     range.selectNodeContents(node);
-    for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) rects.push(rect);
+    const stateWords = Boolean(words?.contains(node));
+    for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) ink.push({ rect, stateWords });
   }
   for (const element of card.querySelectorAll("svg, img, .task-progress, .card-state-dot")) {
     const rect = element.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) rects.push(rect);
+    if (rect.width > 0 && rect.height > 0) ink.push({ rect, stateWords: false });
   }
-  return rects;
+  return ink;
 }
 
 export function besideStateLine(dot: Element, bubble: HTMLElement): BubblePosition | null {
@@ -61,25 +74,39 @@ export function besideStateLine(dot: Element, bubble: HTMLElement): BubblePositi
   if (!card || !line) return null;
   const box = card.getBoundingClientRect();
   const lineBox = line.getBoundingClientRect();
-  const ink = cardInk(card);
+  const ink = cardInk(card, line);
   const floor = Math.max(box.top + POP_INSET, POP_WINDOW_EDGE);
   const ceiling = Math.min(box.bottom - POP_INSET, window.innerHeight - POP_WINDOW_EDGE);
   const rightEdge = Math.min(box.right - POP_INSET, window.innerWidth - POP_WINDOW_EDGE);
-  const inkRight = (top: number, bottom: number) => ink.reduce((right, rect) => rect.top < bottom && rect.bottom > top ? Math.max(right, rect.right) : right, lineBox.left);
-  bubble.dataset.beside = "";
-  let maxWidth = POP_MAX_WIDTH;
-  const sized = (width: number) => { maxWidth = width; bubble.style.maxWidth = `${width}px`; return bubble.getBoundingClientRect(); };
-  for (let top = Math.floor(lineBox.top - POP_INSET); top >= floor; top -= 1) {
-    /* Width, then height, then the rows spanned settle within a few rounds. */
-    let size = sized(POP_MAX_WIDTH);
-    let left = 0;
-    for (let round = 0; round < 4; round += 1) {
-      left = Math.ceil(inkRight(top, top + size.height) + POP_AFTER_WORDS);
-      size = sized(Math.max(POP_MIN_WIDTH, Math.min(POP_MAX_WIDTH, Math.floor(rightEdge - left))));
+  /* Two lines after the words; one line after them; one line over the state words, which its first phrase restates. */
+  for (const mode of ["lines", "line", "over"] as const) {
+    const covers = mode === "over" ? ink.filter((entry) => !entry.stateWords) : ink;
+    const gap = mode === "over" ? POP_INSET : POP_AFTER_WORDS;
+    const inkRight = (top: number, bottom: number) => covers.reduce((right, { rect }) => rect.top < bottom && rect.bottom > top ? Math.max(right, rect.right) : right, lineBox.left);
+    bubble.dataset.beside = mode === "lines" ? "" : "line";
+    let maxWidth = POP_MAX_WIDTH;
+    const sized = (width: number) => { maxWidth = width; bubble.style.maxWidth = `${width}px`; return bubble.getBoundingClientRect(); };
+    for (let top = Math.floor(lineBox.top - POP_INSET); top >= floor; top -= 1) {
+      let size: DOMRect;
+      let left = 0;
+      if (mode === "lines") {
+        /* Width, then height, then the rows spanned settle within a few rounds. */
+        size = sized(POP_MAX_WIDTH);
+        for (let round = 0; round < 4; round += 1) {
+          left = Math.ceil(inkRight(top, top + size.height) + gap);
+          size = sized(Math.max(POP_MIN_WIDTH, Math.min(POP_MAX_WIDTH, Math.floor(rightEdge - left))));
+        }
+      } else {
+        /* One line keeps its own width: it fits after the ink or it does not. */
+        bubble.style.maxWidth = "none";
+        size = bubble.getBoundingClientRect();
+        left = Math.ceil(inkRight(top, top + size.height) + gap);
+        maxWidth = Math.ceil(size.width);
+      }
+      if (top + size.height <= ceiling && left + size.width <= rightEdge + 0.5 && inkRight(top, top + size.height) + gap <= left + 0.5) return { left, top, maxWidth };
+      /* Rising further would leave the state line. */
+      if (top - 1 + size.height < lineBox.bottom) break;
     }
-    if (top + size.height <= ceiling && left + size.width <= rightEdge + 0.5 && inkRight(top, top + size.height) + POP_AFTER_WORDS <= left + 0.5) return { left, top, maxWidth };
-    /* Rising further would leave the state line. */
-    if (top - 1 + size.height < lineBox.bottom) break;
   }
   delete bubble.dataset.beside;
   bubble.style.maxWidth = "";
