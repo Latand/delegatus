@@ -3,24 +3,34 @@
 All notable changes to Delegatus (`delegatus-cli`, published as
 `agent-log-viewer` before 1.3.0) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versions follow [SemVer](https://semver.org/), including its compatibility
-guarantees for the 1.x series.
+versions follow [SemVer](https://semver.org/): a change that breaks
+compatibility raises the major version.
 
 ## [Unreleased]
 
-## [1.17.0] — 2026-10-26
+## [2.0.0] — 2026-10-27
+
+### Breaking change
+- **MCP `create_task` requires `dueAt`.** In 1.16.0 the date was
+  optional. A `create_task` call without `dueAt` (or with an empty or null
+  one) is now refused with `TASK_DUE_REQUIRED`, and a date in the past is
+  refused too. Agents that read the tool schema adapt on their own; a
+  script or integration that creates tasks without a date must now pass a
+  future `dueAt` ([#3269]).
 
 ### Added
-- **Due dates on tasks.** Every new task carries a date. An agent that
-  creates a task must give `dueAt`: the tool refuses a task with no date
-  or with a date in the past. A task you create in the composer gets a
-  date 72 hours ahead, rounded up to the hour, shown in the composer; you
-  can pick another date or clear it back to the default. Moving a date
-  that has already passed needs a reason and is recorded as a slip. The
-  seat is woken about overdue tasks, ordered by priority and then age,
-  once per date and again every 24 hours. Tasks that existed before this
-  release have no date and never become overdue ([#3256], [#3267],
-  [#3269]).
+- **Due dates on tasks.** Tasks that agents and people create carry a
+  date. An agent that creates a task must give `dueAt` (see Breaking
+  change above). A task you create in the composer gets a date 72 hours
+  ahead, rounded up to the hour, shown in the composer; you can pick
+  another date or clear it back to the default. Cards Delegatus creates
+  itself, such as release, maintenance and system-run cards, can have no
+  date. Moving a date that has already passed needs a reason and is
+  recorded as a slip. The seat is woken about overdue tasks, ordered by
+  priority and then age, once per date and again every 24 hours. Tasks
+  from before this release that have no date stay undated and never
+  become overdue; older tasks that already have a date keep it and become
+  overdue once it passes while they are open ([#3256], [#3267], [#3269]).
 - **Review a lane's changed files with line comments.** Comment on lines
   of the files a lane changed and send all comments to the responsible
   agent as one message. The review sheet reads the send receipt in the
@@ -4511,8 +4521,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.17.0...HEAD
-[1.17.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v1.17.0
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
 [1.16.0]: https://github.com/Latand/delegatus/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/Latand/delegatus/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Latand/delegatus/compare/v1.13.0...v1.14.0
