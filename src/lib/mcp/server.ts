@@ -3126,7 +3126,8 @@ export function createMcpToolService(
           // Older relay bindings omitted gateway authorship. Their cached
           // results may name another author's send and cannot license replay.
           if (typedTool === "send_message_to_orchestrator" && !recorded.sendPayload) return notPermitted();
-          if (record.recoveryResult && (record.stage === "not-executed" || record.recoveryResult.details?.outcome === "history-expired")) {
+          if (record.recoveryResult && (record.stage === "not-executed"
+            || (!record.recoveryResult.ok && record.recoveryResult.details?.outcome === "history-expired"))) {
             outcome = "replay";
             return { ...record.recoveryResult, replayed: true };
           }
