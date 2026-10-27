@@ -4,7 +4,7 @@ import path from "node:path";
 import { FISH_AUDIO_FREE_UNTIL, fishAudioFreeEnded, isFishAudioModel, type FishAudioModel } from "@/lib/fishAudio";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
 import { configFilePath } from "@/lib/configDir";
-import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
 
 export type TtsBackend = "openai" | "elevenlabs" | "soniox" | "fishaudio";
@@ -59,12 +59,13 @@ function writeChoice(file: string, text: string): void {
   withFileTransactionSync(file, "the voice settings are busy", () => fs.writeFileSync(file, text));
 }
 
-// Keep the synchronous APIs for transfer/CLI callers. Serving writes yield
-// during contention, using the same queue, owner recovery and commit body.
+// Keep the synchronous APIs for transfer/CLI callers. Async admission also
+// registers queued writes, so a same-process sync writer refuses before it
+// can block the event loop that must advance the queue.
 function writeChoiceAsync(file: string, text: string): Promise<void> {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   return withWaitCorrelation({ label: "voice-settings.write" }, () =>
-    withFileTransaction(file, "the voice settings are busy", () => fs.writeFileSync(file, text)));
+    withFileTransactionAsync(file, "the voice settings are busy", () => fs.writeFileSync(file, text)));
 }
 
 export function writeTtsBackendAsync(backend: TtsBackend): Promise<void> {

@@ -53,6 +53,51 @@ const post = (base: string, body: unknown) => fetch(base, { method: "POST", body
 const tickets = (file: string) => fs.readdirSync(`${file}.write-locks`).filter(name => name.endsWith(".json")).sort();
 const queued = (file: string) => tickets(file).length;
 
+for (const choice of choices) test(`a queued POST refuses a same-process synchronous ${choice.name} writer before release`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-mixed-"));
+  const savedConfig = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = root;
+  const file = configFilePath(choice.file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "previous\n");
+  const release = await hold(file);
+  const syncBody = choice.name === "voice" ? { backend: "soniox", voice: "sync voice" }
+    : choice.name === "model" ? { backend: "fishaudio", model: "s2.1-pro-free" }
+    : { backend: "elevenlabs" };
+  const syncExpected = choice.name === "voice" ? "sync voice" : choice.name === "model" ? "s2.1-pro-free" : "elevenlabs";
+  let server: Awaited<ReturnType<typeof serve>> | undefined;
+  let pending: Promise<Response> | undefined;
+  try {
+    server = await serve(root);
+    pending = post(server.base, choice.body);
+    // Observe a lost POST while the synchronous-call assertion is still pending.
+    void pending.catch(() => undefined);
+    // The owner lives in this process; both competing writers live in the child.
+    await until(() => queued(file) === 2, "queued POST before synchronous write");
+    const queuedTickets = tickets(file);
+    const refusal = await (await post(`${server.base}/sync`, syncBody)).json();
+    expect(refusal.refused).toBe(true);
+    expect(refusal.message).toBe("the voice settings are busy");
+    expect(tickets(file)).toEqual(queuedTickets);
+    expect(fs.readFileSync(file, "utf8")).toBe("previous\n");
+    // A refusal leaves the original FIFO admission intact and runnable.
+    await release();
+    const result = await (await pending).json();
+    expect(result.status).toBe(200);
+    expect(fs.readFileSync(file, "utf8")).toBe(`${choice.expected}\n`);
+    const retry = await (await post(`${server.base}/sync`, syncBody)).json();
+    expect(retry.refused).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(`${syncExpected}\n`);
+    expect(fs.existsSync(`${file}.write-lock`)).toBe(false);
+    expect(queued(file)).toBe(0);
+    console.log(`voice-mixed ${choice.name} ${JSON.stringify({ refusalMs: refusal.elapsedMs, retryMs: retry.elapsedMs })}`);
+  } finally {
+    await release(); await server?.stop(); await Promise.allSettled(pending ? [pending] : []);
+    if (savedConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = savedConfig;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
 for (const choice of choices) test(`${choice.name} lock wait serves timers, requests and SIGTERM`, async () => {
   const measurements = [];
   for (let trial = 0; trial < 3; trial++) {

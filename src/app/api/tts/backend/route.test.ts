@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { configFilePath } from "@/lib/configDir";
+import { writeFishAudioModel, writeTtsBackend, writeTtsVoice } from "@/lib/ttsBackend";
 import { GET, POST } from "./route";
 
 const names = ["XDG_CONFIG_HOME", "LLV_TTS_BACKEND", "LLV_TTS_FISHAUDIO_MODEL", "LLV_TTS_ELEVENLABS_VOICE"];
@@ -75,6 +76,11 @@ for (const choice of [
   expect(fs.existsSync(`${file}.write-lock`)).toBe(false);
   expect(fs.readdirSync(`${file}.write-locks`)).toEqual([]);
   fs.rmdirSync(file);
+  // A failed async commit must release the in-process synchronous admission too.
+  if (choice.file === "tts-voice-soniox") writeTtsVoice("soniox", choice.expected);
+  else if (choice.file === "tts-model-fishaudio") writeFishAudioModel("s2.1-pro");
+  else writeTtsBackend("soniox");
+  expect(fs.readFileSync(file, "utf8")).toBe(`${choice.expected}\n`);
   expect((await POST(request(choice.body))).status).toBe(200);
   expect(fs.readFileSync(file, "utf8")).toBe(`${choice.expected}\n`);
 });

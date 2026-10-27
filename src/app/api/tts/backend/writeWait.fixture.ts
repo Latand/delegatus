@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import { NextRequest } from "next/server";
 import { blockingWaitDiagnostics } from "@/lib/blockingWaits";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { writeFishAudioModel, writeTtsBackend, writeTtsVoice } from "@/lib/ttsBackend";
 import { GET, POST } from "./route";
 
 if (process.argv[3] === "hold") {
@@ -26,6 +27,19 @@ const server = Bun.serve({
   hostname: "127.0.0.1", port: 0,
   async fetch(req) {
     if (req.method === "GET") return GET();
+    if (new URL(req.url).pathname === "/sync") {
+      const body = await req.json();
+      const started = performance.now();
+      try {
+        if (body.voice !== undefined) writeTtsVoice(body.backend, body.voice);
+        else if (body.model !== undefined) writeFishAudioModel(body.model);
+        else writeTtsBackend(body.backend);
+        return Response.json({ refused: false, elapsedMs: performance.now() - started });
+      } catch (error) {
+        if (!(error instanceof FileTransactionBusyError)) throw error;
+        return Response.json({ refused: true, message: error.message, elapsedMs: performance.now() - started });
+      }
+    }
     const started = performance.now();
     try {
       const response = await POST(new NextRequest(req));
