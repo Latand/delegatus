@@ -33,6 +33,53 @@ function fixture() {
   return f;
 }
 
+test.each((["send", "native"] as const).flatMap(mode => (["accepted", "before dispatch", "during journal transition"] as const).map(phase => [mode, phase] as const)))("proactive %s queue authority is checked at actuation: %s", async (mode, phase) => {
+  const f = fixture();
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const project = `queue-authority-${mode}-${phase}`;
+  const { task } = await admitProactiveTask({ ...candidate(`queued-${phase}`), project }, { ...context(), project }, undefined, authority());
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+  f.registry.beginSpawnRequest({ engine: "codex", cwd: f.root, transport: "structured", conversationId: f.conversation.id,
+    origin: { kind: "operator" }, clientAttemptId: `queued-${phase}`, taskIds: [task.id], launchProfile: emptyLaunchProfile({ cwd: f.root }) });
+  const reject = () => decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+  let nativeCalls = 0;
+  const binding = { threadId: f.key.sessionId, accountId: "account-a" };
+  const input = [{ type: "text" as const, text: "Continue retained work" }];
+  if (mode === "native") {
+    Object.assign(f.host, { nativeQueue: {
+      queue: new NativeCodexQueue({ rpc: async (method, params) => {
+        if (method === "thread/queue/list") return { data: [], nextCursor: null };
+        nativeCalls++;
+        return { queuedSubmission: { id: "native-proactive", clientUserMessageId: params.clientUserMessageId, input } };
+      } }, binding.threadId),
+      prepare: async () => input, evidence: async () => null,
+      sendWithdrawn: async () => { throw new Error("unexpected withdrawn send"); },
+    } });
+    f.client.nativeQueueRead = async id => f.journal.nativeQueueRead(id);
+    f.client.nativeQueueTransition = async (id, change) => {
+      if (phase === "during journal transition" && id === "proactive-queued" && change.phase === "prepared") await reject();
+      return f.journal.nativeQueueTransition(id, change);
+    };
+  }
+  const transition = f.client.transitionOperation.bind(f.client);
+  f.client.transitionOperation = async (...args) => {
+    if (phase === "during journal transition" && args[0] === "proactive-queued" && args[1] === "delivering") await reject();
+    return transition(...args);
+  };
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+    f.journal.executeOperation({ ...(mode === "send" ? { kind: "send", policy: "queue" } as const : { kind: "native-queue", action: "add", binding } as const),
+      operationId: "proactive-queued", idempotencyKey: "proactive-queued", conversationId: f.conversation.id, text: input[0].text });
+    if (phase === "before dispatch") await reject();
+    await kickStructuredDeliveryQueue();
+    expect(mode === "send" ? f.host.ledger.writes.length : nativeCalls).toBe(phase === "accepted" ? 1 : 0);
+    if (phase !== "accepted") expect(f.journal.operationResult("proactive-queued")?.receipt)
+      .toMatchObject({ status: "failed", reason: expect.stringContaining("rejected by the operator") });
+  } finally { await f.cleanup(); }
+});
+
 test.each(["conversation", "orchestrator", "review implementer", "reviewer", "recovered source", "newer message"])("a fresh credit crossing stops an active %s and preserves recovery custody", async kind => {
   const f = fixture();
   let active = true, releases = 0, creates = 0, spare = false;

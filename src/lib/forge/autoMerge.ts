@@ -98,6 +98,7 @@ export type TaskFinishOutcome = "moved" | "already-done" | "missing" | "refused"
 /** A review stage: a legacy review loop, or a read-only run stage that owns
     a fail edge (§3.4). */
 export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean {
+  if (pipeline.proactiveTaskIds?.length && pipeline.stages[0]?.id === stage.id) return false;
   if (stage.kind === "review-loop") return true;
   if (stage.kind !== "run" || !stage.onFail) return false;
   const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);

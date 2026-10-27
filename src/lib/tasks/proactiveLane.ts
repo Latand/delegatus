@@ -111,6 +111,8 @@ export async function reserveProactiveLane(pipeline: Pipeline, requestKey: strin
       const first = pipeline.stages[0];
       if (!proactiveScopeReview(first)) throw new Error("proactive lane must begin with independent read-only scope review");
       if (first!.runtime === "codex-cloud") throw new Error("proactive scope review requires the local read-only runtime");
+      if (!pipeline.stages.slice(1).some(stage => stage.kind === "run" && stage.effectiveRole.roleId === "reviewer"
+        && stage.effectiveRole.access === "read-only" && stage.onFail)) throw new Error("proactive implementation requires the ordinary result-review stage");
       const all = rows(store, task.project, true);
       const released = all.filter(row => {
         if (row.released) return true;

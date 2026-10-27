@@ -26,7 +26,8 @@ afterEach(() => { clock.mockImplementation(() => NOW); });
 afterAll(() => clock.mockRestore());
 const stages = [
   { id: "scope", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review the frozen scope", next: "build", onFail: { to: "build", maxRounds: 1 } },
-  { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build the reviewed outcome", next: null },
+  { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build the reviewed outcome", next: "review" },
+  { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review the implemented outcome", next: null, onFail: { to: "build", maxRounds: 1 } },
 ] as const;
 async function fixture(name: string, cloud = false, repoDir = "/repo") {
   savePipelines([]);
@@ -72,7 +73,7 @@ test("an eligible unadopted outcome runs independent scope review, then dispatch
   expect(f.h.spawnInputs[0]!.role.roleId).toBe("reviewer");
   const evidence = JSON.parse(f.h.spawnInputs[0]!.prompt.split("\n").at(-1)!);
   expect(evidence.task).toMatchObject({ text: f.task.text, details: f.task.details, scopeRevision: 0 });
-  expect(evidence.graph.map((stage: { id: string }) => stage.id)).toEqual(["scope", "build"]);
+  expect(evidence.graph.map((stage: { id: string }) => stage.id)).toEqual(["scope", "build", "review"]);
   await f.pass();
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.h.spawnInputs[1]!.role.roleId).toBe("builder");

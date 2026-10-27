@@ -392,6 +392,17 @@ test.each(["before-write", "credential-mint", "in-flight"] as const)("operator r
   }
 });
 
+test("proactive scope approval cannot count as the implementation's result review", () => {
+  const record = lane("proactive-scope-only");
+  record.stages.reverse();
+  record.stages[0]!.next = "build";
+  record.stages[1]!.next = null;
+  record.proactiveTaskIds = ["proactive-outcome"];
+  expect(mergeEligible(record)).toBe(false);
+  delete record.proactiveTaskIds;
+  expect(mergeEligible(record)).toBe(true);
+});
+
 describe("outstanding human reviews (#2866)", () => {
   test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND", "DIRTY", "UNKNOWN", "DRAFT"])("CHANGES_REQUESTED blocks in %s", async (mergeStateStatus) => {
     const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus, reviewDecision: "CHANGES_REQUESTED" })] });
