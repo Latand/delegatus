@@ -595,6 +595,10 @@ export interface PipelineBlockProps {
       words as at home, and none of the ways to act on it. A lane that waits on
       a person says where to answer instead of offering the answer. */
   managedOn?: ManagedOn;
+  /** Task density, a draft lane made from a conversation: its Start, at the
+      head of the lane's tail, and the line that says what holds it back. */
+  start?: React.ReactNode;
+  startNote?: React.ReactNode;
 }
 
 export interface StageConversation {
@@ -760,6 +764,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {opener}
           {acting}
           <span className="pb-grow" />
+          {managed ? null : props.start}
           {controls}
         </div>
       )}
@@ -775,9 +780,10 @@ export function PipelineBlock(props: PipelineBlockProps) {
           <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
           {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
           {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
-          {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
+          {chainHead ? <span className="pb-tail">{acting}{managed ? null : props.start}{controls}{opener}</span> : null}
         </div>
       )}
+      {managed ? null : props.startNote}
       {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
       {managed ? (
         managed.note ? <p className="pb-note" data-managed-on={managed.host}>{managed.note}</p> : null

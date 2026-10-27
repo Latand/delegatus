@@ -177,6 +177,11 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
+/* A pipeline drafted from a card's conversation (variant 3,
+   docs/design/start-pipeline-from-conversation/implementation.md): one task
+   holding one conversation in a repository. The driver answers
+   `/api/pipelines/from-conversation`, so it can hold, refuse or lose them. */
+const FROM_CONVERSATION = SCENARIO === "from-conversation";
 /* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
    titles and descriptions over the four columns, a lane with a running stage on every second one. */
 const DRAG_BOARD = SCENARIO === "drag-board";
@@ -691,6 +696,9 @@ const searchImpl2 = add(conversation("search-impl-2", "Swap the alias only after
 const searchRev = add(conversation("search-rev", "Review the warm-up gate", { mtime: now - 41 * MIN, engine: "codex", model: "gpt-5.6" }));
 const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s after the swap", { mtime: now - 90 * MIN }));
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
+const exportSource = FROM_CONVERSATION
+  ? add(conversation("csv-export", L("CSV export retry and streaming writes", "Повтор експорту CSV і потоковий запис"), { mtime: now - 11 * MIN, cwd: "/repo/atlas" }))
+  : null;
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
 const roleAvatarAgent = ROLE_AVATARS ? add(conversation("ra-agent", L("Why the search results went empty", "Чому результати пошуку зникли"), { mtime: now - 20 * MIN })) : null;
@@ -2059,6 +2067,7 @@ const tasks: BoardTask[] = [
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
+  ...(exportSource ? [task("t-csv-export", "assigned", L("CSV export fails on large projects: the worker runs out of memory past 50k rows", "Експорт CSV падає на великих проєктах: воркеру бракує пам’яті понад 50 тис. рядків"), L("Customers parse the file, so the format stays byte for byte.", "Клієнти розбирають файл, тож формат лишається байт у байт."), 11 * MIN, [exportSource])] : []),
   ...(SYNCED ? [
     task("t-rem-run", "assigned", L("Ship the synced task card", "Випустити картку синхронізованої задачі"), L("Show the other machine's stages on the card and mark it as managed there.", "Показати етапи з іншої машини на картці й позначити, що нею керують там."), 6 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-wait", "assigned", L("Answer the deploy question on the stage box", "Відповісти на питання про розгортання на стенді"), "", 14 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
@@ -4586,6 +4595,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     tasks[index] = next;
     return json({ ok: true, task: next });
   }
+  /* The driver's own server answers the source preview and the draft, so a
+     case can hold an answer, refuse it or lose it. A draft it answers joins
+     the page's pipelines, as the store would hold it. */
+  if (FROM_CONVERSATION && url.pathname === "/api/pipelines/from-conversation") {
+    const answer = await serverFetch(url.pathname + url.search, init);
+    const text = await answer.text();
+    const body = (() => { try { return JSON.parse(text) as { pipeline?: Pipeline }; } catch { return null; } })();
+    if (answer.ok && body?.pipeline && !pipelines.some((entry) => entry.id === body.pipeline!.id)) pipelines.push(body.pipeline);
+    return new Response(text, { status: answer.status, headers: { "content-type": "application/json" } });
+  }
   if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
     const answer = await cloudChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
     return json(answer.body, answer.status);
@@ -4597,7 +4616,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "GET") {
       evidence.pipelineReads.push(id);
       const read = pipelines[index]!;
-      return json({ ok: true, pipeline: read, stageDigests: Object.fromEntries(read.stages.map((stage) => [stage.id, fixtureStageDigest(stage)])) });
+      return json({ ok: true, pipeline: read, stageDigests: Object.fromEntries(read.stages.map((stage) => [stage.id, fixtureStageDigest(stage)])), graphDigest: read.stages.map((stage) => `${stage.id}>${stage.next ?? ""}`).join(",") });
     }
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -4644,6 +4663,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (body.applyNow !== true && (record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
         if (body.expectedStageDigest !== undefined && fixtureStageDigest(target) !== body.expectedStageDigest) return stageChanged("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
         if (typeof body.prompt === "string") target.prompt = body.prompt;
+        /* A waiting stage's role and runtime, as the placeholder pane sends them. */
+        if (body.applyNow !== true) {
+          const roleRef = body.role as { roleId?: string } | null | undefined;
+          if (roleRef?.roleId) { target.role = roleRef as typeof target.role; target.effectiveRole = { ...target.effectiveRole, roleId: roleRef.roleId } as typeof target.effectiveRole; }
+          if (typeof body.engine === "string") { target.engine = body.engine as typeof target.engine; target.effectiveRole = { ...target.effectiveRole, engine: body.engine as typeof target.effectiveRole.engine }; }
+          if (typeof body.model === "string") target.effectiveRole = { ...target.effectiveRole, model: body.model };
+          if (typeof body.effort === "string") target.effectiveRole = { ...target.effectiveRole, effort: body.effort };
+        }
         if (body.applyNow === true) {
           const live = record.runs.find(entry => entry.stageId === target.id)?.attempts.at(-1);
           if (!live || live.state !== "running" || record.state !== "running") return json({ error: "apply now requires a running stage" }, 409);
@@ -4690,6 +4717,21 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         record.dismissedBy = { kind: "operator" };
       } else if (body.action === "close") {
         record.state = "closed";
+      } else if (body.action === "start") {
+        if (record.state !== "draft") return json({ error: "pipeline is not a draft" }, 409);
+        const first = record.stages[0]!;
+        record.state = "running";
+        record.cursor = { stageId: first.id, state: "running", input: null, activatedBy: null } as Pipeline["cursor"];
+        record.worktreeDir = "/repo/atlas-worktrees/pipeline-csv-export";
+        (record.runs as unknown as Array<{ stageId: string; attempts: unknown[] }>).push({ stageId: first.id, attempts: [attempt(1, "running", null, { startedAt: new Date().toISOString() })] });
+      } else if (body.action === "add-stage") {
+        const stage = body.stage as Pipeline["stages"][number];
+        const after = record.stages.find((entry) => entry.id === body.after);
+        if (record.state !== "draft" || !after || !stage) return json({ error: "unsupported in the evidence fixture" }, 400);
+        const tail = record.stages.find((entry) => entry.id === after.id)!;
+        const roleId = (stage.role as { roleId: string } | undefined)?.roleId ?? "builder";
+        record.stages.push({ ...stage, next: tail.next ?? null, onFail: null, effectiveRole: { ...tail.effectiveRole, roleId } } as Pipeline["stages"][number]);
+        tail.next = stage.id;
       } else {
         return json({ error: "unsupported in the evidence fixture" }, 400);
       }

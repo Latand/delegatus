@@ -2180,3 +2180,42 @@
 .task-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; font-variant-numeric: tabular-nums; }
 .task-meta .task-due, .task-meta .task-images { white-space: nowrap; }
 .task-meta .task-due.overdue { color: var(--color-danger); font-weight: 600; }
+
+/* ── A pipeline drafted from a card's conversation (variant 3) ─────────────
+   docs/design/start-pipeline-from-conversation/implementation.md. Start sits
+   at the head of the lane's tail; what holds it back is a notice under the
+   chain. The draft bubble keeps room for its Edit pill on the first line
+   only, so a Ukrainian brief under «Змінити» is not cut and every other line
+   runs to the bubble's edge. */
+.kb .pblock .draft-start { height: 28px; padding: 0 10px; margin-right: 4px; gap: 5px; }
+.kb .pblock .draft-start svg { width: 13px; height: 13px; }
+.kb .pblock > .draft-notice { margin-top: 4px; }
+/* A chain too long to share its row with Start keeps its stages together and
+   moves the tail, Start first, to the line under them. */
+.kb .pblock .pb-chain:has(.draft-start) { flex-wrap: wrap; row-gap: 4px; }
+.kb .card > .draft-notice, .kb .card .draft-notice[data-conversation-draft] { margin: 6px 0 0; }
+.kb .draft-notice:is([data-conversation-draft], [data-draft-start-note], [data-draft-add-stage-error]) button { min-height: 24px; }
+.kb .draft-add-stage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.kb .draft-add-stage .roles { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; }
+.kb .draft-add-stage > .draft-notice { flex: 1 1 100%; margin-top: 0; }
+.kb .pane .ch-meta.pane-id .btn.quiet { height: 28px; padding: 0 8px; margin-left: auto; }
+.kb .pane .pane-config { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.kb .msg.user.draft .bubble { padding-right: 14px; }
+.kb .msg.user.draft .btext::before { content: ""; float: right; width: 84px; height: 1.45em; }
+@media (pointer: coarse) {
+  .kb .msg.user.draft .bubble { padding-right: 14px; }
+  .kb .msg.user.draft .btext::before { width: 108px; height: 44px; }
+  .kb .pblock .draft-start, .kb .draft-add-stage .btn, .kb .pane .ch-meta.pane-id .btn.quiet { min-height: 44px; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-canvas); }
+}
+:root[data-theme="dark"] .kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-canvas); }
+/* The phone's pipeline screen draws the same first message under its stages:
+   the board's editor in a scope of its own, full width, on the screen's own
+   ground. */
+.kb[data-surface="phone-first-message"] { flex: none; min-height: auto; background: transparent; }
+.kb[data-surface="phone-first-message"] .msg.user { align-items: stretch; }
+.kb[data-surface="phone-first-message"] .msg.user .bubble { max-width: none; background: var(--surface-card); }
+.kb[data-surface="phone-first-message"] .msg.user.draft.editing .bubble { width: 100%; }
+.kb[data-surface="phone-first-message"] .bstatus { padding: 2px 2px 0; }

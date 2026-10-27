@@ -75,6 +75,8 @@ import { Badge } from "@/components/ui/Badge";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { useStableCallback } from "./kanban/useStableCallback";
 import { KanbanBoard, type BarTrailExtra } from "./kanban/KanbanBoard";
+import { StageDrafts } from "./kanban/stageDrafts";
+import { ConversationDrafts } from "./pipelines/conversationDraftClient";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { onTaskChipOpen } from "./orchestrator/taskChips";
@@ -937,6 +939,11 @@ function ProjectDashboardView({
      screen share one set, so a move made on the task screen is still drawn on
      the board after ‹. */
   const phoneTaskMutations = useTaskMutations(isMobile ? projectTasks : EMPTY_TASKS);
+  /* First messages being edited and pipelines being drafted from a
+     conversation, shared by the board and the phone's screens so an edit or
+     a creation in flight survives the width crossing the breakpoint. */
+  const [stageDrafts] = useState(() => new StageDrafts());
+  const [conversationDrafts] = useState(() => new ConversationDrafts());
   /* Tasks that exist only for the orchestrator seat are the seat panel's to
      list (#1841): every task list leaves them out — the boards, the phone's
      task screens and their count — while the task
@@ -2291,6 +2298,7 @@ function ProjectDashboardView({
             renderSheet={renderMobileSheet}
             onOpenConversation={openPipelineStageConversation}
             onOpenPipeline={openMobilePipeline}
+            conversationDrafts={conversationDrafts}
             onOpenDraft={(id) => showMobileConversation("draft::" + id)}
             onAddAgent={addBandAgentDraft}
             onShown={reportMobileKanbanShown}
@@ -2314,6 +2322,8 @@ function ProjectDashboardView({
               onOpenConversation={openPipelineStageConversation}
               onOpenTask={(task) => openMobileTask(task.id)}
               cameFromTask={mobileBelow?.kind === "task" ? mobileBelow.id : null}
+              drafts={stageDrafts}
+              conversationDrafts={conversationDrafts}
             />
           ) : (
             <MobilePipelinesScreen
@@ -2489,6 +2499,8 @@ function ProjectDashboardView({
               catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <KanbanSkeleton project={project} />
             ) : kanbanLeaf ? (
               <KanbanBoard
+                stageDrafts={stageDrafts}
+                conversationDrafts={conversationDrafts}
                 layout={pipelineLayout}
                 project={project}
                 groups={layoutGroups}

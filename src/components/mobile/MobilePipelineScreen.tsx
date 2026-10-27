@@ -37,6 +37,10 @@ import { PipelineBlock, PipelineStateLine } from "../pipelines/PipelineBlock";
 import { checkChoiceGroups, checkRowValue, publishingStage, usePipelineChecks, type CheckTerms } from "../pipelines/PipelineCheckSettings";
 import { blockAgeSeconds, type PipelineAnswer } from "../pipelines/pipelineBlockModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
+import type { ConversationDrafts } from "../pipelines/conversationDraftClient";
+import { AddStageControl, conversationDraftLane, DraftStartButton, DraftStartNote } from "../pipelines/DraftStageControls";
+import { StageDraftMessage } from "../kanban/StageDraft";
+import { StageDrafts } from "../kanban/stageDrafts";
 import type { StageSlot } from "../scheme/layout";
 import { humanizeDuration } from "../turnDuration";
 import { nowFragment, pipelineHiddenFromBoard } from "./mobileBoardModel";
@@ -411,6 +415,10 @@ export interface MobilePipelineScreenProps {
   acts?: PendingPipelineActs;
   /** Test seam: the pipeline route. Production reads the browser's. */
   ports?: PipelinePorts;
+  /** The first messages being edited, the board's own store; the screen keeps one when absent. */
+  drafts?: StageDrafts;
+  /** Drafts made from a conversation: Start at the foot of such a draft. */
+  conversationDrafts?: ConversationDrafts;
 }
 
 /**
@@ -451,8 +459,16 @@ export function MobilePipelineScreen({
   cameFromTask = null,
   acts = pendingPipelineActs,
   ports = browserPipelinePorts,
+  drafts: sharedDrafts,
+  conversationDrafts,
 }: MobilePipelineScreenProps) {
   const { t } = useLocale();
+  const [ownDrafts] = useState(() => (sharedDrafts ? null : new StageDrafts()));
+  const drafts = sharedDrafts ?? ownDrafts!;
+  /* A draft made from a conversation (variant 3): its stages, then the first
+     stage's first message with Edit, then Start at the foot. */
+  const fromConversation = Boolean(conversationDrafts) && conversationDraftLane(pipeline);
+  const firstStage = pipeline.stages[0] ?? null;
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
@@ -658,6 +674,12 @@ export function MobilePipelineScreen({
       title={barTitle}
       host={host}
       renderSheet={sheets}
+      dock={fromConversation && conversationDrafts ? (
+        <div data-phone-draft-start-foot={pipeline.id} className="flex flex-col gap-1">
+          <DraftStartNote pipeline={pipeline} store={conversationDrafts} drafts={drafts} ports={ports} variant="phone" />
+          <DraftStartButton pipeline={pipeline} title={title} store={conversationDrafts} drafts={drafts} ports={ports} variant="phone" />
+        </div>
+      ) : undefined}
     >
       <div ref={body} data-mobile2-pipeline-body className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2.5">
         {dismissed ? (
@@ -688,6 +710,18 @@ export function MobilePipelineScreen({
           }}
           onWorkLinks={() => nav.openSheet("links")}
         />
+        {fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : null}
+        {fromConversation && firstStage ? (
+          <section data-phone-draft-first-message={firstStage.id} className="flex shrink-0 flex-col gap-1.5">
+            <h3 className="m-0 flex min-h-[30px] items-center text-ui font-semibold text-secondary">
+              {t("kanban.fromConversation.firstMessage", { stage: names.get(firstStage.id) ?? firstStage.id })}
+            </h3>
+            {/* The board's own editor and store, so Save, conflicts and an unconfirmed write behave as on the card. */}
+            <div className="kb" data-surface="phone-first-message">
+              <StageDraftMessage pipeline={pipeline} stage={firstStage} name={names.get(firstStage.id) ?? firstStage.id} drafts={drafts} ports={ports} />
+            </div>
+          </section>
+        ) : null}
         {linked.length ? (
           <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">
             <h3 className="flex min-h-[30px] items-center gap-1.5 text-ui font-semibold text-secondary">

@@ -1,0 +1,1189 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "label": "1440-en-light",
+      "states": {
+        "menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .lbl",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 43,
+              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 55,
+              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "overflow": false
+        },
+        "preparing": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"creating\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 44,
+              "text": "Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "draft": {
+          "defining": [
+            {
+              "selector": "[data-draft-message=\"p-export:builder\"] .btext",
+              "missing": false,
+              "cut": false,
+              "width": 288,
+              "height": 166,
+              "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            },
+            {
+              "selector": "[data-draft-edit=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 55,
+              "height": 24,
+              "text": "Edit"
+            }
+          ],
+          "overflow": false
+        },
+        "editing": {
+          "defining": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 54,
+              "height": 28,
+              "text": "Save"
+            },
+            {
+              "selector": "[data-draft-start-note=\"blocked\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Save or cancel the first message to start"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 54,
+              "height": 28,
+              "text": "Save"
+            },
+            {
+              "selector": "[data-draft-cancel=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 65,
+              "height": 28,
+              "text": "Cancel"
+            }
+          ],
+          "overflow": false
+        },
+        "conflict": {
+          "defining": [
+            {
+              "selector": "[data-draft-changed] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 354,
+              "height": 32,
+              "text": "Changed elsewhere since you began: «Keep the header row exactly as customers parse it today.»"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "stages": {
+          "defining": [
+            {
+              "selector": "[data-draft-add-stage-roles]",
+              "missing": false,
+              "cut": false,
+              "width": 1390,
+              "height": 32,
+              "text": "OrchestratorReviewerVerifierBuilderArchitectCleanerProd auditorMergerVisual critic"
+            },
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 32,
+              "text": "Stage"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 32,
+              "text": "Stage"
+            },
+            {
+              "selector": "[data-draft-add-role=\"verifier\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 32,
+              "text": "Verifier"
+            }
+          ],
+          "overflow": false
+        },
+        "configure": {
+          "defining": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 96,
+              "height": 28,
+              "text": "Configure"
+            },
+            {
+              "selector": "[data-draft-configure-pane=\"reviewer\"] [role=\"radiogroup\"]",
+              "missing": false,
+              "cut": false,
+              "width": 83,
+              "height": 19,
+              "text": "ClaudeCodex"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 96,
+              "height": 28,
+              "text": "Configure"
+            }
+          ],
+          "overflow": false
+        },
+        "start-refused": {
+          "defining": [
+            {
+              "selector": "[data-draft-start-note=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Not started: no signed-in account can run claude for this project"
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            }
+          ],
+          "overflow": false
+        },
+        "started": {
+          "defining": [
+            {
+              "selector": "[data-pipeline=\"p-export\"][data-lane-state=\"running\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Builder→Reviewer→Verifier0s ago"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-refused": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 56,
+              "text": "Pipeline not created. This card no longer holds the conversation.Check the conversation againClose"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 156,
+              "height": 24,
+              "text": "Check the conversation again"
+            }
+          ],
+          "overflow": false
+        },
+        "create-unknown": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"unknown\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 72,
+              "text": "No answer yet. The pipeline may already exist; Check again asks for the same one.Check again"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-check]",
+              "missing": false,
+              "cut": false,
+              "width": 65,
+              "height": 24,
+              "text": "Check again"
+            }
+          ],
+          "overflow": false
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "label": "1440-en-dark",
+      "states": {
+        "menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .lbl",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 43,
+              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 55,
+              "text": "Pipeline from conversation…CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "overflow": false
+        },
+        "preparing": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"creating\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 44,
+              "text": "Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "draft": {
+          "defining": [
+            {
+              "selector": "[data-draft-message=\"p-export:builder\"] .btext",
+              "missing": false,
+              "cut": false,
+              "width": 288,
+              "height": 166,
+              "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            },
+            {
+              "selector": "[data-draft-edit=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 55,
+              "height": 24,
+              "text": "Edit"
+            }
+          ],
+          "overflow": false
+        },
+        "editing": {
+          "defining": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 54,
+              "height": 28,
+              "text": "Save"
+            },
+            {
+              "selector": "[data-draft-start-note=\"blocked\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Save or cancel the first message to start"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 54,
+              "height": 28,
+              "text": "Save"
+            },
+            {
+              "selector": "[data-draft-cancel=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 65,
+              "height": 28,
+              "text": "Cancel"
+            }
+          ],
+          "overflow": false
+        },
+        "conflict": {
+          "defining": [
+            {
+              "selector": "[data-draft-changed] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 354,
+              "height": 32,
+              "text": "Changed elsewhere since you began: «Keep the header row exactly as customers parse it today.»"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "stages": {
+          "defining": [
+            {
+              "selector": "[data-draft-add-stage-roles]",
+              "missing": false,
+              "cut": false,
+              "width": 1390,
+              "height": 32,
+              "text": "OrchestratorReviewerVerifierBuilderArchitectCleanerProd auditorMergerVisual critic"
+            },
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 32,
+              "text": "Stage"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 32,
+              "text": "Stage"
+            },
+            {
+              "selector": "[data-draft-add-role=\"verifier\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 32,
+              "text": "Verifier"
+            }
+          ],
+          "overflow": false
+        },
+        "configure": {
+          "defining": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 96,
+              "height": 28,
+              "text": "Configure"
+            },
+            {
+              "selector": "[data-draft-configure-pane=\"reviewer\"] [role=\"radiogroup\"]",
+              "missing": false,
+              "cut": false,
+              "width": 83,
+              "height": 19,
+              "text": "ClaudeCodex"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 96,
+              "height": 28,
+              "text": "Configure"
+            }
+          ],
+          "overflow": false
+        },
+        "start-refused": {
+          "defining": [
+            {
+              "selector": "[data-draft-start-note=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Not started: no signed-in account can run claude for this project"
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 67,
+              "height": 28,
+              "text": "Start"
+            }
+          ],
+          "overflow": false
+        },
+        "started": {
+          "defining": [
+            {
+              "selector": "[data-pipeline=\"p-export\"][data-lane-state=\"running\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Builder→Reviewer→Verifier0s ago"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-refused": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 56,
+              "text": "Pipeline not created. This card no longer holds the conversation.Check the conversation againClose"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 156,
+              "height": 24,
+              "text": "Check the conversation again"
+            }
+          ],
+          "overflow": false
+        },
+        "create-unknown": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"unknown\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 72,
+              "text": "No answer yet. The pipeline may already exist; Check again asks for the same one.Check again"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-check]",
+              "missing": false,
+              "cut": false,
+              "width": 65,
+              "height": 24,
+              "text": "Check again"
+            }
+          ],
+          "overflow": false
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "label": "1440-uk-light",
+      "states": {
+        "menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .lbl",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 43,
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 55,
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "overflow": false
+        },
+        "preparing": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"creating\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 44,
+              "text": "Готую пайплайн з розмови Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "draft": {
+          "defining": [
+            {
+              "selector": "[data-draft-message=\"p-export:builder\"] .btext",
+              "missing": false,
+              "cut": false,
+              "width": 298,
+              "height": 185,
+              "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            },
+            {
+              "selector": "[data-draft-edit=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 78,
+              "height": 24,
+              "text": "Змінити"
+            }
+          ],
+          "overflow": false
+        },
+        "editing": {
+          "defining": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 28,
+              "text": "Зберегти"
+            },
+            {
+              "selector": "[data-draft-start-note=\"blocked\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Збережіть або скасуйте перше повідомлення, щоб запустити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 28,
+              "text": "Зберегти"
+            },
+            {
+              "selector": "[data-draft-cancel=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 88,
+              "height": 28,
+              "text": "Скасувати"
+            }
+          ],
+          "overflow": false
+        },
+        "conflict": {
+          "defining": [
+            {
+              "selector": "[data-draft-changed] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 354,
+              "height": 32,
+              "text": "Змінено деінде, відколи ви почали: «Лишити рядок заголовків таким, як його розбирають клієнти сьогодні.»"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "stages": {
+          "defining": [
+            {
+              "selector": "[data-draft-add-stage-roles]",
+              "missing": false,
+              "cut": false,
+              "width": 1390,
+              "height": 32,
+              "text": "ОркестраторРев'юерВерифікаторБілдерАрхітекторКлінерПрод-аудиторМерджерКритик вигляду"
+            },
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 75,
+              "height": 32,
+              "text": "Етап"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 75,
+              "height": 32,
+              "text": "Етап"
+            },
+            {
+              "selector": "[data-draft-add-role=\"verifier\"]",
+              "missing": false,
+              "cut": false,
+              "width": 103,
+              "height": 32,
+              "text": "Верифікатор"
+            }
+          ],
+          "overflow": false
+        },
+        "configure": {
+          "defining": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 119,
+              "height": 28,
+              "text": "Налаштувати"
+            },
+            {
+              "selector": "[data-draft-configure-pane=\"reviewer\"] [role=\"radiogroup\"]",
+              "missing": false,
+              "cut": false,
+              "width": 83,
+              "height": 19,
+              "text": "ClaudeCodex"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 119,
+              "height": 28,
+              "text": "Налаштувати"
+            }
+          ],
+          "overflow": false
+        },
+        "start-refused": {
+          "defining": [
+            {
+              "selector": "[data-draft-start-note=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Не запущено: no signed-in account can run claude for this project"
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            }
+          ],
+          "overflow": false
+        },
+        "started": {
+          "defining": [
+            {
+              "selector": "[data-pipeline=\"p-export\"][data-lane-state=\"running\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Білдер→Рев'юер→Верифікатор0 с тому"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-refused": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 56,
+              "text": "Пайплайн не створено. Ця картка більше не містить розмову.Перевірити розмову ще разЗакрити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 151,
+              "height": 24,
+              "text": "Перевірити розмову ще раз"
+            }
+          ],
+          "overflow": false
+        },
+        "create-unknown": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"unknown\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 72,
+              "text": "Відповіді ще немає. Пайплайн міг уже з’явитися; «Перевірити ще раз» запитає той самий.Перевірити ще раз"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-check]",
+              "missing": false,
+              "cut": false,
+              "width": 102,
+              "height": 24,
+              "text": "Перевірити ще раз"
+            }
+          ],
+          "overflow": false
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "label": "1440-uk-dark",
+      "states": {
+        "menu": {
+          "defining": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"] .lbl",
+              "missing": false,
+              "cut": false,
+              "width": 243,
+              "height": 43,
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "targets": [
+            {
+              "selector": ".menu [data-cm-item=\"fromConversation\"]",
+              "missing": false,
+              "cut": false,
+              "width": 286,
+              "height": 55,
+              "text": "Пайплайн з розмови…Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming"
+            }
+          ],
+          "overflow": false
+        },
+        "preparing": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"creating\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 44,
+              "text": "Готую пайплайн з розмови Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming…"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "draft": {
+          "defining": [
+            {
+              "selector": "[data-draft-message=\"p-export:builder\"] .btext",
+              "missing": false,
+              "cut": false,
+              "width": 298,
+              "height": 185,
+              "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            },
+            {
+              "selector": "[data-draft-edit=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 78,
+              "height": 24,
+              "text": "Змінити"
+            }
+          ],
+          "overflow": false
+        },
+        "editing": {
+          "defining": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 28,
+              "text": "Зберегти"
+            },
+            {
+              "selector": "[data-draft-start-note=\"blocked\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Збережіть або скасуйте перше повідомлення, щоб запустити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-save=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 80,
+              "height": 28,
+              "text": "Зберегти"
+            },
+            {
+              "selector": "[data-draft-cancel=\"p-export:builder\"]",
+              "missing": false,
+              "cut": false,
+              "width": 88,
+              "height": 28,
+              "text": "Скасувати"
+            }
+          ],
+          "overflow": false
+        },
+        "conflict": {
+          "defining": [
+            {
+              "selector": "[data-draft-changed] .msg-text",
+              "missing": false,
+              "cut": false,
+              "width": 354,
+              "height": 32,
+              "text": "Змінено деінде, відколи ви почали: «Лишити рядок заголовків таким, як його розбирають клієнти сьогодні.»"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "stages": {
+          "defining": [
+            {
+              "selector": "[data-draft-add-stage-roles]",
+              "missing": false,
+              "cut": false,
+              "width": 1390,
+              "height": 32,
+              "text": "ОркестраторРев'юерВерифікаторБілдерАрхітекторКлінерПрод-аудиторМерджерКритик вигляду"
+            },
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 75,
+              "height": 32,
+              "text": "Етап"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-add-stage-toggle]",
+              "missing": false,
+              "cut": false,
+              "width": 75,
+              "height": 32,
+              "text": "Етап"
+            },
+            {
+              "selector": "[data-draft-add-role=\"verifier\"]",
+              "missing": false,
+              "cut": false,
+              "width": 103,
+              "height": 32,
+              "text": "Верифікатор"
+            }
+          ],
+          "overflow": false
+        },
+        "configure": {
+          "defining": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 119,
+              "height": 28,
+              "text": "Налаштувати"
+            },
+            {
+              "selector": "[data-draft-configure-pane=\"reviewer\"] [role=\"radiogroup\"]",
+              "missing": false,
+              "cut": false,
+              "width": 83,
+              "height": 19,
+              "text": "ClaudeCodex"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-configure=\"reviewer\"]",
+              "missing": false,
+              "cut": false,
+              "width": 119,
+              "height": 28,
+              "text": "Налаштувати"
+            }
+          ],
+          "overflow": false
+        },
+        "start-refused": {
+          "defining": [
+            {
+              "selector": "[data-draft-start-note=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Не запущено: no signed-in account can run claude for this project"
+            },
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-draft-start=\"p-export\"]",
+              "missing": false,
+              "cut": false,
+              "width": 101,
+              "height": 28,
+              "text": "Запустити"
+            }
+          ],
+          "overflow": false
+        },
+        "started": {
+          "defining": [
+            {
+              "selector": "[data-pipeline=\"p-export\"][data-lane-state=\"running\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 28,
+              "text": "Білдер→Рев'юер→Верифікатор0 с тому"
+            }
+          ],
+          "targets": [],
+          "overflow": false
+        },
+        "create-refused": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"refused\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 56,
+              "text": "Пайплайн не створено. Ця картка більше не містить розмову.Перевірити розмову ще разЗакрити"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-retry]",
+              "missing": false,
+              "cut": false,
+              "width": 151,
+              "height": 24,
+              "text": "Перевірити розмову ще раз"
+            }
+          ],
+          "overflow": false
+        },
+        "create-unknown": {
+          "defining": [
+            {
+              "selector": "[data-conversation-draft=\"unknown\"]",
+              "missing": false,
+              "cut": false,
+              "width": 418,
+              "height": 72,
+              "text": "Відповіді ще немає. Пайплайн міг уже з’явитися; «Перевірити ще раз» запитає той самий.Перевірити ще раз"
+            }
+          ],
+          "targets": [
+            {
+              "selector": "[data-conversation-draft-check]",
+              "missing": false,
+              "cut": false,
+              "width": 102,
+              "height": 24,
+              "text": "Перевірити ще раз"
+            }
+          ],
+          "overflow": false
+        }
+      },
+      "pageErrors": []
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
+import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin, Workflow } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 
@@ -15,6 +15,8 @@ import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, typ
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { latestAttempt, pipelineStateLabel, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import { conversationSourceFile, ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
+import { conversationRefusalText, useConversationPreview } from "@/components/pipelines/useConversationDraft";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { clearedLine } from "@/components/attention/decision";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
@@ -216,6 +218,10 @@ export interface KanbanBoardProps {
   pipelinePorts?: PipelinePorts;
   /** Cards start open; closed by default (docs/design/calm-task-cards-build.md §6.1). */
   initialOpen?: boolean;
+  /** The first messages being edited, shared with the phone's pipeline screen; the board keeps its own when absent. */
+  stageDrafts?: StageDrafts;
+  /** Pipelines drafted from a card's conversation, shared with the phone's screens; the board keeps its own when absent. */
+  conversationDrafts?: ConversationDrafts;
 }
 
 /** Which cards are closed: every card but the ones flipped from the default. */
@@ -436,7 +442,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, []);
   /* K5b: pipeline actions, waiting stages' first messages, and the Stages sheet. */
   const pipelinePorts = props.pipelinePorts ?? browserPipelinePorts;
-  const [stageDrafts] = useState(() => new StageDrafts());
+  const [ownStageDrafts] = useState(() => (props.stageDrafts ? null : new StageDrafts()));
+  const stageDrafts = props.stageDrafts ?? ownStageDrafts!;
+  const [ownConversationDrafts] = useState(() => (props.conversationDrafts ? null : new ConversationDrafts()));
+  const conversationDrafts = props.conversationDrafts ?? ownConversationDrafts!;
   const draftsVersion = useSyncExternalStore(stageDrafts.subscribe, stageDrafts.version, stageDrafts.version);
   const [stagePanels, setStagePanels] = useState<ReadonlyMap<string, StagePanel>>(() => new Map());
   const [sheet, setSheet] = useState<SheetTarget | null>(null);
@@ -540,6 +549,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const card of model.unlinked) map.set(card.id, card);
     return map;
   }, [model]);
+  /* The card ⋯'s source conversation (variant 3), read only while that menu
+     is open: the newest conversation the card holds, named with its branch. */
+  const menuCard = menu.open?.value.kind === "card" ? cardsById.get(menu.open.value.cardId) ?? null : null;
+  const menuSource = useMemo(() => (menuCard?.task ? conversationSourceFile(menuCard.members.map((member) => member.file)) : null), [menuCard]);
+  const sourcePreview = useConversationPreview(menuSource, menuCard?.task?.id ?? null, Boolean(menuCard?.task));
   const tasksById = useRef(new Map<string, BoardTask>());
   tasksById.current = new Map(allTasks.map((task) => [task.id, task] as const));
   const effectiveById = useRef(new Map<string, BoardTask>());
@@ -1544,6 +1558,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "head", label: t("kanban.moveTo") },
         ...statusItems(card, false),
         ...priorityItems,
+        ...fromConversationItem(card),
         { type: "sep" },
         { type: "head", label: t("kanban.colour") },
         swatches,
@@ -1563,6 +1578,44 @@ export function KanbanBoard(props: KanbanBoardProps) {
           : { type: "item", id: "hide", label: t("kanban.hideFromBoard"), kbd: "H", why: card.working ? t("kanban.hideWhyWorking", { count: card.working }) : t("kanban.hideWhy"), note: card.working ? t("kanban.hideNoteWorking", { count: card.working }) : t("kanban.hideNote"), keepFocus: true, onSelect: () => hideCard(card) },
       ],
     };
+  };
+  /* «Pipeline from conversation…» (variant 3): the row names the conversation
+     and its branch as the server read them; a draft this conversation already
+     made on the card opens instead of a second one. */
+  const fromConversationItem = (card: KanbanCardModel): KanbanMenuItem[] => {
+    const task = card.task;
+    if (!task || card !== menuCard || !menuSource?.conversationId) return [];
+    const base = { type: "item" as const, id: "fromConversation", label: t("kanban.fromConversation.menu"), icon: <Workflow className="cm-lane" aria-hidden />, keepFocus: true };
+    const fileTitle = cleanTitle(menuSource.title ?? "", 90) || t("kanban.untitledConversation");
+    const existing = card.pipelines.find((entry) => entry.pipeline.state === "draft" && entry.pipeline.conversationSource?.conversationId === menuSource.conversationId);
+    if (existing) {
+      return [{ ...base, why: `${fileTitle} · ${existing.pipeline.conversationSource!.branch}`, onSelect: () => openConversationDraft(card.id, existing.pipeline) }];
+    }
+    const state = sourcePreview.state;
+    if (conversationDrafts.attempt(task.id)?.phase === "creating") {
+      return [{ ...base, why: fileTitle, disabled: true, onSelect: () => {} }];
+    }
+    if (!state || state.kind === "pending") return [{ ...base, why: t("kanban.fromConversation.checking", { title: fileTitle }), disabled: true, onSelect: () => {} }];
+    if (state.kind === "failed") {
+      /* A reason that may pass: choosing the row reads the source again. */
+      const transient = !state.refusal || state.refusal.retryable === true;
+      const anchor = menu.open?.anchor;
+      return [{ ...base, why: fileTitle, warn: conversationRefusalText(t, state.refusal), disabled: !transient, onSelect: () => {
+        sourcePreview.reload();
+        if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "card", cardId: card.id } }));
+      } }];
+    }
+    const source = state.source;
+    const named = `${cleanTitle(source.title, 90) || fileTitle} · ${source.branch}`;
+    if (!source.canCreate) return [{ ...base, why: named, warn: conversationRefusalText(t, source.refusal ?? null), disabled: true, onSelect: () => {} }];
+    return [{
+      ...base,
+      why: named,
+      onSelect: () => {
+        setCardFolds((current) => withCardOpen(current, card.id, true));
+        void conversationDrafts.create(task.id, source);
+      },
+    }];
   };
   /* #2102: the icon picker opens from the card's own icon, where the eye goes. */
   const iconItem = (card: KanbanCardModel): KanbanMenuItem => ({
@@ -2086,6 +2139,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
     panel.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     panel.focus({ preventScroll: true });
   });
+  /* A draft made from a card's conversation opens on its card as the Builder's
+     first message, once the board draws the lane the server answered. */
+  const conversationDraftsVersion = useSyncExternalStore(conversationDrafts.subscribe, conversationDrafts.version, conversationDrafts.version);
+  const openConversationDraft = useCallback((cardId: string, pipeline: Pipeline) => {
+    setCardFolds((current) => withCardOpen(current, cardId, true));
+    const first = pipeline.stages[0];
+    if (first) openStage(pipeline, first, cardId);
+  }, [openStage]);
+  useEffect(() => {
+    for (const card of cards) {
+      const landed = card.task ? conversationDrafts.landedFor(card.task.id) : null;
+      const summary = landed ? card.pipelines.find((entry) => entry.pipeline.id === landed) : null;
+      if (!summary) continue;
+      conversationDrafts.take(card.task!.id);
+      openConversationDraft(card.id, summary.pipeline);
+    }
+  }, [cards, conversationDraftsVersion, conversationDrafts, openConversationDraft]);
   const foldStagePanel = useCallback((key: string, folded: boolean) => {
     setStagePanels((current) => {
       const panel = current.get(key);
@@ -2874,6 +2944,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onOpenAttempt: cardOpenAttempt,
         onDismissLaunch: dismissLaunch,
         drafts: stageDrafts,
+        conversationDrafts,
         pipelinePorts,
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
@@ -3288,7 +3359,7 @@ type CardHandlers = Pick<
   | "onToggleCollapsed" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onLaneAnswer" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
+  | "drafts" | "conversationDrafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onLaneAnswer" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 

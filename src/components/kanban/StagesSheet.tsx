@@ -23,6 +23,7 @@ import type { PipelinePorts } from "./pipelinePorts";
 import { StageAccountChip } from "./AccountPicker";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { DraftLeftover, StageDraftFeed, useStageDraft } from "./StageDraft";
+import { AddStageControl, ConfigureToggle, conversationDraftLane, DraftStageConfigure } from "@/components/pipelines/DraftStageControls";
 import { stageDraftKey, type StageDrafts } from "./stageDrafts";
 import { draftOutcome, finishedStageIds, neverLaunched, paneFacts, pipelineEnded } from "./stagesModel";
 
@@ -269,6 +270,8 @@ export function StagesSheet(props: {
             ))}
           </nav>
         )}
+        {/* A draft made from a conversation takes one more stage after its last. */}
+        {conversationDraftLane(pipeline) ? <AddStageControl pipeline={pipeline} ports={props.ports} variant="board" /> : null}
 
         <div className="gs-body">
           {graph ? (
@@ -367,6 +370,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const ran = shown?.effectiveRole ? valuesOf(shown.effectiveRole) : identity;
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(props.drafts, draftKey);
+  /* A waiting stage of a conversation's draft opens its role and runtime in place of its first message. */
+  const [configuring, setConfiguring] = useState(false);
   const glyph = <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>;
   const aria = t(pane.folded ? "kanban.stages.paneAriaFolded" : "kanban.stages.paneAria", { n: index + 1, total, stage: name, role: roleNameById(t, roleId), engine, state: word });
   const className = `pane tone-${STAGE_TONE[state]} role-${roleId}${pane.folded ? " folded" : ""}${props.focused ? " focus" : ""}`;
@@ -407,8 +412,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <div className="ch-meta pane-id">
           <StageIdentity identity={identity} density="header" showWord glyph />
           <StageAccountChip pipeline={pipeline} stage={stage} />
+          {conversationDraftLane(pipeline) ? <ConfigureToggle stage={stage} name={name} open={configuring} onToggle={() => setConfiguring((value) => !value)} /> : null}
         </div>
-        <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
+        {configuring && conversationDraftLane(pipeline)
+          ? <div className="pane-config" data-draft-configure-pane={stage.id}><DraftStageConfigure pipeline={pipeline} stage={stage} /></div>
+          : <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />}
       </div>
     );
   } else if (pane.readerKey && props.windowReader === pane.readerKey) {
