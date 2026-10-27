@@ -1,0 +1,71 @@
+{
+  "base": "134a29c6",
+  "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+  "command": "bun test src/components/mobile/issue1347Evidence.browser.test.tsx --reporter=junit (gate-remote, scripts/gate-slot.sh, fresh isolated roots)",
+  "observations": [
+    {
+      "side": "head",
+      "run": 1,
+      "exit": 1,
+      "passed": [],
+      "failures": [
+        {
+          "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+          "suite": "",
+          "name": "issues 1347 + 1348: the phone's rename editor and orchestrator controls measure as usable at 390px in both themes",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "cssPrerequisite": true
+    },
+    {
+      "side": "base",
+      "run": 1,
+      "exit": 1,
+      "passed": [],
+      "failures": [
+        {
+          "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+          "suite": "",
+          "name": "issues 1347 + 1348: the phone's rename editor and orchestrator controls measure as usable at 390px in both themes",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "cssPrerequisite": true
+    },
+    {
+      "side": "head",
+      "run": 2,
+      "exit": 1,
+      "passed": [],
+      "failures": [
+        {
+          "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+          "suite": "",
+          "name": "issues 1347 + 1348: the phone's rename editor and orchestrator controls measure as usable at 390px in both themes",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "cssPrerequisite": true
+    },
+    {
+      "side": "base",
+      "run": 2,
+      "exit": 1,
+      "passed": [],
+      "failures": [
+        {
+          "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+          "suite": "",
+          "name": "issues 1347 + 1348: the phone's rename editor and orchestrator controls measure as usable at 390px in both themes",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "cssPrerequisite": true
+    }
+  ]
+}

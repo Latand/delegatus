@@ -766,3 +766,40 @@ test("Pause reads as paused at once and the menu offers Resume; a refusal shows 
   expect(Array.from(card.querySelectorAll<HTMLButtonElement>("[data-bar-more-menu] button")).find((button) => button.textContent === "Pause")?.disabled).toBe(false);
   expect(card.querySelector("[role=alert]")).not.toBeNull();
 });
+
+test("a Cloud target shows its engine and can answer without a local account", async () => {
+  accounts({});
+  answers.relay = { relays: [relay({ targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" })] })], pending: [], status: [] };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  expect(row.textContent).toContain("Codex Cloud · GPT-6.1 Sol");
+  expect(row.querySelector("[data-external-relay-no-account]")).toBeNull();
+  expect(switchOf(row).disabled).toBe(false);
+  await unfold(row);
+  expect(row.querySelector('[aria-pressed="true"]')?.textContent).toBe("Codex Cloud");
+});
+
+
+test("pairing a built-in relay activates its Cloud target without a local account", async () => {
+  accounts({});
+  const cloudRelay = relay({ origin: CELESTIA, targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol" })] });
+  answers.relay = { relays: [], pending: [celestiaPending({ owner: OWNER })], status: [] };
+  answers.pairing = { status: "awaiting_install", owner: OWNER };
+  route((url, init) => {
+    if (url === "/api/external-relay/pairings/pair-1" && init?.method === "POST") {
+      answers.relay = { relays: [cloudRelay], pending: [], status: [] };
+      return jsonResponse({ relay: cloudRelay });
+    }
+    if (url === "/api/external-relay/relays/relay-1/targets/bot-1" && init?.method === "PATCH") {
+      cloudRelay.targets[0]!.answered_by = "install";
+      return jsonResponse({ target: {} });
+    }
+    return undefined;
+  });
+  const host = await mount(<ExternalRelaySection />);
+  await click(Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Yes, pair"));
+  expect(harness.calls.some(call => call.url.endsWith("/targets/bot-1") && call.method === "PATCH")).toBe(true);
+  expect(harness.calls.some(call => call.url === "/api/external-relay/relays/relay-1" && call.method === "PATCH")).toBe(false);
+  expect(host.textContent).toContain("Codex Cloud");
+});

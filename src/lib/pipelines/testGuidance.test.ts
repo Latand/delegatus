@@ -20,17 +20,16 @@ test("standalone assembly finds the install and quotes its wrapper for another c
     fs.writeFileSync(path.join(standalone, "package.json"), JSON.stringify({ name: "delegatus-cli" }));
     fs.writeFileSync(path.join(install, "bin", "cli.mjs"), "");
     fs.writeFileSync(wrapper, '#!/bin/bash\n# LLV_SIGNAL_SANDBOX\nprintf "%s\\n" "$@"\n');
-    for (const file of ["owned-runner.ts", "cpu-admission.ts"]) fs.writeFileSync(path.join(install, "scripts", file), "runSandboxGate");
+    for (const file of ["owned-runner.ts", "cpu-admission.ts", "gate-wait.ts"]) fs.writeFileSync(path.join(install, "scripts", file), "runSandboxGate");
     fs.writeFileSync(path.join(install, "bin", "agent-signal-sandbox.py"), "");
     const guidance = resolveStageTestGuidance(standalone);
     const command = guidance.match(/: (bash .+?) <project-test-command>/)?.[1];
     expect(command).toBeDefined();
-    expect(guidance).toContain(`Run heavy checks (test suites, typecheck, builds) one at a time through this wrapper by default, since agent scopes have a 4–8 GB memory cap: ${command} <command>.`);
     const result = spawnSync("bash", ["-c", `${command} npm test -- src/example.test.ts`], { cwd: checkout, encoding: "utf8", timeout: 5_000 });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("npm\ntest\n--\nsrc/example.test.ts\n");
     fs.unlinkSync(path.join(install, "scripts", "owned-runner.ts"));
-    expect(resolveStageTestGuidance(standalone)).toContain("Gate wrapper unavailable");
+    expect(() => resolveSignalTooling(standalone)).toThrow("Gate wrapper unavailable");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -46,16 +45,16 @@ test("packed tooling resolves without source files and the container bridge publ
     fs.writeFileSync(path.join(root, "bin/cli.mjs"), "");
     fs.writeFileSync(path.join(root, "bin/agent-signal-sandbox.py"), "# packed launcher");
     fs.writeFileSync(path.join(scripts, "gate-slot.sh"), "# LLV_SIGNAL_SANDBOX");
-    for (const name of ["owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts"]) fs.writeFileSync(path.join(scripts, name), "// runSandboxGate");
+    for (const name of ["owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts", "gate-wait.ts"]) fs.writeFileSync(path.join(scripts, name), "// runSandboxGate");
     delete process.env.LLV_DOCKER_NSENTER_SHIMS;
     expect(resolveSignalTooling(root).gate).toBe(fs.realpathSync(path.join(scripts, "gate-slot.sh")));
     process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
     const tooling = resolveSignalTooling(root);
     expect(tooling.gate).toStartWith(path.join(os.homedir(), ".cache/delegatus/signal-tooling/"));
     expect(fs.readFileSync(tooling.launcher, "utf8")).toBe("# packed launcher");
+    expect(fs.readFileSync(path.join(path.dirname(tooling.gate), "gate-wait.ts"), "utf8")).toBe("// runSandboxGate");
     expect(resolveSignalTooling(root)).toEqual(tooling);
     fs.unlinkSync(path.join(scripts, "test-child-guardian.ts"));
-    expect(resolveStageTestGuidance(root)).toContain("Gate wrapper unavailable");
     expect(() => resolveSignalTooling(root)).toThrow("Gate wrapper unavailable");
   } finally {
     if (previous === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS; else process.env.LLV_DOCKER_NSENTER_SHIMS = previous;

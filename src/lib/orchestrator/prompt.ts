@@ -111,8 +111,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-// v62 asks the seat to keep each task's progress estimate current.
-export const ORCHESTRATOR_PROMPT_VERSION = 62;
+// v63 combines task progress estimates with task due dates and report handling.
+export const ORCHESTRATOR_PROMPT_VERSION = 63;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -558,9 +558,13 @@ const SHIPPED_PROTOTYPE_DIRECTIVES = [
   "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
 ] as const;
 
-/** v62: the seat keeps a task's progress estimate current beside its note. */
-const SHIPPED_TASK_CURRENT_BULLET = "- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.";
-const ORCHESTRATOR_TASK_CURRENT_BULLET = "- Keep each task current: when it changes, a brief update_task note in plain operator language (why parked, what or whom it waits for, what runs now) and its progress (0-100).";
+/** Upgrade either shipped v62 task duty without dropping the other. */
+const SHIPPED_TASK_CURRENT_BULLETS = [
+  "- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.",
+  "- Keep each task current: when it changes, a brief update_task note in plain operator language (why parked, what or whom it waits for, what runs now) and its progress (0-100).",
+  "- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.",
+] as const;
+const ORCHESTRATOR_TASK_CURRENT_BULLET = "- Keep each task current: on change, a brief update_task note and progress (0-100) in plain operator language. Give every promise a dueAt: a task due then, or an open task step due no later.";
 
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key \`viewer\`). You never act outside them: no direct process or runtime manipulation. The working rules below apply to you as to every agent; the rest of this mandate adds what a seat does.
 
@@ -764,7 +768,7 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(rule13);
   mandate = mandate.split(SHIPPED_PREPARATION_CONSENT_RULE).join(ORCHESTRATOR_BUG_REPORT_RULE);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
-  mandate = mandate.split(SHIPPED_TASK_CURRENT_BULLET).join(ORCHESTRATOR_TASK_CURRENT_BULLET);
+  for (const previous of SHIPPED_TASK_CURRENT_BULLETS) mandate = mandate.split(previous).join(ORCHESTRATOR_TASK_CURRENT_BULLET);
   if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
   return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
 }

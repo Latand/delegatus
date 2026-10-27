@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { cardComposerBudget, seatComposerBudget } from "@/lib/composerScroll";
+import { cardComposerBudget, KEYBOARD_TRANSCRIPT_FLOOR_SHARE, keyboardInset, seatComposerBudget, TRANSCRIPT_FLOOR_SHARE } from "@/lib/composerScroll";
 
 /** The box a composer's budget is a share of: the conversation it is laid out
     in. The card composer's own `max-height` is written as a percentage, so the
@@ -42,6 +42,10 @@ function readableFeed(transcript: HTMLElement): HTMLElement | null {
     scrollport. A row the feed holds under it (the turn's status line) never
     yields either, so it comes out of the composer's share with the others.
 
+    While the on-screen keyboard is up the transcript keeps a smaller floor
+    (`KEYBOARD_TRANSCRIPT_FLOOR_SHARE`), because the box is then only the strip
+    above the keyboard and the field is what the operator is writing in.
+
     Null where the box holds no transcript to keep a floor for: the card's
     share of the whole box applies there, from its height alone. */
 function composerBudget(box: HTMLElement, form: HTMLElement, transcript: HTMLElement | null): number | null {
@@ -52,7 +56,10 @@ function composerBudget(box: HTMLElement, form: HTMLElement, transcript: HTMLEle
   const readable = readableFeed(transcript)?.getBoundingClientRect().height ?? feed.height;
   const rows = body - readable - form.getBoundingClientRect().height;
   const surface = box.closest<HTMLElement>("[data-composer-grows]");
-  if (!surface) return Math.floor(cardComposerBudget(body, rows));
+  if (!surface) {
+    const keyboardUp = keyboardInset(window.innerHeight, window.visualViewport) > 0;
+    return Math.floor(cardComposerBudget(body, rows, keyboardUp ? KEYBOARD_TRANSCRIPT_FLOOR_SHARE : TRANSCRIPT_FLOOR_SHARE));
+  }
   const limit = parseFloat(getComputedStyle(surface).maxHeight);
   return Math.floor(seatComposerBudget({
     boxHeight: body,
@@ -105,9 +112,14 @@ export function useComposerBox(active: boolean): { ref: (node: HTMLFormElement |
     observer.observe(box);
     read();
     window.addEventListener("resize", read);
+    /* iOS shrinks only the visual viewport for the keyboard, so the keyboard
+       that changes the floor is announced there. */
+    const visual = window.visualViewport;
+    visual?.addEventListener("resize", read);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", read);
+      visual?.removeEventListener("resize", read);
     };
   }, [active, form]);
   return { ref, height: measured.height, budget: measured.budget };

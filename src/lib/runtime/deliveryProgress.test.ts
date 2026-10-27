@@ -959,3 +959,16 @@ test("an archived legacy send with mixed-format candidate endings is restored be
     }
   }
 });
+
+test("conversation delivery history keeps separate sent message outcomes", () => {
+  const store = new DeliveryProgressStore(null, () => Date.parse("2026-10-24T00:00:00Z"), noTimer);
+  try {
+    for (const id of ["message-one", "message-two"]) store.note(id, "codex-conversation", { waitReason: "dispatching", attempted: true });
+    store.settle("message-one", "delivered", null);
+    store.settle("message-two", "failed", "send-refused");
+    const records = store.forConversation(["codex-conversation"]);
+    expect(records).toHaveLength(2);
+    expect(records.find(record => record.operationId === "message-one")?.phaseHistory?.at(-1)?.phase).toBe("delivered");
+    expect(records.find(record => record.operationId === "message-two")?.phaseHistory?.at(-1)?.phase).toBe("failed");
+  } finally { store.close(); }
+});

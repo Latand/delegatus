@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { effortMeter, effortScale } from "./efforts";
+import { clampEffortToScale, effortMeter, effortScale } from "./efforts";
 
 describe("effortScale", () => {
   test("claude models all share the CLI scale low through max", () => {
@@ -95,7 +95,7 @@ describe("effortMeter", () => {
 
 test("spawn reasoning admits model-specific top tiers for Astra and both Sols", async () => {
   const { reasoningFromBody } = await import("./efforts");
-  for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]) {
+  for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-sol"]) {
     for (const effort of ["max", "ultra"]) {
       expect(reasoningFromBody("codex", { model, effort })).toEqual({ effort, fast: null });
     }
@@ -103,4 +103,9 @@ test("spawn reasoning admits model-specific top tiers for Astra and both Sols", 
   expect(reasoningFromBody("codex", { model: "gpt-5.6-luna", effort: "ultra" }).error).toBeDefined();
   expect(reasoningFromBody("codex", { model: "gpt-6-luna", effort: "max" })).toEqual({ effort: "max", fast: null });
   expect(reasoningFromBody("codex", { model: "gpt-6-luna", effort: "ultra" }).error).toBeDefined();
+});
+
+test("Terra 6.1 exposes the observed six reasoning tiers", () => {
+  expect(effortScale("codex", "gpt-6.1-terra")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  expect(clampEffortToScale("codex", "gpt-6.1-terra", "ultra")).toBe("ultra");
 });

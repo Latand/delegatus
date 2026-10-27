@@ -123,7 +123,7 @@ export type HealthRun = {
 
 /* ── The cheapest runtime ─────────────────────────────────────────────── */
 
-const CHEAPEST_MODEL: Record<RoleEngine, string> = { claude: "haiku", codex: "gpt-5.6-luna" };
+const CHEAPEST_MODEL: Record<RoleEngine, string> = { claude: "haiku", codex: "gpt-6-luna" };
 
 /**
  * The smallest size class among connected engines at the lowest tier of its

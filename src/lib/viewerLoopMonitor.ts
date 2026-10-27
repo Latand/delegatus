@@ -4,6 +4,7 @@ import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
+import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 
 export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
@@ -46,9 +47,10 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
-/** Stall evidence stays visible even in a quiet terminal. A slow journal must
- * not grow the heap or block the loop that it measures. */
+/** A slow journal must not grow the heap or block the loop that it measures.
+ * Package terminals opt out of log output; the service keeps every line. */
 export function createLoopLogSink(write = (line: string, done: () => void) => {
+  if (startupDiagnosticsQuiet()) { done(); return; }
   process.stderr.write(`${line}\n`, done);
 }) {
   const queue: string[] = [];
@@ -69,6 +71,17 @@ export function createLoopLogSink(write = (line: string, done: () => void) => {
   };
 }
 
+/** A packaged install's launcher asks for bounded volume (bin/cli.mjs): its
+ * output often lands in a file nothing rotates, and a large old state wrote
+ * 392 KB of these lines in 25 minutes. Each process then writes gap reports
+ * up to a byte budget per hour, and its summary a minute after start and
+ * every fifteen minutes after, counting the reports the budget held back.
+ * Unset, which is how a checkout's service runs, every line is written as
+ * before. */
+export const LOOP_DIAGNOSTICS_ENV = "LLV_LOOP_DIAGNOSTICS";
+export const BOUNDED_LOOP_DIAGNOSTICS = { windowMs: 3_600_000, gapBytes: 64 * 1024, summaryEveryMs: 15 * 60_000 } as const;
+const boundedDiagnostics = () => process.env[LOOP_DIAGNOSTICS_ENV] === "bounded";
+
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
 export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(undefined, undefined, now),
@@ -80,6 +93,24 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let completed: Operation[] = [];
   let last = now();
   let lastSummary = last;
+  let summaries = 0;
+  let budgetStart = last, budgetBytes = 0;
+  let withheld = { count: 0, bytes: 0, maxGapMs: 0 };
+  /* The profiler can emit a correlated report after a later tick, so the
+     budget is charged when the line is written. */
+  const writeGap = (line: string, gapMs: number) => {
+    if (boundedDiagnostics()) {
+      const at = now();
+      if (at - budgetStart >= BOUNDED_LOOP_DIAGNOSTICS.windowMs) { budgetStart = at; budgetBytes = 0; }
+      const bytes = Buffer.byteLength(line) + 1;
+      if (budgetBytes + bytes > BOUNDED_LOOP_DIAGNOSTICS.gapBytes) {
+        withheld = { count: withheld.count + 1, bytes: withheld.bytes + bytes, maxGapMs: Math.max(withheld.maxGapMs, gapMs) };
+        return;
+      }
+      budgetBytes += bytes;
+    }
+    writeLog(line);
+  };
   let sequence = 0, activeDropped = 0, completedDropped = 0;
   let watchdog: ReturnType<typeof startLoopWatchdog> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -156,15 +187,19 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           })),
         },
       };
-      const emit = (jsProfile?: LoopGapProfile) => writeLog(`[viewer loop-gap] ${JSON.stringify({ ...report, ...(jsProfile ? { jsProfile } : {}) })}`);
+      const emit = (jsProfile?: LoopGapProfile) => writeGap(`[viewer loop-gap] ${JSON.stringify({ ...report, ...(jsProfile ? { jsProfile } : {}) })}`, report.gapMs);
       if (!profiler?.correlate(last, at, report.gapMs, emit)) {
         emit(report.gapMs >= 2000 ? { status: "not-armed", reason: "profiler-not-started" } : undefined);
       }
     }
     completed = [];
-    if (at - lastSummary >= 60_000) {
+    const bounded = boundedDiagnostics();
+    if (at - lastSummary >= (bounded && summaries > 0 ? BOUNDED_LOOP_DIAGNOSTICS.summaryEveryMs : 60_000)) {
       writeLog(`[performance summary] ${JSON.stringify({ ...performanceProcess, revision, role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
-        monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped() })}`);
+        monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped(),
+        ...(bounded ? { loopGapsWithheld: { ...withheld, budgetBytes: BOUNDED_LOOP_DIAGNOSTICS.gapBytes, windowMs: BOUNDED_LOOP_DIAGNOSTICS.windowMs } } : {}) })}`);
+      if (bounded) withheld = { count: 0, bytes: 0, maxGapMs: 0 };
+      summaries++;
       lastSummary = at;
     }
     readAttribution.clear();

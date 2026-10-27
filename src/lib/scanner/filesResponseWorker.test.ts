@@ -544,8 +544,10 @@ test("seat agenda worker preserves asks and ordering from the exact board repres
 });
 
 
-test("an expired seat source leaves a queued peer alone and never dispatches later", async () => {
+test.each(["deadline", "closed-check", "source-share"] as const)("an expired seat source leaves a queued peer alone and never dispatches later: %s", async mode => {
   const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
+  let work: InstanceType<typeof SeatTickWork> | undefined;
   const state = scratchState();
   const program = path.join(state, "held-worker.ts");
   fs.writeFileSync(program, String.raw`
@@ -576,13 +578,42 @@ createInterface({ input: process.stdin }).on("line", async line => {
       if (Date.now() >= deadline) throw new Error("worker readiness was not observed");
       await new Promise(resolve => setTimeout(resolve, 2));
     }
-    await expect(runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, { ...runtime, timeoutMs: 50 })).rejects.toThrow("deadline");
+    let now = 0, next = 0;
+    const timers = new Map<number, { at: number; run: () => void }>();
+    const advance = (delta: number) => {
+      now += delta;
+      for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
+    };
+    work = new SeatTickWork("fixture", 400, () => now, {
+      setTimeout: (run, delay) => { const id = ++next; timers.set(id, { at: now + delay, run }); return id; },
+      clearTimeout: id => { timers.delete(id as number); },
+    });
+    if (mode === "deadline") {
+      await expect(runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, { ...runtime, timeoutMs: 50 })).rejects.toThrow("deadline");
+    } else if (mode === "source-share") {
+      expect(await work.run(() => work!.source("workerAsks", async () => {
+        const queued = runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime);
+        advance(49);
+        expect(work!.signal.aborted).toBe(false);
+        advance(1); // Expire just the source's 50 ms allocation, while its peer holds the queue.
+        await queued;
+        return true;
+      }, false))).toBe(false);
+      expect(now).toBe(50);
+      expect(work.skippedSources.has("workerAsks")).toBe(true);
+      expect(work.signal.aborted).toBe(false);
+    } else {
+      const queued = work.run(() => runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime));
+      work.close();
+      fs.writeFileSync(path.join(state, "release"), "release");
+      await expect(queued).rejects.toThrow("seat project check ended");
+    }
     expect(filesResponseWorkerPoolDiagnostics().pid).not.toBeNull();
     fs.writeFileSync(path.join(state, "release"), "release");
     expect((await peer).body).toBe("[]");
     expect((await runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime)).body).toBe("[]");
     expect(fs.readFileSync(path.join(state, "dispatches"), "utf8")).toBe("one\n");
-  } finally { await stopTestWorker(); await peer.catch(() => undefined); fs.rmSync(state, { recursive: true, force: true }); }
+  } finally { work?.close(); await stopTestWorker(); await peer.catch(() => undefined); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
 
 

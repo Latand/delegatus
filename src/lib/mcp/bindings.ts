@@ -5303,8 +5303,8 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
  */
 async function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const action = text(args.action) || "list";
-  if (action !== "list" && action !== "add" && action !== "remove") {
-    throw new Error("action must be list, add or remove");
+  if (action !== "list" && action !== "add" && action !== "remove" && action !== "set-fallback") {
+    throw new Error("action must be list, add, remove or set-fallback");
   }
   const read = dependencies.readAccountProjectBindings ?? accountProjectBindings;
   const bind = dependencies.bindAccountToProject ?? bindAccountToProject;
@@ -5322,20 +5322,26 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
     : null;
 
   if (action !== "list") {
-    if (!project) throw new Error("project is required to add or remove a binding");
+    if (!project) throw new Error("project is required to change a binding");
     const engine = text(args.engine);
     if (engine !== "claude" && engine !== "codex") throw new Error("engine must be claude or codex");
     const accountId = text(args.accountId);
-    if (!accountId) throw new Error("accountId is required to add or remove a binding");
-    const result = action === "add" ? bind(engine, accountId, project) : unbind(engine, accountId, project);
+    if (!accountId) throw new Error("accountId is required to change a binding");
+    if (args.fallback !== undefined && typeof args.fallback !== "boolean") throw new Error("fallback must be a boolean");
+    if (action === "set-fallback" && typeof args.fallback !== "boolean") throw new Error("fallback is required for set-fallback");
+    const result = action === "remove" ? unbind(engine, accountId, project) : bind(engine, accountId, project, undefined, args.fallback as boolean | undefined, action === "set-fallback");
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
     /* #1845: a write answers the row it changed and that project's pool for
        that engine, still read AFTER the write from the store. The whole table
        is `action: "list"`. */
     const bindings = read();
     const bound = (allowedAccountIdsForProject(project, engine, bindings) ?? []).includes(accountId);
-    if (bound !== (action === "add")) {
+    if (bound !== (action !== "remove")) {
       throw new Error(`the binding store does not show the ${action} of ${engine} account ${accountId} for ${project} after the write`);
+    }
+    const fallback = bindings.find(binding => binding.engine === engine && binding.accountId === accountId && binding.project === project)?.fallback ?? false;
+    if (action !== "remove" && args.fallback !== undefined && fallback !== args.fallback) {
+      throw new Error("the binding store does not show the fallback flag after the write");
     }
     return redactPayload({
       action,
@@ -5344,6 +5350,7 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
       engine,
       accountId,
       bound,
+      fallback,
       allowed: projectEngineAccounts(project, engine, accountsFor(engine), bindings, []),
     });
   }

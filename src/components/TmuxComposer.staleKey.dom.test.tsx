@@ -19,7 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { FileEntry } from "@/lib/types";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 const dom = new Window();
@@ -66,6 +66,7 @@ const structuredView: RuntimeSessionView = {
 } as unknown as RuntimeSessionView;
 
 import { TmuxComposer } from "./TmuxComposer";
+import { setComposerAdmissionTimingForTests } from "./composerAdmissionDeadline";
 import { readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
 
 const realFetch = globalThis.fetch;
@@ -75,6 +76,7 @@ const subscribeRuntime = (listener: () => void) => {runtimeListeners.add(listene
 function useReceipts() {return useSyncExternalStore(subscribeRuntime,()=>structuredView.receipts,()=>structuredView.receipts);}
 
 beforeEach(() => {
+  setComposerAdmissionTimingForTests({ admissionDeadlineMs: 100, receiptReconciliationMs: 20, receiptPollIntervalMs: 5 });
   structuredView.receipts = [];
   installTmuxComposerRuntimeForTests({
     useRuntimeView: (candidate) => {useReceipts();return candidate.conversationId === "conv-stale-key" ? structuredView : null;},
@@ -84,6 +86,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setComposerAdmissionTimingForTests(null);
   resetTmuxComposerRuntimeForTests();
   setLocale("en");
   globalThis.fetch = realFetch;
@@ -110,6 +113,12 @@ function mockWire(sends: SendBody[], respond: Array<(body: SendBody) => { status
   globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
     const url = String(input);
     if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
+    if (url.startsWith("/api/runtime/send?")) {
+      const query = new URL(url, "http://fixture.invalid").searchParams;
+      expect(query.get("conversationId")).toBe("conv-stale-key");
+      expect(sends.some(send => send.idempotencyKey === query.get("clientMessageId"))).toBe(true);
+      return Response.json({ outcome: "unknown" });
+    }
     if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
     const body = JSON.parse(init?.body ?? "{}") as SendBody;
     sends.push(body);
@@ -194,6 +203,20 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
     await new Promise((r) => setTimeout(r, 0));
   });
 
+  /* The bounded observation window ends without a terminal receipt: wait for
+     the composer to release the generation (its durable record drops the
+     reconciling marker and shows the unconfirmed notice) instead of sleeping
+     past the window. */
+  const stillReconciling = () => (JSON.parse(sessionStorage.getItem("llvPendingSend:conv-stale-key") ?? "[]") as { key: string; reconciling?: true }[])
+    .some(entry => entry.key === sends[0]!.idempotencyKey && entry.reconciling);
+  const released = () => !stillReconciling() && Boolean(host.textContent?.includes(translate("en", "composer.deliveryUnconfirmed")));
+  const deadline = performance.now() + 5_000;
+  while (!released() && performance.now() < deadline) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+  }
+  expect(stillReconciling()).toBe(false);
+  expect(host.textContent).toContain(translate("en", "composer.deliveryUnconfirmed"));
+
   /* The operator types a genuinely NEW message. It must leave under a FRESH
      key carrying ITS OWN text — never the stale generation's key or bytes. */
   await settle(() => composerControls(host).type("a brand new message"));
@@ -201,7 +224,7 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
   /* The stale generation no longer holds this browser's wire: no receipt can be
      made to arrive for a request that may never have been admitted, so waiting
      on it would mute the conversation permanently (outbox `holdsLocalWireFence`).
-     The new message therefore leaves at once — and what matters here is that it
+     After that bounded observation the new message leaves — and what matters here is that it
      leaves as ITSELF, under a fresh key with its own text. */
   expect(sends).toHaveLength(2);
   expect(sends[1]!.text).toBe("a brand new message");

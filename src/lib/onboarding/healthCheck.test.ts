@@ -43,7 +43,7 @@ const PROJECT = "dir-0123456789abcdef0123456789abcdef";
 
 test("the cheapest runtime is the smallest connected model at the lowest tier, Claude first on a tie", () => {
   expect(cheapestHealthRuntime({ claude: "connected", codex: "connected" })).toEqual({ engine: "claude", model: "haiku", effort: "low" });
-  expect(cheapestHealthRuntime({ claude: "signed-out", codex: "connected" })?.model).toBe("gpt-5.6-luna");
+  expect(cheapestHealthRuntime({ claude: "signed-out", codex: "connected" })).toEqual({ engine: "codex", model: "gpt-6-luna", effort: "low" });
   expect(cheapestHealthRuntime({ claude: "cli-missing", codex: "signed-out" })).toBeNull();
 });
 

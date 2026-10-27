@@ -179,6 +179,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
   /* The size the catalog last reported, stored with the window. */
   const catalogSizeRef = useRef<number | null>(file?.size ?? null);
   const genRef = useRef(0);
+  const healthyChunk = useRef(false);
   const olderBusyRef = useRef(false);
 
   useEffect(() => {
@@ -268,6 +269,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
 
   useEffect(() => {
     genRef.current += 1;
+    healthyChunk.current = false;
     /* The rendered window already switched (see the render above); the
        transport state — offset, history start, decoder partial — is re-seated
        here from the same snapshot, so the live subscription continues forward
@@ -300,14 +302,25 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
       onChunk: (result) => {
         if (!alive || gen !== genRef.current) return;
         if ("transportError" in result) {
+          healthyChunk.current = false;
           patch(target, { error: translate(getLocale(), "common.serverUnavailable"), loading: false });
           return;
         }
         if ("error" in result && result.error) {
+          healthyChunk.current = false;
           patch(target, { error: result.error, loading: false });
           return;
         }
         const chunk = result as LogChunk;
+        // A healthy idle heartbeat changes neither the transcript nor status.
+        // The first answer and recovery from an error must still clear loading/error.
+        // The snapshot is still saved: it carries the catalog size, which can
+        // move while the transcript is idle and later rejects a truncated file.
+        if (healthyChunk.current && !anchorRef.current && !chunk.data
+          && chunk.offset === offsetRef.current && chunk.size === sizeRef.current) {
+          saveSnapshot(target);
+          return;
+        }
         if (offsetRef.current > chunk.size) {
           if (anchorRef.current) discardRestored(target);
           else {
@@ -389,6 +402,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
           tickTimeRef.current = new Date();
           next.tickTime = tickTimeRef.current;
         }
+        healthyChunk.current = true;
         patch(target, next);
         saveSnapshot(target);
       },
