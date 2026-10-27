@@ -25,6 +25,7 @@ import { MAX_STAGE_PROMPT_LENGTH, MAX_TASK_LENGTH } from "./limits";
 import { preflightPipelineRepo } from "./preflight";
 import { pipelineBaseBranchError } from "./git";
 import { pipelineDeliveryLookup } from "./store";
+import type { Pipeline } from "./types";
 
 export class ConversationDraftRefusal extends Error {
   constructor(readonly code: string, message: string, readonly status = 409, readonly retryable = false) {
@@ -171,7 +172,8 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
     const originalCwd = bound.generation.launchProfile.cwd;
     const canonicalPath = fs.realpathSync(bound.generation.path);
     const common = fs.realpathSync(preflight.gitCommonDir);
-    // Cheap file identities close the ref/index race while storage waits for admission.
+    // Cheap file identities recheck refs/index at synchronous storage admission.
+    // Working-copy status is prepared again after any admission contention.
     // Never run synchronous Git, or hold the state write lease over a Git probe.
     const refFiles = [path.join(gitDirectory.stdout.trim(), "HEAD"), path.join(common, "refs", "heads", initial.branch),
       path.join(common, "packed-refs"), path.join(gitDirectory.stdout.trim(), "index")];
@@ -269,14 +271,23 @@ export async function createConversationDraft(req: NextRequest, input: Conversat
   boundSource(req, input, ports);
   const principal = requestWorkspaceScope(req)?.memberId ?? "solo";
   const creationRequest = { key: `conversation-draft:${hash([principal, input.clientRequestId])}`, digest: hash([input.conversationId, input.taskId, input.sourceRevision]) };
-  const replay = pipelineDeliveryLookup({ requestKey: creationRequest.key });
-  if (replay) {
-    authorize(req, [replay.project, projectForCwd(replay.repoDir)]);
-    if (replay.creationRequest?.digest !== creationRequest.digest) refuse("idempotency_conflict", "creation arguments changed");
-    return { pipeline: replay, status: 200 };
-  }
-  const source = await withViewerOperation("pipelines.from-conversation.capture", () => sourceCapture(req, input, ports, budget));
+  const admitReplay = (pipeline: Pipeline) => {
+    boundSource(req, input, ports);
+    authorize(req, [pipeline.project, projectForCwd(pipeline.repoDir)]);
+  };
+  const replay = () => {
+    const pipeline = pipelineDeliveryLookup({ requestKey: creationRequest.key });
+    if (!pipeline) return null;
+    admitReplay(pipeline);
+    if (pipeline.creationRequest?.digest !== creationRequest.digest) refuse("idempotency_conflict", "creation arguments changed");
+    return { pipeline, status: 200 };
+  };
+  const existing = replay();
+  if (existing) return existing;
+  let descriptor: number | undefined;
   try {
+    const source = await withViewerOperation("pipelines.from-conversation.capture", () => sourceCapture(req, input, ports, budget));
+    descriptor = source.pinned.descriptor;
     if (source.sourceRevision !== input.sourceRevision) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
     if (source.dirty) refuse("SOURCE_HAS_CHANGES", "Commit the conversation's changes before creating a pipeline.");
     const excerpt = withViewerOperation("pipelines.from-conversation.capture", () => conversationExcerpt(source.pinned, source.conversation.engine));
@@ -305,10 +316,15 @@ export async function createConversationDraft(req: NextRequest, input: Conversat
       briefer: { kind: "operator" }, allowOperatorDraftWithoutLineage: true, queueWhenBusy: false, creationRequest,
       conversationSource: { conversationId: source.conversation.id, branch: source.branch, head: source.head, capturedAt },
       beforeConversationCreate: async () => { await source.recheck(); }, admitConversationCreate: source.assertCurrent,
+      admitConversationReplay: admitReplay,
     }));
-    if (!result.pipeline) return { ...result, status: result.status ?? 400 };
-    boundSource(req, input, ports);
-    authorize(req, [result.pipeline.project]);
+    if (!result.pipeline) return replay() ?? { ...result, status: result.status ?? 400 };
+    admitReplay(result.pipeline);
     return { ...result, status: result.replayed ? 200 : 201 };
-  } finally { fs.closeSync(source.pinned.descriptor); }
+  } catch (error) {
+    // A peer can commit after the first lookup, including during source capture.
+    const committed = replay();
+    if (committed) return committed;
+    throw error;
+  } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
 }

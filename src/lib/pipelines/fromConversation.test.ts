@@ -1,10 +1,12 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { soloBrowserSession, OPERATOR_COOKIE } from "@/lib/agent/operatorSession";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { openPinnedTranscript } from "@/lib/mcp/bindings";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
+import { statePath } from "@/lib/configDir";
 import * as pipelineStore from "./store";
 import * as messagePages from "@/lib/session/messagesPage";
 import { listQueuedPipelineCreations } from "./creationQueue";
@@ -246,6 +248,152 @@ test("a branch switched while waiting for real storage admission cannot land a s
   try { await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ code: "SOURCE_CHANGED" }); }
   finally { admission.mockRestore(); }
   expect(loadPipelines()).toEqual([]);
+});
+
+test.each(["tracked", "untracked"])("real storage admission refuses a late %s edit without changing the source", async kind => {
+  const f = await fixture();
+  const input = await f.createInput();
+  const file = path.join(f.repo, kind === "tracked" ? "tracked.txt" : "late-new.txt");
+  const create = pipelineStore.createPipelineWithDelivery;
+  const admission = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementation(async (...args) => {
+    fs.appendFileSync(file, "unfinished source work\n");
+    return create(...args);
+  });
+  try {
+    await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ status: 409, code: "SOURCE_HAS_CHANGES" });
+  } finally { admission.mockRestore(); }
+  expect(loadPipelines()).toEqual([]);
+  expect(listQueuedPipelineCreations()).toEqual([]);
+  expect(fs.readFileSync(file, "utf8")).toEndWith("unfinished source work\n");
+  expect(await f.git(f.repo, "rev-parse", "HEAD")).toBe(f.head);
+  expect(await f.git(f.repo, "status", "--porcelain")).toContain(kind === "tracked" ? "M tracked.txt" : "?? late-new.txt");
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
+test.each(["tracked", "untracked"])("a real SQLite wait repeats source validation and refuses a %s edit", async kind => {
+  const f = await fixture();
+  const input = await f.createInput();
+  const database = new Database(statePath("state.sqlite"));
+  const file = path.join(f.repo, kind === "tracked" ? "tracked.txt" : "late-new.txt");
+  const exec = f.ports.exec;
+  f.ports.exec = async (...args) => {
+    expect(database.query("SELECT owner_token FROM state_leases WHERE collection = 'pipelines'").get()).toBeNull();
+    return exec(...args);
+  };
+  const create = pipelineStore.createPipelineWithDelivery;
+  let preparations = 0;
+  let held = false;
+  let change: ReturnType<typeof setImmediate> | undefined;
+  const admission = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementation(async (...args) => {
+    const options = args[3]!;
+    const prepare = options.prepare!;
+    args[3] = { ...options, prepare: async () => {
+      await prepare();
+      if (++preparations === 1) {
+        database.exec("BEGIN IMMEDIATE");
+        held = true;
+        change = setImmediate(() => {
+          fs.appendFileSync(file, "edit during storage wait\n");
+          database.exec("ROLLBACK");
+          held = false;
+        });
+      }
+    } };
+    return create(...args);
+  });
+  try {
+    await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ code: "SOURCE_HAS_CHANGES", status: 409 });
+    expect(preparations).toBe(1); // The repeated real Git check refuses before preparation completes again.
+    expect(fs.readFileSync(file, "utf8")).toEndWith("edit during storage wait\n");
+    expect(loadPipelines()).toEqual([]);
+    expect(listQueuedPipelineCreations()).toEqual([]);
+  } finally {
+    admission.mockRestore();
+    if (change) clearImmediate(change);
+    if (held) database.exec("ROLLBACK");
+    database.close();
+  }
+});
+
+test.each(["capture", "admission", "preparation"])("a duplicate waiting at %s replays the saved draft after its peer commits and the source moves", async phase => {
+  const f = await fixture();
+  const input = await f.createInput();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const create = pipelineStore.createPipelineWithDelivery;
+  if (phase === "capture") {
+    const open = f.ports.open;
+    let opened = false;
+    f.ports.open = async pathname => {
+      const pinned = await open(pathname);
+      if (!opened) { opened = true; entered.resolve(); await release.promise; }
+      return pinned;
+    };
+  }
+  let calls = 0;
+  const storageErrors: unknown[] = [];
+  const admission = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementation(async (...args) => {
+    if (++calls === 1) {
+      if (phase === "admission") { entered.resolve(); await release.promise; }
+      else if (phase === "preparation") {
+        const options = args[3]!;
+        const prepare = options.prepare!;
+        args[3] = { ...options, prepare: async () => { entered.resolve(); await release.promise; await prepare(); } };
+      }
+    }
+    try { return await create(...args); }
+    catch (error) { storageErrors.push(error); throw error; }
+  });
+  const waiting = createConversationDraft(f.request, input, f.ports);
+  // Observe rejection immediately, including when an assertion below fails.
+  const settled = waiting.then(value => ({ value }), error => ({ error }));
+  try {
+    await entered.promise;
+    const winner = await createConversationDraft(f.request, input, f.ports);
+    expect(winner.status).toBe(201);
+    const saved = await patchPipeline(winner.pipeline!.id, { action: "override-stage", stageId: "builder",
+      expectedStageDigest: stageDigest(winner.pipeline!.stages[0]!), prompt: "Saved while the duplicate waits" }, f.ports.pipeline);
+    expect(saved.error).toBeUndefined();
+    fs.appendFileSync(f.transcript, "\n");
+    fs.appendFileSync(path.join(f.repo, "tracked.txt"), "source moved\n");
+    release.resolve();
+    const outcome = await settled;
+    expect(outcome).not.toHaveProperty("error");
+    if (!("value" in outcome)) throw outcome.error;
+    expect(outcome.value.status).toBe(200);
+    expect(outcome.value.pipeline!.id).toBe(winner.pipeline!.id);
+    expect(outcome.value.pipeline!.stages[0]!.prompt).toBe("Saved while the duplicate waits");
+    expect(storageErrors).toEqual([]);
+    expect(loadPipelines()).toHaveLength(1);
+    expect(listQueuedPipelineCreations()).toEqual([]);
+    expect(f.spawnInputs).toHaveLength(0);
+  } finally { release.resolve(); await settled; admission.mockRestore(); }
+});
+
+test.each(["operator", "task"])("a committed replay still rechecks live %s authority at storage admission", async kind => {
+  const f = await fixture();
+  const input = await f.createInput();
+  const create = pipelineStore.createPipelineWithDelivery;
+  let winner: string | undefined;
+  let replayReturned = false;
+  const admission = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementation(async (...args) => {
+    const stored = await create(...args);
+    winner = stored.id;
+    if (kind === "operator") f.request.headers.delete("cookie");
+    else saveTasks([{ ...f.task, assignments: [] }]);
+    fs.appendFileSync(f.transcript, "\n");
+    const replay = await create(...args);
+    replayReturned = true;
+    return replay;
+  });
+  try {
+    await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({
+      code: kind === "operator" ? "operator_required" : "SOURCE_NOT_ON_TASK",
+    });
+  } finally { admission.mockRestore(); }
+  expect(loadPipelines().map(pipeline => pipeline.id)).toEqual([winner!]);
+  expect(replayReturned).toBe(false);
+  expect(listQueuedPipelineCreations()).toEqual([]);
 });
 
 test("cancellation after opening closes the owned descriptor and creates nothing", async () => {

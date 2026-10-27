@@ -13359,6 +13359,7 @@ type CreatePipelineOptions = {
   /** Source capture and live authority are rechecked after asynchronous creation probes. */
   beforeConversationCreate?: () => Promise<void>;
   admitConversationCreate?: () => void;
+  admitConversationReplay?: (pipeline: Pipeline) => void;
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
@@ -13655,9 +13656,9 @@ export async function createPipelineFromRequest(
     let created: Pipeline;
     let replayed = false;
     try {
-      if (options.beforeConversationCreate) await options.beforeConversationCreate();
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, {
-        requireOwner: !!options.refreshOf, admit: options.admitConversationCreate, onReplay: () => { replayed = true; },
+        requireOwner: !!options.refreshOf, prepare: options.beforeConversationCreate,
+        admit: options.admitConversationCreate, admitReplay: options.admitConversationReplay, onReplay: () => { replayed = true; },
       });
     } catch (error) {
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };

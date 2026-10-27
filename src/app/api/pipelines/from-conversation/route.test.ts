@@ -159,6 +159,35 @@ test("a signed-in workspace member can preview/create; an unassigned member cann
     const input = { ...f.input, sourceRevision: (await preview.json()).source.sourceRevision, clientRequestId: "member-create" };
     expect(teamGate(request("POST", input, memberHeaders), { bearerAuthenticated: false })).toBeNull();
     expect((await POST(request("POST", input, memberHeaders))).status).toBe(201);
+    for (const change of ["membership", "project", "repository"] as const) {
+      const foreignRepo = path.join(f.root, `foreign-${change}`);
+      fs.mkdirSync(foreignRepo);
+      const create = store.createPipelineWithDelivery;
+      let replayReturned = false;
+      const admission = spyOn(store, "createPipelineWithDelivery").mockImplementation(async (...args) => {
+        const saved = await create(...args);
+        if (change === "membership") team.removeWorkspaceMember(workspace, member.id);
+        else store.withDeliveryMutation(tx => tx.put({ ...saved,
+          ...(change === "project" ? { project: "repo-foreign" }
+            : { repoDir: foreignRepo, ...store.pipelineIdentity(saved.id, saved.task, foreignRepo) }),
+        }));
+        fs.appendFileSync(f.transcript, "\n");
+        const replay = await create(...args);
+        replayReturned = true;
+        return replay;
+      });
+      try {
+        const currentPreview = await GET(request("GET", f.input, memberHeaders));
+        const duplicate = { ...input, sourceRevision: (await currentPreview.json()).source.sourceRevision, clientRequestId: `member-race-${change}` };
+        const refused = await POST(request("POST", duplicate, memberHeaders));
+        expect(refused.status).toBe(403);
+        expect((await refused.json()).code).toBe("workspace_forbidden");
+        expect(replayReturned).toBe(false);
+      } finally {
+        admission.mockRestore();
+        if (change === "membership") team.putWorkspaceMember(workspace, member.id, "member", owner.id, now);
+      }
+    }
     team.removeWorkspaceMember(workspace, member.id);
     expect((await GET(request("GET", f.input, memberHeaders))).status).toBe(403);
     expect((await POST(request("POST", input, memberHeaders))).status).toBe(403);

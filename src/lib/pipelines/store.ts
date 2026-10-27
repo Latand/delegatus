@@ -2043,17 +2043,33 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
     owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
 }
 
-export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean; admit?: () => void; onReplay?: () => void } = {}): Promise<Pipeline> {
-  return withDeliveryMutationAsync((tx) => {
-    options.admit?.();
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
+  requireOwner?: boolean;
+  /** Outside the lease; repeated after contention before another create attempt. */
+  prepare?: () => Promise<void>;
+  /** Synchronous creation-only freshness guard under the writer lease. */
+  admit?: () => void;
+  /** Live authority and result scope, independent of source freshness. */
+  admitReplay?: (pipeline: Pipeline) => void;
+  onReplay?: () => void;
+} = {}): Promise<Pipeline> {
+  const replay = (tx: StateBoundedTransaction<Pipeline>) => {
     if (pipeline.creationRequest) {
-      const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
-      if (replay) {
-        if (replay.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+      const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
+      if (existing) {
+        options.admitReplay?.(existing);
+        if (existing.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
         options.onReplay?.();
-        return replay;
+        return existing;
       }
     }
+    return null;
+  };
+  const create = (tx: StateBoundedTransaction<Pipeline>, preparationFailure?: { error: unknown }) => {
+    const existing = replay(tx);
+    if (existing) return existing;
+    if (preparationFailure) throw preparationFailure.error;
+    options.admit?.();
     const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
@@ -2066,7 +2082,26 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);
     return pipeline;
-  }, options.requireOwner ? 4096 : 16);
+  };
+  const limit = options.requireOwner ? 4096 : 16;
+  const prepare = options.prepare;
+  if (!prepare) return withDeliveryMutationAsync(create, limit);
+  return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
+    const store = pipelineStore();
+    // A committed replay needs live authorization, but no fresh source capture.
+    const existing = store.boundedPatch(2, replay);
+    if (existing) { admitted(); return existing; }
+    let preparationFailure: { error: unknown } | undefined;
+    try { await prepare(); }
+    catch (error) { preparationFailure = { error }; }
+    // One non-waiting admission attempt follows preparation. Contention retries
+    // this whole operation, including preparation, with no Git under the lease.
+    return store.boundedPatch(limit, tx => {
+      admitted();
+      // A peer may have committed while preparation was running or refused.
+      return create(tx, preparationFailure);
+    });
+  }, { waitMs: pipelineLockWaitMs(), subject: "pipelines" }));
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
