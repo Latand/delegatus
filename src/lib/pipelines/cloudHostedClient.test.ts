@@ -6,6 +6,7 @@ import { createHostedCloudStageClient, CloudSubmissionNotStartedError, type Host
 import type { CloudTaskAccess, CloudStageClient } from "./cloudStage";
 import { CLOUD_STAGE_TIMEOUT_MS } from "./cloudStage";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
 const model = "gpt-6.1-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
@@ -512,38 +513,54 @@ test("refusal at the final turn dispatch guard is known not to have started work
   expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
 });
 
-test.each([false, true].flatMap(expired => [4_000, 70_000].map(size => ({ expired, size }))))("multipart delivery uses the stage budget and stops at its expiry: %p", async ({ expired, size }) => {
-  const f = fixture();
-  const timers: { ms: number; fire: () => void }[] = [];
-  const realTimer = globalThis.setTimeout;
-  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
-    if (ms >= 30_000) timers.push({ ms, fire: callback });
-    return realTimer(callback, ms);
-  }) as typeof setTimeout);
-  let crossed = false;
-  f.respond((frame, socket) => {
-    if (frame.method === "thread/turns/list" && !crossed) {
-      crossed = true;
-      for (const timer of timers) if (timer.ms <= (expired ? CLOUD_STAGE_TIMEOUT_MS : 30_000)) timer.fire();
-    }
-    return f.original(frame, socket);
-  });
-  try {
-    const prompt = "Accepted detail 界🙂. ".repeat(size);
-    if (size === 70_000) expect(Buffer.byteLength(prompt)).toBeGreaterThan(1024 * 1024);
-    const result = await f.client.submit({ ...f.input, prompt, preparePrompt: async () => prompt }).catch(error => error);
-    const sent = f.frames.filter(frame => frame.method === "turn/start").map(frame => (frame.params!.input as { text: string }[])[0]!.text);
-    expect(crossed).toBe(true);
-    if (expired) {
-      expect(result).toBeInstanceOf(Error);
-      expect(result.message).toBe("Codex Cloud operation timed out");
-      expect(result instanceof CloudSubmissionNotStartedError).toBe(false);
-      expect(sent).toHaveLength(1);
-    } else {
-      expect(result.taskId).toBe(thread.id);
-      expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
-      expect(sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("")).toBe(prompt);
-    }
-    expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
-  } finally { timer.mockRestore(); }
-});
+for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
+  const name = `multipart delivery uses a real stage deadline: expired=${expired} size=${size}`;
+  test(name, async () => {
+    const budgetMs = expired ? 5_123 : 60_123;
+    if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
+    const f = fixture();
+    const acknowledgement = heldCloudAcknowledgement();
+    const realTimer = globalThis.setTimeout;
+    // Keep the production timer and cancellation semantics. Compress only the
+    // thirty-minute session budget; the parent measures real elapsed time.
+    let armed = 0;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      const handle = realTimer(callback, ms === CLOUD_STAGE_TIMEOUT_MS ? budgetMs : ms);
+      if (ms === CLOUD_STAGE_TIMEOUT_MS) { armed++; deadlineReport("armed"); }
+      return handle;
+    }) as typeof setTimeout);
+    let crossed = false, started = 0, acknowledged = 0;
+    f.respond((frame, socket) => {
+      if (frame.method === "turn/start") { expect(started).toBe(acknowledged); started++; }
+      if (frame.method === "thread/turns/list" && !crossed) {
+        crossed = true;
+        acknowledgement.hold(() => { acknowledged++; socket.receive({ id: frame.id, result: f.original(frame, socket) }); });
+        return undefined;
+      }
+      if (frame.method === "thread/turns/list") acknowledged++;
+      return f.original(frame, socket);
+    });
+    try {
+      const prompt = "Accepted detail 界🙂. ".repeat(size);
+      if (size === 70_000) expect(Buffer.byteLength(prompt)).toBeGreaterThan(1024 * 1024);
+      const result = await f.client.submit({ ...f.input, prompt, preparePrompt: async () => prompt }).catch(error => error);
+      const sent = f.frames.filter(frame => frame.method === "turn/start").map(frame => (frame.params!.input as { text: string }[])[0]!.text);
+      expect(armed).toBe(1);
+      expect(crossed).toBe(true);
+      if (expired) {
+        expect(result).toBeInstanceOf(Error);
+        expect(result.message).toBe("Codex Cloud operation timed out");
+        expect(result instanceof CloudSubmissionNotStartedError).toBe(false);
+        expect(sent).toHaveLength(1);
+        expect(acknowledged).toBe(0);
+      } else {
+        expect(result.taskId).toBe(thread.id);
+        expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
+        expect(sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("")).toBe(prompt);
+        expect(acknowledged).toBe(started - 1);
+      }
+      expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+      deadlineReport("done");
+    } finally { timer.mockRestore(); acknowledgement.close(); }
+  }, 180_000);
+}
