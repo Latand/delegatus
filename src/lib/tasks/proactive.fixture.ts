@@ -15,7 +15,10 @@ if (import.meta.main) {
     let result: unknown;
     if (action === "lane-error") {
       const { proactiveTaskExecutionError } = await import("./proactiveExecution");
-      const pipeline = await Bun.file(key!).json();
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      const saved = await Bun.file(key!).json();
+      const pipeline = findPipelineRecord(saved.id);
+      if (!pipeline?.proactiveTaskIds?.length) throw new Error("retained proactive pipeline authority is missing");
       result = { error: proactiveTaskExecutionError(pipeline.proactiveTaskIds, file!, { pipeline, stageId: pipeline.cursor?.stageId, phase: "effect" }) };
     } else if (action === "reserve-lane") {
       const { reserveProactiveLane } = await import("./proactiveLane");
