@@ -120,7 +120,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { clearEngineParkedTaskNote, parkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
 import { operatorLocale } from "@/lib/operator/settings";
-import { requestPipelineTick } from "./controllerSignal";
+import { hasLocalPipelineController, requestPipelineTick } from "./controllerSignal";
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
@@ -9717,14 +9717,16 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
     ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
 
+const provisioningHost = globalThis as typeof globalThis & { __llvProvisioningRepositories?: Map<string, Promise<void>> };
+
 /**
- * The provisioning pre-pass: every lane waiting on a base, fetched and
- * provisioned before the controller takes the lease (#1799).
+ * Fetch and provision outside the lease (#1799). Scoped controller passes
+ * dispatch this work to bounded jobs and apply each outcome in a later lease.
  *
  * The indexed read takes no write lease. A pass with no provisioning work
  * reads no pipeline payloads and starts no subprocess.
  */
-async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[]): Promise<Map<string, PipelineProvisionOutcome>> {
+async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[], waitForRepository: (previous: Promise<void>) => Promise<void> = previous => previous): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
@@ -9767,7 +9769,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Close/delete may originate in another process. Indexed row revisions
   // invalidate only changed jobs; polling needs no lease or close-path hook.
   const watch = setInterval(revalidate, 50);
-  const repositoryTails = new Map<string, Promise<void>>();
+  const repositoryTails = provisioningHost.__llvProvisioningRepositories ??= new Map<string, Promise<void>>();
   const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
     worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
@@ -9792,6 +9794,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
         catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
       };
       let releaseRepository: (() => void) | undefined;
+      let repository: string | undefined, tail: Promise<void> | undefined;
       try {
         // Linked worktrees share refs and Git locks even when repoDir differs.
         // Resolve through Git asynchronously, then serialize each common dir.
@@ -9803,10 +9806,11 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
           return;
         }
-        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
         const previous = repositoryTails.get(repository);
-        repositoryTails.set(repository, new Promise<void>((resolve) => { releaseRepository = resolve; }));
-        await previous;
+        tail = new Promise<void>((resolve) => { releaseRepository = resolve; });
+        repositoryTails.set(repository, tail);
+        if (previous) await waitForRepository(previous);
         const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
@@ -9816,7 +9820,10 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
           error: `pipeline provisioning failed: ${String(error)}`,
         });
-      } finally { releaseRepository?.(); }
+      } finally {
+        releaseRepository?.();
+        if (repository && repositoryTails.get(repository) === tail) repositoryTails.delete(repository);
+      }
     }));
   } finally { clearInterval(watch); }
   return outcomes;
@@ -12287,6 +12294,12 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   const scoped = Boolean(controllerPipelineKeys());
+  if (!hasLocalPipelineController() && ports.structuredDeliveryPublication?.() === "unbound") {
+    // An inventory sidecar owns no delivery publisher. Hand off before Git,
+    // registry reconciliation or another lane can delay the controller wake.
+    requestPipelineTick();
+    return { pipelines: [], changed: false };
+  }
   let completePhase!: () => void;
   const phaseDone = new Promise<void>(resolve => { completePhase = resolve; });
   const queueControllerJob = (id: string, run: () => Promise<unknown>) => startPipelineControllerJob(id, async () => {
@@ -12402,7 +12415,22 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* Before the lease, never under it (#1799). */
     await settlePendingRemoteActions(ports);
     await settlePendingStageProvenance(ports);
-    const provisioned = await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
+    // Production controller passes own bounded jobs; Git never occupies the
+    // scheduler phase. The durable provisioning row is replayed after restart.
+    const provisioned = scoped ? new Map<string, PipelineProvisionOutcome>()
+      : await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
+    if (scoped) for (const lane of await selectControllerPipelines("provisioning", provisioningThrough)) {
+      startPipelineControllerJob(lane.id, async waitOutsideCapacity => {
+        await phaseDone;
+        await withControllerPipelineScope([lane.id], async () => {
+          const outcomes = await provisionPendingPipelines(ports, provisioningThrough, [], waitOutsideCapacity);
+          await withPipelineMutation(async (pipelines, persist) => {
+            const current = pipelines.find(row => row.id === lane.id);
+            if (current && await applyProvisionOutcome(current, outcomes.get(lane.id), ports)) await persist([current]);
+          });
+        });
+      }, () => controllerPipelineVersion(lane.id), "provisioning");
+    }
     const stageBranchProtections = new Map<string, StageBranchProtection>();
     await Promise.all((await selectControllerPipelines("hosts")).map(async (pipeline) => {
       const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
