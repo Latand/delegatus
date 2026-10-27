@@ -39494,3 +39494,104 @@ describe("new task default deadline", () => {
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
+
+
+describe("provider capacity recovery", () => {
+  browserTest("capacity waits and exhausted budgets stay visible at every lane density", async () => {
+    const out = path.resolve(".artifacts/provider-capacity-recovery");
+    fs.mkdirSync(out, { recursive: true });
+    const entry = path.join(out, "fixture.tsx");
+    // This case renders the production block; it adds no standalone driver.
+    fs.writeFileSync(entry, `
+      import { createRoot } from "react-dom/client";
+      import { PipelineBlock, PipelineStateLine } from "@/components/pipelines/PipelineBlock";
+      import { summarizePipeline } from "@/components/kanban/kanbanModel";
+      import { laneState } from "@/components/kanban/cardState";
+      import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
+      import { setLocale } from "@/lib/i18n";
+      const lang = new URL(location.href).searchParams.get("lang");
+      setLocale(lang === "uk" ? "uk" : "en");
+      document.documentElement.classList.toggle("dark", matchMedia("(prefers-color-scheme: dark)").matches);
+      const now = Date.parse("2026-10-26T13:38:00Z");
+      Date.now = () => now;
+      const role = {roleId:"builder",engine:"codex",model:"gpt-6",effort:"high",access:"read-write"};
+      function lane(state, density) {
+        const stage = {id:"builder",kind:"run",role:{roleId:"builder"},effectiveRole:role,prompt:"",next:null,onFail:null};
+        return {id:state+"-"+density,task:lang === "uk" ? "Відновити пошук" : "Restore search",state,taskIds:[],project:"fixture",
+          stages:[stage],cursor:{stageId:"builder",state:"running",input:null,activatedBy:null},createdAt:"2026-10-26T13:28:00Z",closedAt:null,
+          runs:[{stageId:"builder",attempts:[{n:1,state,effectiveRole:role,startedAt:"2026-10-26T13:28:00Z",report:null,
+            completedAt:state === "running" ? null : "2026-10-26T13:38:00Z",verdict:null,flowId:null,agentPath:null,conversationId:null,
+            providerWait:{condition:{kind:"transient",label:"model at capacity",scope:null,resetLabel:null},
+              text:"Selected model is at capacity. Please try again later.",accountId:null,turnTs:now,tries:state === "running" ? 0 : 3,
+              startedAt:"2026-10-26T13:38:00Z",resumeAt:"2026-10-26T13:39:00.000Z",resetsAt:null}}]}]};
+      }
+      createRoot(document.getElementById("root")).render(
+        <WorkLinksProvider value={{pipelines:{},tasks:{}}}>
+          <main style={{padding:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,360px),1fr))",gap:16,color:"var(--color-primary)",background:"var(--surface-base)"}}>
+            {["running","needs_decision"].flatMap(state => ["card","task","screen"].map(density => {
+              const pipeline=lane(state,density);
+              return <article key={pipeline.id} data-case={pipeline.id} data-owner={laneState(pipeline).owner}
+                style={{padding:12,minWidth:0,border:"1px solid var(--border-default)",borderRadius:12,background:"var(--surface-card)"}}>
+                <h2 style={{fontSize:14,marginBottom:8}}>{lang === "uk" ? ({card:"Картка",task:"Завдання",screen:"Конвеєр"}[density]) : density} · {state === "running" ? (lang === "uk" ? "Очікування" : "Waiting") : (lang === "uk" ? "Ліміт вичерпано" : "Budget exhausted")}</h2>
+                {density === "screen" ? <PipelineStateLine summary={summarizePipeline(pipeline)} nowMs={now} /> : null}
+                <PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={now} />
+              </article>;
+            }))}
+          </main>
+        </WorkLinksProvider>);
+    `);
+    const server = await serveEvidenceFixture(out, entry);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const frames: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=${lang}`, { width, height: 1100 }, theme, lang, "reduce", width === 390);
+        try {
+          await page.waitForSelector('[data-case="needs_decision-screen"]');
+          for (const state of ["running", "needs_decision"]) for (const density of ["card", "task", "screen"]) {
+            const panel = page.locator(`[data-case="${state}-${density}"]`);
+            const text = (await panel.innerText()).replaceAll("\u00a0", " ").replaceAll("\u2011", "-");
+            expect(text).toContain(lang === "en" ? "Model at capacity" : "Модель перевантажена");
+            expect(text).toContain(state === "running" ? "2026-10-26 13:39 UTC" : lang === "en" ? "retry budget exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
+            expect(text.split(lang === "en" ? "Model at capacity" : "Модель перевантажена")).toHaveLength(2);
+            if (state === "running") {
+              expect(await panel.getAttribute("data-owner")).toBe("waiting");
+              expect(await panel.locator('.st-running, [data-stage-state="running"]').count()).toBe(0);
+              expect(text).not.toMatch(/running|працює/);
+            }
+          }
+          const geometry = await page.evaluate(() => {
+            const clipped: string[] = [];
+            for (const element of document.querySelectorAll<HTMLElement>('[data-pipeline-reason], [data-stage-now], [data-provider-wait]')) {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const box = element.getBoundingClientRect();
+              for (const rect of range.getClientRects()) if (rect.left < box.left - 1 || rect.right > box.right + 1
+                || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) clipped.push(element.textContent ?? "");
+              const stamp = /\d{4}[-\u2011]\d{2}[-\u2011]\d{2}[ \u00a0]\d{2}:\d{2}[ \u00a0]UTC/.exec(element.textContent ?? "");
+              if (stamp && element.firstChild?.nodeType === Node.TEXT_NODE) {
+                range.setStart(element.firstChild, stamp.index);
+                range.setEnd(element.firstChild, stamp.index + stamp[0].length);
+                if (range.getClientRects().length !== 1) clipped.push("retry timestamp wraps");
+              }
+            }
+            return { clipped, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          expect(geometry).toEqual({ clipped: [], overflow: false });
+          expect(pageErrors).toEqual([]);
+          const screenshot = `${lang}-${theme}-${width}.png`;
+          await page.locator("main").screenshot({ path: path.join(out, screenshot) });
+          frames.push({ lang, theme, width, screenshot, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/provider-capacity-recovery", { recursive: true });
+      const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/pipelines/PipelineBlock.tsx", "src/components/pipelines/pipelineBlock.css", "src/components/pipelines/pipelineBlockModel.ts", "src/components/kanban/cardState.ts", "src/lib/pipelines/stageChip.ts", "src/components/kanban/PipelineSection.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/provider-capacity-recovery/rendered.json", JSON.stringify({
+        driver:"src/components/kanban/kanbanBoard.browser.test.tsx",
+        command:"LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'capacity waits and exhausted budgets'",
+        capturedAt:new Date().toISOString(),
+        base:Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
+        sources:Object.fromEntries(sources.map(file => [file, new Bun.CryptoHasher("sha256").update(fs.readFileSync(file)).digest("hex")])), frames,
+      }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});

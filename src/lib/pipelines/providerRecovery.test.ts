@@ -1,4 +1,8 @@
 import { expect, test, fs, path, loadPipelines, savePipelines, pipelineIdentity, providerRecoveryHarness, stageTranscript, readFixtures, tickPipelines } from "./engine.fixture";
+import { laneState } from "@/components/kanban/cardState";
+import { pipelineReason } from "@/components/pipelines/pipelineBlockModel";
+import { stageChipState } from "./stageChip";
+import { translate, type TFunction } from "@/lib/i18n";
 import { recoverPipelineProviderTurn } from "./engine";
 import { scheduleProviderRecovery, settleProviderRecoveries, PROVIDER_RECOVERY_PAGE, PROVIDER_RECOVERY_DEADLINE_MS } from "./providerRecovery";
 import { FlowPipelineController, startFlowPipelineControllerRuntime } from "./controller";
@@ -46,6 +50,13 @@ test.each([true, null])("exact null-message capacity completion is shown and con
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   let lane = loadPipelines()[0]!;
   expect(lane.stateDetail).toContain("waiting for model at capacity");
+  expect(laneState(lane)).toMatchObject({ owner: "waiting", retryAtMs: f.now() + 60_000 });
+  expect(stageChipState(lane, lane.stages[0]!)).toBe("pending");
+  for (const locale of ["en", "uk"] as const) {
+    const t: TFunction = (key, params) => translate(locale, key, params);
+    expect(pipelineReason(t, lane, () => "Build")).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
+    expect(pipelineReason(t, lane, () => "Build")?.replaceAll("\u00a0", " ").replaceAll("\u2011", "-")).toContain(lane.runs[0]!.attempts[0]!.providerWait!.resumeAt.replace("T", " ").slice(0, 16));
+  }
   expect(lane.runs[0]!.attempts[0]!.providerWait).toMatchObject({ condition: { kind: "transient" }, tries: 0,
     resumeAt: new Date(f.now() + 60_000).toISOString() });
   f.advance(59_999);
@@ -59,6 +70,8 @@ test.each([true, null])("exact null-message capacity completion is shown and con
   expect(lane.runs[0]!.attempts).toHaveLength(1);
   expect(lane.runs[0]!.attempts[0]!.providerRecoveryBudget?.tries).toBe(1);
   expect(lane.stateDetail).toContain("continuing the same conversation");
+  expect(laneState(lane).owner).toBe("working");
+  expect(stageChipState(lane, lane.stages[0]!)).toBe("running");
 });
 
 test("ordinary recovery-budget exhaustion cannot skip the independent terminal observation", async () => {
@@ -106,6 +119,13 @@ test("exhausted capacity recovery visibly parks with the original reason", async
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   expect(loadPipelines()[0]!).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("model at capacity after 3 tries") });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("needs_decision");
+  const saved = loadPipelines()[0]!;
+  for (const locale of ["en", "uk"] as const) {
+    const t: TFunction = (key, params) => translate(locale, key, params);
+    const reason = pipelineReason(t, saved, () => "Build");
+    expect(reason).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
+    expect(reason).toContain(locale === "en" ? "exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
+  }
   expect(f.sends).toHaveLength(0);
 });
 
@@ -341,8 +361,31 @@ test.each([0, 3])("a known capacity cut checkpoints before held activity with %i
   } finally { timer.mockRestore(); release.resolve(); await work; }
 });
 
-test("an expired held read parks visibly, releases observation and lets a peer recover before the read returns", async () => {
+test.each(["busy", "terminal", "continued", "cancelled", "admission"] as const)("an unproved %s read times out without changing lifecycle or admitting late effects", async turn => {
   const f = await capacity();
+  if (turn === "busy") {
+    fs.writeFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }) + "\n");
+    f.h.ports.conversationAgentActive = async () => true;
+  }
+  if (turn === "continued" || turn === "cancelled" || turn === "admission") {
+    await recoverPipelineProviderTurn(f.id, f.h.ports);
+    const lane = loadPipelines()[0]!;
+    const wait = lane.runs[0]!.attempts[0]!.providerWait!;
+    if (turn === "continued") wait.actionAt = f.h.ports.now();
+    else if (turn === "cancelled") wait.retryCancelled = true;
+    else {
+      // Account admission carries a target before that account has any turn.
+      wait.condition = {kind:"usage_limit",label:"codex usage limit",scope:"usage",resetLabel:null};
+      wait.turnTs = 0;
+      wait.switchedAccountId = lane.runs[0]!.attempts[0]!.accountId ?? "account-a";
+      lane.stateDetail = null;
+      fs.writeFileSync(f.file, JSON.stringify({type:"event_msg",timestamp:f.h.ports.now(),payload:{type:"task_started"}}) + "\n");
+      f.h.ports.conversationAgentActive = async () => true;
+    }
+    savePipelines([lane]);
+  }
+  const original = structuredClone(loadPipelines()[0]!);
+  if (turn === "admission") expect(laneState(original).owner).toBe("working");
   const entered = latch(), release = latch(), lateRead = latch();
   const read = f.h.ports.durableTurnEvidence;
   let reads = 0, expire: (() => void) | undefined;
@@ -362,53 +405,78 @@ test("an expired held read parks visibly, releases observation and lets a peer r
     expect(reads).toBe(1);
     expire!();
     await until(settleProviderRecoveries());
-    const parked = structuredClone(loadPipelines()[0]!);
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.runs[0]!.attempts[0]!.state).toBe("needs_decision");
-    expect(parked.stateDetail).toContain("provider recovery observation exceeded 15 seconds");
-    f.h.ports.durableTurnEvidence = read;
-    for (let wake = 0; wake < 4; wake++) {
-      await scheduleProviderRecovery(f.h.ports);
-      await until(settleProviderRecoveries());
-    }
-    expect(reads).toBe(1);
-    const source = `import { scheduleProviderRecovery, settleProviderRecoveries } from "./src/lib/pipelines/providerRecovery.ts";
-      import { defaultPipelinePorts } from "./src/lib/pipelines/engine.ts";
-      import { loadPipelines } from "./src/lib/pipelines/store.ts";
-      let reads=0;
-      const ports={...defaultPipelinePorts(),durableTurnEvidence:async()=>{reads++;return null;}};
-      await scheduleProviderRecovery(ports); await settleProviderRecoveries();
-      console.log(JSON.stringify({reads,state:loadPipelines()[0].state,detail:loadPipelines()[0].stateDetail}));`;
-    const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
-    const output = await new Response(child.stdout).text();
-    const errors = await new Response(child.stderr).text();
-    expect({ code: await child.exited, errors }).toMatchObject({ code: 0 });
-    expect(JSON.parse(output)).toEqual({ reads: 0, state: "needs_decision", detail: parked.stateDetail });
-    const peer = structuredClone(parked);
-    peer.id = "deadline-peer";
-    peer.delivery = undefined; peer.publication = "internal";
-    peer.state = "running"; peer.stateDetail = null;
-    peer.cursor!.state = "running"; peer.runs[0]!.attempts[0]!.state = "running";
-    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
-    savePipelines([parked, peer]);
+    expect(loadPipelines()[0]).toEqual(original);
+    // A new observation is admitted while the old reader is still held.
+    f.h.ports.durableTurnEvidence = turn === "terminal" ? read : async () => ({turn:"busy",message:null,...(turn === "admission" ? {lastRecordAt:f.now()} : {})});
     await scheduleProviderRecovery(f.h.ports);
     await until(settleProviderRecoveries());
-    expect(loadPipelines().find(row => row.id === peer.id)!.stateDetail).toContain("waiting for model at capacity");
-    f.advance(60_000);
-    await scheduleProviderRecovery(f.h.ports);
-    await until(settleProviderRecoveries());
-    expect(f.sends).toHaveLength(1);
-    expect(f.sends[0]).toContain(peer.id);
-    expect(loadPipelines().find(row => row.id === f.id)).toEqual(parked);
+    const observed = structuredClone(loadPipelines()[0]!);
+    if (turn === "cancelled") {
+      expect(observed.state).toBe("needs_decision");
+      expect(observed.stateDetail).toContain("provider recovery cancelled by operator control");
+    } else if (turn === "admission") {
+      expect(observed.state).toBe("running");
+      expect(observed.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+    } else if (turn !== "terminal") expect(observed).toEqual(original);
+    else expect(observed.stateDetail).toContain("waiting for model at capacity");
     release.resolve(); await until(lateRead.promise);
     await new Promise<void>(resolve => setImmediate(resolve));
-    expect(loadPipelines().find(row => row.id === f.id)).toEqual(parked);
-    expect(f.sends).toHaveLength(1);
+    expect(loadPipelines()[0]).toEqual(observed);
+    expect(f.sends).toHaveLength(0);
+    if (turn === "terminal") {
+      f.advance(60_000);
+      await scheduleProviderRecovery(f.h.ports);
+      await until(settleProviderRecoveries());
+      expect(f.sends).toHaveLength(1);
+    }
   } finally { timer.mockRestore(); release.resolve(); await settleProviderRecoveries(); }
+});
+
+test("a real observation deadline leaves a task-started-only active stage running", async () => {
+  const f = await capacity();
+  fs.writeFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }) + "\n");
+  const original = structuredClone(loadPipelines()[0]!);
+  const source = `import { defaultPipelinePorts,recoverPipelineProviderTurn } from "./src/lib/pipelines/engine.ts";
+    import { loadPipelines } from "./src/lib/pipelines/store.ts";
+    let release, sends=0;
+    const ports={...defaultPipelinePorts(),conversationAgentActive:async()=>true,
+      durableTurnEvidence:async()=>{console.log("ready");await new Promise(done=>release=done);return {turn:"busy",message:null};},
+      resumeSeveredTurn:async()=>{sends++;return true;}};
+    const keepAlive=setInterval(()=>{},1000);
+    try { await recoverPipelineProviderTurn(${JSON.stringify(f.id)},ports); } finally { clearInterval(keepAlive); }
+    release(); await new Promise(done=>setImmediate(done));
+    console.log(JSON.stringify({lane:loadPipelines()[0],sends}));`;
+  const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
+  try {
+    const reader = child.stdout.getReader();
+    let output = "";
+    while (!output.includes("ready\n")) {
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error("deadline probe exited before reading evidence");
+      output += new TextDecoder().decode(chunk.value);
+    }
+    const readyAt = performance.now();
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      output += new TextDecoder().decode(chunk.value);
+    }
+    const code = await child.exited;
+    const errors = await new Response(child.stderr).text();
+    expect({code,errors}).toMatchObject({code:0});
+    expect(performance.now() - readyAt).toBeGreaterThanOrEqual(PROVIDER_RECOVERY_DEADLINE_MS - 500);
+    const observed = JSON.parse(output.trim().split("\n").at(-1)!);
+    expect(observed).toEqual({lane:original,sends:0});
+    expect(loadPipelines()[0]).toEqual(original);
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+  }
 });
 
 test.each(["paused", "closed", "edited", "hidden", "reported"] as const)("deadline parking preserves concurrent %s authority", async change => {
   const f = await capacity();
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
   const entered = latch(), release = latch();
   const read = f.h.ports.durableTurnEvidence;
   f.h.ports.durableTurnEvidence = async (...args) => { entered.resolve(); await release.promise; return read(...args); };

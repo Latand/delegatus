@@ -12094,7 +12094,8 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
 export const PROVIDER_RECOVERY_DEADLINE_MS = 15_000;
 
 /** Expiry writes through a new snapshot, never through the expired observer.
- * Any intervening report, control, attempt or checkpoint keeps its authority. */
+ * Only a saved, uncontinued cut can change lifecycle; an unreadable active
+ * turn stays running. Intervening reports, controls and checkpoints win. */
 async function parkExpiredProviderObservation(id: string, fence: string | undefined): Promise<void> {
   if (!fence) return;
   const preview = await findControllerPipeline(id);
@@ -12106,7 +12107,8 @@ async function parkExpiredProviderObservation(id: string, fence: string | undefi
     if (!pipeline || pipeline.state !== "running" || pipeline.closedAt || pipeline.hiddenAt
       || pipelineSurvivorRefusal(pipeline) || controllerTickFingerprint(pipeline) !== fence) return;
     const stage = currentStage(pipeline), attempt = stage && currentAttempt(pipeline, stage.id);
-    if (stage?.kind !== "run" || attempt?.state !== "running" || attempt.report) return;
+    if (stage?.kind !== "run" || attempt?.state !== "running" || attempt.report || !attempt.providerWait || !(attempt.providerWait.turnTs > 0) || attempt.providerWait.actionAt
+      || attempt.providerWait.retryCancelled) return;
     taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
     await park(pipeline, `${pipeline.stateDetail ? `${pipeline.stateDetail}; ` : ""}provider recovery observation exceeded 15 seconds; waiting for operator decision`, attempt);
     await persist([pipeline]);
