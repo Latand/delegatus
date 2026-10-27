@@ -1153,6 +1153,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.speedStandard": "Стандартна",
   "composer.speedTierNamed": "Рівень {tier}",
   "composer.speedFastTier": "Швидка — пріоритетний тариф",
+  "composer.speedFastShort": "Швидка",
   "composer.speedUltraTier": "Ультра — тариф Ultrafast",
   "composer.speedUltraAbsent": "{account} не пропонує Ultrafast для {model} (є: {offers})",
   "composer.speedUltraAbsentNone": "{account} не пропонує Ultrafast для {model}",

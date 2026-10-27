@@ -17,7 +17,7 @@ export const ULTRA_TIER = "ultrafast";
 export type TierOffer =
   | { state: "loading" }
   | { state: "offered"; account: string }
-  | { state: "absent"; account: string; offers: string[] }
+  | { state: "absent"; account: string; offers: { id: string; name: string }[] }
   | { state: "unknown"; account: string }
   | { state: "no-model" };
 
@@ -30,7 +30,7 @@ export function tierOfferFrom(account: CatalogAccount | null, requested: string,
   const tiers = account?.models?.find((row) => row.slug === model)?.tiers;
   if (!account || !tiers) return { state: "unknown", account: name };
   if (tiers.some((offer) => offer.id === tier)) return { state: "offered", account: name };
-  return { state: "absent", account: name, offers: tiers.map((offer) => offer.name) };
+  return { state: "absent", account: name, offers: tiers.map(({ id, name }) => ({ id, name })) };
 }
 
 /**
@@ -81,6 +81,13 @@ export function ultraRowOf(t: TFunction, offer: TierOffer, model: string, runnin
   return running ? { enabled: true, reason: null } : { enabled: offer.state === "offered", reason: ultraUnavailableReason(t, offer, model) };
 }
 
+/** A tier as the speed rows name it, so a reason never names an offer by a word no row shows. */
+export function speedTierName(t: TFunction, tier: { id: string; name: string }): string {
+  if (tier.id === "priority") return t("composer.speedFastShort");
+  if (tier.id === "default" || tier.id === "standard") return t("composer.speedStandard");
+  return tier.name;
+}
+
 /** The visible reason Ultra cannot be chosen, or null while it can (or while the read is in flight). */
 export function ultraUnavailableReason(t: TFunction, offer: TierOffer, modelName: string): string | null {
   /* A model name is one word: a line never breaks at its hyphens. */
@@ -88,7 +95,7 @@ export function ultraUnavailableReason(t: TFunction, offer: TierOffer, modelName
   switch (offer.state) {
     case "absent":
       return offer.offers.length
-        ? t("composer.speedUltraAbsent", { account: offer.account, model, offers: offer.offers.join(", ") })
+        ? t("composer.speedUltraAbsent", { account: offer.account, model, offers: offer.offers.map((tier) => speedTierName(t, tier)).join(", ") })
         : t("composer.speedUltraAbsentNone", { account: offer.account, model });
     case "unknown":
       return t("composer.speedUltraUnknown", { account: offer.account });
@@ -97,4 +104,34 @@ export function ultraUnavailableReason(t: TFunction, offer: TierOffer, modelName
     default:
       return null;
   }
+}
+
+/**
+ * A refused speed action in the operator's words. The server's refusal of an
+ * unavailable Ultrafast is the one sentence `serviceTierRefusal` writes, naming
+ * the one account the conversation runs on, the model and the tiers its catalog
+ * lists; read back, it says what the Ultra row's own reason says. Anything else,
+ * or a refusal over several accounts, is the server's own text.
+ */
+export function speedRefusalText(t: TFunction, body: { code?: unknown; error?: unknown }, modelName: (slug: string) => string): string | null {
+  if (typeof body.error !== "string") return null;
+  if (body.code !== "service_tier_unavailable") return body.error;
+  const offer = serviceTierRefusalOffer(body.error);
+  return offer ? ultraUnavailableReason(t, offer.offer, modelName(offer.model)) ?? body.error : body.error;
+}
+
+const QUOTED = String.raw`"(?:[^"\\]|\\.)*"`;
+const REFUSAL = new RegExp(String.raw`^no evaluated account offers serviceTier ${ULTRA_TIER} for model (\S+); evaluated (?:pinned|selected) account ${QUOTED}: account (${QUOTED})(?: \(([^()]*)\))?: (\S+) offered: (.*?)(?:; ${ULTRA_TIER} offered for other models on this account: .*)?$`);
+
+/** The account, model and offers of a one-account Ultrafast refusal; null for any other text. */
+export function serviceTierRefusalOffer(text: string): { model: string; offer: TierOffer } | null {
+  const match = REFUSAL.exec(text);
+  if (!match || match[1] !== match[4]) return null;
+  let name: string;
+  try { name = JSON.parse(match[2]!) as string; } catch { return null; }
+  const offered = match[5]!;
+  if (offered === "unknown (catalog unavailable)") return { model: match[1]!, offer: { state: "unknown", account: name } };
+  const ids = offered === "none" ? [] : offered.split(", ");
+  if (ids.some((id) => !/^[a-z][a-z0-9_-]{0,31}$/.test(id))) return null;
+  return { model: match[1]!, offer: { state: "absent", account: name, offers: ids.map((id) => ({ id, name: id })) } };
 }

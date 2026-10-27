@@ -13,7 +13,7 @@
     {
       "locale": "en",
       "width": 390,
-      "face": "6-Astra · high",
+      "face": "6-Astra · high · Ultrafast",
       "detail": "Ultra — Ultrafast tier",
       "overflow": false,
       "pageErrors": [],
@@ -31,7 +31,7 @@
     {
       "locale": "uk",
       "width": 390,
-      "face": "6-Astra · high",
+      "face": "6-Astra · high · Ultrafast",
       "detail": "Ультра — тариф Ultrafast",
       "overflow": false,
       "pageErrors": [],
@@ -92,6 +92,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · High · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -136,12 +138,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
         }
       ]
     },
@@ -161,7 +163,13 @@
         "max",
         "ultra"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -203,6 +211,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -221,6 +230,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -276,6 +286,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · High · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -320,12 +332,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
         }
       ]
     },
@@ -345,7 +357,13 @@
         "max",
         "ultra"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -387,6 +405,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -405,6 +424,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -435,7 +455,7 @@
       "frame": "ultra-s2-picked-en-light-390.png",
       "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high · Ultrafast",
       "ultra": {
-        "text": "Ultra — Ultrafast tier",
+        "text": "Ultra — Ultrafast tier switch pending",
         "disabled": false,
         "checked": "true"
       },
@@ -444,6 +464,24 @@
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-sheet-pending]",
+          "text": "switch pending"
+        }
+      ]
+    },
+    {
+      "state": "s3-face",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s3-face-en-light-390.png",
+      "faceText": "6.1-Sol · high · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -460,10 +498,20 @@
         "checked": "true"
       },
       "note": null,
+      "summary": "Applies to your next message: 6.1-Sol · high · Ultrafast",
+      "faceText": "6.1-Sol · high · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-mobile2-next-message]",
+          "text": "Applies to your next message: 6.1-Sol · high · Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -504,12 +552,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 3,
+      "error": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "lines": 1,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
         }
       ]
     },
@@ -529,7 +577,13 @@
         "max",
         "ultra"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -567,6 +621,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -585,6 +640,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -640,6 +696,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · Високі · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -659,7 +717,7 @@
         "disabled": true,
         "checked": "false"
       },
-      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -667,7 +725,7 @@
         },
         {
           "selector": "[data-runtime-row-note]",
-          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -684,12 +742,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -709,7 +767,13 @@
         "максимальні",
         "ультра"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -751,6 +815,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -769,6 +834,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -824,6 +890,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · Високі · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -843,7 +911,7 @@
         "disabled": true,
         "checked": "false"
       },
-      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -851,7 +919,7 @@
         },
         {
           "selector": "[data-runtime-row-note]",
-          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -868,12 +936,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -893,7 +961,13 @@
         "максимальні",
         "ультра"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -935,6 +1009,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -953,6 +1028,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -983,7 +1059,7 @@
       "frame": "ultra-s2-picked-uk-light-390.png",
       "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high · Ultrafast",
       "ultra": {
-        "text": "Ультра — тариф Ultrafast",
+        "text": "Ультра — тариф Ultrafast зміна очікує",
         "disabled": false,
         "checked": "true"
       },
@@ -992,6 +1068,24 @@
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-sheet-pending]",
+          "text": "зміна очікує"
+        }
+      ]
+    },
+    {
+      "state": "s3-face",
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "ultra-s3-face-uk-light-390.png",
+      "faceText": "6.1-Sol · high · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -1008,10 +1102,20 @@
         "checked": "true"
       },
       "note": null,
+      "summary": "Стосується наступного повідомлення: 6.1-Sol · high · Ultrafast",
+      "faceText": "6.1-Sol · high · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-mobile2-next-message]",
+          "text": "Стосується наступного повідомлення: 6.1-Sol · high · Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -1027,7 +1131,7 @@
         "disabled": true,
         "checked": "false"
       },
-      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
       "measured": [
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
@@ -1035,7 +1139,7 @@
         },
         {
           "selector": "[data-runtime-row-note]",
-          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -1052,12 +1156,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 3,
+      "error": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
+      "lines": 1,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -1077,7 +1181,13 @@
         "максимальні",
         "ультра"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -1115,6 +1225,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1133,6 +1244,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1188,6 +1300,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · High · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -1232,12 +1346,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
         }
       ]
     },
@@ -1257,7 +1371,13 @@
         "max",
         "ultra"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -1299,6 +1419,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1317,6 +1438,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1372,6 +1494,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · High · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -1416,12 +1540,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
         }
       ]
     },
@@ -1441,7 +1565,13 @@
         "max",
         "ultra"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -1483,6 +1613,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1501,6 +1632,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1531,7 +1663,7 @@
       "frame": "ultra-s2-picked-en-dark-390.png",
       "face": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high · Ultrafast",
       "ultra": {
-        "text": "Ultra — Ultrafast tier",
+        "text": "Ultra — Ultrafast tier switch pending",
         "disabled": false,
         "checked": "true"
       },
@@ -1540,6 +1672,24 @@
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-sheet-pending]",
+          "text": "switch pending"
+        }
+      ]
+    },
+    {
+      "state": "s3-face",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s3-face-en-dark-390.png",
+      "faceText": "6.1-Sol · high · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -1556,10 +1706,20 @@
         "checked": "true"
       },
       "note": null,
+      "summary": "Applies to your next message: 6.1-Sol · high · Ultrafast",
+      "faceText": "6.1-Sol · high · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ultra — Ultrafast tier"
+        },
+        {
+          "selector": "[data-mobile2-next-message]",
+          "text": "Applies to your next message: 6.1-Sol · high · Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -1600,12 +1760,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 3,
+      "error": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)",
+      "lines": 1,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B doesn't offer Ultrafast for GPT‑6.1‑Sol (offers: Fast)"
         }
       ]
     },
@@ -1625,7 +1785,13 @@
         "max",
         "ultra"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · high effort · account Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -1663,6 +1829,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1681,6 +1848,7 @@
         "max",
         "ultra"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1736,6 +1904,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · Високі · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -1755,7 +1925,7 @@
         "disabled": true,
         "checked": "false"
       },
-      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -1763,7 +1933,7 @@
         },
         {
           "selector": "[data-runtime-row-note]",
-          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -1780,12 +1950,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -1805,7 +1975,13 @@
         "максимальні",
         "ультра"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -1847,6 +2023,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1865,6 +2042,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -1920,6 +2098,8 @@
         "checked": "true"
       },
       "note": null,
+      "summary": null,
+      "faceText": "6.1-Sol · Високі · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -1939,7 +2119,7 @@
         "disabled": true,
         "checked": "false"
       },
-      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
       "measured": [
         {
           "selector": "[data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-row=\"speed\"][data-runtime-value=\"ultrafast\"] > span",
@@ -1947,7 +2127,7 @@
         },
         {
           "selector": "[data-runtime-row-note]",
-          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -1964,12 +2144,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 4,
+      "error": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
+      "lines": 2,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -1989,7 +2169,13 @@
         "максимальні",
         "ультра"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -2031,6 +2217,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -2049,6 +2236,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -2079,7 +2267,7 @@
       "frame": "ultra-s2-picked-uk-dark-390.png",
       "face": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high · Ultrafast",
       "ultra": {
-        "text": "Ультра — тариф Ultrafast",
+        "text": "Ультра — тариф Ultrafast зміна очікує",
         "disabled": false,
         "checked": "true"
       },
@@ -2088,6 +2276,24 @@
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-sheet-pending]",
+          "text": "зміна очікує"
+        }
+      ]
+    },
+    {
+      "state": "s3-face",
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "ultra-s3-face-uk-dark-390.png",
+      "faceText": "6.1-Sol · high · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -2104,10 +2310,20 @@
         "checked": "true"
       },
       "note": null,
+      "summary": "Стосується наступного повідомлення: 6.1-Sol · high · Ultrafast",
+      "faceText": "6.1-Sol · high · Ultrafast",
       "measured": [
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
           "text": "Ультра — тариф Ultrafast"
+        },
+        {
+          "selector": "[data-mobile2-next-message]",
+          "text": "Стосується наступного повідомлення: 6.1-Sol · high · Ultrafast"
+        },
+        {
+          "selector": "[data-runtime-pill]",
+          "text": "6.1-Sol · high · Ultrafast"
         }
       ]
     },
@@ -2123,7 +2339,7 @@
         "disabled": true,
         "checked": "false"
       },
-      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)",
+      "note": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
       "measured": [
         {
           "selector": "[data-runtime-sheet-value=\"ultrafast\"] [data-runtime-row-label], [data-runtime-sheet-value=\"ultrafast\"] > span",
@@ -2131,7 +2347,7 @@
         },
         {
           "selector": "[data-runtime-row-note]",
-          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Fast)"
+          "text": "Account D не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -2148,12 +2364,12 @@
         "checked": "false"
       },
       "note": null,
-      "error": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority",
-      "lines": 3,
+      "error": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)",
+      "lines": 1,
       "measured": [
         {
           "selector": "[data-runtime-speed-error]",
-          "text": "no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account \"default\": account \"Account B\" (default): gpt-6.1-sol offered: priority"
+          "text": "Account B не пропонує Ultrafast для GPT‑6.1‑Sol (є: Швидка)"
         }
       ]
     },
@@ -2173,7 +2389,13 @@
         "максимальні",
         "ультра"
       ],
-      "measured": []
+      "runsOn": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast",
+      "measured": [
+        {
+          "selector": "[data-orchestrator-runs-on-value]",
+          "text": "Codex · GPT-6.1-Sol · зусилля high · акаунт Account B · Ultrafast"
+        }
+      ]
     },
     {
       "state": "s6-create-pill",
@@ -2211,6 +2433,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     },
     {
@@ -2229,6 +2452,7 @@
         "максимальні",
         "ультра"
       ],
+      "runsOn": null,
       "measured": []
     }
   ]

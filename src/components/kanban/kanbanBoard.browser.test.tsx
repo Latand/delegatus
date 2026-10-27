@@ -19660,10 +19660,11 @@ describe("fast TTS header", () => {
 });
 
 /* Ultra on the seat's speed control (2026-10-26), at 1280, 768 and 390 in both
-   languages and themes: S1 offered, S2 just picked, S3 applied, S4 unavailable on a
+   languages and themes: S1 offered, S2 just picked (pending on its row in the phone's
+   sheet), S3 applied (named on the phone's face and sheet summary), S4 unavailable on a
    priority-only account with its reason as visible text and reached by the arrow keys,
-   S5 refused and rolled back with the reason beside the rows it was picked in, S6 the
-   create and rotate drafts with Ultra chosen and a rotation left on the inherited tier. Every changed string is
+   S5 refused and rolled back with the localized reason beside the rows it was picked in, S6 the
+   create (Ultrafast in its Runs on line) and rotate drafts with Ultra chosen and a rotation left on the inherited tier. Every changed string is
    measured as whole text inside the window and its popover or sheet. */
 async function captureUltraSpeedStates(browser: Browser, base: string, out: string) {
   const frames: Record<string, unknown>[] = [];
@@ -19729,18 +19730,26 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
         expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).toContain("Ultrafast");
         /* The rows stay open until the action answers, with Ultra checked. */
         expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("true");
-        await shot(page, "s2-picked", await facts(page), [label]);
+        /* The sheet covers the face's «switch pending», so the tapped row says it. */
+        if (phone) expect(await page.locator(`${ultraRow} [data-runtime-sheet-pending]`).textContent()).toBe(translate(locale, "runtimeConfig.pending"));
+        await shot(page, "s2-picked", await facts(page), phone ? [label, `${ultraRow} [data-runtime-sheet-pending]`] : [label]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     }
     { // S3: Ultra applied, as the conversation reports it.
       const { context, page, pageErrors } = await seat("&tier=ultrafast");
       try {
-        if (!phone) expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+        expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+        /* The phone's face, before its sheet covers it. */
+        if (phone) await shot(page, "s3-face", { faceText: await page.locator("[data-runtime-pill]").textContent() }, ["[data-runtime-pill]"]);
         await openSpeed(page);
         const read = await facts(page);
         expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
-        await shot(page, "s3-applied", read, [label]);
+        expect(await page.locator("[data-runtime-sheet-pending]").count()).toBe(0);
+        /* The phone's sheet says the applied tier in the line it opens with, as the face does. */
+        const summary = phone ? await page.locator("[data-mobile2-next-message]").textContent() : null;
+        if (phone) expect(summary).toContain("· Ultrafast");
+        await shot(page, "s3-applied", { ...read, summary, faceText: await page.locator("[data-runtime-pill]").textContent() }, phone ? [label, "[data-mobile2-next-message]", "[data-runtime-pill]"] : [label]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     }
@@ -19758,7 +19767,8 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
         }
         const read = await facts(page);
         expect(read.ultra).toMatchObject({ disabled: true, checked: "false" });
-        expect(read.note).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account D", model: "GPT\u20116.1\u2011Sol", offers: "Fast" }));
+        /* The offers are named by the words the rows use. */
+        expect(read.note).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account D", model: "GPT\u20116.1\u2011Sol", offers: translate(locale, "composer.speedFastShort") }));
         await shot(page, "s4-unavailable", read, [label, "[data-runtime-row-note]"]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
@@ -19776,12 +19786,12 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
         const error = await page.locator("[data-runtime-speed-error]").textContent();
-        expect(error).toBe('no evaluated account offers serviceTier ultrafast for model gpt-6.1-sol; evaluated pinned account "default": account "Account B" (default): gpt-6.1-sol offered: priority');
+        /* The server's refusal, said as the Ultra row's own reason says it, in the page's language. */
+        expect(error).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account B", model: "GPT\u20116.1\u2011Sol", offers: translate(locale, "composer.speedFastShort") }));
         const lines = await page.locator("[data-runtime-speed-error]").evaluate((element) => {
           const range = document.createRange(); range.selectNodeContents(element);
           return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
         });
-        if (phone) expect(lines).toBeGreaterThanOrEqual(3);
         expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).not.toContain("Ultrafast");
         await shot(page, "s5-refused", { ...await facts(page), error, lines }, ["[data-runtime-speed-error]"]);
         expect(pageErrors).toEqual([]);
@@ -19804,7 +19814,10 @@ async function captureUltraSpeedStates(browser: Browser, base: string, out: stri
         const efforts = await page.locator('select[aria-label]').filter({ has: page.locator('option[value="high"]') }).evaluate((element) => [...(element as HTMLSelectElement).options].map((option) => option.textContent));
         expect(efforts).not.toContain(translate(locale, "draft.speedUltra"));
         await select.scrollIntoViewIfNeeded();
-        await shot(page, `s6-${mode}-select`, { select: shown, efforts }, []);
+        /* The Runs on line the operator confirms names the chosen speed too. */
+        const runsOn = mode === "create" ? await page.locator("[data-orchestrator-runs-on-value]").textContent() : null;
+        if (mode === "create") expect(runsOn).toContain("· Ultrafast");
+        await shot(page, `s6-${mode}-select`, { select: shown, efforts, runsOn }, mode === "create" ? ["[data-orchestrator-runs-on-value]"] : []);
         if (mode === "create") {
           await page.locator("[data-runtime-pill]").click();
           if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();

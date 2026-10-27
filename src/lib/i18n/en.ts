@@ -1163,6 +1163,7 @@ export const en = {
   "composer.speedStandard": "Standard",
   "composer.speedTierNamed": "{tier} tier",
   "composer.speedFastTier": "Fast — priority tier",
+  "composer.speedFastShort": "Fast",
   "composer.speedUltraTier": "Ultra — Ultrafast tier",
   "composer.speedUltraAbsent": "{account} doesn't offer Ultrafast for {model} (offers: {offers})",
   "composer.speedUltraAbsentNone": "{account} doesn't offer Ultrafast for {model}",

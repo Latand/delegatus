@@ -25,7 +25,7 @@ import type { FileEntry, RateLimitState } from "@/lib/types";
 
 import { accountWeeklyLeft, WeeklyColumn, weeklyLeftAria, weeklyLeftHint, type WeeklyLeft } from "./accountWeekly";
 import type { StripSurface } from "./agentCapabilities";
-import { ULTRA_TIER, ultraRowOf, useCodexTierOffer, type UltraRow } from "./codexTierOffer";
+import { speedRefusalText, ULTRA_TIER, ultraRowOf, useCodexTierOffer, type UltraRow } from "./codexTierOffer";
 import { browserPipelinePorts } from "./kanban/pipelinePorts";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 import { stagePipelineId, stageRunOf, stageSwitchRequest, switchFailureText, switchOpen, switchRefusalText, type StageRun } from "./stageRuntimeSwitch";
@@ -186,6 +186,8 @@ export function RuntimePill({
   const [error, setError] = useState("");
   /* The refusal of a speed choice, which the phone's sheet says beside the speed rows. */
   const [speedError, setSpeedError] = useState("");
+  /* The speed choice whose action has not answered yet, marked on its row in the phone's sheet. */
+  const [speedPending, setSpeedPending] = useState<SpeedTier | null>(null);
   const revisionRef = useRef(0);
   const operationRef = useRef<string | null>(null);
   const rollbackRef = useRef<BrowserProfileRollback | null>(null);
@@ -364,6 +366,8 @@ export function RuntimePill({
   const applyReconfigure = useCallback(async (draft: RuntimeDraft) => {
     const revision = revisionRef.current;
     setApplyState("saving");
+    /* What saves now is this change: a speed choice it superseded is no longer pending. */
+    setSpeedPending(null);
     setError("");
     try {
       const response = await fetch("/api/tmux", {
@@ -414,6 +418,7 @@ export function RuntimePill({
     if (!engine) return false;
     const revision = revisionRef.current;
     setApplyState("saving");
+    setSpeedPending(null);
     setError("");
     const displayedTier = !speedChanged && engine === "codex" && file.serviceTier && draft.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
     const answer = await browserPipelinePorts.patch(run.pipeline.id, stageSwitchRequest(run, engine, draft, accountId, displayedTier));
@@ -447,6 +452,7 @@ export function RuntimePill({
     setApplyState("saving");
     setError("");
     setSpeedError("");
+    setSpeedPending(tier);
     const conversationId = file.conversationId ?? runtimeConversationId;
     let failure: string | null = null;
     try {
@@ -460,12 +466,14 @@ export function RuntimePill({
           serviceTier: tier,
         }),
       });
-      const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-      if (!response.ok || body.ok !== true) failure = body.error ?? t("runtimeConfig.failed");
+      const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; code?: string };
+      /* An unavailable tier is said as the Ultra row's own reason says it, in the operator's language. */
+      if (!response.ok || body.ok !== true) failure = speedRefusalText(t, body, (slug) => engine ? modelLabel(engine, slug) : slug) ?? t("runtimeConfig.failed");
     } catch (cause) {
       failure = cause instanceof Error ? cause.message : t("runtimeConfig.failed");
     }
     if (revision !== revisionRef.current) return "superseded";
+    setSpeedPending(null);
     if (failure) {
       liveDraftRef.current = defaults(file);
       setLiveDraft(liveDraftRef.current);
@@ -479,7 +487,7 @@ export function RuntimePill({
     setApplyState("applied");
     requestFilesRefresh();
     return "applied";
-  }, [file, runtimeConversationId, t]);
+  }, [engine, file, runtimeConversationId, t]);
 
   /* The switch this page watched settle. One that was already over when the
      page opened is only shown, never announced again. */
@@ -869,7 +877,7 @@ export function RuntimePill({
   const limitedAccount = isMobile ? file.rateLimit?.accountId ?? null : null;
   const chipText = limitedAccount
     ? t("mobile2.composer.chipAtLimit", { model: faceModelShort, account: limitedAccount })
-    : `${faceModelShort} · ${faceTier}`;
+    : `${faceModelShort} · ${faceTier}${tierSuffix}`;
 
   return (
     <span className="relative inline-flex min-w-0" onPointerDown={(event) => event.stopPropagation()}>
@@ -948,6 +956,8 @@ export function RuntimePill({
           speedLocked={speedLocked}
           lockReason={lockReason}
           limit={file.rateLimit ?? null}
+          tierName={namedTier}
+          speedPending={applyState === "saving" ? speedPending : null}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
           onSelectSpeed={selectSpeed}
@@ -1578,10 +1588,14 @@ function MenuRow({
 
 export function RuntimeSheet({
   t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
-  effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
+  effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null, tierName = null, speedPending = null,
   onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, speedError = null, onClose,
 }: PanelProps & {
   limit?: RateLimitState | null;
+  /** A non-standard tier the conversation runs at, named in the summary as the desktop face names it. */
+  tierName?: string | null;
+  /** A speed choice whose action is still answering: its row says so until it does. */
+  speedPending?: SpeedTier | null;
   owner: Document;
   /** What the sheet is called and what its rows apply to, where that is not a conversation's next message:
       a new agent's composer names the agent it is about to start. */
@@ -1591,6 +1605,8 @@ export function RuntimeSheet({
   const speedErrorRef = useRef<HTMLParagraphElement>(null);
   const immediate = Boolean(accountChoice?.immediate);
   const speed = speedTierOf(face);
+  /* The sheet covers the face and its «switch pending»: the row that was tapped says it instead. */
+  const pendingWords = t("runtimeConfig.pending");
 
   useOverlayEscape(onClose);
 
@@ -1652,7 +1668,7 @@ export function RuntimeSheet({
                 {/* A running stage has no next message to wait for: the tap stops its turn. */}
                 {heading?.summary ?? (immediate
                   ? t("mobile2.composer.stageNow")
-                  : t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) }))}
+                  : t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: `${tierWord(t, face.effort, true)}${tierName ? ` · ${tierName}` : ""}` }))}
               </p>
             </div>
             {/* A phone has no Escape and the backdrop is a guess, so the way out
@@ -1709,12 +1725,13 @@ export function RuntimeSheet({
 
         {speedShown ? (
           <SheetSection label={t("composer.speedGroup")}>
-            <SheetRow label={t("composer.speedStandard")} checked={speed === "default"} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectSpeed("default")} />
+            <SheetRow label={t("composer.speedStandard")} checked={speed === "default"} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} pending={speedPending === "default" ? pendingWords : undefined} onSelect={() => onSelectSpeed("default")} />
             <SheetRow
               label={speedDetail === t("composer.speedStandard") || (ultra && speed === ULTRA_TIER) ? t("composer.speedFastTier") : speedDetail}
               checked={speed !== "default" && !(ultra && speed === ULTRA_TIER)}
               disabled={speedLocked}
               reason={speedLocked ? lockReason : undefined}
+              pending={speedPending === "priority" ? pendingWords : undefined}
               onSelect={() => onSelectSpeed("priority")}
             />
             {ultra ? (
@@ -1725,6 +1742,7 @@ export function RuntimeSheet({
                 unavailable={!speedLocked && !ultra.enabled}
                 reason={speedLocked ? lockReason : undefined}
                 note={speedLocked ? undefined : ultra.reason ?? undefined}
+                pending={speedPending === ULTRA_TIER ? pendingWords : undefined}
                 value={ULTRA_TIER}
                 onSelect={() => onSelectSpeed(ULTRA_TIER)}
               />
@@ -1928,7 +1946,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
 }
 
 function SheetRow({
-  label, checked, disabled = false, unavailable = false, reason, note, value, onSelect,
+  label, checked, disabled = false, unavailable = false, reason, note, pending, value, onSelect,
 }: {
   label: string;
   checked: boolean;
@@ -1938,6 +1956,8 @@ function SheetRow({
   reason?: string;
   /** Why the row cannot be chosen, as visible text under it: a phone has no tooltip. */
   note?: string;
+  /** The words a choice still being applied carries, beside a spinner in place of its check. */
+  pending?: string;
   value?: string;
   onSelect: () => void;
 }) {
@@ -1952,6 +1972,7 @@ function SheetRow({
       disabled={disabled}
       aria-label={reason ? `${label} — ${reason}` : undefined}
       aria-describedby={note ? noteId : undefined}
+      aria-busy={pending ? true : undefined}
       title={reason}
       onClick={unavailable ? undefined : onSelect}
       data-runtime-sheet-row
@@ -1961,7 +1982,14 @@ function SheetRow({
       }`}
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {checked ? <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : null}
+      {pending ? (
+        <>
+          {/* A word break in the row's name; a flex row draws no space for it. */}
+          {" "}
+          <span className="shrink-0 text-label font-semibold text-accent" data-runtime-sheet-pending>{pending}</span>
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden />
+        </>
+      ) : checked ? <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : null}
     </button>
     {/* Outside the button, so the reason keeps full contrast while the row is dimmed. */}
     {note ? <span id={noteId} role="none" className="-mt-1 block px-2 pb-1.5 text-label leading-snug text-muted" data-runtime-row-note>{note}</span> : null}
