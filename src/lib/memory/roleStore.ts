@@ -12,8 +12,8 @@ import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
-import { appendRule as appendWithPolicy, archivedRule, lessonPatternSource, retainRules as retainWithPolicy, leavingOrder, sameRule, scopeChars } from "./roleConsolidate";
-import { roleMemoryEnabled, swarmRulesEnabled } from "./settings";
+import { appendRule as appendWithPolicy, archivedRule, lessonPatternSource, retainRules as retainWithPolicy, leavingOrder, pendingCorrection, sameRule, scopeChars } from "./roleConsolidate";
+import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from "./settings";
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
@@ -194,10 +194,12 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
       for (const rule of [...uncurated, ...candidates.filter(rule => rule.curatedAt || rule.keptByOperatorAt)]) {
         const earlier = joined.find((kept) => sameRule(kept.rule, rule.rule));
         if (!earlier) { joined.push(rule); continue; }
-        // A duplicate carries the strongest retention decision across a rename.
+        // A duplicate carries the strongest retention decision across a rename,
+        // and an unreviewed correction on either side stays unreviewed.
         const lineage = [...new Set([...(earlier.mergedFrom ?? []), rule.id])];
-        if (rule.curatedAt || rule.keptByOperatorAt) {
-          const kept = { ...earlier, mergedFrom: lineage, curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt };
+        if (rule.curatedAt || rule.keptByOperatorAt || rule.operatorCorrection) {
+          const kept = { ...earlier, mergedFrom: lineage, ...(rule.operatorCorrection ? { operatorCorrection: true as const } : {}), curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt,
+            ...(pendingCorrection(rule) || pendingCorrection(earlier) ? { changedAt: now } : {}) };
           joined.splice(joined.indexOf(earlier), 1);
           joined.push(kept);
           tx.put(kept);
@@ -311,6 +313,7 @@ export function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text
 }
 
 interface LessonWriteInput {
+  correction?: true;
   source: RuleSource;
   lessons: readonly LessonInput[];
   none: string | null;
@@ -329,6 +332,11 @@ export function leaveLessons(input: Omit<LessonWriteInput, "source"> & { source:
 /** A designated seat leaves practice without creating a stage request. */
 export function leaveSeatLessons(input: Omit<LessonWriteInput, "source" | "none" | "problem"> & { source: SeatRuleSource }) {
   return writeLessonAnswer({ ...input, none: null });
+}
+
+/** Correction lessons do not spend the stage's closing request. */
+export function leaveCorrectionLessons(input: Omit<LessonWriteInput, "none" | "rewrite" | "problem" | "applied" | "misled">) {
+  return writeLessonAnswer({ ...input, correction: true, none: null });
 }
 
 /** The operator's own root conversation in Delegatus mode: project and machine
@@ -410,6 +418,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const incoming: RoleMemoryRule = {
         kind: "rule", id: newRuleId(tx), scope, rule: lesson.rule, why: lesson.why,
         state: "active", hints, source: { ...input.source, project }, createdAt: now, changedAt: now,
+        ...(input.correction ? { operatorCorrection: true as const } : {}),
       };
       const outcome = appendWithPolicy(active, incoming, now, ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of outcome.changed) tx.put(changed);
@@ -540,6 +549,11 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
       }
     }
   }
+  for (const row of all) {
+    if (row.kind !== "rule" || row.versionOf || !row.operatorCorrection || tasks.has(row.id)) continue;
+    const source = row.source;
+    if (source.origin === undefined || source.origin === "stage") tasks.set(row.id, [{ key: source.taskId ?? `pipeline:${source.pipelineId}`, at: row.createdAt }]);
+  }
   const mergedAt = (from: string, into: string) => byId.get(from)?.mergedAt ?? mergeTimes.get(edgeKey(from, into)) ?? byId.get(from)?.changedAt ?? "";
   return (id) => {
     const seen = new Set<string>();
@@ -571,7 +585,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
   const curatorRevision = history.filter(change => change.by === "curator" && !change.revertedAt)
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
-  const awaitingCuration = !row.curatedAt || (agentRevision && curatorRevision ? agentRevision > curatorRevision
+  const awaitingCuration = !row.curatedAt || row.state === "active" && pendingCorrection(row) || (agentRevision && curatorRevision ? agentRevision > curatorRevision
     : row.revisedBy?.by === "agent" && row.revisedBy.at > row.curatedAt);
   /* A text equal to the one in force is not an earlier text: returning to it would change nothing. */
   const earlier = (row.versions ?? []).flatMap(id => {
@@ -581,8 +595,9 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
   });
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
+    ...(row.operatorCorrection ? { operatorCorrection: true as const } : {}),
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "operator" ? "operator" : row.source.origin === "import" ? "import" : row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "operator" ? "operator" : row.source.origin === "import" ? "import" : row.source.origin === "conversation" ? "conversation" : row.source.stageId,
     ...(row.source.origin === "import" ? { importSource: { candidate: row.source.candidate, occurrences: row.source.occurrences, engine: row.source.engine, sha256: row.source.sha256, importId: row.source.importId } } : {}),
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
@@ -648,7 +663,9 @@ function projectViewContext(project: string, now: number): {
     return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
   }
   const enabled = roleMemoryEnabled();
-  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+  // The selector tells the kill switch from the engines position, which the view names apart.
+  const selector = roleMemorySelectorEnabled();
+  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${selector}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
   const revision = stamp();
   if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
     memo.guard = guard;
@@ -714,7 +731,7 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
     scopes.push({ scope: swarmScope(role), kind: "swarm", roleId: role, revision: 0, chars: scopeChars(active), bound: SWARM_ROLE_BOUND, addedToday: 0,
       active: active.map(row => ({ ...view(row, now, rulesById, [], 0), fresh: false, awaitingCuration: false })), left: [] });
   }
-  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
+  const value = { project: canonical, enabled, ...(!enabled && roleMemorySelectorEnabled() ? { pausedBy: "memorySource" as const } : {}), scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
   if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
   const bytes = Buffer.byteLength(JSON.stringify(value));
   projectViews.delete(memoKey);

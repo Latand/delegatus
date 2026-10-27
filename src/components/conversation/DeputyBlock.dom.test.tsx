@@ -199,14 +199,14 @@ async function settle(): Promise<void> {
   for (let index = 0; index < 4; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function mount(deputies?: readonly SeatDeputyView[]): { host: HTMLElement; rerender: (next?: readonly SeatDeputyView[]) => void } {
+function mount(deputies?: readonly SeatDeputyView[], readOnly = false): { host: HTMLElement; rerender: (next?: readonly SeatDeputyView[]) => void } {
   const host = dom.document.createElement("div") as unknown as HTMLElement;
   dom.document.body.append(host as never);
   const root = createRoot(host);
   roots.add(root);
   const draw = (next?: readonly SeatDeputyView[]) => flushSync(() => {
     root.render(
-      <LogFeed file={seatFile} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} compact deputies={next} />,
+      <LogFeed readOnly={readOnly} file={seatFile} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} compact deputies={next} />,
     );
   });
   draw(deputies);
@@ -507,4 +507,13 @@ test("parallel C: a failed ask keeps its question, shows the reason and retries 
     expect(host.querySelector("[role=alert]")?.textContent).toContain("The previous delivery is still being checked");
     expect(host.querySelector("[data-deputy-head]")?.textContent).toContain("Add a task: reviewer for #2244");
   } finally { globalThis.fetch = previousFetch; }
+});
+
+
+test("an archived transcript keeps deputy details and suppresses retry", async () => {
+  const { host } = mount([deputy({ state: "ended", outcome: "failed", retryable: true, error: "Retained failure" })], true);
+  await settle();
+  expect(host.querySelector("[data-deputy-block]")).not.toBeNull();
+  expect(host.querySelector("[data-deputy-retry]")).toBeNull();
+  expect(host.querySelector("[data-deputy-result]")).not.toBeNull();
 });

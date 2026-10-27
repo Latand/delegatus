@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { launchModelIds } from "@/lib/agent/models";
 
 import { ROLE_VARIANT_DEFAULTS } from "./paramConfig";
 import { ROLE_DEFAULTS } from "./defaults";
@@ -23,7 +23,7 @@ type MappingEngine = typeof MAPPING_ENGINES[number];
 export function roleLaunchChoices(): Record<MappingEngine, Record<string, readonly string[]>> {
   const choices = { claude: {}, codex: {} } as Record<MappingEngine, Record<string, readonly string[]>>;
   for (const engine of MAPPING_ENGINES) {
-    for (const option of ENGINE_MODELS[engine]) choices[engine][option.id] = effortScale(engine, option.id) ?? [];
+    for (const model of launchModelIds(engine)) choices[engine][model] = effortScale(engine, model) ?? [];
   }
   return choices;
 }
@@ -40,7 +40,7 @@ function configViolations(field: string, config: RoleConfig): RoleMappingViolati
   if (!engines.includes(config.engine)) {
     return [{ field: `${field}.engine`, message: `unknown engine ${JSON.stringify(config.engine)}`, expected: `one of: ${MAPPING_ENGINES.join(", ")}` }];
   }
-  const models = ENGINE_MODELS[config.engine].map((option) => option.id);
+  const models = launchModelIds(config.engine);
   if (!models.includes(config.model)) {
     return [{
       field: `${field}.model`,

@@ -164,3 +164,26 @@ for (const unit of ["ї", "🎙"]) for (const confirm of [false, true]) test(`co
   await expect(runCompanionTool({ ...context, callId: "envelope-overflow" }, "request_orchestrator_delegation", { instruction: unit.repeat(6001) })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   expect(delivered).toHaveLength(1);
 });
+
+test("starter revocation while the structured probe is held prevents legacy fallback", async () => {
+  const f = fixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const probing = new Promise<void>(resolve => { entered = resolve; });
+  let legacyCalls = 0;
+  setConversationHostDependenciesForTests({
+    completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
+    recordOperatorRequest: () => null,
+    collectImagePayloads: () => ({ images: [], error: null }),
+    enqueueStructuredMessage: async () => { entered(); await held; return null; },
+    deliverConversationMessage: async () => { legacyCalls++; throw new Error("revoked member reached legacy transport"); },
+  });
+  const pending = f.admission.delegate(f.session.id, "held-probe-call", "held-probe-turn", "Review");
+  await probing;
+  f.store.updateMember({ ...f.human.member, status: "revoked", revokedAt: new Date().toISOString() });
+  release();
+  expect(await pending).toEqual({ state: "sent", status: "failed", failureCode: "member_required" });
+  expect(legacyCalls).toBe(0);
+  expect(delivered).toEqual([]);
+});

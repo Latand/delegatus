@@ -42,6 +42,16 @@ test("role references resolve registry defaults and stage overrides", () => {
   });
 });
 
+test("automatic preferred tiers remain role defaults for launch-time fallback", () => {
+  const resolved = resolvePipelineRole({
+    role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.1-sol", effort: "high", preferredServiceTier: "ultrafast",
+  }, "run", REGISTRY_LOOKUP).role;
+  expect(resolved).toMatchObject({
+    engine: "codex", model: "gpt-6.1-sol", preferredServiceTier: "ultrafast",
+    serviceTier: "ultrafast", serviceTierSource: "role-default",
+  });
+});
+
 test("role-less stages inherit Builder runtime defaults and receive no scaffold", () => {
   const lookup = (roleId: string) => roleId === "builder"
     ? { engine: "codex" as const, model: "gpt-5.6-sol", effort: "medium", access: "read-write" as const, promptScaffold: "Builder guidance" }
@@ -118,7 +128,7 @@ test("cross-engine overrides require a compatible model", () => {
 
 test("stage model overrides enumerate the selected engine catalog when invalid", () => {
   expect(resolvePipelineRole({ engine: "codex", model: "gpt-5.6-codex" }, "run", REGISTRY_LOOKUP).error)
-    .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+    .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
   expect(resolvePipelineRole({ engine: "claude", model: "claude-fable-5" }, "run", REGISTRY_LOOKUP).error)
     .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
@@ -137,10 +147,13 @@ test("a near-limit override scaffold composes with fences inside the store cap",
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-roles-cap-"));
   process.env.LLV_STATE_DIR = sandbox;
   try {
-    saveRoleOverrides({ reviewer: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
-    const resolved = pipelineRoleLookup("reviewer");
-    expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
-    expect(resolved?.promptScaffold).toContain("Safety fences:");
+    for (const role of ["reviewer", "orchestrator"] as const) {
+      saveRoleOverrides({ [role]: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
+      const resolved = pipelineRoleLookup(role);
+      expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
+      expect(resolved?.promptScaffold).toContain("Safety fences:");
+      expect(resolved?.promptScaffold).toContain("call leave_lesson that turn: correction:true, lesson");
+    }
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -341,9 +354,9 @@ test("Builder domain=frontend keeps the canonical frontend scaffold guidance (pa
 
 test("codex model overrides use the curated launch catalog at create time", () => {
   expect(resolvePipelineRole({ model: `gpt-${"x".repeat(200)}` }, "run", REGISTRY_LOOKUP).error)
-    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
   expect(resolvePipelineRole({ model: "gpt-5.6\u0000sol" }, "run", REGISTRY_LOOKUP).error)
-    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
 });
 
 for (const effort of ["xhigh", "max", "ultra"]) {

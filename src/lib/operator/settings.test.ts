@@ -66,3 +66,28 @@ test("an older settings file can carry unknown keys", () => {
   }));
   expect(readOperatorSettings()).toEqual({ locale, timeZone: null });
 });
+
+test("reads copy the outer settings while retaining the cached nested values", () => {
+  updateOperatorSettings({ locale: "uk", timeZone: "Europe/Kyiv" }, "2026-10-01T00:00:00Z");
+  const first = readOperatorSettings();
+  const second = readOperatorSettings();
+  expect(second).not.toBe(first);
+  expect(second.locale).toBe(first.locale);
+  expect(second.timeZone).toBe(first.timeZone);
+  first.locale = null;
+  expect(operatorLocale()).toBe("uk");
+});
+
+test("a same-size same-mtime replacement changes the locale without a reset", () => {
+  const file = path.join(sandbox, "operator-settings.json");
+  const replacement = path.join(sandbox, "replacement.json");
+  const body = (value: string) => JSON.stringify({ schemaVersion: 1, locale: { value, source: "chosen", changedAt: "2026-10-01T00:00:00Z" } });
+  const stamp = new Date("2026-10-01T00:00:00Z");
+  fs.writeFileSync(file, body("en"));
+  fs.utimesSync(file, stamp, stamp);
+  expect(operatorLocale()).toBe("en");
+  fs.writeFileSync(replacement, body("uk"));
+  fs.utimesSync(replacement, stamp, stamp);
+  fs.renameSync(replacement, file);
+  expect(operatorLocale()).toBe("uk");
+});

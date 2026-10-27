@@ -39,11 +39,13 @@ test.skipIf(process.platform !== "linux")("a Linux gate without systemd uses the
   expect(run.status).toBe(37); expect(run.stderr).toContain("portable cleanup on linux is best effort");
 });
 test("memory service forwards args, status and bounded tree termination", () => {
-  const f = fixture(true); expect(f.run("exit 23").status).toBe(23);
+  const f = fixture(true);
+  delete f.env.NODE_OPTIONS; delete f.env.LLV_GATE_MEM;
+  expect(f.run("exit 23").status).toBe(23);
   const args = readFileSync(join(f.root, "log"), "utf8");
-  expect(args).toContain("MemoryMax=8G"); expect(args).toContain("KillMode=control-group"); expect(args).toContain("TimeoutStopSec=2s");
+  expect(args).toContain("MemoryMax=14G"); expect(args).toContain("KillMode=control-group"); expect(args).toContain("TimeoutStopSec=2s");
   expect(args).toContain("CPUWeight=10"); expect(args).toContain("IOWeight=10");
-  expect(f.run('echo "$NODE_OPTIONS"').stdout).toContain("--max-old-space-size=6144");
+  expect(f.run('echo "$NODE_OPTIONS"').stdout).toContain("--max-old-space-size=11264");
 });
 test("another command waits for the same legacy-compatible slot", async () => {
   const f = fixture(true);
@@ -94,10 +96,11 @@ function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?:
 }
 test.skipIf(process.platform !== "linux")("a gate runs in the work slice with the shared quotas and keeps its memory cap", () => {
   const f = cpuFixture({ manager: true });
+  delete f.env.LLV_GATE_MEM;
   expect(f.run().status).toBe(0);
   const args = readFileSync(join(f.root, "log"), "utf8").trim().split("\n");
   expect(args).toContain("--slice=delegatus-agents-work.slice");
-  for (const property of ["MemoryMax=8G", "CPUWeight=10", "IOWeight=10", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args[args.indexOf(property) - 1]).toBe("-p");
+  for (const property of ["MemoryMax=14G", "CPUWeight=10", "IOWeight=10", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args[args.indexOf(property) - 1]).toBe("-p");
   expect(readFileSync(join(f.root, "systemctl.log"), "utf8")).toContain("--user set-property --runtime delegatus-agents-work.slice CPUWeight=100 CPUQuota=1800% CPUQuotaPeriodSec=20ms");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 });

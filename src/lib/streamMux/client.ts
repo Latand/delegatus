@@ -1,5 +1,7 @@
 "use client";
 
+import { backoffDelayMs } from "../deadline";
+
 import { decodeMuxEvent, MUX_ENDPOINT, MUX_PING_MS, type MuxOp } from "./protocol";
 
 /** The event a stream hands its listeners: what the readers here use of a MessageEvent. */
@@ -313,7 +315,7 @@ export function createStreamMux(deps: StreamMuxDeps): StreamMux {
       connect();
       return;
     }
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** (failures - 1), RECONNECT_MAX_MS);
+    const delay = backoffDelayMs(failures, { baseMs: RECONNECT_BASE_MS, maxMs: RECONNECT_MAX_MS, jitter: 0 });
     reconnectTimer = deps.setTimeout(() => {
       reconnectTimer = null;
       if (!direct && !physical && channels.size > 0) connect();

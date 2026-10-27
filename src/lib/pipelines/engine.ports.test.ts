@@ -1,6 +1,83 @@
 import { assertCpuReadGuardSurvivesSpyRestoration } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, fs, path, accountManager, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, entry, finishReported, realWorktreeLane, successorOnPullRequestBranch } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
+import { bindHostExitWriter, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+
+test("pipeline death evidence waits for the independent native waiter's receipt", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pending-exit-agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const identity = { pid: 2147482599, startIdentity: "fixture-pending-exit-port", bootEpoch: "fixture-boot" };
+  const binding = fs.mkdtempSync(path.join(process.env.TMPDIR!, "pending-exit-port-"));
+  setAgentRegistryForTests(registry);
+  try {
+    const launch = registry.beginSpawn("codex", "fixtures", { title: "Pending native exit fixture" });
+    const sessionId = "00000000-0000-0000-0000-000000000000";
+    registry.stageStructuredSpawn(launch.launchId, { key: { engine: "codex", sessionId }, artifactPath: `fixtures/rollout-2026-10-25T00-00-00-${sessionId}.jsonl`,
+      cwd: "fixtures", accountId: null, status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+      structuredHost: { kind: "codex-app-server", process: identity, exitProcess: identity, endpoint: "stdio:fixture",
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [] } });
+    bindHostExitWriter(binding, identity, captureProcessIdentity(process.pid));
+    const ports = defaultPipelinePorts();
+    expect(await ports.conversationHostUnavailableSince!(launch.conversationId)).toBeUndefined();
+    expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "unknown" });
+    recordHostExit(identity, null, "SIGKILL");
+    expect(await ports.conversationHostUnavailableSince!(launch.conversationId)).toBeTruthy();
+    expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "gone" });
+    expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe("exit: signal SIGKILL; no Delegatus stop recorded");
+  } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
+});
+
+for (const sqliteMode of ["off", "sqlite"] as const) test(`a warmed pipeline projection retains reclaimed launch evidence (${sqliteMode})`, () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `reclaimed-exit-${sqliteMode}.json`), undefined, undefined, { sqliteMode });
+  setAgentRegistryForTests(registry);
+  const native = { pid: 2147482598, startIdentity: `reclaimed-exit-${sqliteMode}`, bootEpoch: "fixture-boot" };
+  const next = { ...native, startIdentity: `successor-${sqliteMode}` };
+  const key = { engine: "codex" as const, sessionId: `reclaimed-exit-${sqliteMode}` };
+  const host = { kind: "codex-app-server" as const, process: native, exitProcess: native, endpoint: "stdio:fixture",
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [] };
+  try {
+    const launch = registry.beginSpawn("codex", "fixtures", { title: "Reclaimed native exit fixture" });
+    registry.stageStructuredSpawn(launch.launchId, { key, artifactPath: "fixtures/reclaimed.jsonl", cwd: "fixtures", accountId: null,
+      status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: host });
+    const ports = defaultPipelinePorts();
+    expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toContain("status unavailable");
+    withHostStopOrigin({ path: "pipeline-stage-stop", operationId: "reclaimed-exit-operation" }, () => recordHostStop(native, "SIGTERM", "fallback"));
+    recordHostExit(native, 23, null);
+    registry.setStructuredHost(key, { ...host, process: next, exitProcess: next });
+    expect(registry.spawnReceipt(launch.launchId)?.hostExit?.exit?.code).toBe(23);
+    const expected = "exit: code 23; stopped by pipeline-stage-stop (reclaimed-exit-operation)";
+    expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+    expect(defaultPipelinePorts().conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+  } finally { setAgentRegistryForTests(null); registry.close(); }
+});
+
+for (const sqliteMode of ["off", "sqlite"] as const) test(`late predecessor exit stays bound to its pending launch before another mutation (${sqliteMode})`, () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `late-predecessor-${sqliteMode}.json`), undefined, undefined, { sqliteMode });
+  const binding = fs.mkdtempSync(path.join(process.env.TMPDIR!, "late-predecessor-"));
+  setAgentRegistryForTests(registry);
+  const predecessor = { pid: 2147482595, startIdentity: `late-predecessor-${sqliteMode}`, bootEpoch: "fixture-boot" };
+  const successor = { ...predecessor, startIdentity: `late-successor-${sqliteMode}` };
+  const key = { engine: "codex" as const, sessionId: `late-predecessor-${sqliteMode}` };
+  const host = { kind: "codex-app-server" as const, process: predecessor, exitProcess: predecessor, endpoint: "stdio:fixture",
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [] };
+  try {
+    const launch = registry.beginSpawn("codex", "fixtures", { title: "Late predecessor exit fixture" });
+    registry.stageStructuredSpawn(launch.launchId, { key, artifactPath: "fixtures/late-predecessor.jsonl", cwd: "fixtures", accountId: null,
+      status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: host });
+    bindHostExitWriter(binding, predecessor, captureProcessIdentity(process.pid));
+    const warmed = defaultPipelinePorts();
+    expect(warmed.conversationHostEnded!(launch.conversationId, launch.launchId)).toContain("status unavailable");
+    registry.setStructuredHost(key, { ...host, process: successor, exitProcess: successor });
+    expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]?.pendingHostExits).toEqual([{ process: predecessor, launchId: launch.launchId }]);
+    withHostStopOrigin({ path: "pipeline-stage-stop", operationId: "late-predecessor-operation" }, () => recordHostStop(predecessor, "SIGKILL", "fallback"));
+    recordHostExit(predecessor, null, "SIGKILL");
+    recordHostExit(successor, 99, null);
+    expect(registry.spawnReceipt(launch.launchId)?.hostExit).toBeUndefined();
+    const expected = "exit: signal SIGKILL; stopped by pipeline-stage-stop (late-predecessor-operation)";
+    expect(warmed.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+    expect(defaultPipelinePorts().conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+  } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
+});
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
   const observations: Awaited<ReturnType<typeof import("@/lib/tmux").panePidMap>>[] = [
@@ -1221,3 +1298,51 @@ for (const interruption of [null, "before-ref", "after-ref"] as const) {
     }
   });
 }
+
+
+test.each(["preparation", "transport"] as const)("spawn admission rechecks its lane cutoff after %s yields", async boundary => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `deadline-registry-${boundary}.json`));
+  setAgentRegistryForTests(registry);
+  let clock = 1_000;
+  const monotonic = spyOn(performance, "now").mockImplementation(() => clock);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "claude", accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
+    transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }});
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
+  let dispatched = false;
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    await Promise.resolve();
+    clock += 3_000;
+    await input.authorize?.();
+    dispatched = true;
+    return { path: null } as never;
+  });
+  let reservations = 0;
+  try {
+    await expect(defaultPipelinePorts().spawnAgent({
+      role: { roleId: "builder", engine: "claude", model: "fable", effort: "high", access: "read-write", promptScaffold: "" },
+      runtimeProfile: { access: "read-write", sandbox: "full" }, cwd: process.env.LLV_STATE_DIR!,
+      project: "repo-00000000000000000000000000000001", requestedAccountId: null,
+      title: "Build", prompt: "Build", parentPath: null, clientAttemptId: `lane_deadline_${boundary}`,
+      spawnAdmissionDeadline: clock + 3_000,
+      membership: { kind: "pipeline", containerId: "deadline-lane", role: "builder", slot: "build:1",
+        stageId: "build", stageOrder: 0, round: 1, parentConversationId: null }, creatorConversationId: null,
+    }, async () => {
+      if (++reservations === 2 && boundary === "preparation") {
+        await Promise.resolve(); clock += 3_000;
+      }
+    })).rejects.toThrow("lane deadline exhausted");
+    expect(dispatched).toBe(false);
+    expect(spawn.mock.calls.length).toBe(boundary === "preparation" ? 0 : 1);
+    const receipt = registry.spawnReceiptForClientAttempt(`lane_deadline_${boundary}`);
+    if (boundary === "preparation") expect(receipt?.state).toBe("failed");
+  } finally {
+    monotonic.mockRestore(); resolve.mockRestore(); client.mockRestore(); guard.mockRestore(); spawn.mockRestore();
+    setAgentRegistryForTests(null); registry.close();
+  }
+});

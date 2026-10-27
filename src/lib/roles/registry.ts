@@ -5,7 +5,7 @@ import { validateLaunchModel } from "@/lib/agent/models";
 
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
-import { BUILDER_FINISH_LINE, BUILDER_WORK_RULES, EARLIER_ANSWERS_MECHANICS, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES, RENDERED_RULES } from "./defaults";
+import { BUILDER_FINISH_LINE, BUILDER_WORK_RULES, EARLIER_ANSWERS_MECHANICS, FIX_ROUND_FINISH_LINE, OPERATOR_CORRECTION_RULE, ORCHESTRATOR_WITHOUT_MANDATE_RULES, RENDERED_RULES } from "./defaults";
 import { roleEngineRefusal } from "./locks";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
@@ -129,7 +129,9 @@ const BUILDER_REVIEW_LINE = `${BUILDER_FINISH_LINE} Review your own diff before 
  * override stored before they existed) gets it at its end.
  */
 export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues, project = "", deferWorkerLimit = false): string {
-  const rendered = renderScaffold(definition, params, project, deferWorkerLimit);
+  const original = renderScaffold(definition, params, project, deferWorkerLimit);
+  const rendered = definition.id === "orchestrator" || original.includes(OPERATOR_CORRECTION_RULE)
+    ? original : `${OPERATOR_CORRECTION_RULE}\n\n${original}`;
   if (definition.id !== "builder") return rendered;
   const fixRound = params.mode === "apply-fixes";
   const frontend = params.domain === "frontend";

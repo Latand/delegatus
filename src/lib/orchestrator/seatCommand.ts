@@ -1086,8 +1086,9 @@ async function runOrchestratorSeatRequest(
   const project = canonicalOrchestratorProject(namedProject);
   /* Upgraded before preflight and before the durable begin, so a new intent
      records the text it delivers; a replay delivers what its intent recorded. */
-  const mandate = orchestratorMandateUpgraded(typeof rawBody.mandate === "string" ? rawBody.mandate : "");
-  if (!mandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
+  const rawMandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
+  if (!rawMandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
+  const mandate = orchestratorMandateUpgraded(rawMandate);
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
     return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters", admission: "refused" } };

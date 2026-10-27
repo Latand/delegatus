@@ -397,7 +397,7 @@ describe("compactPipelineArtifactPaths", () => {
  * the stage could be protected. This drives the exact client derivation order.
  */
 describe("issue 560: a running review round renders its real conversation, not a prompt placeholder", () => {
-  const R1_PATH = "/home/user/.codex/sessions/rollout-R1.jsonl";
+  const R1_PATH = "/state/.codex/sessions/rollout-R1.jsonl";
   const CONV_R1 = "conversation_review-r1";
   const stages = [stage("architect"), stage("builder"), stage("review", "review-loop")];
 
@@ -895,12 +895,11 @@ describe("stageOpenTarget (reviewer paths route to the flow deck, never the fold
     expect(stageOpenTarget(runStage, attempt({ agentPath: null }))).toBeNull();
   });
 
-  test("a review-loop whose flow is not renderable (closed/missing) has no open target", () => {
-    /* renderableFlows excludes closed/absent flows, so the action is disabled
-       so it never routes to a deck the board never draws. */
+  test("a retired review opens its archive even when its deck is not placed", () => {
+    /* Archive navigation is independent of current board placement. */
     const renderable = new Set<string>(["f1"]);
     expect(stageOpenTarget(reviewStage, attempt({ flowId: "f1" }), renderable)).toEqual({ kind: "flow", flowId: "f1" });
-    expect(stageOpenTarget(reviewStage, attempt({ flowId: "gone" }), renderable)).toBeNull();
+    expect(stageOpenTarget(reviewStage, attempt({ flowId: "gone" }), renderable)).toEqual({ kind: "flow", flowId: "gone" });
     /* A run stage is unaffected by the flow set. */
     expect(stageOpenTarget(runStage, attempt({ agentPath: "/build" }), renderable)).toEqual({ kind: "path", path: "/build" });
   });
@@ -926,21 +925,21 @@ describe("compactStageOpenTarget", () => {
     state: "reviewing",
   } as unknown as Flow;
 
-  test("opens the latest reviewer transcript after compact history removes the flow deck", () => {
+  test("opens the archive after compact history removes the deck", () => {
     expect(compactStageOpenTarget(reviewStage, reviewAttempt, [flow], new Set(), new Set(["/reviewer"]))).toEqual({
-      kind: "path",
-      path: "/reviewer",
+      kind: "flow",
+      flowId: "f1",
     });
   });
 
-  test("falls back to the implementer when the reviewer transcript is unavailable", () => {
+  test("keeps the archive reachable when the reviewer transcript is unavailable", () => {
     expect(compactStageOpenTarget(reviewStage, reviewAttempt, [flow], new Set(), new Set(["/builder"]))).toEqual({
-      kind: "path",
-      path: "/builder",
+      kind: "flow",
+      flowId: "f1",
     });
   });
 
-  test("opens the current resumed generation of the active durable binding", () => {
+  test("keeps the archive id stable across reviewer generations", () => {
     const resumedFlow = {
       ...flow,
       rounds: [{ n: 1, reviewerPath: "/reviewer-archived", reviewerConversationId: "conversation-reviewer" }],
@@ -959,10 +958,10 @@ describe("compactStageOpenTarget", () => {
     ] as unknown as FileEntry[];
 
     expect(compactStageOpenTarget(reviewStage, reviewAttempt, [resumedFlow], new Set(), new Set(["/reviewer-resumed"]), files))
-      .toEqual({ kind: "path", path: "/reviewer-resumed" });
+      .toEqual({ kind: "flow", flowId: "f1" });
   });
 
-  test("a completed pipeline resolves history through the current reviewer binding", () => {
+  test("a completed pipeline opens the archive even without scanned transcripts", () => {
     const buildStage = { ...stage("build"), next: reviewStage.id };
     const completed = pipeline({
       state: "completed",
@@ -978,9 +977,9 @@ describe("compactStageOpenTarget", () => {
     } as unknown as Flow;
 
     expect(compactPipelineOpenTarget(completed, [reboundFlow], new Set(), new Set(["/reviewer-current"])))
-      .toEqual({ kind: "path", path: "/reviewer-current" });
+      .toEqual({ kind: "flow", flowId: "f1" });
     expect(compactPipelineOpenTarget(completed, [reboundFlow], new Set(), new Set()))
-      .toBeNull();
+      .toEqual({ kind: "flow", flowId: "f1" });
   });
 });
 
@@ -1342,14 +1341,16 @@ describe("optimistic stage mutations (issue #221 §3 — instant add/remove)", (
     expect(optimisticAddReview(readOnly, { id: "r", kind: "review-loop", prompt: "{{prev.output}}", next: null }, 1).stages.map((stage) => [stage.id, stage.kind])).toEqual([["a", "run"], ["r", "review-loop"], ["b", "run"]]);
   });
 
-  test("Add review needs two free stage slots and a run before it (#2187)", () => {
+  test("a native reviewer needs one free stage slot and an existing insertion point", () => {
     const run = (id: string): PipelineStage => ({ ...chain()[0]!, id, next: null });
     const full = (count: number) => pipeline({ stages: Array.from({ length: count }, (_, index) => run(`s${index}`)) });
     expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES - 2), 0)).toBe(true);
-    expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES - 1), 0)).toBe(false);
+    expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES - 1), 0)).toBe(true);
     expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES), 0)).toBe(false);
-    /* Before every run it would be the chain's first stage, which cannot start. */
+    /* The card action always inserts after an existing stage. */
     expect(canAddReviewAfter(full(2), -1)).toBe(false);
+    expect(canAddReviewAfter(full(2), 2)).toBe(false);
+    expect(canAddReviewAfter(full(2), 0.5)).toBe(false);
   });
 
   test("a lane stopped after its last fix marks its review stage as the one it waits on (#2187)", () => {
@@ -1395,10 +1396,11 @@ describe("template-first drafts (issue #196)", () => {
   test("templateStageInputs folds a template into POSTable stages with roles and no pinned runtime", () => {
     const template = PIPELINE_TEMPLATES.find((candidate) => candidate.id === "planBuildReview")!;
     const inputs = templateStageInputs(template);
-    expect(inputs.map((input) => input.role?.roleId)).toEqual(["architect", "builder", "reviewer"]);
-    expect(inputs.map((input) => input.kind)).toEqual(["run", "run", "review-loop"]);
-    /* The chain is linear and closed. */
-    expect(inputs.map((input) => input.next)).toEqual([inputs[1]!.id, inputs[2]!.id, null]);
+    expect(inputs.map((input) => input.role?.roleId)).toEqual(["architect", "builder", "reviewer", "builder"]);
+    expect(inputs.map((input) => input.kind)).toEqual(["run", "run", "run", "run"]);
+    /* A finite fail edge reaches a dedicated fixer and then a fresh review. */
+    expect(inputs.map((input) => input.next)).toEqual([inputs[1]!.id, inputs[2]!.id, null, inputs[2]!.id]);
+    expect(inputs[2]!.onFail).toEqual({ to: inputs[3]!.id, maxRounds: 3, onExhausted: "advance" });
     /* No engine/model/effort pins: the server resolves each role's current defaults. */
     for (const input of inputs) {
       expect(input.engine).toBeUndefined();

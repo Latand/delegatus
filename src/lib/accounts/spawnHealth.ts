@@ -269,9 +269,10 @@ const productionDependencies: ClaudeSpawnHealthDependencies = {
 /**
  * Chooses one launchable Claude account from a single preflight health pass.
  * A current OAuth expiry is required before the live usage probe runs. Live
- * validation outranks a transient probe failure for ordinary routing. An
- * explicit admissible pin keeps its account; the active account breaks ties
- * inside the same health tier when the caller left the account unpinned.
+ * validation outranks a transient probe failure within each binding tier.
+ * Primary accounts, including refreshable credentials, precede fallback
+ * accounts. An explicit admissible pin keeps its account; the active account
+ * breaks ties inside the same binding and health tier for unpinned work.
  */
 export async function selectHealthyClaudeAccount(
   accounts: ClaudeAccount[],
@@ -280,7 +281,9 @@ export async function selectHealthyClaudeAccount(
   pinPreferred = true,
   fallbackPreferredId: string | null | undefined = preferredId,
   model?: string | null,
+  fallbackAccountIds: readonly string[] = [],
 ): Promise<ClaudeSpawnAccountSelection> {
+  const fallbackIds = new Set(fallbackAccountIds);
   const now = dependencies.now();
   const forModel = (result: ClaudeValidityProbeResult): SpawnAccountAdmission => result.limitRead
     ? claudeValidityFromLimitRead(result.limitRead, now, model)
@@ -322,7 +325,8 @@ export async function selectHealthyClaudeAccount(
     : 0;
   const select = (candidates: Evaluated[]) => candidates
     .filter((candidate) => rank(candidate.admission) > 0)
-    .sort((left, right) => rank(right.admission) - rank(left.admission)
+    .sort((left, right) => Number(fallbackIds.has(left.account.id)) - Number(fallbackIds.has(right.account.id))
+      || rank(right.admission) - rank(left.admission)
       || Number(right.account.id === fallbackPreferredId) - Number(left.account.id === fallbackPreferredId)
       || left.account.id.localeCompare(right.account.id))[0];
   const result = (selected: Evaluated, requested?: Evaluated | null): ClaudeSpawnAccountSelection => ({
@@ -375,10 +379,11 @@ export async function selectHealthyClaudeAccount(
   if (pinPreferred && requested?.admission.kind === "admissible") return result(requested, requested);
 
   const currentSelection = select(current);
-  if (currentSelection) return result(currentSelection, requested);
+  if (currentSelection && !fallbackIds.has(currentSelection.account.id)) return result(currentSelection, requested);
 
   const refreshed = (await Promise.all(classified
     .filter((candidate) => candidate.oauth?.expiresAt && candidate.oauth.expiresAt <= now && candidate.oauth.refreshable)
+    .filter((candidate) => !currentSelection || !fallbackIds.has(candidate.account.id))
     .filter((candidate) => candidate.account.id !== preferredExpired?.account.id)
     .map(({ account }) => evaluate(account, (candidate, retryUnrelatedRevision) => refreshSingleFlight(candidate, dependencies.refresh, retryUnrelatedRevision)))))
     .filter((candidate) => candidate !== null);

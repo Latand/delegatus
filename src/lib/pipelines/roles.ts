@@ -1,5 +1,5 @@
 import { configForParams, listRoles, roleFenceBlock, roleScaffoldBody, validateRoleParams } from "@/lib/roles/registry";
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/lib/roles/defaults";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { codexLaunchTier } from "@/lib/accounts/codexServiceTiers";
 import { effortScale } from "@/lib/agent/efforts";
@@ -72,6 +72,10 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
   /* The trim stays for an operator override stored near the cap. A cut that
      only the supplied text values cause is reported instead, so the stage is
      refused before its scaffold is stored without the end of its rules. */
+  const trimmedBody = body.slice(0, budget);
+  // Stored overrides can fill the cap before the shared working rules begin.
+  const storedBody = trimmedBody.includes(OPERATOR_CORRECTION_RULE)
+    ? trimmedBody : `${OPERATOR_CORRECTION_RULE}\n\n${body}`.slice(0, budget);
   const supplied = definition.parameters.filter((parameter) => parameter.kind === "text" && parameters[parameter.key] !== defaultRoleParameterValue(parameter));
   const parameterOverflow = body.length > budget && supplied.length > 0
     && render({ ...parameters, ...Object.fromEntries(supplied.map((parameter) => [parameter.key, defaultRoleParameterValue(parameter)])) }).length <= budget
@@ -84,7 +88,7 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
        back to the base config. */
     ...configForParams(definition, parameters),
     access: definition.capabilities.includes("read-only") ? "read-only" : "read-write",
-    promptScaffold: `${body.slice(0, budget)}${fences}`,
+    promptScaffold: `${storedBody}${fences}`,
     ...(parameterOverflow ? { parameterOverflow } : {}),
   };
 };
@@ -111,11 +115,11 @@ export function validatePipelineRoleParams(roleId: string, params: Record<string
 }
 
 export function resolvePipelineRole(
-  stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "serviceTier" | "access">,
+  stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "serviceTier" | "preferredServiceTier" | "access">,
   kind: PipelineStageKind,
   lookup?: PipelineRoleLookup | null,
   project = "",
-): { role?: EffectivePipelineRole; error?: string; field?: "model" | "serviceTier" } {
+): { role?: EffectivePipelineRole; error?: string; field?: "model" | "serviceTier" | "preferredServiceTier" } {
   const ref = stage.role;
   if (ref !== undefined && (!ref || typeof ref !== "object" || Array.isArray(ref))) {
     return { error: "stage role must be an object" };
@@ -157,11 +161,15 @@ export function resolvePipelineRole(
   const engine = stage.engine ?? registered?.engine ?? builder.engine;
   const engineRefusal = roleEngineRefusal(roleId, engine);
   if (engineRefusal) return { error: engineRefusal };
+  if (stage.preferredServiceTier !== undefined && engine !== "codex") {
+    return { error: "preferredServiceTier is Codex only", field: "preferredServiceTier" };
+  }
   const model = value(stage.model, registered?.model ?? builder.model);
   const effort = value(stage.effort, registered?.effort ?? builder.effort);
   const row = registered ?? builder;
   const tier = codexLaunchTier({ engine, model, fast: undefined, serviceTier: stage.serviceTier,
-    roleDefault: row.serviceTier, roleDefaultApplies: engine === row.engine && model === row.model });
+    roleDefault: stage.preferredServiceTier ?? row.serviceTier,
+    roleDefaultApplies: stage.preferredServiceTier !== undefined || (engine === row.engine && model === row.model) });
   if ("error" in tier) return { error: tier.error, field: "serviceTier" };
   if (model) {
     const validation = validateLaunchModel(engine, model);
@@ -187,6 +195,7 @@ export function resolvePipelineRole(
       model,
       effort,
       ...(tier.tier ? { serviceTier: tier.tier, serviceTierSource: tier.required ? "explicit" as const : "role-default" as const } : {}),
+      ...(stage.preferredServiceTier ? { preferredServiceTier: stage.preferredServiceTier } : {}),
       access: kind === "review-loop" || isReadOnlyLockedRole(roleId) ? "read-only" : stage.access ?? registered?.access ?? builder.access ?? "read-write",
       promptScaffold,
     },

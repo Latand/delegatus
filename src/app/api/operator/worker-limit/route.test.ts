@@ -5,23 +5,27 @@ import os from "node:os";
 import path from "node:path";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { GET, PUT } from "./route";
 import { GET as seatStatus } from "@/app/api/orchestrator/seat/status/route";
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "worker-route-"));
 const previous = process.env.LLV_STATE_DIR;
+const previousToken = process.env.LLV_TOKEN;
+delete process.env.LLV_TOKEN;
 process.env.LLV_STATE_DIR = directory;
 beforeEach(() => fs.rmSync(path.join(directory, "worker-limit.json"), { force: true }));
 afterAll(() => {
+  if (previousToken === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previousToken;
   setCallerConversationResolverForTests(null);
   if (previous === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previous;
   fs.rmSync(directory, { recursive: true, force: true });
 });
-const request = (body: unknown, headers = {}) => new NextRequest("http://localhost/api/operator/worker-limit", { method: "PUT", headers: { host: "localhost", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+const request = (body: unknown, headers = {}) => new NextRequest("http://localhost/api/operator/worker-limit", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
 test("operator settings and seat header write both levels through the same route", async () => {
-  expect((await (await GET(new NextRequest("http://localhost/api/operator/worker-limit"))).json()).machine.value).toBe(3);
+  expect((await (await GET(new NextRequest("http://localhost/api/operator/worker-limit", { headers: { cookie: `llv_operator=${soloBrowserSession()}` } }))).json()).machine.value).toBe(3);
   expect((await PUT(request({ value: 8 }))).status).toBe(200);
   const project = await (await PUT(request({ project: "one", value: 10 }))).json();
   expect(project.project).toMatchObject({ value: 10, effective: 10, source: "project" });
@@ -43,4 +47,12 @@ test("an agent reads worker limits through the tool instead of the operator rout
   setCallerConversationResolverForTests(() => "conversation_one");
   const response = await GET(new NextRequest("http://localhost/api/operator/worker-limit", { headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } }));
   expect(response.status).toBe(403);
+});
+
+test("a forged same-origin browser header cannot change worker limits without a session", async () => {
+  const req = request({ value: 8 }, { cookie: "", "sec-fetch-site": "same-origin" });
+  const response = await PUT(req);
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ error: expect.stringContaining("operator-only") });
+  expect(fs.existsSync(path.join(directory, "worker-limit.json"))).toBe(false);
 });

@@ -16,7 +16,7 @@ import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent
 import { resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import type { Flow, Round } from "@/lib/flows/types";
-import type { ProcessIdentity } from "@/lib/processIdentity";
+import { sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
 export type CensusRegistry = Pick<RegistryFile, "entries" | "conversations">
   & Partial<Pick<RegistryFile, "conversationAliases" | "receipts">>;
@@ -95,10 +95,6 @@ const OPEN_RECEIPT = new Set<SpawnReceipt["state"]>(["starting", "pane-bound", "
 
 function usable(identity: ProcessIdentity | null | undefined): identity is ProcessIdentity {
   return !!identity && Number.isInteger(identity.pid) && identity.pid > 0;
-}
-
-function sameProcess(left: ProcessIdentity, right: ProcessIdentity): boolean {
-  return left.pid === right.pid && left.startIdentity === right.startIdentity;
 }
 
 /** Alive while any recorded identity answers under its start identity (R4). */
@@ -208,9 +204,9 @@ export function entryOwners(
      is a setup owner only when it is doing setup. */
   const claimant = currentClaimant(entry);
   if (claimant) {
-    const ownHost = recorded.some((identity) => sameProcess(identity, claimant));
+    const ownHost = recorded.some((identity) => sameRecordedProcessIdentity(identity, { pid: claimant.pid, startIdentity: claimant.startIdentity }));
     const viewer = context.viewer;
-    const heldByThisViewer = !!viewer?.identity && sameProcess(viewer.identity, claimant) && viewer.heldKeys.has(key);
+    const heldByThisViewer = !!viewer?.identity && sameRecordedProcessIdentity(viewer.identity, { pid: claimant.pid, startIdentity: claimant.startIdentity }) && viewer.heldKeys.has(key);
     const hostedLive = HOSTED.has(entry.status) && recorded.some((identity) => identityAlive(identity, probe));
     if (!ownHost && !heldByThisViewer && !hostedLive) {
       owners.push({ ...base, id: `setup:${key}:${claimant.pid}:${claimant.startIdentity}`, role: "setup", kind: "structured",
@@ -270,9 +266,9 @@ export function registryOwners(
        agent cannot drop the pane the receipt also launched. */
     const unrecorded: ProcessIdentity[] = [];
     for (const identity of launched) {
-      const recorded = owners.filter((owner) => owner.entry && owner.identities.some((other) => sameProcess(other, identity)));
+      const recorded = owners.filter((owner) => owner.entry && owner.identities.some((other) => sameRecordedProcessIdentity(other, { pid: identity.pid, startIdentity: identity.startIdentity })));
       for (const owner of recorded) addCustody(owner, base.binding);
-      if (!recorded.length && !unrecorded.some((other) => sameProcess(other, identity))) unrecorded.push(identity);
+      if (!recorded.length && !unrecorded.some((other) => sameRecordedProcessIdentity(other, { pid: identity.pid, startIdentity: identity.startIdentity }))) unrecorded.push(identity);
     }
     if (unrecorded.length) {
       owners.push({ ...base, id: `launched:${receipt.launchId}:${unrecorded[0]!.pid}:${unrecorded[0]!.startIdentity}`, role: "host", kind,

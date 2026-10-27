@@ -135,7 +135,7 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
-import { issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
+import { ISSUE_REPORT_RESPONSE_RULE, issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS } from "@/lib/issueReports/scrub";
@@ -187,7 +187,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveCorrectionForRole, leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -2083,7 +2083,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     const preview = recordIssueReportPreview({ title, body, privacyJudgment, ...review }, caller.conversationId, { directory });
     return {
       ...view(preview),
-      next: "Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after approval.",
+      next: `Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. Preparation needs no separate consent. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after exact-text approval. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   const givenDigest = text(args.digest);
@@ -2105,7 +2105,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
-      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
+      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
@@ -2742,7 +2742,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
-    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
+    const answer = { correction: args.correction, lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
     /* The operator's own root conversation, in Delegatus mode only: proven by
        the registry, never by an argument (memory-source-switch.md §3.3). */
     const operator = () => {
@@ -2760,8 +2760,11 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     try {
       return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
     } catch (error) {
+      if (!(error instanceof RoleMemoryRefusal) || error.code !== "LESSON_NOT_AN_ATTEMPT" || caller.kind !== "agent") throw error;
+      // A registered role outside a pipeline may still leave an operator correction.
+      if (args.correction === true && caller.role && caller.conversationId) return { ...leaveCorrectionForRole({ conversationId: caller.conversationId, roleId: caller.role, project: dependencies.callerProject ? dependencies.callerProject() : productionCallerProject() }, answer) };
       // Only a conversation that holds no stage attempt at all may be the operator's.
-      const own = error instanceof RoleMemoryRefusal && error.code === "LESSON_NOT_AN_ATTEMPT" && caller.kind === "agent" ? operator() : null;
+      const own = operator();
       if (!own) throw error;
       return { ...leaveLessonForOperator(own, answer) };
     }
@@ -5299,8 +5302,8 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
  */
 async function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const action = text(args.action) || "list";
-  if (action !== "list" && action !== "add" && action !== "remove") {
-    throw new Error("action must be list, add or remove");
+  if (action !== "list" && action !== "add" && action !== "remove" && action !== "set-fallback") {
+    throw new Error("action must be list, add, remove or set-fallback");
   }
   const read = dependencies.readAccountProjectBindings ?? accountProjectBindings;
   const bind = dependencies.bindAccountToProject ?? bindAccountToProject;
@@ -5318,20 +5321,26 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
     : null;
 
   if (action !== "list") {
-    if (!project) throw new Error("project is required to add or remove a binding");
+    if (!project) throw new Error("project is required to change a binding");
     const engine = text(args.engine);
     if (engine !== "claude" && engine !== "codex") throw new Error("engine must be claude or codex");
     const accountId = text(args.accountId);
-    if (!accountId) throw new Error("accountId is required to add or remove a binding");
-    const result = action === "add" ? bind(engine, accountId, project) : unbind(engine, accountId, project);
+    if (!accountId) throw new Error("accountId is required to change a binding");
+    if (args.fallback !== undefined && typeof args.fallback !== "boolean") throw new Error("fallback must be a boolean");
+    if (action === "set-fallback" && typeof args.fallback !== "boolean") throw new Error("fallback is required for set-fallback");
+    const result = action === "remove" ? unbind(engine, accountId, project) : bind(engine, accountId, project, undefined, args.fallback as boolean | undefined, action === "set-fallback");
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
     /* #1845: a write answers the row it changed and that project's pool for
        that engine, still read AFTER the write from the store. The whole table
        is `action: "list"`. */
     const bindings = read();
     const bound = (allowedAccountIdsForProject(project, engine, bindings) ?? []).includes(accountId);
-    if (bound !== (action === "add")) {
+    if (bound !== (action !== "remove")) {
       throw new Error(`the binding store does not show the ${action} of ${engine} account ${accountId} for ${project} after the write`);
+    }
+    const fallback = bindings.find(binding => binding.engine === engine && binding.accountId === accountId && binding.project === project)?.fallback ?? false;
+    if (action !== "remove" && args.fallback !== undefined && fallback !== args.fallback) {
+      throw new Error("the binding store does not show the fallback flag after the write");
     }
     return redactPayload({
       action,
@@ -5340,6 +5349,7 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
       engine,
       accountId,
       bound,
+      fallback,
       allowed: projectEngineAccounts(project, engine, accountsFor(engine), bindings, []),
     });
   }

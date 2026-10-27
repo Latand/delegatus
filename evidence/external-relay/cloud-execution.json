@@ -1,0 +1,5940 @@
+{
+  "recordedAt": "2026-10-26T10:39:28.998465+00:00",
+  "baselineRevision": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+  "reviewedRevision": "56ed185f9b009ee959e9370093d2fdc4d4da39cf",
+  "sourceSha256": "2f6c26dba8cc2473a29ffeca84e0fef2279303836961f461ef66da9cd711af90",
+  "sourceFiles": [
+    {
+      "path": "docs/design/relay.md",
+      "sha256": "1197bb2a4001675d947b502ea993164f4af77a4bf60ff5e4a7795a351b913d56"
+    },
+    {
+      "path": "docs/guide/telegram.md",
+      "sha256": "07fd1fa84cc62e9d368c2ce2977a114a89a501d47c3e9cdec4e067a3e4b1815d"
+    },
+    {
+      "path": "src/app/api/external-relay/relays/[id]/route.ts",
+      "sha256": "c8d3d72975a18e565d829fd5fa366804753f19e8ed87ac4ef796346c7ec0e6ce"
+    },
+    {
+      "path": "src/app/api/external-relay/route.test.ts",
+      "sha256": "08fed52614cd89c5dbcb74be9fdc9191c97f37e2f49840759f0d9237e70b819b"
+    },
+    {
+      "path": "src/components/externalRelay/CloneCreate.dom.test.tsx",
+      "sha256": "87ddac8037886d25dc441593ace5f68856722d14678787bc4b79ebf876cfd573"
+    },
+    {
+      "path": "src/components/externalRelay/CloneCreate.tsx",
+      "sha256": "b5a038ffbde174ad9955a406df5ce303f104ebd10aa6ae6eba00c3ff5591bdf7"
+    },
+    {
+      "path": "src/components/externalRelay/ExternalRelaySection.dom.test.tsx",
+      "sha256": "a23e186747084021f22682461bc4610c4cbdb1be5d330918fd8dc1a8ff2a60a0"
+    },
+    {
+      "path": "src/components/externalRelay/ExternalRelaySection.tsx",
+      "sha256": "5c33ac15751338e46d248c90a6899d63c1bb74816cc2813a2411c515d8184fca"
+    },
+    {
+      "path": "src/components/kanban/kanbanBoard.browser.test.tsx",
+      "sha256": "cbf134231f41a8792cc0a00f83c2b2af27e54f670687a8e969a47f3c5852c43a"
+    },
+    {
+      "path": "src/lib/externalRelay/client.test.ts",
+      "sha256": "47b9433979d42e3068caf527f7f871c9e6b25dd94e33c77bf2a78b16259ed5da"
+    },
+    {
+      "path": "src/lib/externalRelay/cloneCreate.test.ts",
+      "sha256": "2a8c727766aa422fe347d87539381a5afc88d128697641d7bee463caec69cfb8"
+    },
+    {
+      "path": "src/lib/externalRelay/cloud.test.ts",
+      "sha256": "ceeb981f97ace7ce093dc27d39ce040a441fd146c2e85e5a99e892828790b1dd"
+    },
+    {
+      "path": "src/lib/externalRelay/cloud.ts",
+      "sha256": "3052111a6bdef77ee6f35e9dd60a78eeeebe7332099d83ddc314e7492b2afb97"
+    },
+    {
+      "path": "src/lib/externalRelay/cloudCustody.fixture.ts",
+      "sha256": "2b846f472f75e9388cdef92810b2b0ebda24b1bcf9d68f4e08aaefd2e3ff129d"
+    },
+    {
+      "path": "src/lib/externalRelay/cloudDeadline.fixture.ts",
+      "sha256": "ff75e75b3a8d9dfa93fde3efafe666f5a991bb4c46c6ce369745a5ea14992ad5"
+    },
+    {
+      "path": "src/lib/externalRelay/conversations.ts",
+      "sha256": "926890792345fd1a9912820e9c8b172a3b1f84471ad956ea9a1290af6da794d8"
+    },
+    {
+      "path": "src/lib/externalRelay/ownerOutput.test.ts",
+      "sha256": "2e3266b3472ab4b4f90446110c75cd4e0f572cd9d0bccd937ca91a9eac8a021e"
+    },
+    {
+      "path": "src/lib/externalRelay/ownerOutput.ts",
+      "sha256": "1461578b34fc77f5fd065c31532ab855443ec328efa87c5acc4d6c3d6b322fd5"
+    },
+    {
+      "path": "src/lib/externalRelay/ownerRun.ts",
+      "sha256": "5f52db59fda48bfde8b90de9ca3e34f692954e7081fbaa1595b331bd0962693d"
+    },
+    {
+      "path": "src/lib/externalRelay/ownerServiceTools.ts",
+      "sha256": "f5bdf940b8ec18c5f04b1888b1bda65855edb3218a53b63f552b6fc28f68d33f"
+    },
+    {
+      "path": "src/lib/externalRelay/poller.test.ts",
+      "sha256": "fdb66766624f40c8dad1d0fd4b6c0540a80a14137c8c062c83c75b0b0a010b65"
+    },
+    {
+      "path": "src/lib/externalRelay/poller.ts",
+      "sha256": "e6ccc53a1ae076a13d88a5d75ba2efcb806611d768ca9f4affab2b270300f077"
+    },
+    {
+      "path": "src/lib/externalRelay/runner.test.ts",
+      "sha256": "1da60028b431ec6925f1f4f59edb2afe9d7123247583d4defad2237146cb631e"
+    },
+    {
+      "path": "src/lib/externalRelay/runner.ts",
+      "sha256": "917b20d6cad33aa36156e3f43229cdb206d3ecbd8c9f37378aeec95716e08285"
+    },
+    {
+      "path": "src/lib/externalRelay/store.test.ts",
+      "sha256": "b2e9a98b431e2aa23a536ee2f8cf7a5b79d86a223059bc01dd2f89941e308788"
+    },
+    {
+      "path": "src/lib/externalRelay/store.ts",
+      "sha256": "b7be783e435f1eea21e2290e0fcb3a15c91a7313a3bf149b879df8a8df8d3461"
+    },
+    {
+      "path": "src/lib/i18n/en.ts",
+      "sha256": "9b321b7222d1d415838378dce25bf4cad3e181f27983553e03c69d9e25848f79"
+    },
+    {
+      "path": "src/lib/i18n/uk.ts",
+      "sha256": "859309cecd0bef34f64009fdedc4d9709a5c92616398dbb06e46f839542b0148"
+    }
+  ],
+  "runtime": {
+    "bun": "1.4.0",
+    "playwrightCore": "1.62.1"
+  },
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR",
+    "closed Viewer control URL"
+  ],
+  "method": {
+    "tests": "bash scripts/gate-slot.sh bun run test <explicit-file>",
+    "selection": "Touched tests, direct source importers including generated child-script imports, adjacent tests, and scoped Linux gates; one file at a time.",
+    "comparison": "Full head and main files, with fresh repeated observations for red files. Final-phase observations bind to sourceSha256; earlier head observations document the repair iterations."
+  },
+  "checks": [
+    {
+      "phase": "head",
+      "mode": "types",
+      "exit": 0,
+      "durationMs": 289996
+    },
+    {
+      "phase": "head",
+      "mode": "lint",
+      "exit": 0,
+      "durationMs": 23978
+    },
+    {
+      "phase": "head",
+      "mode": "browser",
+      "exit": 0,
+      "durationMs": 173410
+    },
+    {
+      "phase": "final",
+      "mode": "types",
+      "exit": 0,
+      "durationMs": 229919
+    },
+    {
+      "phase": "final",
+      "mode": "lint",
+      "exit": 0,
+      "durationMs": 19790
+    },
+    {
+      "phase": "final",
+      "mode": "privacy",
+      "exit": 0,
+      "durationMs": 37933
+    }
+  ],
+  "summary": {
+    "selectedFiles": 114,
+    "passedFiles": 98,
+    "preExistingRedFiles": 16,
+    "introducedFailures": 0
+  },
+  "tests": [
+    {
+      "file": "bin/bind-guard.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 572,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 576,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 699,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "bin/server-runtime.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2023,
+          "passed": 31,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1651,
+          "passed": 31,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1918,
+          "passed": 31,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "scripts/demo-capture.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 653,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 567,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 631,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "scripts/memory-selection.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1931,
+          "passed": 38,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2020,
+          "passed": 38,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2234,
+          "passed": 38,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/external-relay/conversations/route.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1072,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1035,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1241,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/external-relay/owner-history/route.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 723,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 896,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 868,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/external-relay/route.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 1322,
+          "passed": 5,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "status refreshes the targets and omits credential and poll secret"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 1310,
+          "passed": 5,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "status refreshes the targets and omits credential and poll secret"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 1517,
+          "passed": 5,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "status refreshes the targets and omits credential and poll secret"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 1494,
+          "passed": 5,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "status refreshes the targets and omits credential and poll secret"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 1154,
+          "passed": 5,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "status refreshes the targets and omits credential and poll secret"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 28466,
+          "passed": 70,
+          "failed": 23,
+          "skipped": 0,
+          "failures": [
+            "Claude selection handles a fallback race with automatic credential rotation",
+            "Claude selection handles a fallback race with exhausted pin",
+            "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+            "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+            "Claude selection handles a fallback race with pin catalog change",
+            "Claude selection handles a fallback race with pin credential removal",
+            "Claude selection handles a fallback race with pin credential rotation",
+            "Claude selection handles a fallback race with pin rejected refresh rotation",
+            "Claude selection handles a fallback race with pin unreadable credential",
+            "Claude selection handles a fallback race with unavailable pin",
+            "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+            "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+            "Viewer draft and per-project orchestrator seat pass public spawn admission",
+            "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+            "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+            "a pinned Claude health probe handles pinned catalog before reserving once",
+            "a pinned Claude health probe handles pinned credential before reserving once",
+            "a pinned Claude health probe handles pinned removed credential before reserving once",
+            "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+            "a pinned Claude health probe handles unrelated refusal before reserving once",
+            "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+            "a queued pinned account survives restart and launches exactly once on the pin after admission",
+            "an automatic bound-project health revision race stays retryable and preserves the same request key"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 28741,
+          "passed": 70,
+          "failed": 23,
+          "skipped": 0,
+          "failures": [
+            "Claude selection handles a fallback race with automatic credential rotation",
+            "Claude selection handles a fallback race with exhausted pin",
+            "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+            "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+            "Claude selection handles a fallback race with pin catalog change",
+            "Claude selection handles a fallback race with pin credential removal",
+            "Claude selection handles a fallback race with pin credential rotation",
+            "Claude selection handles a fallback race with pin rejected refresh rotation",
+            "Claude selection handles a fallback race with pin unreadable credential",
+            "Claude selection handles a fallback race with unavailable pin",
+            "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+            "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+            "Viewer draft and per-project orchestrator seat pass public spawn admission",
+            "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+            "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+            "a pinned Claude health probe handles pinned catalog before reserving once",
+            "a pinned Claude health probe handles pinned credential before reserving once",
+            "a pinned Claude health probe handles pinned removed credential before reserving once",
+            "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+            "a pinned Claude health probe handles unrelated refusal before reserving once",
+            "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+            "a queued pinned account survives restart and launches exactly once on the pin after admission",
+            "an automatic bound-project health revision race stays retryable and preserves the same request key"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 29505,
+          "passed": 70,
+          "failed": 23,
+          "skipped": 0,
+          "failures": [
+            "Claude selection handles a fallback race with automatic credential rotation",
+            "Claude selection handles a fallback race with exhausted pin",
+            "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+            "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+            "Claude selection handles a fallback race with pin catalog change",
+            "Claude selection handles a fallback race with pin credential removal",
+            "Claude selection handles a fallback race with pin credential rotation",
+            "Claude selection handles a fallback race with pin rejected refresh rotation",
+            "Claude selection handles a fallback race with pin unreadable credential",
+            "Claude selection handles a fallback race with unavailable pin",
+            "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+            "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+            "Viewer draft and per-project orchestrator seat pass public spawn admission",
+            "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+            "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+            "a pinned Claude health probe handles pinned catalog before reserving once",
+            "a pinned Claude health probe handles pinned credential before reserving once",
+            "a pinned Claude health probe handles pinned removed credential before reserving once",
+            "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+            "a pinned Claude health probe handles unrelated refusal before reserving once",
+            "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+            "a queued pinned account survives restart and launches exactly once on the pin after admission",
+            "an automatic bound-project health revision race stays retryable and preserves the same request key"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 30851,
+          "passed": 70,
+          "failed": 23,
+          "skipped": 0,
+          "failures": [
+            "Claude selection handles a fallback race with automatic credential rotation",
+            "Claude selection handles a fallback race with exhausted pin",
+            "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+            "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+            "Claude selection handles a fallback race with pin catalog change",
+            "Claude selection handles a fallback race with pin credential removal",
+            "Claude selection handles a fallback race with pin credential rotation",
+            "Claude selection handles a fallback race with pin rejected refresh rotation",
+            "Claude selection handles a fallback race with pin unreadable credential",
+            "Claude selection handles a fallback race with unavailable pin",
+            "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+            "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+            "Viewer draft and per-project orchestrator seat pass public spawn admission",
+            "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+            "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+            "a pinned Claude health probe handles pinned catalog before reserving once",
+            "a pinned Claude health probe handles pinned credential before reserving once",
+            "a pinned Claude health probe handles pinned removed credential before reserving once",
+            "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+            "a pinned Claude health probe handles unrelated refusal before reserving once",
+            "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+            "a queued pinned account survives restart and launches exactly once on the pin after admission",
+            "an automatic bound-project health revision race stays retryable and preserves the same request key"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 27519,
+          "passed": 70,
+          "failed": 23,
+          "skipped": 0,
+          "failures": [
+            "Claude selection handles a fallback race with automatic credential rotation",
+            "Claude selection handles a fallback race with exhausted pin",
+            "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+            "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+            "Claude selection handles a fallback race with pin catalog change",
+            "Claude selection handles a fallback race with pin credential removal",
+            "Claude selection handles a fallback race with pin credential rotation",
+            "Claude selection handles a fallback race with pin rejected refresh rotation",
+            "Claude selection handles a fallback race with pin unreadable credential",
+            "Claude selection handles a fallback race with unavailable pin",
+            "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+            "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+            "Viewer draft and per-project orchestrator seat pass public spawn admission",
+            "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+            "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+            "a pinned Claude health probe handles pinned catalog before reserving once",
+            "a pinned Claude health probe handles pinned credential before reserving once",
+            "a pinned Claude health probe handles pinned removed credential before reserving once",
+            "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+            "a pinned Claude health probe handles unrelated refusal before reserving once",
+            "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+            "a queued pinned account survives restart and launches exactly once on the pin after admission",
+            "an automatic bound-project health revision race stays retryable and preserves the same request key"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/telegram/bot/confirmation/route.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1987,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2017,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2266,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/voice-tools/route.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 3421,
+          "passed": 12,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2720,
+          "passed": 12,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 3506,
+          "passed": 12,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/BoardSearchEntry.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1739,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1656,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1327,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/BootShell.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1929,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1755,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1858,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/OverviewBoard.catalog.render.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1070,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1076,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1138,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/OverviewBoard.firstRun.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1344,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1511,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1319,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 2337,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "what needs one project to write into is absent, never faked"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 2030,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "what needs one project to write into is absent, never faked"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 1958,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "what needs one project to write into is absent, never faked"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 2088,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "what needs one project to write into is absent, never faked"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 2138,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "what needs one project to write into is absent, never faked"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/components/OverviewBoard.loading.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1650,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1826,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1250,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/OverviewBoard.render.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 976,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 925,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1069,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 921,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 939,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 930,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/ProjectDashboard.empty.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1681,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1489,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2003,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 3836,
+          "passed": 25,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 3878,
+          "passed": 25,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 5041,
+          "passed": 25,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2166,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1597,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1669,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/ProjectRail.firstRun.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2040,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1125,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1276,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/TaskHeader.killConfirm.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 879,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1021,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1162,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/Viewer.catalogFailure.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2342,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2897,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2825,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/Viewer.deepLink.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 59387,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 62452,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 61484,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/Viewer.switching.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 9847,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 8609,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 7844,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/attention/PermissionActions.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1140,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 928,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 951,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/externalRelay/CloneCreate.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 15686,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 15382,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 15166,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/externalRelay/ExternalRelaySection.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2742,
+          "passed": 33,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 4348,
+          "passed": 33,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2147,
+          "passed": 31,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/externalRelay/RelayChats.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1400,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1433,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1158,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/feed/FeedItem.mobile.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1600,
+          "passed": 21,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1420,
+          "passed": 21,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1027,
+          "passed": 21,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1171,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1222,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 977,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/feed/QuestionCard.dismiss.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1106,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 927,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1084,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/feed/QuestionCard.mobile.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1301,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 866,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1036,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/feed/processingError.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 862,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 739,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 901,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/resources/AttachControls.render.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 717,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 751,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 771,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/runtime/AttentionCard.dismiss.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 998,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1049,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 968,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/runtime/ConversationAttention.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 882,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1065,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 932,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/skeletons.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1166,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 945,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1004,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/hooks/serverReach.dom.test.tsx",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 5756,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 5785,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 5646,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.registryLock.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 10532,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 12650,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 12788,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/agent/spawnDiagnostics.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 1313,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner diagnostics with truncated encoded credentials withhold the payload"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 1879,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner diagnostics with truncated encoded credentials withhold the payload"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 1645,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner diagnostics with truncated encoded credentials withhold the payload"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 1603,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner diagnostics with truncated encoded credentials withhold the payload"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 1791,
+          "passed": 13,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner diagnostics with truncated encoded credentials withhold the payload"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/attention/nativeAssociation.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 3038,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 3549,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2770,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/client.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1273,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1802,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1457,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/cloneCreate.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1464,
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2091,
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1271,
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/cloneDirectory.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1220,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1386,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 964,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/cloneSend.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1406,
+          "passed": 23,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1609,
+          "passed": 23,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1129,
+          "passed": 23,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/cloud.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 44887,
+          "passed": 81,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "Cloud continuation repository guard reaches the runtime journal: changed=false",
+            "Cloud continuation repository guard reaches the runtime journal: changed=true"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 43609,
+          "passed": 81,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "Cloud continuation repository guard reaches the runtime journal: changed=false",
+            "Cloud continuation repository guard reaches the runtime journal: changed=true"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 44042,
+          "passed": 84,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 42815,
+          "passed": 86,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "branchOnly": true
+        },
+        {
+          "branchOnly": true
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/compact.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1277,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1286,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 949,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/conversations.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2241,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2314,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1799,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/hold.runner.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 60606,
+          "passed": 11,
+          "failed": 11,
+          "skipped": 0,
+          "failures": [
+            "acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+            "capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "capacity hold acknowledges, queues, then serves without taking execution capacity",
+            "capacity returning at the admission cutoff cannot start expired waiting work",
+            "capacity waiters take released slots in order within the configured limit",
+            "chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "chat hold acknowledges, queues, then serves without taking execution capacity",
+            "drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "drain hold acknowledges, queues, then serves without taking execution capacity",
+            "shrinking stall window 10s bounds unacknowledged admission",
+            "two owner chains in one chat run together; a reply waits for only its chain"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 60602,
+          "passed": 12,
+          "failed": 10,
+          "skipped": 0,
+          "failures": [
+            "acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+            "capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "capacity hold acknowledges, queues, then serves without taking execution capacity",
+            "capacity returning at the admission cutoff cannot start expired waiting work",
+            "chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "chat hold acknowledges, queues, then serves without taking execution capacity",
+            "drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "drain hold acknowledges, queues, then serves without taking execution capacity",
+            "shrinking stall window 10s bounds unacknowledged admission",
+            "two owner chains in one chat run together; a reply waits for only its chain"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 61185,
+          "passed": 12,
+          "failed": 10,
+          "skipped": 0,
+          "failures": [
+            "acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+            "capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "capacity hold acknowledges, queues, then serves without taking execution capacity",
+            "capacity returning at the admission cutoff cannot start expired waiting work",
+            "chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "chat hold acknowledges, queues, then serves without taking execution capacity",
+            "drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "drain hold acknowledges, queues, then serves without taking execution capacity",
+            "shrinking stall window 10s bounds unacknowledged admission",
+            "two owner chains in one chat run together; a reply waits for only its chain"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 59186,
+          "passed": 12,
+          "failed": 10,
+          "skipped": 0,
+          "failures": [
+            "acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+            "capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "capacity hold acknowledges, queues, then serves without taking execution capacity",
+            "capacity returning at the admission cutoff cannot start expired waiting work",
+            "chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "chat hold acknowledges, queues, then serves without taking execution capacity",
+            "drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "drain hold acknowledges, queues, then serves without taking execution capacity",
+            "shrinking stall window 10s bounds unacknowledged admission",
+            "two owner chains in one chat run together; a reply waits for only its chain"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 58888,
+          "passed": 12,
+          "failed": 10,
+          "skipped": 0,
+          "failures": [
+            "acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+            "capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "capacity hold acknowledges, queues, then serves without taking execution capacity",
+            "capacity returning at the admission cutoff cannot start expired waiting work",
+            "chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "chat hold acknowledges, queues, then serves without taking execution capacity",
+            "drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+            "drain hold acknowledges, queues, then serves without taking execution capacity",
+            "shrinking stall window 10s bounds unacknowledged admission",
+            "two owner chains in one chat run together; a reply waits for only its chain"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/leaseRecovery.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 10600,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 6658,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 6971,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/mediaInput.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 10285,
+          "passed": 37,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 3732,
+          "passed": 37,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 6436,
+          "passed": 37,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerAnswer.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 3946,
+          "passed": 1,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "relay_answer binds a live owner conversation, replaces parts and closes after the answer"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 1928,
+          "passed": 1,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "relay_answer binds a live owner conversation, replaces parts and closes after the answer"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 1531,
+          "passed": 1,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "relay_answer binds a live owner conversation, replaces parts and closes after the answer"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 2778,
+          "passed": 1,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "relay_answer binds a live owner conversation, replaces parts and closes after the answer"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 1795,
+          "passed": 1,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "relay_answer binds a live owner conversation, replaces parts and closes after the answer"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerAttachment.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1934,
+          "passed": 22,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 897,
+          "passed": 22,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1167,
+          "passed": 22,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerBridgeContext.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 4838,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2090,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 2125,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerDestination.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1884,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 596,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 681,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerHistory.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 6208,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 4759,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 5031,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerLateDelivery.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 5182,
+          "passed": 26,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 3206,
+          "passed": 26,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 3388,
+          "passed": 26,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerLifecycle.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 58178,
+          "passed": 35,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 47815,
+          "passed": 35,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 59645,
+          "passed": 35,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerOutboundContext.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 3789,
+          "passed": 17,
+          "failed": 5,
+          "skipped": 0,
+          "failures": [
+            "restart preserves explicit-first question context and request replays",
+            "restart preserves explicit-last question context and request replays",
+            "restart preserves same-second question context and request replays",
+            "send, process restart, unthreaded answer uses the sent question; publication %s replays without a second Telegram send"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 3060,
+          "passed": 17,
+          "failed": 5,
+          "skipped": 0,
+          "failures": [
+            "restart preserves explicit-first question context and request replays",
+            "restart preserves explicit-last question context and request replays",
+            "restart preserves same-second question context and request replays",
+            "send, process restart, unthreaded answer uses the sent question; publication %s replays without a second Telegram send"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 2939,
+          "passed": 17,
+          "failed": 5,
+          "skipped": 0,
+          "failures": [
+            "restart preserves explicit-first question context and request replays",
+            "restart preserves explicit-last question context and request replays",
+            "restart preserves same-second question context and request replays",
+            "send, process restart, unthreaded answer uses the sent question; publication %s replays without a second Telegram send"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 5805,
+          "passed": 17,
+          "failed": 5,
+          "skipped": 0,
+          "failures": [
+            "restart preserves explicit-first question context and request replays",
+            "restart preserves explicit-last question context and request replays",
+            "restart preserves same-second question context and request replays",
+            "send, process restart, unthreaded answer uses the sent question; publication %s replays without a second Telegram send"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 2968,
+          "passed": 17,
+          "failed": 5,
+          "skipped": 0,
+          "failures": [
+            "restart preserves explicit-first question context and request replays",
+            "restart preserves explicit-last question context and request replays",
+            "restart preserves same-second question context and request replays",
+            "send, process restart, unthreaded answer uses the sent question; publication %s replays without a second Telegram send"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerOutput.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 846,
+          "passed": 75,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 832,
+          "passed": 75,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 611,
+          "passed": 75,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 801,
+          "passed": 73,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 742,
+          "passed": 73,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerPrivateLoop.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 3568,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2304,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 3377,
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerRelayContract.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1720,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 934,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1482,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerServiceTools.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 4899,
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2610,
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 3811,
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerStop.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 16758,
+          "passed": 23,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "completed cleanup stays with a live foreign owner until that process exits"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 13558,
+          "passed": 23,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "completed cleanup stays with a live foreign owner until that process exits"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 13953,
+          "passed": 23,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "completed cleanup stays with a live foreign owner until that process exits"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 15738,
+          "passed": 23,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "completed cleanup stays with a live foreign owner until that process exits"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 12826,
+          "passed": 23,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "completed cleanup stays with a live foreign owner until that process exits"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/ownerTier.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 5176,
+          "passed": 53,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner final answers refuse truncated JSON credentials"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 4291,
+          "passed": 53,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner final answers refuse truncated JSON credentials"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 4021,
+          "passed": 53,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner final answers refuse truncated JSON credentials"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 5729,
+          "passed": 53,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner final answers refuse truncated JSON credentials"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 3890,
+          "passed": 53,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "owner final answers refuse truncated JSON credentials"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/poller.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 7947,
+          "passed": 30,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 7258,
+          "passed": 30,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 8507,
+          "passed": 30,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/progressSteps.runner.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 54747,
+          "passed": 3,
+          "failed": 3,
+          "skipped": 0,
+          "failures": [
+            "member descriptor gate on uses the plain CLI path",
+            "owner observation reads current tools and final boundaries only with steps enabled",
+            "plain tool rounds report working for restricted reads without exposing names or arguments"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 53187,
+          "passed": 3,
+          "failed": 3,
+          "skipped": 0,
+          "failures": [
+            "member descriptor gate on uses the plain CLI path",
+            "owner observation reads current tools and final boundaries only with steps enabled",
+            "plain tool rounds report working for restricted reads without exposing names or arguments"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 52614,
+          "passed": 3,
+          "failed": 3,
+          "skipped": 0,
+          "failures": [
+            "member descriptor gate on uses the plain CLI path",
+            "owner observation reads current tools and final boundaries only with steps enabled",
+            "plain tool rounds report working for restricted reads without exposing names or arguments"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 54868,
+          "passed": 3,
+          "failed": 3,
+          "skipped": 0,
+          "failures": [
+            "member descriptor gate on uses the plain CLI path",
+            "owner observation reads current tools and final boundaries only with steps enabled",
+            "plain tool rounds report working for restricted reads without exposing names or arguments"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 52904,
+          "passed": 3,
+          "failed": 3,
+          "skipped": 0,
+          "failures": [
+            "member descriptor gate on uses the plain CLI path",
+            "owner observation reads current tools and final boundaries only with steps enabled",
+            "plain tool rounds report working for restricted reads without exposing names or arguments"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/prompt.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1538,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1001,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1767,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/prototypeAnswer.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 9330,
+          "passed": 16,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 4892,
+          "passed": 16,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 6854,
+          "passed": 16,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/publish.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1089,
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 746,
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1054,
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/requestTimeout.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 8571,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 6857,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 7098,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/requestWindow.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 12515,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 5224,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 7879,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/runner.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 204499,
+          "passed": 319,
+          "failed": 2,
+          "skipped": 4,
+          "failures": [
+            "owner en failure reply excludes interrupted answer parts",
+            "owner uk failure reply excludes interrupted answer parts"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 181684,
+          "passed": 319,
+          "failed": 2,
+          "skipped": 4,
+          "failures": [
+            "owner en failure reply excludes interrupted answer parts",
+            "owner uk failure reply excludes interrupted answer parts"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 168487,
+          "passed": 319,
+          "failed": 2,
+          "skipped": 4,
+          "failures": [
+            "owner en failure reply excludes interrupted answer parts",
+            "owner uk failure reply excludes interrupted answer parts"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 183444,
+          "passed": 318,
+          "failed": 2,
+          "skipped": 4,
+          "failures": [
+            "owner en failure reply excludes interrupted answer parts",
+            "owner uk failure reply excludes interrupted answer parts"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 165203,
+          "passed": 318,
+          "failed": 2,
+          "skipped": 4,
+          "failures": [
+            "owner en failure reply excludes interrupted answer parts",
+            "owner uk failure reply excludes interrupted answer parts"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/slice3Runner.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 21115,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 13896,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 21215,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/store.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 3327,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 2955,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 3250,
+          "passed": 11,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/switches.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2086,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 992,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1584,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/toolIndex.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1188,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 627,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 880,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/toolLoop.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 2383,
+          "passed": 53,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1130,
+          "passed": 53,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1737,
+          "passed": 53,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/i18n/i18n.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 822,
+          "passed": 27,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 604,
+          "passed": 27,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 770,
+          "passed": 27,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/i18n/spawnCopy.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 791,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 585,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 662,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/links/telegramPublication.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 32980,
+          "passed": 43,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 18907,
+          "passed": 43,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 27690,
+          "passed": 43,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/bindings.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 16176,
+          "passed": 118,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 12655,
+          "passed": 118,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 13734,
+          "passed": 118,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/orchestratorTools.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 3791,
+          "passed": 75,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "a definite message refusal after seat creation preserves both the cause and created recipient",
+            "server 403 on seat creation retains its cause and closes the send as not executed"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 3145,
+          "passed": 75,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "a definite message refusal after seat creation preserves both the cause and created recipient",
+            "server 403 on seat creation retains its cause and closes the send as not executed"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 2708,
+          "passed": 75,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "a definite message refusal after seat creation preserves both the cause and created recipient",
+            "server 403 on seat creation retains its cause and closes the send as not executed"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 3448,
+          "passed": 75,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "a definite message refusal after seat creation preserves both the cause and created recipient",
+            "server 403 on seat creation retains its cause and closes the send as not executed"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 2463,
+          "passed": 75,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "a definite message refusal after seat creation preserves both the cause and created recipient",
+            "server 403 on seat creation retains its cause and closes the send as not executed"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/projectResolution.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 9771,
+          "passed": 43,
+          "failed": 12,
+          "skipped": 0,
+          "failures": [
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (originless repository)",
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (unrecorded remote)",
+            "MCP folds a deleted conventional worktree before comparing its designated seat",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "get_orchestrator resolves the repository directory name independently of its display name",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (originless)",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "owner-relay resolves the repository directory name independently of its display name",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "send_message_to_orchestrator resolves the repository directory name independently of its display name"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 7465,
+          "passed": 43,
+          "failed": 12,
+          "skipped": 0,
+          "failures": [
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (originless repository)",
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (unrecorded remote)",
+            "MCP folds a deleted conventional worktree before comparing its designated seat",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "get_orchestrator resolves the repository directory name independently of its display name",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (originless)",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "owner-relay resolves the repository directory name independently of its display name",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "send_message_to_orchestrator resolves the repository directory name independently of its display name"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 8320,
+          "passed": 43,
+          "failed": 12,
+          "skipped": 0,
+          "failures": [
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (originless repository)",
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (unrecorded remote)",
+            "MCP folds a deleted conventional worktree before comparing its designated seat",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "get_orchestrator resolves the repository directory name independently of its display name",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (originless)",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "owner-relay resolves the repository directory name independently of its display name",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "send_message_to_orchestrator resolves the repository directory name independently of its display name"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 7240,
+          "passed": 43,
+          "failed": 12,
+          "skipped": 0,
+          "failures": [
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (originless repository)",
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (unrecorded remote)",
+            "MCP folds a deleted conventional worktree before comparing its designated seat",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "get_orchestrator resolves the repository directory name independently of its display name",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (originless)",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "owner-relay resolves the repository directory name independently of its display name",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "send_message_to_orchestrator resolves the repository directory name independently of its display name"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 5687,
+          "passed": 43,
+          "failed": 12,
+          "skipped": 0,
+          "failures": [
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (originless repository)",
+            "30,000 retained cwd rows do not slow cold lookups without a recorded remote (unrecorded remote)",
+            "MCP folds a deleted conventional worktree before comparing its designated seat",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "get_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "get_orchestrator resolves the repository directory name independently of its display name",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (originless)",
+            "owner-relay keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "owner-relay resolves the repository directory name independently of its display name",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (originless)",
+            "send_message_to_orchestrator keeps Alpha's identity with a missing remote ledger (remote repository)",
+            "send_message_to_orchestrator resolves the repository directory name independently of its display name"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/server.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 44417,
+          "passed": 100,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 34081,
+          "passed": 100,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 32442,
+          "passed": 100,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/stdio.integration.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 221000,
+          "passed": 36,
+          "failed": 17,
+          "skipped": 0,
+          "failures": [
+            "a launched stdio server releases repeated large read answers without loading its domain stores",
+            "a managed stdio server never opens local receipts even while that database is locked",
+            "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "codex-mcp-client receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
+            "native caller admission (#2827) > an unknown or malformed capability refuses native admission",
+            "path-only send: late registration after binding, lost response, and restart retain one delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
+            "send_message: ID-bearing error recovers admission before execution and across restart",
+            "send_message: incomplete successful JSON recovers admission before execution and across restart",
+            "send_message: proxy errors after actual effect recover the original identity across process restart",
+            "send_message: queued ordinary replay and terminal recovery both survive downstream loss and process restart",
+            "send_message: terminal recovery survives a delayed reset, missing downstream evidence and restart",
+            "send_message: terminal recovery survives a delayed timeout, missing downstream evidence and restart",
+            "spoofing and concurrency: another caller, a changed payload, and two processes racing one key"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 200718,
+          "passed": 36,
+          "failed": 17,
+          "skipped": 0,
+          "failures": [
+            "a launched stdio server releases repeated large read answers without loading its domain stores",
+            "a managed stdio server never opens local receipts even while that database is locked",
+            "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "codex-mcp-client receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
+            "native caller admission (#2827) > an unknown or malformed capability refuses native admission",
+            "path-only send: late registration after binding, lost response, and restart retain one delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
+            "send_message: ID-bearing error recovers admission before execution and across restart",
+            "send_message: incomplete successful JSON recovers admission before execution and across restart",
+            "send_message: proxy errors after actual effect recover the original identity across process restart",
+            "send_message: queued ordinary replay and terminal recovery both survive downstream loss and process restart",
+            "send_message: terminal recovery survives a delayed reset, missing downstream evidence and restart",
+            "send_message: terminal recovery survives a delayed timeout, missing downstream evidence and restart",
+            "spoofing and concurrency: another caller, a changed payload, and two processes racing one key"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 255052,
+          "passed": 36,
+          "failed": 17,
+          "skipped": 0,
+          "failures": [
+            "a launched stdio server releases repeated large read answers without loading its domain stores",
+            "a managed stdio server never opens local receipts even while that database is locked",
+            "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "codex-mcp-client receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
+            "native caller admission (#2827) > an unknown or malformed capability refuses native admission",
+            "path-only send: late registration after binding, lost response, and restart retain one delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
+            "send_message: ID-bearing error recovers admission before execution and across restart",
+            "send_message: incomplete successful JSON recovers admission before execution and across restart",
+            "send_message: proxy errors after actual effect recover the original identity across process restart",
+            "send_message: queued ordinary replay and terminal recovery both survive downstream loss and process restart",
+            "send_message: terminal recovery survives a delayed reset, missing downstream evidence and restart",
+            "send_message: terminal recovery survives a delayed timeout, missing downstream evidence and restart",
+            "spoofing and concurrency: another caller, a changed payload, and two processes racing one key"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 195575,
+          "passed": 36,
+          "failed": 17,
+          "skipped": 0,
+          "failures": [
+            "a launched stdio server releases repeated large read answers without loading its domain stores",
+            "a managed stdio server never opens local receipts even while that database is locked",
+            "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "codex-mcp-client receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
+            "native caller admission (#2827) > an unknown or malformed capability refuses native admission",
+            "path-only send: late registration after binding, lost response, and restart retain one delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
+            "send_message: ID-bearing error recovers admission before execution and across restart",
+            "send_message: incomplete successful JSON recovers admission before execution and across restart",
+            "send_message: proxy errors after actual effect recover the original identity across process restart",
+            "send_message: queued ordinary replay and terminal recovery both survive downstream loss and process restart",
+            "send_message: terminal recovery survives a delayed reset, missing downstream evidence and restart",
+            "send_message: terminal recovery survives a delayed timeout, missing downstream evidence and restart",
+            "spoofing and concurrency: another caller, a changed payload, and two processes racing one key"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 211552,
+          "passed": 36,
+          "failed": 17,
+          "skipped": 0,
+          "failures": [
+            "a launched stdio server releases repeated large read answers without loading its domain stores",
+            "a managed stdio server never opens local receipts even while that database is locked",
+            "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "codex-mcp-client receives JSON once through the stable launcher and keeps liveness diagnostics",
+            "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
+            "native caller admission (#2827) > an unknown or malformed capability refuses native admission",
+            "path-only send: late registration after binding, lost response, and restart retain one delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
+            "send_message: ID-bearing error recovers admission before execution and across restart",
+            "send_message: incomplete successful JSON recovers admission before execution and across restart",
+            "send_message: proxy errors after actual effect recover the original identity across process restart",
+            "send_message: queued ordinary replay and terminal recovery both survive downstream loss and process restart",
+            "send_message: terminal recovery survives a delayed reset, missing downstream evidence and restart",
+            "send_message: terminal recovery survives a delayed timeout, missing downstream evidence and restart",
+            "spoofing and concurrency: another caller, a changed payload, and two processes racing one key"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/memory/context.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 952,
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 946,
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 797,
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/memory/selection.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1020,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1162,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 975,
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/onboarding/legacyState.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 756,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 730,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 724,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/orchestrator/ownerRelay.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 4996,
+          "passed": 23,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "ordinary worker board creation keeps its inbox default",
+            "runner routes an adjacent approval to its report seat through MCP and HTTP"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 4056,
+          "passed": 23,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "ordinary worker board creation keeps its inbox default",
+            "runner routes an adjacent approval to its report seat through MCP and HTTP"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 4131,
+          "passed": 23,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "ordinary worker board creation keeps its inbox default",
+            "runner routes an adjacent approval to its report seat through MCP and HTTP"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 4610,
+          "passed": 23,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "ordinary worker board creation keeps its inbox default",
+            "runner routes an adjacent approval to its report seat through MCP and HTTP"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 4321,
+          "passed": 23,
+          "failed": 2,
+          "skipped": 0,
+          "failures": [
+            "ordinary worker board creation keeps its inbox default",
+            "runner routes an adjacent approval to its report seat through MCP and HTTP"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/platformHome.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 624,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 504,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 607,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/darwinIdentity.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 596,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 536,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 720,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/index.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1022,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 784,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 923,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/memory.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 731,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 615,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 660,
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/portable.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 760,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 572,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 626,
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/windows.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 753,
+          "passed": 16,
+          "failed": 0,
+          "skipped": 5,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 632,
+          "passed": 16,
+          "failed": 0,
+          "skipped": 5,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 644,
+          "passed": 16,
+          "failed": 0,
+          "skipped": 5,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/windowsCwd.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 561,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 568,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 642,
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/windowsIdentity.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 602,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 1,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 594,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 1,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 722,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 1,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/proc/windowsSnapshot.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 664,
+          "passed": 14,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 609,
+          "passed": 14,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 631,
+          "passed": 14,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/processGroup.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 546,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 2,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 540,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 2,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 648,
+          "passed": 15,
+          "failed": 0,
+          "skipped": 2,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 4535,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 3836,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 4335,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/prototypeReview/telegramPost.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 11162,
+          "passed": 37,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 8546,
+          "passed": 37,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 11526,
+          "passed": 37,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/localEndpoint.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 829,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 570,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 654,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryController.migration.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 24594,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 21610,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 20690,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 1628,
+          "passed": 34,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1583,
+          "passed": 34,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 1967,
+          "passed": 34,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredSpawn.terminalize.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 12502,
+          "passed": 111,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 12197,
+          "passed": 111,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 14368,
+          "passed": 111,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/scanner/describe.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 4663,
+          "passed": 57,
+          "failed": 0,
+          "skipped": 2,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 4675,
+          "passed": 57,
+          "failed": 0,
+          "skipped": 2,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 3971,
+          "passed": 57,
+          "failed": 0,
+          "skipped": 2,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/state/durableJson.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 677,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 574,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 559,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/telegram/bot/reviewPolls.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 9104,
+          "passed": 27,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "recovery accounts for jobs lost before the first claim in batches of sixteen"
+          ]
+        },
+        {
+          "phase": "head",
+          "exit": 1,
+          "durationMs": 7926,
+          "passed": 27,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "recovery accounts for jobs lost before the first claim in batches of sixteen"
+          ]
+        },
+        {
+          "phase": "final",
+          "exit": 1,
+          "durationMs": 8980,
+          "passed": 27,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "recovery accounts for jobs lost before the first claim in batches of sixteen"
+          ]
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 8512,
+          "passed": 27,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "recovery accounts for jobs lost before the first claim in batches of sixteen"
+          ]
+        },
+        {
+          "phase": "base",
+          "exit": 1,
+          "durationMs": 7359,
+          "passed": 27,
+          "failed": 1,
+          "skipped": 0,
+          "failures": [
+            "recovery accounts for jobs lost before the first claim in batches of sixteen"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/lib/viewerInstrumentation.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 711,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 748,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 684,
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/runtime-host/runtimeHostFence.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 844,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 950,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 645,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "file": "src/runtime-host/socket.test.ts",
+      "head": [
+        {
+          "phase": "head",
+          "exit": 0,
+          "durationMs": 805,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "phase": "final",
+          "exit": 0,
+          "durationMs": 1056,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "base": [
+        {
+          "phase": "base",
+          "exit": 0,
+          "durationMs": 742,
+          "passed": 7,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ]
+    }
+  ],
+  "browser": [
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "light",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 915,
+      "scheme": "dark",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "light",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 915,
+      "scheme": "dark",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "empty",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 2
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "list",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 6
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "cloud-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "local-settings",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 11
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "form",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 17
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "waiting",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 7
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "setup-failed",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "state": "created",
+      "overflow": false,
+      "cutText": [],
+      "shortTargets": [],
+      "controls": 9
+    }
+  ],
+  "visualInspection": {
+    "frames": 96,
+    "widths": [
+      390,
+      915,
+      1440
+    ],
+    "locales": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "explanationCrops": 24
+  },
+  "regressionControls": [
+    {
+      "expectedFailure": true,
+      "revision": "56ed185f9b009ee959e9370093d2fdc4d4da39cf",
+      "file": "src/lib/externalRelay/cloud.test.ts",
+      "phase": "reviewed",
+      "exit": 1,
+      "durationMs": 103971,
+      "passed": 58,
+      "failed": 28,
+      "skipped": 0,
+      "failures": [
+        "Cloud continuation repository guard reaches the runtime journal: changed=true",
+        "Cloud local continuation validates its active generation repository: deleted",
+        "Cloud local continuation validates its active generation repository: dispatch-generation",
+        "Cloud local continuation validates its active generation repository: dispatch-reassigned",
+        "Cloud local continuation validates its active generation repository: foreign",
+        "Cloud local continuation validates its active generation repository: missing-cwd",
+        "Cloud local continuation validates its active generation repository: reassigned",
+        "a Cloud target continues its local Codex owner conversation with the local engine",
+        "confirmed Cloud fallback keeps request-bound service tools and effects: action",
+        "confirmed Cloud fallback keeps request-bound service tools and effects: none",
+        "confirmed Cloud fallback keeps request-bound service tools and effects: rich",
+        "confirmed Cloud fallback keeps request-bound service tools and effects: unknown",
+        "structured owner egress (cloud, plain, base64)",
+        "structured owner egress (cloud, plain, percent)",
+        "structured owner egress (cloud, plain, raw)",
+        "structured owner egress (cloud, rich, base64)",
+        "structured owner egress (cloud, rich, percent)",
+        "structured owner egress (cloud, rich, raw)",
+        "uncertain Cloud custody fences redelivery across process restart: member, acknowledged",
+        "uncertain Cloud custody fences redelivery across process restart: member, completed",
+        "uncertain Cloud custody fences redelivery across process restart: member, crash",
+        "uncertain Cloud custody fences redelivery across process restart: member, disconnect",
+        "uncertain Cloud custody fences redelivery across process restart: member, refused",
+        "uncertain Cloud custody fences redelivery across process restart: owner, acknowledged",
+        "uncertain Cloud custody fences redelivery across process restart: owner, completed",
+        "uncertain Cloud custody fences redelivery across process restart: owner, crash",
+        "uncertain Cloud custody fences redelivery across process restart: owner, disconnect",
+        "uncertain Cloud custody fences redelivery across process restart: owner, refused"
+      ]
+    },
+    {
+      "expectedFailure": true,
+      "revision": "56ed185f9b009ee959e9370093d2fdc4d4da39cf",
+      "file": "src/lib/externalRelay/ownerOutput.test.ts",
+      "phase": "reviewed",
+      "exit": 1,
+      "durationMs": 753,
+      "passed": 74,
+      "failed": 1,
+      "skipped": 0,
+      "failures": [
+        "configured Cloud credentials are withheld by plain and structured owner egress"
+      ]
+    }
+  ],
+  "mutationControls": [
+    {
+      "expectedFailure": true,
+      "file": "src/lib/externalRelay/cloud.test.ts",
+      "phase": "mutation",
+      "exit": 1,
+      "durationMs": null,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "failures": [
+        "confirmed Cloud fallback keeps request-bound service tools and effects: rich"
+      ]
+    },
+    {
+      "expectedFailure": true,
+      "file": "src/lib/externalRelay/cloud.test.ts",
+      "phase": "mutation",
+      "exit": 1,
+      "durationMs": null,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "failures": [
+        "confirmed Cloud fallback keeps request-bound service tools and effects: reassigned"
+      ]
+    }
+  ]
+}

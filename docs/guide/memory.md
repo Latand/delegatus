@@ -35,6 +35,49 @@ start. Review and verification stages get none and leave none.
   The window shows each rule's earlier texts with **Return**, and an **Undo**
   for a whole curator pass.
 
+## One memory: Delegatus memory or the engines' own
+
+Claude and Codex each keep a memory of their own, and Delegatus keeps learned
+rules. The **Delegatus memory** row under **Settings** in the sidebar's ⋯ menu
+chooses which one agents launched by Delegatus use. It is set for the whole
+installation, so it shows on the overview too. Its line under the title says
+where it stands:
+
+- **Off, before any choice.** Agents get both: the engines' own memory and
+  Delegatus rules. Turning the switch on starts the import below.
+- **Importing.** The curator reads every Claude and Codex note and keeps it as
+  a rule at the level its readers need, or drops it with a reason. The line
+  counts files done, and parts left when a long file was split. The engines'
+  memory stays on until the notes they load at start are all decided.
+- **Waiting for earlier agents.** New agent starts use Delegatus rules only.
+  Agents that started earlier keep their engine memory until they restart, and
+  the notes they write meanwhile are imported too. The line says how many are
+  left.
+- **On.** Agents remember through Delegatus rules; Claude's and Codex's own
+  memory is off for every agent Delegatus launches.
+- **Off, after a choice.** Agents use Claude's and Codex's own memory, and
+  Delegatus rules are paused; the rules window says so. Once an import has
+  run, new engine notes are imported daily by default, and the line says when
+  that last ran and how many notes were new.
+
+When something holds the import's next step, the line says so after its
+words: orchestrator wakes are off, the role memory curator is off, learned
+rules are off, an automatic update is finishing, or a deployment is running.
+The import resumes when that is cleared. If you undo an import pass in the
+rules window, the line adds that the import was undone, or partly undone with
+the number of rules that stay because a later edit touched them.
+
+The switch moves as soon as you press it, and the change is saved in the
+background. If the save is refused, the switch goes back and the line says so until the
+next reading of the installation's state.
+If an import stops, for example because a backup copy did not match its
+source, the switch goes back to where it was and the line names the reason.
+Delegatus only reads the engines' memory files: before the import it backs
+them up privately, and it never edits them or your own engine settings, so
+turning the switch off finds them as they were. Reviewers and other clean
+stages read neither memory in any position. Notes that the import drops stay
+searchable with `search_memory` and in the transcripts.
+
 ## Shared memory
 
 Claude and Codex keep separate memories. `search_memory` lets an agent on
@@ -44,6 +87,9 @@ either engine query what both have learned.
 
 With shared memory switched on for a project, each message you send to a
 Claude or Codex agent also carries the memories selected as relevant to it.
+While **Delegatus memory** is on, or waiting for earlier agents, nothing is
+added this way, because those memories come from the engines' own stores; the
+project's switch keeps its setting for the other positions.
 
 Automatic memory hooks apply to agents launched by Delegatus. Your own Codex
 sessions keep their existing hooks. Delegatus passes its Codex hook through

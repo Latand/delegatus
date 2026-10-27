@@ -256,6 +256,7 @@ const MUTATING_TOOL_READ_FIELDS: Partial<Record<McpToolName, readonly string[]>>
 
 /** Maintenance changes task metadata and inert proposals. New mutations fail closed. */
 export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (tool === "leave_lesson" && args.correction === true) return ALLOWED;
   if (voiceToolsProposalOrRead(tool, args)) return ALLOWED;
   if (tool === "backfill_worktree_projects" && args.dryRun !== false) return ALLOWED;
   if (["create_task", "update_task", "agent_activity", "lifecycle_events"].includes(tool)) return ALLOWED;
@@ -269,6 +270,7 @@ export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpT
     operator-facing writes are a report preview and inert voice-tool proposals. This
     boundary runs before receipt replay, recovery or downstream dispatch. */
 export function permitIssueReporterTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (tool === "leave_lesson" && args.correction === true) return ALLOWED;
   if (voiceToolsProposalOrRead(tool, args)) return ALLOWED;
   if (tool === "issue_report" && (args.action === "hints" || args.action === "preview" || args.action === "show")) return ALLOWED;
   if (tool === "pipeline_action" && args.action === "preview") return ALLOWED;
@@ -294,6 +296,7 @@ export function permitNeedsYouRead(
 
 /** The curator writes its checked pass and inert proposals; poll receipts are reads. */
 export function permitCuratorTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (tool === "leave_lesson" && args.correction === true) return ALLOWED;
   if (voiceToolsProposalOrRead(tool, args)) return ALLOWED;
   if (tool === "curate_rules" || tool === "agent_activity" || tool === "lifecycle_events") return ALLOWED;
   if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;

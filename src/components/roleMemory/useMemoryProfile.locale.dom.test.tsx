@@ -30,7 +30,7 @@ test("changing locale during a stream releases the old send and reads the new ca
     return Response.json(profileView(rules, locale, "sample", null));
   }) as typeof fetch;
   function Probe({ locale }: { locale: Locale }) {
-    const profile = useMemoryProfile("garden", locale, rules);
+    const profile = useMemoryProfile("garden", locale, "sample");
     return <><output>{profile.view?.locale}</output><button disabled={profile.running} onClick={() => void profile.summarize()}>Summarize</button></>;
   }
   const tick = () => new Promise(resolve => setTimeout(resolve, 0));

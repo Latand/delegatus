@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 import type { DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
@@ -179,10 +180,12 @@ test("a bespoke rotation's appended status directive belongs to the mandate, not
   expand(container, 1);
   expect(container.textContent).toContain("You are replacing orchestrator conversation");
   expect(container.textContent).not.toContain(STATUS_DIRECTIVE_BODY);
+  expect(container.textContent).not.toContain(OPERATOR_CORRECTION_RULE);
 
   expand(container, 0);
   expect(container.textContent).toContain(bespoke);
   expect(container.textContent).toContain(STATUS_DIRECTIVE_BODY);
+  expect(container.textContent).toContain(OPERATOR_CORRECTION_RULE);
 });
 
 test("an ordinary operator message keeps its bubble, and so does a paste of the mandate itself", () => {

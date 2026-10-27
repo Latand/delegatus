@@ -1,3 +1,4 @@
+import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { shortId } from "@/lib/shortIds";
 /* The MANAGER's draft defaults and versioned system directive (#182, #691 §4/§6).
  *
@@ -84,7 +85,7 @@ import { shortId } from "@/lib/shortIds";
  * accepted workstream, a re-run when a role's default model changes; it also
  * ships the working rule 16 that #3083 rewrote. */
 
-import { ROLE_DEFAULTS, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
 import { ROLE_VARIANT_IDS, type RoleVariantId } from "@/lib/roles/types";
 import type { RegistryRoleDefinitions, RoleConfig, RoleDefinition } from "@/lib/roles/types";
@@ -110,7 +111,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 58;
+// v62 combines task due dates with report preparation and decline handling.
+export const ORCHESTRATOR_PROMPT_VERSION = 62;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -294,8 +296,8 @@ Each time you are seated, Delegatus sends a read-only board pass after your firs
 /** The heading of the required reporting and cross-project rules. */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
 
-/** The bug-report rule: both of the operator's steps are decision forms. */
-const ORCHESTRATOR_BUG_REPORT_RULE = "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged. Publish (issue_report publish, the digest) only after the operator chooses its approving option, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.";
+/** Prepare automatically; ask once for approval of the exact public text. */
+const ORCHESTRATOR_BUG_REPORT_RULE = `When a Delegatus tool misbehaves (errors, contradictions, suspect refusals), prepare a scrubbed draft without asking for preparation consent: spawn_agent role issue-reporter with evidence. Read it back (issue_report show), put previewText in chat unchanged and ask once before publication: publish_prototype_review, no taskId, passing approvalForm.issueReport unchanged. Publish (issue_report publish, the digest) only after the operator chooses its approving option; give the link. ${ISSUE_REPORT_RESPONSE_RULE} Never file another way.`;
 
 /**
  * Two rules every seat carries (#2518), delivered like the sections above so
@@ -303,8 +305,8 @@ const ORCHESTRATOR_BUG_REPORT_RULE = "When a Delegatus tool misbehaves (an error
  * rotation.
  *
  * The first is the only sanctioned way a seat reports a Delegatus failure.
- * Each step is the operator's: the question, then the yes to the exact text,
- * and since v56 both are asked in a decision form (the operator, 2026-10-15).
+ * Since v61 the seat prepares a scrubbed draft without a consent step and
+ * asks once, in a decision form, before publishing the exact text.
  * `issue_report` holds the other half: publication takes a preview's digest
  * and never a text, from a seat that read the preview back, and it reads the
  * operator's approval of that digest itself. What the seat says the operator
@@ -321,9 +323,10 @@ ${ORCHESTRATOR_BUG_REPORT_RULE}
 Other projects: send_message_to_orchestrator; tasks, pipelines, spawns and worker messages need an explicit operator request quoted in crossProjectRequest.
 get_orchestrator lists linkedSeats. Coordinate production and shared locks via send_message_to_orchestrator with machine named.`;
 
-/** The bug-report rule as v40 to v55 shipped it, asking both questions with
-    reply drafts. Delivery replaces it by exact match, so a running seat's
-    section becomes the current one and is not delivered a second time. */
+/** The v56-v60 rule upgrades before a new intent; pending retries retain it. */
+const SHIPPED_PREPARATION_CONSENT_RULE = "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged. Publish (issue_report publish, the digest) only after the operator chooses its approving option, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.";
+
+/** Older reply-draft rules still upgrade at delivery as they did in v56. */
 const SHIPPED_BUG_REPORT_RULES: readonly string[] = [
   "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.",
 ];
@@ -596,7 +599,7 @@ ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
 - Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
-- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.
+- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.
 
 ## Pipeline stage contract
 Stages form a graph; array order is presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
@@ -702,7 +705,7 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
   /* These rules are required for every seat. A heading or partial custom
      wording cannot establish that both contracts were delivered. */
-  { markers: [ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE], directive: ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE },
+  { markers: [ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE, ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE.replace(ORCHESTRATOR_BUG_REPORT_RULE, SHIPPED_PREPARATION_CONSENT_RULE)], directive: ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE },
   { markers: [ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE], directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
@@ -744,17 +747,22 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
   return orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(mandate), orchestratorRoleTable(roles));
 }
 
-/** The v58 upgrades, idempotent. A seat request applies them to its mandate
+/** The mandate upgrades, idempotent. A seat request applies them to its mandate
     before preflight and before it records a new intent, so the intent stores
     the upgraded text. They stay out of `orchestratorMandateWithRoleTable`: a
     pending intent recorded by an earlier release replays its first attempt's
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
+  mandate = mandate.split("- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.").join("- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.");
+  const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
+  const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
+  mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);
+  if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(rule13);
+  mandate = mandate.split(SHIPPED_PREPARATION_CONSENT_RULE).join(ORCHESTRATOR_BUG_REPORT_RULE);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
-  return mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)
-    ? mandate
-    : mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
+  if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
+  return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
 }
 
 /** Delivery with an already rendered role table. A pending seat intent replays

@@ -412,7 +412,7 @@ test("rows for two spellings that have converged are one binding, and one unbind
   }));
 
   expect(accountProjectBindings()).toEqual([
-    { engine: "claude", accountId: RESERVED, project: ATLAS, createdAt: "2026-08-01T00:00:00.000Z" },
+    { engine: "claude", accountId: RESERVED, project: ATLAS, createdAt: "2026-08-01T00:00:00.000Z", fallback: false },
   ]);
   expect(allowedAccountIdsForProject(OLD, "claude")).toEqual([RESERVED]);
   expect(projectsForAccount("claude", RESERVED)).toEqual([ATLAS]);
@@ -441,4 +441,15 @@ test("the refusal wording names capacity, the project and the accounts it may us
     "codex",
     BEACON,
   )).toBe(`no allowed codex account is available for project ${BEACON} (project ${BEACON} allows no codex account)`);
+});
+
+test("fallback binding persists, clears and defaults legacy rows to false", () => {
+  damage(JSON.stringify({ schemaVersion: 1, bindings: [{ engine: "claude", accountId: RESERVED, project: ATLAS, createdAt: "2026-10-25T00:00:00Z" }] }));
+  expect(accountProjectBindings()[0].fallback).toBe(false);
+  expect(bindAccountToProject("claude", RESERVED, ATLAS, undefined, true)).toMatchObject({ ok: true, changed: true, bindings: [{ fallback: true }] });
+  resetAccountCollectionsForTests();
+  expect(accountProjectBindings()[0].fallback).toBe(true);
+  expect(bindAccountToProject("claude", RESERVED, ATLAS, undefined, false)).toMatchObject({ ok: true, changed: true, bindings: [{ fallback: false }] });
+  expect(bindAccountToProject("claude", SHARED, ATLAS, undefined, true).ok).toBe(true);
+  expect(accountProjectBindings().find(binding => binding.accountId === SHARED)?.fallback).toBe(true);
 });

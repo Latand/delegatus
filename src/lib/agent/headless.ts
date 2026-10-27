@@ -1,3 +1,4 @@
+import { withoutOperatorCredentials } from "./operatorCredentials";
 import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -68,8 +69,7 @@ export interface LiveRun {
 export const headlessRuns = new Map<string, LiveRun>();
 
 export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string, omitKeys: readonly string[] = []): NodeJS.ProcessEnv {
-  const env = withoutUnsupportedApiCredentials(base);
-  delete env.LLV_TOKEN;
+  const env = withoutUnsupportedApiCredentials(withoutOperatorCredentials(base));
   /* A headless reviewer is no owner of the operator's state. The Viewer's own
      claim (the image sets it for the whole container) used to ride along, so a
      reviewer's `NODE_ENV=test bun -e` fixture resolved the live task store and

@@ -1,0 +1,202 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'telemetry opt-outs'",
+  "sources": {
+    "src/components/telemetry/TelemetrySettings.tsx": "2e9e2efa9ca2696f4a207a7826ed80a2ed6e54477aed08f8b72d461a2503be31",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "d8bbc597a8bac9cef360074f423f4332d36c7528a1ae3f9408ccda354b0d551d"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": false,
+      "noticeCount": 1,
+      "switchDisabled": false,
+      "settingsNotice": true
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locked": true,
+      "noticeCount": 0,
+      "switchDisabled": true,
+      "settingsNotice": false
+    }
+  ]
+}

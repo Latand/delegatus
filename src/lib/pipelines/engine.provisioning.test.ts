@@ -2,6 +2,7 @@
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, newRound, setRelayDeliveryForTest, tickFlow, registerPipelineTick, loadPipelines, savePipelines, interruptionObligationDirectory, patchPipeline, closeAndDrain, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, withRuntimeSnapshot, DEPLOY_WINDOW_MS, forbiddenSleep, frozenWallClock, HISTORICAL_VERDICT_MISS, DEPLOY_CUT_HOLD, READ_ONLY_RERUN, deployCutObligations, structuredLatest, reviewParkedAfterRestart, STAGE_HEAD, PASS_TEXT, makeStructuredAttempt, stalledEntry, countDurableReads, pinStageHead, runningStructuredStage } from "./engine.fixture";
 import type { Flow, FileEntry } from "./engine.fixture";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 
 test("a busy account mutation waits between ticks and claims one host on the same attempt (#1433)", async () => {
@@ -203,6 +204,7 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
     registerPipelineTick(async () => {});
     const ports = defaultPipelinePorts();
+    ports.now = () => ${JSON.stringify(h.ports.now())};
     // This child models admission and a fake spawn, just like the parent harness.
     ports.engineReadiness = () => "connected";
     ports.structuredDeliveryPublication = () => "ready";
@@ -225,10 +227,13 @@ test("a due busy wait survives a restarted controller race with one fresh host c
   let first: ReturnType<typeof Bun.spawn> | null = null;
   let second: ReturnType<typeof Bun.spawn> | null = null;
   const waitFor = async (filename: string): Promise<void> => {
-    for (let attempt = 0; attempt < 400 && !fs.existsSync(filename); attempt += 1) await Bun.sleep(5);
-    if (!fs.existsSync(filename)) {
-      const childError = first?.exitCode !== null && first?.stderr ? await new Response(first.stderr as ReadableStream<Uint8Array>).text() : "";
-      throw new Error(`timed out waiting for ${path.basename(filename)}: ${childError || JSON.stringify(loadPipelines().map((pipeline) => ({ state: pipeline.state, detail: pipeline.stateDetail })))}`);
+    const deadline = performance.now() + 10_000;
+    while (!fs.existsSync(filename)) {
+      if (performance.now() >= deadline) {
+        const childError = first?.exitCode !== null && first?.stderr ? await new Response(first.stderr as ReadableStream<Uint8Array>).text() : "";
+        throw new Error(`timed out waiting for ${path.basename(filename)}: ${childError || JSON.stringify(loadPipelines().map((pipeline) => ({ state: pipeline.state, detail: pipeline.stateDetail })))}`);
+      }
+      await Bun.sleep(5);
     }
   };
   try {
@@ -243,13 +248,14 @@ test("a due busy wait survives a restarted controller race with one fresh host c
       new Response(first.stderr as ReadableStream<Uint8Array>).text(),
       new Response(second.stderr as ReadableStream<Uint8Array>).text(),
     ]);
-    expect({ firstExit, secondExit, firstError, secondError }).toEqual({ firstExit: 0, secondExit: 0, firstError: "", secondError: "" });
+    assertStateChildSuccess(firstExit, firstError);
+    assertStateChildSuccess(secondExit, secondError);
   } finally {
     fs.writeFileSync(releasePath, "release");
     for (const child of [first, second]) {
       if (!child) continue;
       const finished = await Promise.race([child.exited.then(() => true), Bun.sleep(100).then(() => false)]);
-      if (!finished) child.kill();
+      if (!finished) { child.kill(); await child.exited; }
     }
   }
 
@@ -492,12 +498,14 @@ test("a controller that never returns parks the stage with the wait it spent (#1
   /* The budget is wall-clock, so the schedule stops exactly on it. */
   expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 7_000]);
   expect(scheduled.reduce((total, delay) => total + delay, 0)).toBe(30_000);
-  expect(spawnCalls).toBe(scheduled.length + 1);
+  // Exhaustion parks before a new spawn can be admitted at the cutoff.
+  expect(spawnCalls).toBe(scheduled.length);
   /* Nothing was slept through inside the pipelines phase. */
   expect(slept).toEqual([]);
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("structured delivery controller is unavailable");
   expect(parked.stateDetail).toContain("6 retries over 30s");
+  expect(parked.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ budgetMs: 30_000, retryMaxMs: 8_000 });
 });
 
 test("the controller wait counts the time a failing spawn attempt spent (#1191)", async () => {
@@ -1336,7 +1344,9 @@ test("a read-only stage whose host was lost re-runs on the same head instead of 
   const rerun = loadPipelines()[0]!;
   expect(rerun.state).toBe("running");
   expect(rerun.cursor).toMatchObject({ stageId: "review", state: "pending" });
-  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: READ_ONLY_RERUN });
+  const rerunError = `${READ_ONLY_RERUN}; exit: status unavailable; no Delegatus stop recorded`;
+  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: rerunError });
+  expect(rerun.stateDetail).toBe(rerunError);
   expect(rerun.runs[1]!.attempts).toHaveLength(0);
 
   await tickPipelines([], h.ports);

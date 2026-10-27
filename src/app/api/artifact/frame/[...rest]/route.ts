@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { FRAME_CSP, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
-import { fencedStores, homeRoot, inFencedStore, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, realpathAdmitted, inFencedStore, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
 
@@ -28,7 +28,7 @@ export const dynamic = "force-dynamic";
  * itself. It authorizes by the scope in the path instead (see frameScope.ts):
  * a signed, expiring grant for ONE directory, minted only by the same-origin
  * meta read of /api/artifact. What it serves stays inside what /api/artifact
- * already serves — the home root and the previewable types — narrowed to the
+ * already serves — project/scratch roots and previewable types — narrowed to the
  * report's directory tree, checked lexically and again after realpath, and
  * held to the same content check (`sniffAgrees`) on the pinned descriptor.
  *
@@ -88,8 +88,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!directory) return refuse(403, "this report link has expired; reopen the preview");
 
   const abs = path.resolve(directory, ...inside);
-  const home = homeRoot();
-  if (!underRoot(abs, directory) || !underRoot(abs, home) || inFencedStore(abs, fencedStores())) return refuse(403, "outside the report directory");
+  const admission = admittedAs(abs, lexicalAllowedRoots());
+  if (!underRoot(abs, directory) || !admission) return refuse(403, "outside the report directory");
 
   const classified = classifyArtifact(abs);
   if (!classified) return refuse(415, "not a previewable file type");
@@ -99,7 +99,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
     realDirectory = await fs.realpath(directory);
     real = await fs.realpath(abs);
-    if (!underRoot(realDirectory, await fs.realpath(home))) return refuse(403, "outside the allowed roots");
+    if (!realpathAdmitted(admission, real, await realAllowedRoots())) return refuse(403, "outside the allowed roots");
   } catch {
     return refuse(404, "file not found");
   }

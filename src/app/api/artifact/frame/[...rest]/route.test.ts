@@ -9,17 +9,27 @@ import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
 import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-frame-"));
-const { GET } = await import("./route");
+const { GET: serve } = await import("./route");
+const responses: Response[] = [];
+async function GET(...args: Parameters<typeof serve>) {
+  const response = await serve(...args); responses.push(response); return response;
+}
 const { GET: GET_ARTIFACT } = await import("../../route");
 
 const savedHome = process.env.HOME;
+const savedState = process.env.LLV_STATE_DIR;
 let home = "";
 
 beforeEach(() => {
   home = fs.realpathSync(fs.mkdtempSync(path.join(sandbox, "home-")));
-  process.env.HOME = home;
+  process.env.HOME = path.dirname(home);
+  process.env.LLV_STATE_DIR = path.join(home, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
 });
-afterEach(() => {
+afterEach(async () => {
+  for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
+  if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
 });
 afterAll(() => {

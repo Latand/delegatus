@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { DELEGATUS_MECHANICS } from "@/lib/roles/defaults";
+import { DELEGATUS_MECHANICS, OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 
 import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
@@ -292,14 +292,14 @@ test("design and UI stages receive the task-bound prototype publishing contract"
    the blocked rule whether the stage is known by its params or its fail edge. */
 const STORED_FIX_SCAFFOLD = "You are a Builder in apply-fixes mode. Implement the brief with focused checks. You are done when every handed finding and every issue you notice within the pinned specification is fixed, or left unfixed with evidence that it is wrong, and the project's own checks for what you touched pass. The reviewer evaluates the result against the pinned specification. Report the verification evidence; fix any issue you notice within the specification before finishing. Stay inside the scope the brief names. Process cleanup: stop only the processes you started yourself, each by the PID you recorded when you started it.\n\nApply-fixes guidance: Fix every handed finding and anything you notice yourself within the pinned specification.\n\nSafety fences:\n- Product source changes stay inside the scope the brief names.";
 
-test("a stored lane renders its original scaffold and its fix stage still reads the blocked rule", () => {
+test("a stored lane keeps its scaffold after the correction duty and its fix stage still reads the blocked rule", () => {
   const review: PipelineStage = { id: "review", kind: "run", prompt: "Review", next: null, onFail: { to: "fix", maxRounds: 2 },
     effectiveRole: { roleId: "reviewer", engine: "codex", model: null, effort: "xhigh", access: "read-only", promptScaffold: "You are a fresh-context Reviewer. Three standing rules." } };
   const byParams: PipelineStage = { id: "fix", kind: "run", prompt: "Fix", next: "review", role: { roleId: "builder", params: { mode: "apply-fixes" } },
     effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: STORED_FIX_SCAFFOLD } };
   const pipeline = buildPipeline({ id: "stored", task: "Fix it", project: "viewer", repoDir: "/repo", stages: [review, byParams], srcPath: null, srcConversationId: null, now: "now" });
   const fixPrompt = renderStagePrompt(pipeline, byParams, byParams.effectiveRole, "P1 a finding");
-  expect(fixPrompt).toContain(`Role prompt scaffold:\n${STORED_FIX_SCAFFOLD}\n`);
+  expect(fixPrompt).toContain(`Role prompt scaffold:\n${OPERATOR_CORRECTION_RULE}\n\n${STORED_FIX_SCAFFOLD}\n`);
   expect(fixPrompt).not.toContain("Working rules (every role, every project)");
   expect(fixPrompt).toContain("For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason");
   expect(fixPrompt).toContain(DELEGATUS_MECHANICS);
@@ -308,7 +308,7 @@ test("a stored lane renders its original scaffold and its fix stage still reads 
   const edgePipeline = buildPipeline({ id: "stored-edge", task: "Fix it", project: "viewer", repoDir: "/repo", stages: [review, byEdge], srcPath: null, srcConversationId: null, now: "now" });
   expect(renderStagePrompt(edgePipeline, byEdge, byEdge.effectiveRole, "P1 a finding")).toContain("For a blocked fix stage");
   const reviewPrompt = renderStagePrompt(pipeline, review, review.effectiveRole, "");
-  expect(reviewPrompt).toContain("Role prompt scaffold:\nYou are a fresh-context Reviewer. Three standing rules.\n");
+  expect(reviewPrompt).toContain(`Role prompt scaffold:\n${OPERATOR_CORRECTION_RULE}\n\nYou are a fresh-context Reviewer. Three standing rules.\n`);
   expect(reviewPrompt).not.toContain("For a blocked fix stage");
 });
 
@@ -324,4 +324,19 @@ test("an owner without a delivery remote gets a local commit instruction", () =>
   expect(local).not.toContain("Push this branch");
   pipeline.delivery.target.remote = "https://example.invalid/repo.git";
   expect(renderStagePrompt(pipeline, stage, stage.effectiveRole, "")).toContain("Never push; the pipeline publishes");
+});
+
+
+test("retained stage scaffolds receive the correction duty and its write exception on delivery", () => {
+  for (const roleId of ["builder", "reviewer", "orchestrator"] as const) {
+    const role = { roleId, engine: "codex" as const, model: "gpt-6-luna", effort: "high", access: "read-only" as const,
+      promptScaffold: "A stored scaffold.\n\nSafety fences:\n- Change role memory only through curate_rules.\n- Never publish: the only write is issue_report with action preview." };
+    const stage: PipelineStage = { id: "work", kind: "run", prompt: "Handle the request", next: null, effectiveRole: role };
+    const pipeline = buildPipeline({ id: "retained-correction", task: "Handle the request", project: "one", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+    const prompt = renderStagePrompt(pipeline, stage, role, "");
+    expect(prompt.split(OPERATOR_CORRECTION_RULE)).toHaveLength(2);
+    expect(prompt).not.toContain("Change role memory only through curate_rules.");
+    expect(prompt).not.toContain("the only write is issue_report");
+    expect(role.promptScaffold).toStartWith("A stored scaffold.");
+  }
 });

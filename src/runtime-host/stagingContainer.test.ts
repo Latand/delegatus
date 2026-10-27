@@ -33,7 +33,6 @@ const composeService = {
     LLV_RUNTIME_HOST_SOCKET: "/home/user/.config/agent-log-viewer/state/runtime-host.sock",
     LLV_VIEWER_DEPLOY_TARGET: "/home/user/.config/agent-log-viewer/state/viewer-release.json",
     LLV_VIEWER_PORT: "8898",
-    LLV_LEGACY_TMUX_EXTERNAL: "0",
     TMUX_TMPDIR: "/tmp",
     LLV_DOCKER_NSENTER_SHIMS: "1",
     GIT_SSH_COMMAND: "ssh compose-config",
@@ -55,7 +54,7 @@ const composeService = {
 } satisfies ViewerComposeService;
 
 const paths = stagingStatePaths("/home/user/.config/agent-log-viewer/state-staging");
-const tmux = { legacyTmuxExternal: "0", tmuxTmpdir: "/tmp" };
+const tmux = { tmuxTmpdir: "/tmp" };
 
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) => value === flag ? [args[index + 1]!] : []);

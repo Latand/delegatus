@@ -72,7 +72,7 @@ test("list and today have exact wire, shape, stripped author ids and stable late
   expect(double.state.exchanges.at(-1)!.request.query).toEqual([["tz", "Europe/Kyiv"], ["from", "2026-10-12"], ["to", "2026-10-12"], ["cursor", "10"]]);
   expect(second).toMatchObject({ available: true, nextCursor: null });
   const before = double.state.requests;
-  for (const input of [{ action: "messages", cursor: "broken" }, { action: "messages", chat: "-101", cursor: page.nextCursor }, { action: "messages", chat: "invalid" }])
+  for (const input of [{ action: "messages", cursor: "broken" }, { action: "messages", chat: "-102", cursor: page.nextCursor }, { action: "messages", chat: "invalid" }])
     expect(await readOwnerHistory(input, ports)).toMatchObject({ reason: "invalid_arguments" });
   expect(double.state.requests).toBe(before);
 });

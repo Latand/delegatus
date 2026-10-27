@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -138,7 +139,7 @@ test("an unregistered or malformed conversation resolves to modality", () => {
 function browserRequest(): NextRequest {
   return new NextRequest("http://127.0.0.1/api/runtime/realtime", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: "{}",
   });
 }
@@ -147,7 +148,7 @@ test("the request authority carries the modality persona for an ordinary convers
   const conversationId = spawnConversation(null);
   const authority = realtimeRequestAuthority(browserRequest(), { action: "start", conversationId });
   expect(authority.personaVariant).toBe("modality");
-  /* The operator's own browser presents no capability, so it holds transport. */
+  /* The operator's own browser presents no capability and holds its session, so it holds transport. */
   expect(authority.operator).toBeTrue();
   expect(authority.caller).toEqual({ kind: "anonymous" });
 });
