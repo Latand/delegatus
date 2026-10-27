@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { codexFixture, createGateSandbox, createRuntimeCheckTree, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runAdmittedChecks, runPushPair, runSteps, supervisorTimeoutMs, SUPERVISOR_MARGIN_MS, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { codexFixture, createGateSandbox, createRuntimeCheckTree, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runAdmittedChecks, runPushPair, runSteps, supervisorTimeoutMs, viewerBuildEnvironment, SUPERVISOR_MARGIN_MS, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { createHookFixture, fixtureGitEnv } from "./local-gate.fixture";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { nativeBatches } from "./verify-native-codex-runtime";
@@ -112,6 +112,14 @@ test("the measured pipeline file families reserve comparison time without changi
   const file = "src/lib/pipelines/engine.ts";
   const step = plan("pre-push", [file], context({ existing: new Set([file]), tests })).find(step => step.name === "touched tests")!;
   expect(step.command.slice(4)).toEqual(tests.map(file => `./${file}`));
+});
+
+test.each([undefined, "8G", "20G"])("Viewer build memory budget preserves caller overrides: %s", memory => {
+  const input: NodeJS.ProcessEnv = { NODE_ENV: "test", LLV_GATE_MEM: memory, NODE_OPTIONS: "--no-warnings" };
+  const env = viewerBuildEnvironment(input);
+  expect(env).toMatchObject({ NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1",
+    LLV_GATE_MEM: memory ?? "14G", NODE_OPTIONS: "--no-warnings" });
+  expect(input).toEqual({ NODE_ENV: "test", LLV_GATE_MEM: memory, NODE_OPTIONS: "--no-warnings" });
 });
 
 test("runtime builds own one full-project check with fresh Next validators", () => {
