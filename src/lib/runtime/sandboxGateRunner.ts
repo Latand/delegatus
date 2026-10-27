@@ -113,13 +113,13 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
   try {
     verifiedRoot(gate);
     if (![gate.owner, gate.parent].every(identity => identity.startIdentity && identity.bootEpoch)) throw new Error("owned runner has no verified namespace owner identity");
-    const memory = parseMemorySize(process.env.LLV_GATE_MEM ?? "8G");
+    const memory = parseMemorySize(process.env.LLV_GATE_MEM ?? "14G");
     const quota = Number((process.env.DELEGATUS_WORK_SCOPE_CPU_QUOTA ?? process.env.LLV_WORK_SCOPE_CPU_QUOTA ?? "300").replace(/%$/, ""));
     if (!memory || !Number.isSafeInteger(quota) || quota <= 0) throw new Error("owned runner needs finite memory and CPU limits");
     // The leaf cannot exceed a limit above it; name the one that binds.
     const ceiling = scopeMemoryCeiling(context.scope);
     if (ceiling !== null && ceiling < memory) {
-      console.error(`owned runner: this gate leaf sits inside the agent's scope, so its effective memory cap is ${(ceiling / 2 ** 30).toFixed(2)} GiB, below the gate's ${process.env.LLV_GATE_MEM ?? "8G"}`);
+      console.error(`owned runner: this gate leaf sits inside the agent's scope, so its effective memory cap is ${(ceiling / 2 ** 30).toFixed(2)} GiB, below the gate's ${process.env.LLV_GATE_MEM ?? "14G"}`);
     }
     fs.writeFileSync(path.join(root, "memory.max"), String(memory));
     fs.writeFileSync(path.join(root, "memory.swap.max"), "0");
