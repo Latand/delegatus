@@ -41,7 +41,7 @@ test.each((["send", "native"] as const).flatMap(mode => (["accepted", "before di
   const { task } = await admitProactiveTask({ ...candidate(`queued-${phase}`), project }, { ...context(), project }, undefined, authority());
   await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
   f.registry.beginSpawnRequest({ engine: "codex", cwd: f.root, transport: "structured", conversationId: f.conversation.id,
-    origin: { kind: "operator" }, clientAttemptId: `queued-${phase}`, taskIds: [task.id], launchProfile: emptyLaunchProfile({ cwd: f.root }) });
+    origin: { kind: "operator" }, clientAttemptId: `queued-${phase}`, taskIds: [task.id], launchProfile: emptyLaunchProfile({ cwd: f.root, title: "Continue retained proactive work" }) });
   const reject = () => decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
   let nativeCalls = 0;
   const binding = { threadId: f.key.sessionId, accountId: "account-a" };

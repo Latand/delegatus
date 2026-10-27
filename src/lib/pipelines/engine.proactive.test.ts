@@ -1,7 +1,7 @@
 import { afterAll, afterEach, spyOn } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test, harness, createPipelineFromRequest, loadPipelines, savePipelines, tickPipelines, finishReported, engineModule, patchPipeline, closeAndDrain, defaultPipelinePorts, accountManager } from "./engine.fixture";
+import { expect, test, harness, createPipelineFromRequest, loadPipelines, savePipelines, tickPipelines, finishReported, engineModule, patchPipeline, closeAndDrain, defaultPipelinePorts, accountManager, realProvisioningRepo } from "./engine.fixture";
 import { admitProactiveTask, decideProactiveTask, proactiveDecisionToken, readProactiveAllowance } from "@/lib/tasks/proactive";
 import { candidate, NOW } from "@/lib/tasks/proactive.fixture";
 import { applySeatTickSettingsChange, defaultSeatTickSettings, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
@@ -20,6 +20,7 @@ import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setCodexCloudEnvironmentId } from "@/lib/projects/settings";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { requestDigest } from "@/lib/mcp/server";
+import { projectInfoFromCwd } from "@/lib/scanner/describe";
 
 const clock = spyOn(Date, "now").mockImplementation(() => NOW);
 afterEach(() => { clock.mockImplementation(() => NOW); });
@@ -29,9 +30,8 @@ const stages = [
   { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build the reviewed outcome", next: "review" },
   { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review the implemented outcome", next: null, onFail: { to: "build", maxRounds: 1 } },
 ] as const;
-async function fixture(name: string, cloud = false, repoDir = "/repo") {
+async function fixture(name: string, cloud = false, repoDir = "/repo", project = `proactive-${name}`) {
   savePipelines([]);
-  const project = `proactive-${name}`;
   const h = harness();
   h.advanceWallClock(NOW - 1_000_000);
   h.ports.projectForCwd = () => project;
@@ -127,16 +127,17 @@ test("the first prompt uses its receipt account before a native generation exist
 });
 
 test("the production scope launch writes a profile the engine reads as read-only", async () => {
-  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "scope-launch-profile-"));
-  const owned = [root];
+  const { root, repo, git } = await realProvisioningRepo("scope-launch-profile");
   let restore = () => {};
   let launchId: string | null = null;
   try {
-    const f = await fixture("physical-read-only", false, root);
+    await git(repo, "commit", "--allow-empty", "-m", "base");
+    const project = projectInfoFromCwd(repo)?.project;
+    if (!project) throw new Error("fixture repository has no project identity");
+    const f = await fixture("physical-read-only", false, repo, project);
     await f.tick();
     const worktree = f.current().worktreeDir;
-    fs.mkdirSync(worktree);
-    owned.push(worktree);
+    await git(repo, "worktree", "add", "--detach", worktree, "HEAD");
     const selected = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({ kind: "available", account: {
       engine: "codex", accountId: "account-limited", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" },
     } }));
@@ -149,7 +150,7 @@ test("the production scope launch writes a profile the engine reads as read-only
   } finally {
     restore();
     if (launchId) agentRegistry().failStructuredSpawn(launchId, "fixture ended before actuation", { announce: false });
-    for (const directory of owned.reverse()) fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

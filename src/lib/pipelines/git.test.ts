@@ -3295,7 +3295,8 @@ test.each(["success", "refused", "unknown"] as const)("rejection during an activ
     expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head }
       : outcome === "unknown" ? { ok: true, remote: "unreachable", uncertain: true, sha: head } : { ok: false });
     expect(confirmations).toBe(outcome !== "refused" ? 1 : 0);
-    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result });
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject(outcome === "unknown"
+      ? { state: "running", executor: { finished: true, result } } : { state: "settled", result });
     expect(await box.originHead()).toBe(outcome !== "refused" ? head : "");
     if (outcome === "unknown") {
       expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery")).toBeNull();
