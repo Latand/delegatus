@@ -29,7 +29,7 @@ A reference within a removed group is identified below. Generic basenames are di
 | `docs/design/` | Keep all design documents: active links, open work, retirement dependencies or unresolved historical value. Protected designs and documents linked from README, ARCHITECTURE or CONTRIBUTING stay. |
 | Remaining `docs/` | Keep release, operational, investigation, performance, research and acceptance notes whose archival value is uncertain, plus referenced media and provenance. |
 | `spikes/issue-863/` | Keep: performance test points to the profile, and the retirement design cites its corpus. |
-| Other source candidates | Keep runtime workers, subprocess fixtures, framework entries and MCP entry points: runtime strings reach these without imports. Keep `SectionHeader.tsx` (design-system references) and `WorkflowStrip.tsx` (retirement design reference). |
+| Other source candidates | Keep runtime workers, subprocess fixtures, framework entries and MCP entry points: runtime strings reach these without imports. `SectionHeader.tsx` and `WorkflowStrip.tsx` were kept here for their design references and removed later: neither has an importer (`docs/verification/legacy-cleanup.md`). |
 | Fenced areas | Preserve `src/lib/flows`, `src/components/flows`, `src/lib/reviewHistory`, `evals/`, README, changelog, license and CI/deploy consumers. |
 
 ## Removal ledger

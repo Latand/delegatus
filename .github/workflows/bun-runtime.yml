@@ -28,6 +28,8 @@ name: Bun runtime pin
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       native_queue_campaign:
@@ -43,10 +45,8 @@ permissions:
 # had already been replaced. One round per ref, and the newest wins. This group
 # is step 1 of the cut order on #1761.
 #
-# Nothing that must not be cancelled is in reach of this group. After step 2 none
-# of these workflows runs on a push to main or a tag at all, and on `pull_request`
-# the ref is `refs/pull/<n>/merge` while a run started by hand carries the branch
-# ref, so the two never share a group.
+# Pull requests and main each cancel obsolete runs on their own ref. A
+# cancelled commit stays ineligible until an exact-target gate succeeds.
 #
 # The two required workflows get no group at all, deliberately. They run on
 # `pull_request_target` and, for the tracker audit, on issue and review events,

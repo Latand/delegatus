@@ -360,6 +360,12 @@ test("an aged live writer without process identity retains the transaction until
 
   const second = spawnWriter("mcp");
   await waitFor(`${second.ready}.waiting`);
+  const waitingDb = new Database(path.join(sandbox, "state.sqlite"));
+  try {
+    expect(waitingDb.query<{ owner_pid: number; owner_start_identity: string | null }, []>(
+      "SELECT owner_pid, owner_start_identity FROM state_leases WHERE collection = 'tasks'",
+    ).get()).toEqual({ owner_pid: first.child.pid, owner_start_identity: null });
+  } finally { waitingDb.close(); }
   const enteredBeforeRelease = fs.existsSync(second.ready);
   fs.writeFileSync(first.release, "release\n", "utf8");
   if (!enteredBeforeRelease) await waitFor(second.ready);

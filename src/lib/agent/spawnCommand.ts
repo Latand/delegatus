@@ -1,10 +1,12 @@
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
-import type { AgentRegistry, SpawnReceipt } from "./registry";
+import type { SpawnReceipt } from "./registry";
+import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 
 import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { NextRequest, NextResponse } from "next/server";
@@ -31,7 +33,7 @@ import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
-import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
+import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { resolveSpawnLineageOffLoop, SpawnParentError } from "@/lib/agent/spawnParent";
 import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
 import {
@@ -50,14 +52,15 @@ import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { headCwd } from "@/lib/agent/transcript";
 import { persistHandoffLineage, rememberHandoffChild } from "@/lib/handoffLineage";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { runtimeHostClient, RuntimeHostUnavailableError } from "@/lib/runtime/client";
+import { runtimeHostClient, isRuntimeHostTransportFailure } from "@/lib/runtime/client";
+import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { runtimeScope } from "@/lib/runtime/contracts";
 import { publishFilesRevision } from "@/lib/runtime/filesRevision";
 import { runtimeEventsEnabled } from "@/lib/runtime/flags";
 import { runtimeImageCapability, runtimeImageStore, type RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { assertStructuredTextEnvelope, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
-import { queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
+import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
 import { structuredSpawnGap, spawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
 import { loadPipelines } from "@/lib/pipelines/store";
@@ -131,6 +134,8 @@ export interface SpawnCommandDependencies {
   runtimeHostClient: typeof runtimeHostClient;
   publishFilesRevision?: typeof publishFilesRevision;
   spawnStructuredConversation: typeof spawnStructuredConversation;
+  /** Clock and sleep seam for bounded handover retries. */
+  runtimeAdmissionRetry?: Parameters<typeof withRuntimeAdmissionRetry>[1];
   assertStructuredRuntime: typeof assertDarwinStructuredRuntime;
   defer(work: () => Promise<void>): void;
   storeImages(images: readonly RuntimeImageUpload[]): StructuredImageRef[];
@@ -333,7 +338,7 @@ export function spawnLauncherFor(
   return { value: null };
 }
 
-type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; inheritedServiceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
 
 export async function executeSpawnRequest(
   req: NextRequest,
@@ -466,7 +471,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if ("error" in validation) return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  const tierResolution = codexLaunchTier({ engine, model: selectedModel.model, fast: body.fast, serviceTier: body.serviceTier,
+  const tierResolution = codexLaunchTier({ engine, model: selectedModel.model, fast: body.fast, serviceTier: body.serviceTier, inheritedServiceTier: body.inheritedServiceTier,
     roleDefault: role.value?.config.serviceTier, roleDefaultApplies: !!role.value && !role.value.explicitRuntime });
   if ("error" in tierResolution) return NextResponse.json({ error: tierResolution.error }, { status: 400 });
   let launchTier = tierResolution.tier;
@@ -1198,7 +1203,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const withAccountOverride = (body: SpawnResponse): SpawnResponse =>
       ({ ...body, ...(accountOverride ? { accountOverride } : {}), ...(runtime ? { runtime } : {}) });
     let queuedReceipt = begun.receipt;
-    if (queuedUntil && queuedTitle && requestedAccountId) {
+    // A later quota observation cannot replace an already admitted payload or
+    // restart its deployment budget when the caller replays the same request.
+    if (queuedUntil && queuedTitle && requestedAccountId && !begun.receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
       const existingQueue = begun.receipt.queuedPinnedSpawn;
       let queuedImageRefs: StructuredImageRef[];
       if (existingQueue) {
@@ -1256,43 +1263,82 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     ): void => {
       dependencies.defer(async () => {
         let response: SpawnResponse;
+        let launchAccount = account;
+        const failOwnedAdmission = (reason: string) => registry.failStructuredSpawnOffLoop(receipt.launchId, reason, {
+          recoveryFence: (_file, current) => current.state === "starting" && !current.key && !current.pane
+            && Boolean(receipt.admissionOwner && current.admissionOwner
+              && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)),
+        });
         try { authorizeLaunch(receipt); }
         catch {
-          await registry.failStructuredSpawnOffLoop(receipt.launchId, "autonomous launch authorization revoked");
+          await failOwnedAdmission("autonomous launch authorization revoked");
           return;
         }
         try {
-          response = await dependencies.spawnStructuredConversation({
-            engine,
-            receipt,
-            spec,
-            account,
-            prompt,
-            imageRefs,
-            registry,
-            client: runtimeClient,
-            authorize: () => authorizeLaunch(receipt),
-          });
-          await recordActualSpawnAccountOffLoop(registry, receipt, account.accountId, response.path);
+          const launchAccountId = receipt.queuedPinnedSpawn?.launchAccountId ?? receipt.queuedPinnedSpawn?.accountId;
+          if (launchAccountId && launchAccountId !== account.accountId) {
+            launchAccount = dependencies.resolveSpawnAccount(engine, launchAccountId);
+            if (launchAccount.engine !== engine || launchAccount.accountId !== launchAccountId) {
+              throw new Error("queued direct spawn resolved a different account");
+            }
+          }
+          // Replays keep the durable launch id and first-message identity. A
+          // handover gets the admission window before the card is failed.
+          response = await withRuntimeAdmissionRetry(async () => {
+            const current = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
+            if (!current || current.state !== "starting") {
+              throw new Error(current?.error ?? "structured launch admission already settled");
+            }
+            if (receipt.admissionOwner && (!current.admissionOwner
+              || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner))) {
+              throw new Error("structured launch admission ownership changed");
+            }
+            try { authorizeLaunch(receipt); }
+            catch {
+              await failOwnedAdmission("autonomous launch authorization revoked");
+              throw new Error("autonomous launch authorization revoked");
+            }
+            try {
+              return await dependencies.spawnStructuredConversation({
+                engine,
+                receipt,
+                spec: receipt.queuedPinnedSpawn?.spec ?? spec,
+                account: launchAccount,
+                ["prompt"]: receipt.queuedPinnedSpawn?.prompt ?? prompt,
+                imageRefs,
+                registry,
+                client: runtimeClient,
+                authorize: () => authorizeLaunch(receipt),
+              });
+            } catch (error) {
+              // The launcher may already have settled its own failure. That
+              // durable result ends retries even if its last error was transport.
+              const current = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
+              if (current && ["failed", "conflicted", "completed"].includes(current.state)) {
+                throw new Error(error instanceof Error ? error.message : String(error), { cause: error });
+              }
+              throw error;
+            }
+          }, dependencies.runtimeAdmissionRetry);
+          await recordActualSpawnAccountOffLoop(registry, receipt, launchAccount.accountId, response.path);
         } catch (error) {
           spawnDiagnosticError("[spawn] structured launch failed", {
             launchId: receipt.launchId,
             conversationId: receipt.conversationId,
             error,
           });
-          /* Structured is the default transport now, and this injected launch
-             seam can still throw before it records a durable result. Preserve a
-             route-level transport fallback so tests, older launch adapters, and
-             partial upgrades still turn an accepted 202 into a terminal card.
-             Retry-safe:
-             `failStructuredSpawn` no-ops on an already-terminal receipt, and a
-             failed launch is claimable for retry under the same launch id, so
-             a transient blip cannot become a second launch. */
-          if (error instanceof RuntimeHostUnavailableError) {
-            await registry.failStructuredSpawnOffLoop(
-              receipt.launchId,
-              `structured spawn transport failed: ${error.message}`.slice(0, 240),
-            );
+          /* Older adapters can throw before recording a durable result. Hand
+             unbound transport failures back to the queue while its original
+             budget remains; terminal settlement still requires this owner. */
+          if (error instanceof Error) {
+            const current = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
+            if (current?.state !== "starting" || !current.admissionOwner || !receipt.admissionOwner
+              || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)) return;
+            if (isRuntimeHostTransportFailure(error) && await registry.deliveryWriteOrBusy({ label: "spawn.route-defer-admission" }, () =>
+              registry.deferStructuredSpawnAdmission(receipt.launchId, receipt.admissionOwner!, dependencies.runtimeAdmissionRetry?.now?.() ?? Date.now(), error.message))) {
+              return;
+            }
+            await failOwnedAdmission(`structured spawn failed: ${error.message}`.slice(0, 240));
           }
           return;
         }
@@ -1325,24 +1371,46 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         }
       });
     };
+    const persistStructuredPayload = async (receipt: SpawnReceipt): Promise<SpawnReceipt> => {
+      if (receipt.queuedPinnedSpawn) return receipt;
+      let imageRefs: StructuredImageRef[];
+      try { imageRefs = dependencies.storeImages(images); }
+      catch (error) { throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error)); }
+      const now = dependencies.runtimeAdmissionRetry?.now?.() ?? Date.now();
+      return registry.deliveryWriteOrBusy({ label: "registry.queueStructuredAdmission", operationId: receipt.launchId }, () => {
+        const current = registry.spawnReceipt(receipt.launchId);
+        if (current?.queuedPinnedSpawn) return current;
+        return registry.queuePinnedSpawn(receipt.launchId, {
+          version: 1, retryAt: new Date(now).toISOString(),
+          admissionDeadlineAt: new Date(now + (dependencies.runtimeAdmissionRetry?.deadlineMs ?? DEPLOY_ADMISSION_BUDGET_MS)).toISOString(),
+          accountId: receipt.accountId ?? account.accountId,
+          ...(receipt.accountId !== account.accountId ? { launchAccountId: account.accountId } : {}),
+          locale: prefersUkrainian(req) ? "uk" : "en", spec, prompt, imageRefs,
+          parentArtifactPath, pipelineSourceConversationId,
+        }, receipt.launchProfile.title ?? launchTitle);
+      });
+    };
     if (begun.kind === "replay") {
       const structured = identityMaterializationFence(registry.readOnlySnapshot()).isStructured(queuedReceipt);
       let receipt = queuedReceipt;
       let initialMessage: SpawnResponse["initialMessage"] | undefined;
       const runtimeClient = structured ? dependencies.runtimeHostClient() : null;
       if (runtimeClient && !queuedUntil) {
-        try {
-          const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, runtimeClient);
-          receipt = reconciled;
-          initialMessage = reconciled.initialMessage;
-        } catch {
-          /* The durable registry receipt remains available during runtime resynchronization. */
+        // Queued admission retains its deployment deadline. Host-setup
+        // reconciliation starts after runtime acknowledgement retires it.
+        if (!receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+          try {
+            const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, runtimeClient);
+            receipt = reconciled;
+            initialMessage = reconciled.initialMessage;
+          } catch {
+            /* The durable registry receipt remains available during runtime resynchronization. */
+          }
         }
         const admission = (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
         receipt = admission.receipt;
         if (admission.claimed) {
-          let imageRefs;
-          try { imageRefs = dependencies.storeImages(images); }
+          try { receipt = await persistStructuredPayload(receipt); }
           catch (error) {
             /* No deferred work exists after this rejection. A compare-and-set
                release lets the next retry claim the lease immediately. */
@@ -1351,8 +1419,18 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             }
             throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error));
           }
-          deferStructuredSpawn(receipt, runtimeClient, imageRefs);
+          deferStructuredSpawn({ ...receipt, admissionOwner: admission.receipt.admissionOwner }, runtimeClient, receipt.queuedPinnedSpawn!.imageRefs);
         }
+      }
+      // A concurrent request can observe the live publisher before its payload
+      // commits. Leave that owner working; acceptance needs durable input.
+      if (structured && receipt.state === "starting" && !receipt.key && !receipt.pane
+        && !receipt.queuedPinnedSpawn && !receipt.hostSetupStartedAt) {
+        return NextResponse.json({
+          error: "The launch is still being prepared. Retry the same request.",
+          code: "spawn_preparing", retryable: true,
+          launchId: receipt.launchId, conversationId: receipt.conversationId,
+        }, { status: 503 });
       }
       if (receipt.artifactPath
         && identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt, { structured })) {
@@ -1389,10 +1467,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (transport === "structured") {
       const runtimeClient = dependencies.runtimeHostClient();
       if (!runtimeClient) throw new Error("structured spawn runtime host is unavailable");
-      let imageRefs;
-      try { imageRefs = dependencies.storeImages(images); }
-      catch (error) { throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error)); }
-      deferStructuredSpawn(begun.receipt, runtimeClient, imageRefs);
+      const receipt = await persistStructuredPayload(begun.receipt);
+      deferStructuredSpawn({ ...receipt, admissionOwner: begun.receipt.admissionOwner }, runtimeClient, receipt.queuedPinnedSpawn!.imageRefs);
       return NextResponse.json(
         withAccountOverride(spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
           structured: true,
@@ -1525,42 +1601,4 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
-}
-
-export async function recordActualSpawnAccountOffLoop(
-  registry: AgentRegistry,
-  receipt: SpawnReceipt,
-  actualAccountId: string,
-  agentPath: string | null,
-): Promise<void> {
-  if (!agentPath || receipt.accountId === actualAccountId) return;
-  const observed = registry.spawnRecoverySnapshot([receipt.launchId]);
-  const prior = observed.receipts[receipt.launchId];
-  const priorEntry = prior?.key ? observed.entries[sessionKeyId(prior.key)] : null;
-  const custody = (entry: typeof priorEntry) => JSON.stringify([entry?.claimEpoch, entry?.claimOwner,
-    entry?.structuredHostOperationId, entry?.structuredHost?.writerClaimEpoch, entry?.structuredHost?.process]);
-  const expectedCustody = custody(priorEntry);
-  await registry.deliveryWriteBatchOrBusy({ label: "registry.spawn-actual-account", operationId: receipt.launchId }, () => {
-    const snapshot = registry.readOnlySnapshot();
-    const materialized = snapshot.receipts[receipt.launchId];
-    if (!materialized?.key || materialized.artifactPath !== agentPath) return;
-    const entry = snapshot.entries[sessionKeyId(materialized.key)];
-    const conversation = snapshot.conversations[materialized.conversationId];
-    if (!entry || !conversation || conversation.generations.at(-1)?.path !== agentPath
-      || materialized.conversationId !== prior?.conversationId || custody(entry) !== expectedCustody) return;
-    registry.reconcileConversations([{
-      engine: materialized.engine,
-      path: agentPath,
-      accountId: actualAccountId,
-      launchProfile: materialized.launchProfile,
-      turn: {
-        state: conversation.turn.state,
-        source: conversation.turn.source,
-        terminalAt: conversation.turn.terminalAt,
-      },
-      expectedTurnObservedAt: conversation.turn.observedAt,
-      observedAt: new Date().toISOString(),
-    }]);
-    registry.upsert({ ...entry, accountId: actualAccountId });
-  });
 }

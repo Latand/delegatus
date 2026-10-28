@@ -7,13 +7,13 @@ import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { appendLifecycleEventsAsync } from "@/lib/lifecycle/journal";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { updateCodex, type UpdateNotice } from "./update";
+import { hasPendingCodexUpdate, updateCodex, type UpdateNotice } from "./update";
 import { productionUpdatePorts } from "./production";
 import { updateDirectory } from "./installation";
 
 import { createCodexUpdateTicker } from "./scheduler";
 
-let ticker: (() => Promise<void>) | undefined;
+let ticker: ((requested?: boolean) => Promise<void>) | undefined;
 
 function current(): boolean {
   const authority = readHotStateAuthority(stateDir());
@@ -30,10 +30,15 @@ export async function reportCodexUpdate(notice: UpdateNotice): Promise<void> {
 }
 
 /** Called by the existing minute update scheduler, independently of app updates. */
-export async function codexUpdateTick(): Promise<void> {
+export async function codexUpdateTick(requested = false): Promise<void> {
   ticker ??= createCodexUpdateTicker({
     clockFile: statePath("codex-update-clock.json"), now: Date.now, current, report: reportCodexUpdate,
-    update: async () => {
+    hasPending: () => {
+      const binary = codexAccountBinary();
+      return process.env.LLV_DOCKER_NSENTER_SHIMS !== "1" && process.platform !== "win32"
+        && path.isAbsolute(binary) && hasPendingCodexUpdate(binary);
+    },
+    update: async request => {
       const binary = codexAccountBinary();
       if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || process.platform === "win32" || !path.isAbsolute(binary)) {
         throw new Error("install location unsupported");
@@ -44,9 +49,17 @@ export async function codexUpdateTick(): Promise<void> {
       try {
         const bun = process.versions.bun ? process.execPath : process.env.LLV_BUN_EXECUTABLE || "bun";
         await updateCodex(binary, productionUpdatePorts({ bun, probeFile, scratch, current, report: reportCodexUpdate,
-          versionsDirectory: path.join(updateDirectory(binary), "versions") }));
+          versionsDirectory: path.join(updateDirectory(binary), "versions") }), false, request);
       } finally { await fs.promises.rm(scratch, { recursive: true, force: true }); }
     },
   });
-  await withViewerOperation("codex.cli-update", ticker);
+  await withViewerOperation("codex.cli-update", () => ticker!(requested));
+}
+
+/** An authenticated host request enters the same coalesced serving job. It
+ * bypasses the daily wait; all compatibility, custody and idle gates remain. */
+export function requestCodexUpdate(): boolean {
+  if (!current()) return false;
+  void codexUpdateTick(true).catch(() => console.error("[codex update] requested check could not complete; retained state will retry"));
+  return true;
 }

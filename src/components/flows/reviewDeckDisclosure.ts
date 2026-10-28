@@ -1,4 +1,4 @@
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 
 /*
  * Deck disclosure model (#289 + #325): whether a review-round deck renders

@@ -114,6 +114,7 @@ type FileIdentityRow = {
   mtime_ms: number;
   project: string;
   engine: string;
+  messages_count: number;
 };
 
 /** One matched message as the ranking pass reads it: `values()` tuples,
@@ -204,6 +205,8 @@ function migrateSearchSchema(db: Database): void {
       db.exec("ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL");
     }
     if (currentVersion < 4) {
+      // Table replacement invalidates its old descriptor checkpoint as well.
+      db.exec("DROP TABLE IF EXISTS transcript_checkpoints");
       db.exec(`
         ALTER TABLE transcript_messages RENAME TO transcript_messages_previous;
         ALTER TABLE transcript_files RENAME TO transcript_files_previous;
@@ -317,6 +320,17 @@ function openWriterDatabase(): Database {
       );
     `);
     migrateSearchSchema(db);
+    db.exec(`CREATE TABLE IF NOT EXISTS transcript_checkpoints (
+      path TEXT PRIMARY KEY REFERENCES transcript_files(path) ON DELETE CASCADE,
+      identity TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      mtime_ms REAL NOT NULL,
+      file_mtime_ms REAL NOT NULL,
+      ctime_ms REAL NOT NULL,
+      engine TEXT NOT NULL,
+      messages_count INTEGER NOT NULL,
+      cursor TEXT NOT NULL
+    )`);
     transcriptPathIndex.install(db, path.dirname(filename));
     if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transcript_messages").get()!.n === 0) {
       /* Empty fresh indexes are cheap to create before the first indexing pass. */
@@ -523,16 +537,19 @@ function messageFromRecord(
   };
 }
 
-async function* transcriptLines(pathname: string): AsyncGenerator<{ bytes: Buffer; byteOffset: number; lineNumber: number }> {
+async function* transcriptLines(
+  pathname: string, file: fs.promises.FileHandle, size: number, cursor: TranscriptCheckpoint,
+): AsyncGenerator<{ bytes: Buffer; byteOffset: number; lineNumber: number; nextOffset?: number }> {
   let fragments: Buffer[] = [];
   let fragmentBytes = 0;
-  let lineOffset = 0;
-  let lineNumber = 1;
-  let streamOffset = 0;
-  for await (const chunk of fs.createReadStream(pathname)) {
+  let lineOffset = cursor.byteOffset;
+  let lineNumber = cursor.lineNumber;
+  let streamOffset = cursor.byteOffset;
+  if (streamOffset >= size) return;
+  for await (const chunk of fs.createReadStream(pathname, { fd: file, autoClose: false, start: streamOffset, end: size - 1 })) {
     const lines = performanceSpans.sync("transcript.index", () => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const rows: Array<{ bytes: Buffer; byteOffset: number; lineNumber: number }> = [];
+      const rows: Array<{ bytes: Buffer; byteOffset: number; lineNumber: number; nextOffset: number }> = [];
       let start = 0;
       while (true) {
         const newline = bytes.indexOf(0x0a, start);
@@ -543,7 +560,7 @@ async function* transcriptLines(pathname: string): AsyncGenerator<{ bytes: Buffe
           ? Buffer.concat(tail.length ? [...fragments, tail] : fragments, totalBytes)
           : tail;
         const line = combined.at(-1) === 0x0d ? combined.subarray(0, -1) : combined;
-        rows.push({ bytes: line, byteOffset: lineOffset, lineNumber });
+        rows.push({ bytes: line, byteOffset: lineOffset, lineNumber, nextOffset: streamOffset + newline + 1 });
         lineNumber += 1;
         fragments = [];
         fragmentBytes = 0;
@@ -569,11 +586,12 @@ async function* transcriptLines(pathname: string): AsyncGenerator<{ bytes: Buffe
   }
 }
 
-async function* readTranscriptMessages(source: TranscriptIndexSource): AsyncGenerator<ParsedTranscriptMessage> {
-  type RecentMessage = { representation: "response" | "event" | "copilot"; timestamp: number | null; lineNumber: number };
-  const recent = new Map<string, RecentMessage>();
-  const recentOrder: Array<{ key: string; message: RecentMessage }> = [];
-  for await (const line of transcriptLines(source.path)) {
+async function* readTranscriptMessages(
+  source: TranscriptIndexSource, file: fs.promises.FileHandle, cursor: TranscriptCheckpoint,
+): AsyncGenerator<ParsedTranscriptMessage> {
+  const recentOrder = [...cursor.recent];
+  const recent = new Map(recentOrder.map(entry => [entry.key, entry.message]));
+  for await (const line of transcriptLines(source.path, file, source.size, cursor)) {
     const indexed = performanceSpans.sync("transcript.index", () => {
       if (!line.bytes.length) return null;
       let parsed: unknown;
@@ -585,7 +603,7 @@ async function* readTranscriptMessages(source: TranscriptIndexSource): AsyncGene
       const message = messageFromRecord(record(parsed) ?? {}, source, line.byteOffset, line.lineNumber);
       if (!message) return null;
       if (message.representation !== "claude") {
-        const key = `${message.speaker}\0${message.body}`;
+        const key = crypto.createHash("sha256").update(`${message.speaker}\0${message.body}`).digest("hex");
         const previous = recent.get(key);
         const closeInTime = previous
           && (message.timestamp !== null && previous.timestamp !== null
@@ -612,8 +630,50 @@ async function* readTranscriptMessages(source: TranscriptIndexSource): AsyncGene
         lineNumber: message.lineNumber,
       };
     });
+    if (line.nextOffset !== undefined) {
+      cursor.byteOffset = line.nextOffset;
+      cursor.lineNumber = line.lineNumber + 1;
+      cursor.messageIndex += indexed ? 1 : 0;
+      cursor.recent = [...recentOrder];
+    }
     if (indexed) yield indexed;
   }
+}
+
+type RecentMessage = { representation: "response" | "event" | "copilot"; timestamp: number | null; lineNumber: number };
+type TranscriptCheckpoint = {
+  byteOffset: number;
+  lineNumber: number;
+  messageIndex: number;
+  recent: Array<{ key: string; message: RecentMessage }>;
+};
+type CheckpointRow = {
+  identity: string; size: number; mtime_ms: number; file_mtime_ms: number; ctime_ms: number;
+  engine: string; messages_count: number; cursor: string;
+};
+
+function fileIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+
+function readCheckpoint(row: CheckpointRow | null, current: FileIdentityRow | null): TranscriptCheckpoint | null {
+  if (!row || !current || row.size !== current.size || row.mtime_ms !== current.mtime_ms
+    || row.engine !== current.engine || row.messages_count !== current.messages_count) return null;
+  try {
+    const cursor: TranscriptCheckpoint = JSON.parse(row.cursor);
+    if (!Number.isSafeInteger(cursor.byteOffset) || cursor.byteOffset < 0 || cursor.byteOffset > row.size
+      || !Number.isSafeInteger(cursor.lineNumber) || cursor.lineNumber < 1
+      || !Number.isSafeInteger(cursor.messageIndex) || cursor.messageIndex < 0 || cursor.messageIndex > current.messages_count
+      || !Array.isArray(cursor.recent) || cursor.recent.length > 8) return null;
+    for (const entry of cursor.recent) {
+      if (!entry || typeof entry.key !== "string" || !/^[a-f0-9]{64}$/.test(entry.key)
+        || !entry.message || !["response", "event", "copilot"].includes(entry.message.representation)
+        || !(entry.message.timestamp === null || Number.isFinite(entry.message.timestamp))
+        || !Number.isSafeInteger(entry.message.lineNumber) || entry.message.lineNumber < 1
+        || entry.message.lineNumber >= cursor.lineNumber) return null;
+    }
+    return cursor;
+  } catch { return null; }
 }
 
 function removeTranscript(db: Database, pathname: string): void {
@@ -628,32 +688,53 @@ export async function indexTranscriptSources(
   options: TranscriptIndexOptions = {},
 ): Promise<TranscriptIndexResult> {
   const db = performanceSpans.sync("transcript.index", openWriterDatabase);
-  const readMessages = options.readMessages ?? readTranscriptMessages;
   let filesRead = 0;
   let filesSkipped = 0;
   let messagesIndexed = 0;
   const failures: TranscriptIndexResult["failures"] = [];
   try {
     const identity = performanceSpans.sync("transcript.index", () => db.query<FileIdentityRow, [string]>(
-      "SELECT size, mtime_ms, project, engine FROM transcript_files WHERE path = ?",
+      "SELECT size, mtime_ms, project, engine, messages_count FROM transcript_files WHERE path = ?",
     ));
     const updateMetadata = performanceSpans.sync("transcript.index", () => db.query(
       "UPDATE transcript_files SET project = ?, engine = ? WHERE path = ?",
     ));
-    for (const source of sources) {
-      const current = performanceSpans.sync("transcript.index", () => identity.get(source.path));
-      if (current?.size === source.size && current.mtime_ms === source.mtimeMs) {
-        if (current.project !== source.project || current.engine !== source.engine) {
-          performanceSpans.sync("transcript.index", () => updateMetadata.run(source.project, source.engine, source.path));
-        }
-        performanceSpans.sync("transcript.index", () => { filesSkipped += 1; });
-        continue;
-      }
-      performanceSpans.sync("transcript.index", () => {
-        filesRead += 1;
-        db.exec("BEGIN IMMEDIATE");
-      });
+    for (const listedSource of sources) {
+      let file: fs.promises.FileHandle | undefined;
       try {
+        // Open and stat the descriptor we will read, rather than trusting a
+        // scanner inventory that may precede rotation or another append.
+        file = options.readMessages ? undefined : await fs.promises.open(listedSource.path, "r");
+        const stat = await file?.stat();
+        // Preserve the feed's captured file time for undated-message ordering;
+        // descriptor times independently fence the checkpoint and rewrite check.
+        const source = stat ? { ...listedSource, size: stat.size } : listedSource;
+        const current = performanceSpans.sync("transcript.index", () => identity.get(source.path));
+        const saved = performanceSpans.sync("transcript.index", () => db.query<CheckpointRow, [string]>(
+          "SELECT identity, size, mtime_ms, file_mtime_ms, ctime_ms, engine, messages_count, cursor FROM transcript_checkpoints WHERE path = ?",
+        ).get(source.path));
+        const checkpoint = stat && stat.ino !== 0 && saved?.identity === fileIdentity(stat)
+          ? readCheckpoint(saved, current) : null;
+        if (current?.size === source.size && current.mtime_ms === source.mtimeMs && current.engine === source.engine
+          && (!stat || (checkpoint && saved?.file_mtime_ms === stat.mtimeMs && saved.ctime_ms === stat.ctimeMs))) {
+          if (current.project !== source.project) {
+            performanceSpans.sync("transcript.index", () => updateMetadata.run(source.project, source.engine, source.path));
+          }
+          filesSkipped += 1;
+          continue;
+        }
+        // Same-file growth assumes the already-written prefix is unchanged:
+        // agent transcripts are append-only. Combined rewrite plus growth
+        // between scans is excluded from this guarantee. Truncation, rotation,
+        // engine changes and same-size rewrites rebuild from byte zero.
+        const incremental = !!(checkpoint && current && source.size > current.size && current.engine === source.engine);
+        const cursor: TranscriptCheckpoint = incremental ? checkpoint! : { byteOffset: 0, lineNumber: 1, messageIndex: 0, recent: [] };
+        const startMessageIndex = cursor.messageIndex;
+        const readMessages = options.readMessages ?? ((input: TranscriptIndexSource) => readTranscriptMessages(input, file!, cursor));
+        performanceSpans.sync("transcript.index", () => {
+          filesRead += 1;
+          db.exec("BEGIN IMMEDIATE");
+        });
         // Retain unchanged rows when a transcript grows: their IDs and undated
         // fallback times belong to existing paging snapshots. New IDs never reuse
         // deleted IDs, including after a complete prune of the index.
@@ -671,7 +752,7 @@ export async function indexTranscriptSources(
           INSERT INTO transcript_messages(id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `));
-        let messageIndex = 0;
+        let messageIndex = startMessageIndex;
         for await (const message of readMessages(source)) {
           performanceSpans.sync("transcript.index", () => {
             const prior = existing.get(source.path, messageIndex);
@@ -693,6 +774,27 @@ export async function indexTranscriptSources(
             messageIndex += 1;
           });
         }
+        if (file && stat) {
+          const after = await file.stat();
+          const named = await fs.promises.stat(source.path);
+          if ([after, named].some(current => fileIdentity(current) !== fileIdentity(stat)
+            || current.size < stat.size || (current.size === stat.size
+              && (current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs)))) {
+            throw new Error("Transcript changed while indexing; the next scan will retry");
+          }
+          // A concurrent append is beyond the bounded descriptor read; commit
+          // this snapshot's size so the next pass consumes those later bytes.
+          performanceSpans.sync("transcript.index", () => db.query(`
+            INSERT INTO transcript_checkpoints(path, identity, size, mtime_ms, file_mtime_ms, ctime_ms, engine, messages_count, cursor)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET identity = excluded.identity, size = excluded.size,
+              mtime_ms = excluded.mtime_ms, file_mtime_ms = excluded.file_mtime_ms,
+              ctime_ms = excluded.ctime_ms, engine = excluded.engine,
+              messages_count = excluded.messages_count, cursor = excluded.cursor
+          `).run(source.path, fileIdentity(stat), stat.size, source.mtimeMs, stat.mtimeMs, stat.ctimeMs, source.engine, messageIndex, JSON.stringify(cursor)));
+        } else {
+          db.query("DELETE FROM transcript_checkpoints WHERE path = ?").run(source.path);
+        }
         performanceSpans.sync("transcript.index", () => db.query(`DELETE FROM transcript_messages_fts WHERE rowid IN (
           SELECT id FROM transcript_messages WHERE transcript_path = ? AND message_index >= ?
         )`).run(source.path, messageIndex));
@@ -701,14 +803,16 @@ export async function indexTranscriptSources(
           db.query("UPDATE transcript_search_sequence SET last_id = ? WHERE singleton = 1").run(lastId);
           db.query("UPDATE transcript_files SET messages_count = ? WHERE path = ?").run(messageIndex, source.path);
           db.exec("COMMIT");
-          messagesIndexed += messageIndex;
+          messagesIndexed += messageIndex - startMessageIndex;
         });
       } catch (error) {
         performanceSpans.sync("transcript.index", () => { try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ } });
         failures.push({
-          path: source.path,
+          path: listedSource.path,
           error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        await file?.close();
       }
     }
     if (options.complete) {

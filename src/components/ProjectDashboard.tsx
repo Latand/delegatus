@@ -15,7 +15,7 @@ import { ProjectAccounts } from "@/components/ProjectAccounts";
 import { projectTitle } from "@/lib/displayNames";
 import { cachedProjectName } from "@/lib/client/projectNameCache";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -35,6 +35,7 @@ import { seatOnlyTask, type SeatRefs } from "@/lib/tasks/groupHide";
 import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumbent";
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
+import { openProjectReviewHistory } from "./flows/ReviewHistory";
 import { isDirectReviewFlow } from "./flows/directReviewGroups";
 import { claimedReviewerDescendantPaths, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
 import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
@@ -73,6 +74,7 @@ import { topScreen, useMobileNav, useMobileNavStore, type MobileScreen, type Mob
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
+import { useStableCallback } from "./kanban/useStableCallback";
 import { KanbanBoard, type BarTrailExtra } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
@@ -765,7 +767,7 @@ function ProjectDashboardView({
          never force a quiet reviewed conversation back onto the board just to
          host its deck. Its deck still renders whenever the reviewed conversation
          is on the board for its own reasons. */
-      if (isDirectReviewFlow(flow) && flow.state !== "reviewing") continue;
+      if (!isDirectReviewFlow(flow) || flow.state !== "reviewing") continue;
       paths.add(flow.implementerPath);
     }
     return paths;
@@ -1448,6 +1450,7 @@ function ProjectDashboardView({
     if (closed) markConversationSeen(closed);
     applyClose(path);
   };
+  const closeConversation = useStableCallback((file: FileEntry) => closeNode(file.path));
 
   /* Latest manual list behind a ref so the convergence effect below reads
      current board state without re-running on every prefs change. */
@@ -1979,6 +1982,7 @@ function ProjectDashboardView({
       { kind: "row", key: "new-pipeline", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newPipeline"), onSelect: () => { mobileNav.closeSheet(); setTemplatePickerOpen(true); } },
     ];
     const entries: MobileMenuEntry[] = [
+      { kind: "row", key: "review-history", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("reviewHistory.title"), onSelect: () => { mobileNav.closeSheet(); openProjectReviewHistory(project); } },
       { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTaskCount ? t("mobile2.menu.tasksOpen", { count: openTaskCount }) : undefined, onSelect: () => openMobileTasks("list") },
       /* Every pipeline of the project (§3.1): the columns carry each one on its
          task's card, and the board's old «N pipelines» row is gone. */
@@ -2121,6 +2125,11 @@ function ProjectDashboardView({
               </BarMenuGroup>
             ) : null}
             {extra ? <BarMenuGroup name="board">{extra.menuRows(close)}</BarMenuGroup> : null}
+            <BarMenuGroup name="review-history">
+              <button type="button" className={BAR_MENU_ROW} onClick={() => { close(); openProjectReviewHistory(project); }}>
+                <ListTree className="h-[15px] w-[15px]" aria-hidden /> {t("reviewHistory.title")}
+              </button>
+            </BarMenuGroup>
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
@@ -2524,7 +2533,7 @@ function ProjectDashboardView({
                 onDraftSpawned={draftSpawned}
                 onHandoff={addHandoffDraft}
                 onSpawnRetry={retryLaunch}
-                onCloseConversation={(file) => closeNode(file.path)}
+                onCloseConversation={closeConversation}
                 barLead={barLead}
                 barTrail={(fit, extra) => barTrail(fit, true, extra)}
                 recentAgents={(close, countSlot) => (

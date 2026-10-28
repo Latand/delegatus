@@ -1,4 +1,4 @@
-import { MAX_TTS_TEXT_LENGTH, isPcmTtsBackend } from "@/lib/tts";
+import { MAX_TTS_MESSAGE_LENGTH, MAX_TTS_TEXT_LENGTH, isPcmTtsBackend } from "@/lib/tts";
 
 /**
  * One synthesis unit of a spoken message (issue #1022). A chunk is an exact
@@ -43,24 +43,37 @@ function trimmedRange(source: string, start: number, end: number): { start: numb
   return to > from ? { start: from, end: to } : null;
 }
 
+/** Both boundary scans are already ordered; merge them without sorting. */
+function mergeBounds(first: number[], second: number[], end: number): number[] {
+  const bounds: number[] = [];
+  let left = 0;
+  let right = 0;
+  while (left < first.length || right < second.length) {
+    const bound = (first[left] ?? Infinity) <= (second[right] ?? Infinity) ? first[left++]! : second[right++]!;
+    if (bound !== bounds.at(-1)) bounds.push(bound);
+  }
+  if (bounds.at(-1) !== end) bounds.push(end);
+  return bounds;
+}
+
 /** Sentence-sized units, each carrying whether a blank line opened it. */
 function sentenceUnits(source: string): Unit[] {
   const units: Unit[] = [];
-  const bounds: number[] = [];
+  const sentences: number[] = [];
   SENTENCE_END.lastIndex = 0;
   for (let match = SENTENCE_END.exec(source); match; match = SENTENCE_END.exec(source)) {
-    bounds.push(match.index + match[0].length);
+    sentences.push(match.index + match[0].length);
   }
   /* A blank line ends a unit too: list items and headings carry no full stop. */
-  for (const match of source.matchAll(/\n[ \t]*\n/g)) bounds.push(match.index + match[0].length);
-  bounds.sort((a, b) => a - b);
+  const paragraphs: number[] = [];
+  for (const match of source.matchAll(/\n[ \t]*\n/g)) paragraphs.push(match.index + match[0].length);
 
   let cursor = 0;
-  for (const bound of [...bounds, source.length]) {
+  for (const bound of mergeBounds(sentences, paragraphs, source.length)) {
     if (bound <= cursor) continue;
     const range = trimmedRange(source, cursor, bound);
     if (range) {
-      units.push({ ...range, paragraph: units.length > 0 && /\n[ \t]*\n\s*$/.test(source.slice(0, range.start)) });
+      units.push({ ...range, paragraph: units.length > 0 && /\n[ \t]*\n/.test(source.slice(units.at(-1)!.end, range.start)) });
     }
     cursor = bound;
   }
@@ -83,8 +96,8 @@ function splitOnWhitespace(source: string, start: number, end: number, limit: nu
     if (cut < 0) {
       /* No whitespace inside the window: take the whole token up to the next
          space so the word survives intact. */
-      const next = source.slice(from).search(/\s/);
-      cut = next < 0 ? end : from + next;
+      cut = from + 1;
+      while (cut < end && !/\s/.test(source[cut]!)) cut += 1;
     }
     const piece = trimmedRange(source, from, cut);
     if (piece) pieces.push(piece);
@@ -100,8 +113,11 @@ function splitOnWhitespace(source: string, start: number, end: number, limit: nu
  * Splits a message into synthesis chunks on paragraph and sentence boundaries.
  * A message that already fits in one chunk comes back as exactly one chunk, so
  * short answers keep the single-request behaviour they have always had.
+ * Messages beyond the read-aloud limit produce no chunks. Check the raw UTF-16
+ * length before trimming, segmentation or any text-sized copy.
  */
 export function chunkSpeech(source: string, policy?: { backend: string; language?: string }): SpeechChunk[] {
+  if (source.length > MAX_TTS_MESSAGE_LENGTH) return [];
   if (isPcmTtsBackend(policy?.backend)) return sonioxChunks(source, policy?.language);
   const whole = trimmedRange(source, 0, source.length);
   if (!whole) return [];
@@ -146,32 +162,47 @@ export function chunkSpeech(source: string, policy?: { backend: string; language
   return chunks;
 }
 
+/** Advance at most `limit` Unicode codepoints, keeping UTF-16 source offsets. */
+function codePointEnd(source: string, start: number, end: number, limit: number): number {
+  let cursor = start;
+  for (let count = 0; cursor < end && count < limit; count += 1) {
+    cursor += source.codePointAt(cursor)! > 0xffff ? 2 : 1;
+  }
+  return Math.min(cursor, end);
+}
+
 /** Fast Soniox requests retain UTF-16 source offsets while sizing Unicode
  * codepoints. Sentence boundaries also honor list/paragraph breaks. */
 function sonioxChunks(source: string, language = "en"): SpeechChunk[] {
-  const bounds = new Set<number>([source.length]);
+  const sentences: number[] = [];
   if (typeof Intl.Segmenter === "function") {
     let segmenter: Intl.Segmenter;
     try { segmenter = new Intl.Segmenter(language, { granularity: "sentence" }); }
     catch { segmenter = new Intl.Segmenter("en", { granularity: "sentence" }); }
+    let contentEnd = 0;
     for (const part of segmenter.segment(source)) {
       const end = part.index + part.segment.length;
-      if (end < source.length && /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|e\.g|i\.e|etc|vs)\.\s*$/i.test(source.slice(0, end))) continue;
-      bounds.add(end);
+      let tail = end;
+      while (tail > part.index && /\s/.test(source[tail - 1]!)) tail -= 1;
+      if (tail > part.index) contentEnd = tail;
+      // Include a preceding character so the word boundary stays meaningful.
+      if (end < source.length && /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|e\.g|i\.e|etc|vs)\.$/i.test(source.slice(Math.max(0, contentEnd - 6), contentEnd))) continue;
+      sentences.push(end);
     }
   } else {
     for (const match of source.matchAll(/[.!?…]["'”’)\]]*(?=\s|$)/g)) {
-      const head = source.slice(0, match.index);
+      const head = source.slice(Math.max(0, match.index - 6), match.index);
       if (match[0] === "." && /(?:\b(?:Mr|Mrs|Ms|Dr|Prof|e\.g|i\.e)|\b[A-Z])$/i.test(head)) continue;
-      bounds.add(match.index + match[0].length);
+      sentences.push(match.index + match[0].length);
     }
   }
-  for (const match of source.matchAll(/\n+/g)) bounds.add(match.index + match[0].length);
+  const lines: number[] = [];
+  for (const match of source.matchAll(/\n+/g)) lines.push(match.index + match[0].length);
   const units: Unit[] = [];
   let cursor = 0;
-  for (const bound of [...bounds].sort((a, b) => a - b)) {
+  for (const bound of mergeBounds(sentences, lines, source.length)) {
     const range = trimmedRange(source, cursor, bound);
-    if (range) units.push({ ...range, paragraph: /\n/.test(source.slice(cursor, range.start)) || /\n/.test(source.slice(units.at(-1)?.end ?? 0, range.start)) });
+    if (range) units.push({ ...range, paragraph: /\n/.test(source.slice(units.at(-1)?.end ?? 0, range.start)) });
     cursor = bound;
   }
   const chunks: SpeechChunk[] = [];
@@ -185,12 +216,10 @@ function sonioxChunks(source: string, language = "en"): SpeechChunk[] {
     let from = unit.start;
     while (from < unit.end) {
       const limit = chunks.length === 0 ? 160 : 360;
-      if (open && (unit.paragraph || open.units === 3 || [...source.slice(open.start, unit.end)].length > limit)) flush();
+      if (open && (unit.paragraph || open.units === 3 || codePointEnd(source, open.start, unit.end, limit) < unit.end)) flush();
       const cap = chunks.length === 0 ? 160 : 360;
-      const points = [...source.slice(from, unit.end)];
-      let to = unit.end;
-      if (points.length > cap) {
-        to = from + points.slice(0, cap).join("").length;
+      let to = codePointEnd(source, from, unit.end, cap);
+      if (to < unit.end) {
         const window = source.slice(from, to);
         const spaces = [...window.matchAll(/\s+/g)];
         const space = spaces.at(-1);

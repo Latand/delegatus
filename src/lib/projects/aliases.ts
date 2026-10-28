@@ -65,7 +65,7 @@ function withRecoveredAliases(legacy: ProjectAliasSnapshot): ProjectAliasSnapsho
 function resolveAlias(project: string, aliases: Readonly<Record<string, string>>): string {
   let current = project;
   const seen = new Set<string>();
-  while (aliases[current] && !seen.has(current)) {
+  while (Object.hasOwn(aliases, current) && aliases[current] && !seen.has(current)) {
     seen.add(current);
     current = aliases[current]!;
   }
@@ -319,7 +319,8 @@ export function isRemoteRepositoryIdentity(identity: Pick<RepositoryProjectIdent
 
 /** The remote this machine saw behind a repository id, or null. */
 export function recordedProjectRemote(project: string): string | null {
-  return readRemotes()[project] ?? null;
+  const remotes = readRemotes();
+  return Object.hasOwn(remotes, project) ? remotes[project]! : null;
 }
 
 /** Known remote identities, for the operator's linked-project chooser. */
