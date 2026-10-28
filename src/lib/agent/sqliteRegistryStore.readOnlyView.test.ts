@@ -187,6 +187,52 @@ test("a retained archived collection keeps its retired reader alive after its ro
   expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
 }, 30_000);
 
+test.skipIf(process.platform !== "linux")("retired prepared readers release their connections after peer writes", async () => {
+  const { open, kept, filename } = fixture();
+  const reader = open();
+  const writer = open();
+  const handles = () => fs.readdirSync("/proc/self/fd").filter(fd => {
+    try { return fs.readlinkSync(`/proc/self/fd/${fd}`) === filename; } catch { return false; }
+  }).length;
+  const collect = async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 1));
+    Bun.gc(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  };
+  await reader.prepareReadOnlySnapshot();
+  const baseline = handles();
+  for (let index = 0; index < 3; index++) {
+    // The second mutable snapshot installs the writer snapshot cache on the
+    // prepared reader; that cache must not pin a retired view either.
+    reader.snapshot();
+    reader.snapshot();
+    writer.mutate(file => { file.receipts[kept]!.error = `peer-write-${index}`; }, false);
+    await reader.prepareReadOnlySnapshot();
+    await collect();
+  }
+  // The async call's most recent view may still be held until its job ends.
+  // Earlier generations must all release their connections.
+  const deadline = performance.now() + 5_000;
+  do { await collect(); } while (handles() > baseline + 1 && performance.now() < deadline);
+  expect(handles()).toBeLessThanOrEqual(baseline + 1);
+}, 30_000);
+
+test("a held mutable snapshot survives retirement of its prepared reader", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  await reader.prepareReadOnlySnapshot();
+  const held = reader.snapshot().file;
+  reader.snapshot();
+  writer.mutate(file => { file.receipts[kept]!.error = "peer updated"; }, false);
+  const refreshed = await reader.prepareReadOnlySnapshot();
+  expect(refreshed.file.receipts[kept]?.error).toBe("peer updated");
+  expect(held.receipts[kept]?.error).toBeNull();
+  held.receipts[kept]!.error = "local edit";
+  expect(held.receipts[kept]?.error).toBe("local edit");
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("peer updated");
+});
+
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
   const reads: Array<[string, number]> = [];

@@ -662,6 +662,8 @@ export interface McpRequestBindingInput {
   /** Relay admission's server-derived text and author, captured before dispatch
       so recovery verifies the actual durable payload after rotation/restart. */
   sendPayload?: { text: string; origin: MessageOrigin };
+  /** Sender outbox CAS fence carried only by a safe same-key retry. */
+  seatMessageFence?: string;
 }
 
 /** The identity persisted with a recoverable mutation's claim, before its
@@ -677,6 +679,8 @@ export interface McpRequestBinding extends McpRequestBindingInput {
   /** Local bindings use only process custody; this grants no caller authority. */
   localDispatch?: true;
   claimGeneration?: string;
+  /** Original arguments beneath a seat retry's nonce-bound storage digest. */
+  seatMessageDigest?: string;
   claimedAt: string;
 }
 
@@ -709,8 +713,8 @@ export interface McpReceiptStore {
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
   /** Drop an unsettled claim so its `clientRequestId` can be used again
       (#1766). Only a claim this call still holds — same digest, no result
-      recorded — is released; anything already settled is left exactly as it
-      is. Optional so a minimal store keeps working: without it an unadmitted
+      recorded — is released; settled claims remain durable. Fenced seat
+      retries are replaced atomically by claim. Optional so a minimal store keeps working: without it an unadmitted
       refusal is settled as before rather than silently stranding a claim. */
   release?(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean | Promise<boolean>;
 }
@@ -726,16 +730,16 @@ export interface McpRecoveryReceiptStore extends McpReceiptStore {
   lookup(key: string): McpReceiptRecord | null | Promise<McpReceiptRecord | null>;
   /** `claimed` → `dispatching`. False means the attempt was closed by someone
       else first, and the caller must not dispatch. */
-  markDispatching(key: string, digest: string): boolean | Promise<boolean>;
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): boolean | Promise<boolean>;
   /** Fill an absent orchestrator recipient once, under the original claim owner. */
   bindCreatedTarget?(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean | Promise<boolean>;
   /** `claimed` → `not-executed`, writing the terminal result. False means the
       row is no longer merely claimed (it was dispatched, or already closed). */
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean | Promise<boolean>;
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): boolean | Promise<boolean>;
   /** Writes the result only if none is recorded yet, and returns whatever the
       row holds afterwards — the first terminal answer always wins. Recovery
       may save stronger terminal evidence alongside an ordinary acceptance. */
-  settle(key: string, digest: string, result: McpToolResult, stage?: "settled" | "not-executed", recovery?: boolean): McpToolResult | Promise<McpToolResult>;
+  settle(key: string, digest: string, result: McpToolResult, stage?: "settled" | "not-executed", recovery?: boolean, expectedBinding?: McpRequestBinding): McpToolResult | Promise<McpToolResult>;
 }
 
 export function supportsMcpRecovery(store: McpReceiptStore): store is McpRecoveryReceiptStore {
@@ -746,8 +750,26 @@ export function supportsMcpRecovery(store: McpReceiptStore): store is McpRecover
     && typeof candidate.settle === "function";
 }
 
-/** A claim whose tool was already dispatched is never released: absence would
-    then be read as "nothing ran", which is exactly what it is not (#1766). */
+/** Only an atomic downstream negative fence licenses a same-key seat retry. */
+function retryableSeatFence(result: McpToolResult | null | undefined): boolean {
+  return result?.ok === false && result.toolName === "send_message_to_orchestrator"
+    && result.details?.evidence === "seat-message-admission-fence"
+    && result.details?.nextAction === "retry-same-key";
+}
+
+/** A new attempt replaces a fenced receipt under the same writer lock. Its
+ * identity remains durable across a crash before the next dispatch marker. */
+function reclaimFencedSeatClaim(receipt: Receipt | McpReceiptRecord | undefined, binding: McpRequestBinding | undefined, digest: string): boolean {
+  const held = receipt?.binding;
+  return !!receipt && !!held && !!binding && receipt.stage === "not-executed"
+    && retryableSeatFence(receipt.recoveryResult ?? receipt.result)
+    && held.toolName === "send_message_to_orchestrator" && binding.toolName === held.toolName
+    && binding.clientRequestId === held.clientRequestId && sameCaller(held.caller, binding.caller, held.toolName)
+    && !!held.target.identity?.startsWith("machine:") && JSON.stringify(binding.target) === JSON.stringify(held.target)
+    && binding.downstreamKey === held.downstreamKey && binding.seatMessageDigest === digest
+    && !!binding.seatMessageFence && binding.seatMessageFence !== held.seatMessageFence;
+}
+
 function dispatchedReceipt(receipt: Receipt): boolean {
   return receipt.stage === "dispatching";
 }
@@ -760,9 +782,30 @@ function reclaimLocalClaim(receipt: Pick<McpReceiptRecord, "binding" | "stage" |
     && processIdentityProvenDead(receipt.binding.owner);
 }
 
+/** All older writers already compare this field before changing a receipt.
+ * Rotating it fences their late answers too; current readers compare args. */
+function receiptStoreDigest(digest: string, binding?: McpRequestBinding): string {
+  if (binding?.seatMessageDigest === undefined) return digest;
+  if (binding.toolName !== "send_message_to_orchestrator" || !binding.seatMessageFence || !/^[a-f0-9-]{36}$/.test(binding.seatMessageFence)
+    || !/^[a-f0-9]{64}$/.test(binding.seatMessageDigest)) throw new Error("invalid seat retry digest binding");
+  return crypto.createHash("sha256").update(`seat-retry\0${digest}\0${binding.seatMessageFence}`).digest("hex");
+}
+
+function logicalReceiptDigest(receipt: Pick<Receipt, "digest" | "binding">): string {
+  const digest = receipt.binding?.seatMessageDigest;
+  if (digest === undefined) return receipt.digest;
+  if (receiptStoreDigest(digest, receipt.binding) !== receipt.digest) throw new Error("invalid seat retry receipt digest");
+  return digest;
+}
+
+function claimReceiptDigest(digest: string, binding?: McpRequestBinding): string {
+  if (binding?.seatMessageDigest !== undefined && binding.seatMessageDigest !== digest) throw new Error("seat retry arguments contradict the binding");
+  return receiptStoreDigest(digest, binding);
+}
+
 function recordOf(receipt: Receipt): McpReceiptRecord {
   return {
-    digest: receipt.digest,
+    digest: logicalReceiptDigest(receipt),
     result: receipt.result ?? null,
     ...(receipt.recoveryResult ? { recoveryResult: receipt.recoveryResult } : {}),
     binding: receipt.binding ?? null,
@@ -774,7 +817,7 @@ function terminalReceiptResult(result: McpToolResult | null | undefined): result
   return Boolean(result && (result.ok
     ? result.outcome === "settled" || result.settled === true
       || (result.toolName === "spawn_agent" && result.state === "settled")
-    : result.details?.outcome === "settled" || result.details?.outcome === "not-executed"));
+    : result.details?.outcome === "settled" || result.details?.outcome === "not-executed" || result.details?.outcome === "history-expired"));
 }
 
 function receiptSettlement(
@@ -800,12 +843,12 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     beforeClaim?.();
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest === digest && reclaimLocalClaim(receipt, binding)) {
-      this.receipts.set(key, { digest, ...(binding ? { binding, stage: "claimed" } : {}) });
+    if (!receipt || logicalReceiptDigest(receipt) === digest && (reclaimLocalClaim(receipt, binding) || reclaimFencedSeatClaim(receipt, binding, digest))) {
+      this.receipts.set(key, { digest: claimReceiptDigest(digest, binding), ...(binding ? { binding, stage: "claimed" } : {}) });
       return { kind: "fresh" };
     }
     const record = recordOf(receipt);
-    if (receipt.digest !== digest) return { kind: "conflict", record };
+    if (record.digest !== digest) return { kind: "conflict", record };
     return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
   }
 
@@ -817,8 +860,8 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
 
   release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.result
-      || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, unadmittedBinding) || receipt.result || receipt.recoveryResult
+      || (unadmittedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
       || (dispatchedReceipt(receipt)
       && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
     this.receipts.delete(key);
@@ -830,9 +873,10 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return receipt ? recordOf(receipt) : null;
   }
 
-  markDispatching(key: string, digest: string): boolean {
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result) return false;
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding) || receipt.stage !== "claimed" || receipt.result) return false;
+    if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) return false;
     this.receipts.set(key, { ...receipt, stage: "dispatching" });
     return true;
   }
@@ -845,16 +889,18 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return true;
   }
 
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result) return false;
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding) || receipt.stage !== "claimed" || receipt.result) return false;
+    if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) return false;
     this.receipts.set(key, { ...receipt, result, stage: "not-executed" });
     return true;
   }
 
-  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false): McpToolResult {
+  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false, expectedBinding?: McpRequestBinding): McpToolResult {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding)) throw new Error("MCP receipt ownership changed");
+    if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) throw new Error("MCP receipt attempt changed");
     const settled = receiptSettlement(receipt, result, stage, recovery);
     this.receipts.set(key, settled.receipt);
     return settled.result;
@@ -989,6 +1035,10 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)
     || (owner.bootEpoch !== undefined && !nullableString(owner.bootEpoch))) return false;
   if (value.localDispatch !== undefined && value.localDispatch !== true) return false;
+  if (value.seatMessageFence !== undefined && (typeof value.seatMessageFence !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.seatMessageFence)
+    || value.toolName !== "send_message_to_orchestrator" || !target.identity?.startsWith("machine:"))) return false;
+  if (value.seatMessageDigest !== undefined && (typeof value.seatMessageDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.seatMessageDigest)
+    || !value.seatMessageFence || value.toolName !== "send_message_to_orchestrator")) return false;
   if (value.claimGeneration !== undefined && (typeof value.claimGeneration !== "string" || !value.claimGeneration)) return false;
   return true;
 }
@@ -1665,13 +1715,13 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
       beforeClaim?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (receipt && !(receipt.digest === digest && reclaimLocalClaim(receipt, binding))) {
+      if (receipt && !(logicalReceiptDigest(receipt) === digest && (reclaimLocalClaim(receipt, binding) || reclaimFencedSeatClaim(receipt, binding, digest)))) {
         const record = recordOf(receipt);
-        if (receipt.digest !== digest) return { kind: "conflict", record };
+        if (record.digest !== digest) return { kind: "conflict", record };
         return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
       }
       const target = retention === "durable" ? state.mutationReceipts : state.readReceipts;
-      target[key] = { digest, ...(binding ? { binding, stage: "claimed" as const } : {}) };
+      target[key] = { digest: claimReceiptDigest(digest, binding), ...(binding ? { binding, stage: "claimed" as const } : {}) };
       const keys = Object.keys(state.readReceipts);
       for (const expired of keys.slice(0, Math.max(0, keys.length - FILE_RECEIPT_CAP))) delete state.readReceipts[expired];
       writeReceiptFile(this.filePath, state);
@@ -1701,8 +1751,8 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest || receipt.result
-        || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+      if (!receipt || receipt.digest !== receiptStoreDigest(digest, unadmittedBinding) || receipt.result || receipt.recoveryResult
+        || (unadmittedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
         || (dispatchedReceipt(receipt)
         && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
       delete state.mutationReceipts[key];
@@ -1738,25 +1788,28 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
-  markDispatching(key: string, digest: string): Promise<boolean> {
-    return this.transition(key, digest, (receipt) =>
-      receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, stage: "dispatching" } : null);
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): Promise<boolean> {
+    return this.transition(key, receiptStoreDigest(digest, expectedBinding), (receipt) =>
+      receipt && receipt.stage === "claimed" && !receipt.result
+        && (!expectedBinding || JSON.stringify(receipt.binding) === JSON.stringify(expectedBinding)) ? { ...receipt, stage: "dispatching" } : null);
   }
 
   bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): Promise<boolean> {
     return this.transition(key, digest, (receipt) => withCreatedTarget(receipt, binding, identity));
   }
 
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): Promise<boolean> {
-    return this.transition(key, digest, (receipt) =>
-      receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, result, stage: "not-executed" } : null);
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): Promise<boolean> {
+    return this.transition(key, receiptStoreDigest(digest, expectedBinding), (receipt) =>
+      receipt && receipt.stage === "claimed" && !receipt.result
+        && (!expectedBinding || JSON.stringify(receipt.binding) === JSON.stringify(expectedBinding)) ? { ...receipt, result, stage: "not-executed" } : null);
   }
 
-  async settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false): Promise<McpToolResult> {
+  async settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false, expectedBinding?: McpRequestBinding): Promise<McpToolResult> {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
+      if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding)) throw new Error("MCP receipt ownership changed");
+      if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) throw new Error("MCP receipt attempt changed");
       const settled = receiptSettlement(receipt, result, stage, recovery);
       if (settled.receipt !== receipt) {
         delete state.readReceipts[key];
@@ -1906,19 +1959,18 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       const now = this.now();
       this.pruneBoundedReceipts(now);
       const receipt = this.selectRow(key);
-      if (receipt && binding?.localDispatch === true && receipt.digest === digest
-        && receipt.stage === "claimed" && receipt.result_json === null
-        && reclaimLocalClaim(this.recordOfRow(key, receipt), binding)) {
+      if (receipt && binding && this.recordOfRow(key, receipt).digest === digest
+        && (reclaimLocalClaim(this.recordOfRow(key, receipt), binding) || reclaimFencedSeatClaim(this.recordOfRow(key, receipt), binding, digest))) {
         const bindingJson = JSON.stringify(binding);
-        this.db.query("UPDATE mcp_receipts SET binding_json = ?, claimed_at = ?, storage_bytes = ? WHERE receipt_key = ?")
-          .run(bindingJson, now, this.storageBytes(key, digest, null, bindingJson), key);
+        this.db.query("UPDATE mcp_receipts SET digest = ?, binding_json = ?, claimed_at = ?, storage_bytes = ?, result_json = NULL, recovery_result_json = NULL, stage = 'claimed' WHERE receipt_key = ?")
+          .run(claimReceiptDigest(digest, binding), bindingJson, now, this.storageBytes(key, digest, null, bindingJson), key);
         this.db.exec("COMMIT");
         return { kind: "fresh" };
       }
       if (receipt) {
         this.db.exec("COMMIT");
         const record = this.recordOfRow(key, receipt);
-        if (receipt.digest !== digest) return { kind: "conflict", record };
+        if (record.digest !== digest) return { kind: "conflict", record };
         if (receipt.result_json === null) {
           return { kind: "pending", unfinishedAgeMs: Math.max(0, now - receipt.claimed_at), record };
         }
@@ -1929,7 +1981,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       this.db.query<unknown, [string, string, ReceiptRetention, number, number, string | null, string | null]>(`
         INSERT INTO mcp_receipts(receipt_key, digest, retention, result_json, storage_bytes, claimed_at, binding_json, stage)
         VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
-      `).run(key, digest, retention, storageBytes, now, bindingJson, binding ? "claimed" : null);
+      `).run(key, claimReceiptDigest(digest, binding), retention, storageBytes, now, bindingJson, binding ? "claimed" : null);
       this.pruneBoundedReceipts(now);
       this.db.exec("COMMIT");
       return { kind: "fresh" };
@@ -1972,9 +2024,9 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
         FROM mcp_receipts
         WHERE receipt_key = ?
       `).get(key);
-      const releasable = Boolean(receipt) && receipt!.digest === digest
+      const releasable = Boolean(receipt) && receipt!.digest === receiptStoreDigest(digest, unadmittedBinding)
         && receipt!.result_json === null && receipt!.recovery_result_json === null
-        && (unadmittedBinding?.localDispatch !== true || receipt!.binding_json === JSON.stringify(unadmittedBinding))
+        && (!unadmittedBinding || receipt!.binding_json === JSON.stringify(unadmittedBinding))
         && (receipt!.stage !== "dispatching" || (!!unadmittedBinding && receipt!.binding_json === JSON.stringify(unadmittedBinding)));
       if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
       this.db.exec("COMMIT");
@@ -1990,12 +2042,13 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     return receipt ? this.recordOfRow(key, receipt) : null;
   }
 
-  markDispatching(key: string, digest: string): boolean {
-    return this.db.query<unknown, [string, string]>(`
-      UPDATE mcp_receipts
-      SET stage = 'dispatching'
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): boolean {
+    const bindingJson = expectedBinding ? JSON.stringify(expectedBinding) : null;
+    return this.db.query<unknown, [string, string, string | null, string | null]>(`
+      UPDATE mcp_receipts SET stage = 'dispatching'
       WHERE receipt_key = ? AND digest = ? AND stage = 'claimed' AND result_json IS NULL
-    `).run(key, digest).changes === 1;
+        AND (? IS NULL OR binding_json = ?)
+    `).run(key, receiptStoreDigest(digest, expectedBinding), bindingJson, bindingJson).changes === 1;
   }
 
   bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean {
@@ -2020,12 +2073,13 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): boolean {
     const resultJson = JSON.stringify(result);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const receipt = this.selectRow(key);
-      if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result_json !== null) {
+      if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding) || receipt.stage !== "claimed" || receipt.result_json !== null
+        || (expectedBinding && receipt.binding_json !== JSON.stringify(expectedBinding))) {
         this.db.exec("COMMIT");
         return false;
       }
@@ -2042,12 +2096,13 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false): McpToolResult {
+  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false, expectedBinding?: McpRequestBinding): McpToolResult {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const row = this.selectRow(key);
-      if (!row || row.digest !== digest) throw new Error("MCP receipt ownership changed");
+      if (!row || row.digest !== receiptStoreDigest(digest, expectedBinding)) throw new Error("MCP receipt ownership changed");
       const record = this.recordOfRow(key, row);
+      if (expectedBinding && JSON.stringify(record.binding) !== JSON.stringify(expectedBinding)) throw new Error("MCP receipt attempt changed");
       const receipt: Receipt = {
         digest, ...(record.result ? { result: record.result } : {}),
         ...(record.recoveryResult ? { recoveryResult: record.recoveryResult } : {}),
@@ -2096,7 +2151,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     const recoveryResult = receipt.recovery_result_json === null ? null : this.parseResult(key, receipt.recovery_result_json);
     if (recoveryResult && !terminalReceiptResult(recoveryResult)) throw new Error("invalid MCP terminal recovery result");
     return {
-      digest: receipt.digest,
+      digest: logicalReceiptDigest({ digest: receipt.digest, binding: binding ?? undefined }),
       ...(recoveryResult ? { recoveryResult } : {}),
       result: receipt.result_json === null ? null : this.parseResult(key, receipt.result_json),
       binding,
@@ -2486,14 +2541,16 @@ export interface McpToolServiceOptions {
 }
 
 /** The closed outcome vocabulary of original-key recovery (#1490). */
-export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-executed" | "unknown";
+export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-executed" | "history-expired" | "unknown";
 
 /** What a caller may do next, stated on the answer rather than implied by
     `retryable`. `original-key-lookup` is the ONLY permitted action on an
     unknown or open outcome: never a new key, never an automatic resend. */
-export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request";
+export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request" | "manual-check";
 
 export interface McpRecoveryEvidence {
+  /** A downstream admission CAS fenced this exact attempt before any effect. */
+  seatMessageFenced?: true;
   outcome: McpRecoveryOutcome;
   /** Provenance of this answer: which durable record or journal supplied it,
       or `none` when nothing was found. */
@@ -2523,9 +2580,9 @@ export interface McpRecoverableTool {
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
   /** Synchronous native session fence before claim, dispatch or disclosure. */
   currentCaller?(): McpRequestCaller;
-  /** Read-only: what the downstream durable records say about this binding.
+  /** Read downstream evidence, optionally fencing an unadmitted attempt.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
-  recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
+  recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs; fenceAdmission?: boolean }): Promise<McpRecoveryEvidence>;
 }
 
 /**
@@ -2609,6 +2666,7 @@ function stringIds(details: McpToolPayload): Record<string, string> {
 }
 
 function nextActionFor(outcome: McpRecoveryOutcome): McpRecoveryNextAction {
+  if (outcome === "history-expired") return "manual-check";
   if (outcome === "settled") return "follow-disposition";
   if (outcome === "not-executed") return "new-request-permitted";
   return "original-key-lookup";
@@ -2644,6 +2702,9 @@ function recoveryAnswer(
       replayed,
       shared,
     );
+  }
+  if (evidence.outcome === "history-expired") {
+    return failure(toolName, requestId, "history_expired", evidence.reason ?? "Check delivery manually before sending again.", false, replayed, shared);
   }
   if (evidence.outcome === "not-executed") {
     return failure(
@@ -2948,8 +3009,8 @@ export function createMcpToolService(
         };
         /* Downstream evidence that has failed to be read is unknown too, with
            the cause on the answer, and never a thrown error. */
-        const readEvidence = (bound: McpRequestBinding, legacy: boolean): Promise<McpRecoveryEvidence> =>
-          tool.recover(bound, { legacy, context, args: digestArgs }).catch((cause: unknown): McpRecoveryEvidence => ({
+        const readEvidence = (bound: McpRequestBinding, legacy: boolean, fenceAdmission = true): Promise<McpRecoveryEvidence> =>
+          tool.recover(bound, { legacy, context, args: digestArgs, ...(fenceAdmission ? {} : { fenceAdmission: false }) }).catch((cause: unknown): McpRecoveryEvidence => ({
             outcome: "unknown",
             evidence: "none",
             reason: cause instanceof Error ? cause.message : String(cause),
@@ -2972,6 +3033,7 @@ export function createMcpToolService(
           evidence: McpRecoveryEvidence,
           replayed: boolean,
           original?: McpToolResult | null,
+          evidenceBinding: McpRequestBinding = binding,
         ): Promise<McpToolResult> => {
           const refusal = sessionRefusal(); if (refusal) return refusal;
           // Read again after the evidence lookup: another process may have
@@ -3000,7 +3062,12 @@ export function createMcpToolService(
             replayed: true,
           };
           const answer = recoveryAnswer(typedTool, requestId, evidence, replayed, previous);
-          if (evidence.outcome !== "settled" && evidence.outcome !== "not-executed") return answer;
+          if (evidence.seatMessageFenced && (!current?.binding
+            || JSON.stringify(current.binding) !== JSON.stringify(evidenceBinding))) {
+            return recoveryAnswer(typedTool, requestId, { outcome: "unknown", evidence: "mcp-receipt",
+              reason: "The fenced attempt's receipt changed; look up the original key again.", ids: {} }, replayed);
+          }
+          if (evidence.outcome !== "settled" && evidence.outcome !== "not-executed" && evidence.outcome !== "history-expired") return answer;
           let stored: McpToolResult;
           try {
             stored = await store.settle(
@@ -3009,6 +3076,7 @@ export function createMcpToolService(
               answer,
               evidence.outcome === "not-executed" ? "not-executed" : "settled",
               true,
+              evidenceBinding.target.identity?.startsWith("machine:") ? evidenceBinding : undefined,
             );
           } catch {
             // A failed write can race a successful terminal recovery.
@@ -3016,6 +3084,9 @@ export function createMcpToolService(
               const current = await readableStoredResult();
               if (terminalResult(current)) return { ...current, replayed: true };
             } catch { /* The independently read evidence remains available. */ }
+            if (evidence.seatMessageFenced) return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt", reason: "The fenced attempt could not be saved; look up the original key again.", ids: {},
+            }, replayed);
             return answer;
           }
           return stored === answer ? answer : { ...stored, replayed: true };
@@ -3057,13 +3128,22 @@ export function createMcpToolService(
           // Older relay bindings omitted gateway authorship. Their cached
           // results may name another author's send and cannot license replay.
           if (typedTool === "send_message_to_orchestrator" && !recorded.sendPayload) return notPermitted();
-          if (record.recoveryResult && record.stage === "not-executed") {
+          if (record.recoveryResult && (record.stage === "not-executed"
+            || (!record.recoveryResult.ok && record.recoveryResult.details?.outcome === "history-expired"))) {
             outcome = "replay";
             return { ...record.recoveryResult, replayed: true };
           }
-          if (record.result && (!recoveryOnly || record.stage === "not-executed")) {
+          // A remote acceptance may outlive its pruned delivery history.
+          // Revalidate it so ordinary same-key replays also close on expiry.
+          const remoteAcceptance = typedTool === "send_message_to_orchestrator"
+            && recorded.target.identity?.startsWith("machine:") && record.result?.ok && !terminalResult(record.result);
+          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance) {
             outcome = "replay";
             return { ...record.result, replayed: true };
+          }
+          if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")) {
+            // The sender's fence also closes a stalled pre-dispatch owner.
+            return answerFromEvidence(await readEvidence(recorded, false), true, record.result, recorded);
           }
           if (record.stage === "claimed") {
             /* Claimed and never marked dispatching. While its owner lives the
@@ -3105,10 +3185,15 @@ export function createMcpToolService(
               ids: {},
             }, true);
           }
-          const evidence = await readEvidence(recorded, false);
+          const admitted = recorded.target.identity?.startsWith("machine:") && record.result?.ok === true && typeof record.result.operationId === "string";
+          const evidence = await readEvidence(recorded, false, !admitted);
           outcome = evidence.outcome === "unknown" ? "failure" : "replay";
-          return answerFromEvidence(evidence, true, record.result);
+          return answerFromEvidence(evidence, true, record.result, recorded);
         };
+        const retryCandidate = (record: McpReceiptRecord): boolean => !recoveryOnly && record.digest === digest
+          && !!record.binding && sameCaller(record.binding.caller, binding.caller, typedTool)
+          && record.binding.toolName === "send_message_to_orchestrator" && !!record.binding.target.identity?.startsWith("machine:")
+          && !!record.binding.target.project && record.stage === "not-executed" && retryableSeatFence(record.recoveryResult ?? record.result);
         const claimStartedAt = performance.now();
         if (tool.bindForRecovery) {
           let record: McpReceiptRecord | null;
@@ -3117,15 +3202,17 @@ export function createMcpToolService(
           } catch (cause) {
             return unreadableReceipt(cause, false);
           }
-          if (record) return recoverRecord(record);
+          if (record && !retryCandidate(record)) return recoverRecord(record);
           // An absent lookup is no admission verdict: the original may still
           // arrive. Resolve current names only when this call can admit work.
           if (!recoveryOnly) {
             try {
-              const fresh = await tool.bind(digestArgs);
+              const retry = record?.binding;
+              const fresh = await tool.bind(retry ? { ...digestArgs, machine: retry.target.identity!.slice(8), project: retry.target.project } : digestArgs);
               if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
               if (invocationProof && fresh.caller.nativeProof !== invocationProof) return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage({ reason: "session-changed", retryable: false }), false, false);
-              binding = { ...binding, ...fresh };
+              binding = { ...binding, ...fresh, ...(retry ? { downstreamKey: retry.downstreamKey } : {}),
+                ...(fresh.seatMessageFence ? { seatMessageDigest: digest } : {}) };
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
@@ -3143,7 +3230,7 @@ export function createMcpToolService(
             return unreadableReceipt(cause, false);
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
-          if (record) return recoverRecord(record);
+          if (record && !retryCandidate(record)) return recoverRecord(record);
           try {
             await tool.authorizeClaim?.(digestArgs, binding);
           } catch (error) {
@@ -3197,14 +3284,19 @@ export function createMcpToolService(
         }
         const beforeDispatch = sessionRefusal();
         if (beforeDispatch) {
-          try { await store.fenceUndispatched(key, digest, beforeDispatch); } catch { /* No dispatch; the live session is still refused. */ }
+          try {
+            if (binding.target.identity?.startsWith("machine:")) await store.fenceUndispatched(key, digest, beforeDispatch, binding);
+            else await store.fenceUndispatched(key, digest, beforeDispatch);
+          } catch { /* No dispatch; the live session is still refused. */ }
           return beforeDispatch;
         }
         /* The fence before the one dispatch. Failing here means another
            process closed the attempt between the claim and now. */
         let dispatching: boolean;
         try {
-          dispatching = await store.markDispatching(key, digest);
+          dispatching = binding.target.identity?.startsWith("machine:")
+            ? await store.markDispatching(key, digest, binding)
+            : await store.markDispatching(key, digest);
         } catch (cause) {
           /* The claim is this process's and stays `claimed`: nothing was
              dispatched, and once this process is gone the row closes as
@@ -3314,6 +3406,8 @@ export function createMcpToolService(
             digest,
             settled,
             settled.ok || settled.details?.outcome === "settled" ? "settled" : "not-executed",
+            false,
+            binding.target.identity?.startsWith("machine:") ? binding : undefined,
           );
         } catch {
           /* The answer is real whether or not the row took it: the row stays
@@ -3649,6 +3743,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
   "Recovery under the ORIGINAL `clientRequestId` (#1490): the claim is bound server-side to the calling conversation, its project, the canonical target and the exact downstream key BEFORE the one dispatch, and the request is sent exactly once — never re-POSTed after it may have reached Delegatus.",
   "Repeat the same call with the same arguments (with or without `recoveryOnly: true`) to learn what became of it. A fresh ordinary call claims and dispatches once; an existing claim is answered by READING the durable downstream record, never by dispatching again; `recoveryOnly: true` never claims an absent key or starts any work. Changed arguments under an existing key are an `idempotency_conflict`; another caller or project is refused without disclosure, and a caller whose identity the server cannot establish is refused (`caller_unidentified`) before anything is claimed or dispatched.",
   "The answer's `outcome` is closed: `accepted` (durably admitted, with its actual ids), `in-flight` (executing), `settled` (terminal, with the actual state and resend guidance), `not-executed` (the server proves dispatch never began and the attempt is permanently closed), or `unknown` (timeout, interrupted claim, an unreadable receipt record, unreadable or ambiguous evidence, or absence while execution is still possible). `nextAction` says what is permitted: on `unknown`, `accepted` and `in-flight` ONLY another lookup under the same key — `retryable` never means a new key may be used, and nothing is ever redelivered automatically. `message_receipt(operationId)` remains available for an accepted send.",
+  "A remote seat relay whose sender outbox row is absent stays unknown for up to 30 seconds from its claim. Recovery then atomically fences that admission and returns not-executed with state not-delivered, hop mcp-to-outbox, resend safe and nextAction retry-same-key. Recovery-only calls retain that answer. The next ordinary call with identical arguments and the original clientRequestId may retry; the old attempt stays fenced and all admitted copies share one peer message id.",
   "For a direct `send_message`, a refused TCP connection is retried within the call only when the kernel proves no request was sent. If every attempt is refused, the unadmitted claim is released: the answer gives `outcome: not-executed`, `evidence: not-admitted` and `nextAction: retry-same-key`, and the caller may repeat the identical call under its original key. This exception never applies after a timeout, reset, proxy error or unreadable answer, when the request may have reached Delegatus.",
 ].join(" ");
 
@@ -3753,7 +3848,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_flow: "Read one archived flow by durable id. Flows are retired; the reply grants no execution or current-head approval.",
   flow_action: "Deprecated: flows are retired. New operations refuse with FLOW_RETIRED; use pipeline run stages with review/fix edges. Replay an already accepted clientRequestId to read its original receipt without execution.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
-  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
+  conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
@@ -4488,6 +4583,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   conversation_action: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
     conversationId: z.string().optional()
       .describe("Durable Delegatus conversation id. Archive and unarchive actions expand it to every registered generation path."),
     transcriptPath: z.string().optional()
@@ -4495,7 +4591,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     selectedContext: selectedContextSchema,
     targets: z.array(conversationArchiveTargetSchema).min(1).max(100).optional()
       .describe("Archive/unarchive list form. Cannot be combined with the single-target fields."),
-    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "archive", "unarchive"]),
+    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "speed", "archive", "unarchive"]),
     key: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "Tab", "Enter", "Escape"]).optional(),
     decision: z.enum(["allow", "deny"]).optional()
       .describe("permission only: allow once or deny the structured host's pending tool permission request."),
@@ -4699,6 +4795,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   create_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier."),
     project: z.string().min(1).describe("Known project key, display name or repository name this orchestrator will own. Case and surrounding whitespace are ignored."),
     conversationId: z.string().regex(/^conversation_/).optional().describe("Existing registered conversation to adopt. Delegatus validates its project, cwd, transcript, lifecycle, and operator authority before seating it."),
     mandate: z.string().optional().describe("Edited mandate text; defaults to the approved versioned orchestrator prompt."),
@@ -4722,6 +4820,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   rotate_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier."),
     project: z.string().min(1).describe("Known project key, display name or repository name whose orchestrator seat rotates to a fresh successor. Case and surrounding whitespace are ignored."),
     mandate: z.string().optional().describe("Successor mandate. Omitted: the incumbent's own mandate when it is based on the current default version or is bespoke; the current built-in default when the incumbent's is based on an older version (get_orchestrator reports both versions)."),
     keepIncumbentMandate: z.boolean().optional().describe("Carry the incumbent's mandate forward even when it is based on an older default version. Ignored when mandate is given."),
