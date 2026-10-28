@@ -98,7 +98,14 @@ export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunn
   const declared = options.declared ?? isForgeAppRepository;
   return async (args) => {
     const target = await readRepository(args, cwd);
-    return target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args);
+    try {
+      return await (target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args));
+    } catch (error) {
+      // Preserve the runner budget alongside execFile diagnostics for callers
+      // that persist a bounded failure reason. Both credential paths use it.
+      if (error instanceof Error) Object.assign(error, { timeoutMs });
+      throw error;
+    }
   };
 }
 

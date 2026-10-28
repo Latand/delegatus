@@ -9,6 +9,7 @@ test.each([
   [new Error("HTTP 403: Resource not accessible by integration"), "authentication failed", false],
   [Object.assign(new Error("CLI needs login"), { code: 4 }), "authentication failed", false],
   [new Error("HTTP 404: Not Found"), "not found", false],
+  [new Error("authentication token not found"), "authentication failed", false],
   [new SyntaxError("Unexpected end of JSON input"), "invalid response", false],
   [null, "failed", false],
 ] as const)("classifies %s", (error, category, transient) => {
@@ -45,4 +46,22 @@ test.each([401, 403, 404, 429, 503])("status %s in a URL or PR number is not an 
 test("message-only command wrappers are stripped before classification", () => {
   expect(githubReadFailure(new Error("Command failed: gh pr view 429 --repo acme/timeout\nHTTP 401: Bad credentials")))
     .toEqual({ transient: false, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+});
+
+test.each(["timeout", "rate-limit", "authentication"])("not-found evidence precedes quoted repository %s", name => {
+  const diagnostic = `GraphQL: Could not resolve to a Repository with the name 'acme/${name}'. (repository)`;
+  expect(githubReadFailure(Object.assign(new Error("Command failed: gh"), { stderr: diagnostic })))
+    .toEqual({ transient: false, reason: `GitHub read not found: ${diagnostic}` });
+});
+
+test("timeout limit survives redaction and bounding before a long diagnostic", () => {
+  const credential = ["ghp", "x".repeat(36)].join("_");
+  const failure = Object.assign(new Error("Command failed: gh"), {
+    killed: true, signal: "SIGTERM", timeoutMs: 1234, stderr: `${credential} ${"detail ".repeat(200)}`,
+  });
+  const result = githubReadFailure(failure);
+  expect(result.reason).toStartWith("GitHub read timed out: limit 1234 ms; ");
+  expect(result.reason.length).toBeLessThanOrEqual(400);
+  expect(result.reason).not.toContain(credential);
+  expect(result.transient).toBe(true);
 });

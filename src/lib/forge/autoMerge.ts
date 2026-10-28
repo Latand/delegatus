@@ -1165,11 +1165,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       || (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")) : candidates;
     // A merge admitted while refreshes ran can now be behind an older queued
     // PR. Reconcile its landing before that PR can monopolize bounded reads.
-    // Backing-off reads hold no readiness slot; their durable due time
-    // remains authoritative even after a checks deadline or process restart.
-    const selected = readable.filter(entry => !entry.pipeline.merge!.readFailures || dueNow(entry)).sort((a, b) =>
+    // Retry work rotates by durable read time; backoff holds no readiness
+    // slot, and unresolved merge ownership retains reconciliation priority.
+    const rotateReads = candidates.some(entry => entry.pipeline.merge!.readFailures);
+    const selected = readable.filter(entry => !rotateReads || dueNow(entry)).sort((a, b) =>
       Number(b.pipeline.merge!.state === "merging" && dueNow(b))
-      - Number(a.pipeline.merge!.state === "merging" && dueNow(a))).slice(0, limit);
+      - Number(a.pipeline.merge!.state === "merging" && dueNow(a))
+      || (rotateReads ? (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "") : 0)).slice(0, limit);
     const first = candidates[0]?.pipeline;
     const firstPr = first?.merge?.prNumber;
     const queueReason = refreshOutstanding ? "waiting for merge readiness poll"

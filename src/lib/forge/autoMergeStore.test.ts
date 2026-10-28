@@ -544,6 +544,76 @@ test("transient backoff yields to a healthy follower across fresh processes and 
   expect(await run(clock + MERGE_SETTLE_MS + MERGE_POLL_MS, true)).toMatchObject({ writes: 0, merge: { state: "merged" } });
 });
 
+test("many due failures yield to a healthy follower after every process restart", async () => {
+  const count = 12;
+  const rows = Array.from({ length: count }, (_, index) => completedLane(`failed-${String(index).padStart(2, "0")}`));
+  const follower = completedLane("healthy-follower");
+  follower.closedAt = iso(T0);
+  savePipelines([...rows, follower]);
+  const script = `
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
+    const clock = Number(process.env.FIXTURE_CLOCK);
+    let merged = false;
+    const failures = [], writes = [];
+    const ports = productionAutoMergePorts({ loadPipelines, now: () => clock,
+      setting: () => ({ enabled: true, changedAt: "2026-09-25T08:00:00Z", changedBy: "operator" }),
+      pullRequestOf: lane => ({ repository: "acme/widgets", number: lane.id === "healthy-follower" ? 99 : Number(lane.id.slice(7)) + 1 }),
+      cachedState: () => null, log: () => {},
+      run: async args => {
+        if (args[0] === "pr" && args[1] === "view") {
+          if (args[2] !== "99") {
+            failures.push(Number(args[2]));
+            throw Object.assign(new Error("Command failed: gh"), { killed: true, signal: "SIGTERM" });
+          }
+          return JSON.stringify({ state: merged ? "MERGED" : "OPEN", isDraft: false,
+            headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+            statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+            mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null });
+        }
+        if (args[1]?.includes("/reviews")) return "";
+        if (args[0] === "api") return "[]";
+        if (args[0] === "repo") return '{"squashMergeAllowed":true}';
+        throw new Error("unexpected read");
+      },
+      write: async (args, repository, beforeDispatch) => {
+        beforeDispatch?.();
+        if (repository !== "acme/widgets" || args.join(" ") !== ["pr", "merge", "99", "--repo", repository, "--squash", "--match-head-commit", "a".repeat(40)].join(" ")) throw new Error("unexpected write");
+        writes.push(99); merged = true; return "";
+      },
+    });
+    await sweepAutoMerge(ports);
+    console.log(JSON.stringify({ failures, writes, rows: loadPipelines() }));
+  `;
+  let writes = 0;
+  const attempted = new Set<number>();
+  for (let minute = 0; minute < 32; minute++) {
+    const clock = T0 + minute * MERGE_POLL_MS;
+    const before = loadPipelines();
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox, FIXTURE_CLOCK: String(clock) },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expectMergeChildSuccess(code, error);
+    const result = JSON.parse(output) as { failures: number[]; writes: number[]; rows: Pipeline[] };
+    expect(result.rows).toEqual(loadPipelines());
+    for (const number of result.failures) {
+      attempted.add(number);
+      const previous = before.find(row => row.id === rows[number - 1]!.id)?.merge;
+      if (previous?.nextReadAt) expect(clock).toBeGreaterThanOrEqual(Date.parse(previous.nextReadAt));
+    }
+    writes += result.writes.length;
+  }
+  expect(attempted.size).toBe(count);
+  expect(writes).toBe(1);
+  expect(loadPipelines().find(row => row.id === follower.id)?.merge?.state).toBe("merged");
+  for (const row of loadPipelines().filter(row => row.id !== follower.id)) {
+    expect(row.merge).toMatchObject({ state: "queued", reason: expect.stringMatching(/^GitHub read timed out:/) });
+    expect(row.merge!.readFailures).toBeGreaterThan(1);
+  }
+});
+
 test("a stopped merge is stored, raises lane-merge with its two answers, and retry-merge requeues it; a merge is journaled", async () => {
   resetAutoMergeForTests();
   savePipelines([completedLane("pipe-merge")]);

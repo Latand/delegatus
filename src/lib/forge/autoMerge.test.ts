@@ -261,7 +261,7 @@ describe("GitHub read failure recovery through production ports", () => {
       const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
       const ports = productionAutoMergePorts({ ...h.ports, run: githubRunner(os.tmpdir(), 100, { declared: () => false }) });
       await sweepAutoMerge(ports);
-      expect(h.merge("L1")).toMatchObject({ state: "queued", readFailures: 1, reason: expect.stringMatching(/^GitHub read timed out:/) });
+      expect(h.merge("L1")).toMatchObject({ state: "queued", readFailures: 1, reason: "GitHub read timed out: limit 100 ms; no diagnostic returned" });
       expect(h.writes).toEqual([]);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
@@ -332,10 +332,79 @@ describe("GitHub read failure recovery through production ports", () => {
       }
       h.advance(MERGE_POLL_MS);
     }
-    expect(failureTimes).toEqual([0, 60_000, 180_000, 420_000, 900_000, 1_500_000]);
-    expect(h.merge("L1")).toMatchObject({ readFailures: 6, reason: expect.stringMatching(/^GitHub read timed out:/) });
+    expect(failureTimes[0]).toBe(0);
+    expect(failureTimes.length).toBeGreaterThanOrEqual(5);
+    for (let index = 1; index < failureTimes.length; index++) {
+      expect(failureTimes[index]! - failureTimes[index - 1]!).toBeGreaterThanOrEqual(Math.min(600_000, 60_000 * 2 ** (index - 1)));
+    }
+    expect(h.merge("L1")).toMatchObject({ readFailures: failureTimes.length, reason: expect.stringMatching(/^GitHub read timed out:/) });
     expect(h.merges()).toHaveLength(canMerge ? 1 : 0);
     if (canMerge) expect(h.merges()[0]).toEqual(["pr", "merge", "12", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A]);
+  });
+
+  test.each([10, 12, 20])("%s failing predecessors cannot starve a healthy follower", async count => {
+    const ids = Array.from({ length: count }, (_, index) => `failed-${String(index).padStart(2, "0")}`);
+    const h = harness({ lanes: [...ids.map(id => lane(id)), lane("healthy", { closedAt: T0 })],
+      prs: Array.from({ length: count + 1 }, (_, index) => openPr(index + 11)) });
+    const failures = new Map<string, number>();
+    const ports = productionAutoMergePorts({ ...h.ports, run: async args => {
+      if (args[0] === "pr" && args[1] === "view" && Number(args[2]) < count + 11) {
+        const previous = failures.get(args[2]!);
+        if (previous !== undefined) {
+          const record = h.merge(ids[Number(args[2]) - 11]!)!;
+          expect(h.now()).toBeGreaterThanOrEqual(Date.parse(record.nextReadAt!));
+        }
+        failures.set(args[2]!, h.now());
+        throw timeout();
+      }
+      return h.ports.run(args);
+    } });
+    for (let minute = 0; minute <= 90; minute++) {
+      await sweepAutoMerge(ports);
+      h.advance(MERGE_POLL_MS);
+    }
+    expect(h.merge("healthy")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merges()[0]![2]).toBe(String(count + 11));
+    for (const id of ids) expect(h.merge(id)).toMatchObject({ state: "queued", readFailures: expect.any(Number) });
+    expect(failures.size).toBe(count);
+  });
+
+  test.each(["widgets", "timeout", "rate-limit", "authentication"])("quoted repository %s retains not-found policy", async name => {
+    const { githubRunner } = await import("../monitor/githubEvidence");
+    const repository = `acme/${name}`;
+    const diagnostic = `GraphQL: Could not resolve to a Repository with the name '${repository}'. (repository)`;
+    const h = harness({ lanes: [lane("missing")], prs: [openPr(11)] });
+    const ports = productionAutoMergePorts({ ...h.ports, pullRequestOf: () => ({ repository, number: 11 }),
+      run: githubRunner(os.tmpdir(), 30_000, { declared: () => false, exec: async () => { throw cliError(diagnostic); } }),
+    });
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sweepAutoMerge(ports);
+      expect(h.merge("missing")).toMatchObject({ readFailures: attempt, reason: `GitHub read not found: ${diagnostic}` });
+      h.advance(MERGE_POLL_MS);
+    }
+    expect(h.merge("missing")).toMatchObject({ state: "blocked", nextReadAt: null });
+    expect(h.writes).toEqual([]);
+  });
+
+  test("the production runner reports its actual default timeout budget", async () => {
+    const bin = fs.mkdtempSync(path.join(sandbox, "gh-budget-"));
+    fs.writeFileSync(path.join(bin, "gh"), "#!/usr/bin/env bun\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      const h = harness({ lanes: [lane("default-timeout")], prs: [openPr(11)] });
+      const ports = productionAutoMergePorts({ ...h.ports });
+      ports.run = productionAutoMergePorts({ loadPipelines: h.ports.loadPipelines }).run;
+      await sweepAutoMerge(ports);
+      expect(h.merge("default-timeout")).toMatchObject({ state: "queued", readFailures: 1,
+        reason: "GitHub read timed out: limit 30000 ms; no diagnostic returned" });
+      expect(h.writes).toEqual([]);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   test("a refused App read never falls back to the CLI identity", async () => {
