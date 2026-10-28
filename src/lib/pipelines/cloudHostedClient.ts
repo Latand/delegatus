@@ -16,12 +16,17 @@ const MODEL = "gpt-6.1-sol";
 const MAX_FRAME = 16 * 1024 * 1024;
 type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
+export function hostedCloudPrincipal(auth: Auth): string {
+  let subject: unknown = "";
+  try { subject = row(JSON.parse(Buffer.from(auth.token.split(".")[1], "base64url").toString())).sub ?? ""; } catch { /* Routing still binds opaque test/native tokens. */ }
+  return createHash("sha256").update(JSON.stringify([auth.account ?? "", subject])).digest("hex");
+}
 type Input = Parameters<CloudStageClient["submit"]>[0];
 export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 /** A submission failed before sending any model-turn request. */
 export class CloudSubmissionNotStartedError extends HostedCloudError {}
 class CloudEnvironmentMissingError extends HostedCloudError {
-  constructor() { super("Codex Cloud environment missing", "invalid"); }
+  constructor() { super("Codex Cloud environment missing", "cloud-limit"); }
 }
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
@@ -380,6 +385,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     throw new Error("Codex Cloud recorded turn not found");
   }
   return {
+    prepareEnvironment: async input => {
+      const { prepareCloudEnvironment } = await import("@/lib/projects/codexCloudEnvironments");
+      return prepareCloudEnvironment(input, dependencies);
+    },
     hasEnvironment: async input => {
       guard(input);
       const auth = await dependencies.authenticate(input.account, input.signal);
@@ -397,6 +406,9 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       if (input.serviceTier != null) return Promise.reject(new Error("Codex Cloud explicit service tier unsupported"));
       let turnRequested = false;
       return using(input, async (client, auth, scope) => {
+      if (input.environmentPrincipal !== undefined && input.environmentPrincipal !== hostedCloudPrincipal(auth)) {
+        throw new CloudSubmissionNotStartedError("Codex Cloud environment account identity changed", "account-limit");
+      }
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha) && Buffer.byteLength(input.prompt) <= 1024 * 1024, "submission input invalid");

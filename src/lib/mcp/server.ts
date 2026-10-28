@@ -124,6 +124,7 @@ export const MCP_TOOL_NAMES = [
   "rotate_orchestrator",
   "seat_tick_settings",
   "account_project_binding",
+  "codex_cloud_environment",
   "role_presets",
   "auto_updates",
   "account_limits",
@@ -205,6 +206,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      (#1279), and the record it answers with outlives this process either way:
      a replayed clientRequestId must answer with what the first call recorded. */
   "account_project_binding",
+  "codex_cloud_environment",
   /* Writes the durable role mapping and appends its audit line when it carries
      `overrides` (#2019); a read of the same tool changes nothing, but the
      receipt has to outlive this process either way: a replayed clientRequestId
@@ -2837,6 +2839,7 @@ export function createMcpToolService(
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
       if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+        || (typedTool === "codex_cloud_environment" && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
@@ -3908,6 +3911,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
+  codex_cloud_environment: "Read saved per-account Codex Cloud environment readiness for a project, or set/clear an account's manual override with expectedRevision and clientRequestId. Automatic preparation discovers matching GitHub repositories and creates private environments. Reads contact no provider. Only the operator or this project's designated seat sets overrides. Clearing reveals the legacy project override or automatic selection. nextCursor is supplied as after for another page.",
   role_presets: [
     "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
@@ -4832,6 +4836,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     effort: z.string().optional().describe("Reasoning effort for the successor; round-trips into its spawn like create_orchestrator's."),
     accountId: z.string().optional(),
   }).passthrough(),
+  codex_cloud_environment: z.object({ action: z.enum(["read", "set"]), project: z.string().trim().min(1).max(256),
+    accountId: z.string().regex(/^[A-Za-z0-9_~-]{1,200}$/).optional(), environmentId: z.string().max(200).nullable().optional(),
+    expectedRevision: z.number().int().nonnegative().optional(), after: z.string().max(1024).optional(), limit: z.number().int().min(1).max(100).optional(),
+    clientRequestId: clientRequestIdSchema.optional() }).strict(),
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
     fallback: z.boolean().optional().describe("Use this binding only when primary allowed accounts have no capacity. Required for set-fallback; optional on add."),

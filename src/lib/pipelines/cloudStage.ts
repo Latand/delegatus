@@ -24,6 +24,10 @@ export type CloudStageAttempt = {
   model: string | null;
   error?: string;
   accountId?: string;
+  /** Frozen manual selection, distinct from routine readiness refreshes. */
+  environmentSelection?: string;
+  environmentBindingRevision?: number;
+  environmentPrincipal?: string;
   /** A receiptless submission may still be executing remotely. */
   submissionUnresolved?: boolean;
   failures?: number;
@@ -57,12 +61,13 @@ export type CloudTaskAccess = {
 export interface CloudStageClient {
   supportsModel(model: string, reasoningEffort: string | null): boolean;
   submit(input: { environmentId: string; branch: string; headSha: string; prompt: string; model: string;
-    reasoningEffort: string | null; serviceTier?: string | null; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
+    reasoningEffort: string | null; serviceTier?: string | null; environmentPrincipal?: string; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
     assertCurrent: () => void }): Promise<{ taskId: string; taskUrl: string; thread?: CloudThreadReference }>;
   poll(input: CloudTaskAccess): Promise<CloudTaskObservation>;
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string }>;
   /** Catalog read under this account's subscription, before any work is submitted. */
   hasEnvironment(input: { account: AccountContext; environmentId: string; signal: AbortSignal; assertCurrent: () => void }): Promise<boolean>;
+  prepareEnvironment?(input: import("@/lib/projects/codexCloudEnvironments").PrepareCloudEnvironmentInput): Promise<import("@/lib/projects/codexCloudEnvironments").CloudEnvironmentPreparation>;
   /** Read-only stages never request/apply a diff. */
   readDiff(input: CloudTaskAccess): Promise<string>;
 }
@@ -107,6 +112,9 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
     && (row.model === null || typeof row.model === "string")
     && (row.error === undefined || typeof row.error === "string")
     && (row.accountId === undefined || typeof row.accountId === "string")
+    && (row.environmentSelection === undefined || typeof row.environmentSelection === "string" && row.environmentSelection.length <= 1024)
+    && (row.environmentBindingRevision === undefined || Number.isSafeInteger(row.environmentBindingRevision) && Number(row.environmentBindingRevision) > 0)
+    && (row.environmentPrincipal === undefined || typeof row.environmentPrincipal === "string" && /^[a-f0-9]{64}$/.test(row.environmentPrincipal))
     && (row.submissionUnresolved === undefined || typeof row.submissionUnresolved === "boolean")
     && (row.failures === undefined || Number.isSafeInteger(row.failures) && Number(row.failures) >= 0 && Number(row.failures) <= 3)
     && (row.fallbackEligible === undefined || typeof row.fallbackEligible === "boolean")

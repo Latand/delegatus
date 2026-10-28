@@ -63,6 +63,22 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
     respond: (fn: typeof handle) => { handle = fn; } };
 }
 
+test("a principal change after environment preparation refuses before thread or turn submission", async () => {
+  const f = fixture();
+  const error = await f.client.submit({ ...f.input, environmentPrincipal: "f".repeat(64) }).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.message).toContain("account identity changed");
+  expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+});
+
+test("a configuration disappearing after preparation remains a confirmed pre-turn fallback cause", async () => {
+  const f = fixture({ fetch: async () => Response.json({}, { status: 404 }) });
+  const error = await f.client.submit(f.input).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("cloud-limit");
+  expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+});
+
 test.each([200, 403, 404] as const)("account catalog admission handles HTTP %i before any Cloud work", async status => {
   const f = fixture({ fetch: async () => status === 200 ? Response.json({ id: environmentId, repositories: [{ mount_path: environment.cwd }] }) : new Response(null, { status }) });
   expect(await f.client.hasEnvironment(f.access)).toBe(status === 200);

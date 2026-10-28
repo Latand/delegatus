@@ -11,6 +11,22 @@ function sources(overrides: Partial<CloudCheckConfigSources> = {}): CloudCheckCo
     account: () => ({ kind: "available", account }), ...overrides };
 }
 
+test("unconfigured projects use the selected account's prepared binding and frozen task receipts survive later edits", () => {
+  const selected = sources({ environment: () => "", preparedEnvironment: (_project, accountId) => `asenvcfg_${accountId}` });
+  expect(selectCloudCheckConfig(lane.worktreeDir, "lane", "build", selected)).toMatchObject({ environmentId: "asenvcfg_fixture" });
+  const withReceipt = { ...lane, runs: [{ stageId: "build", attempts: [{ accountId: "fixture", cloud: { taskId: "task-fixture", accountId: "fixture", environmentId: "asenvcfg_frozen" } }] }] } as Pipeline;
+  const frozen = sources({ lane: () => withReceipt, environment: () => "asenvcfg_changed", preparedEnvironment: () => "asenvcfg_changed" });
+  expect(selectCloudCheckConfig(lane.worktreeDir, "lane", "build", frozen)).toMatchObject({ environmentId: "asenvcfg_frozen" });
+});
+
+test("local projects and missing prepared bindings choose local checks without requiring a Codex account", () => {
+  let accounts = 0;
+  const selected = sources({ environment: () => "", preparedEnvironment: () => "", hasPreparedEnvironment: () => false,
+    account: () => { accounts++; return { kind: "unavailable", allowedAccountIds: [] }; } });
+  expect(selectCloudCheckConfig(lane.worktreeDir, "lane", "build", selected)).toBeNull();
+  expect(accounts).toBe(0);
+});
+
 test("default checks use the managed project environment and Codex stage account", () => {
   const selections: unknown[] = [];
   expect(selectCloudCheckConfig(lane.worktreeDir, "lane", "build", sources({

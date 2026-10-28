@@ -190,7 +190,7 @@ export function bridgeReportsEnabled(project: string): boolean {
   return bridgeReportsSetting(project).enabled;
 }
 
-/** Empty disables cloud stages; an environment id is never inferred from a repository. */
+/** Legacy manual override. Empty permits per-account automatic preparation. */
 export function codexCloudEnvironmentId(project: string): string {
   const projects = readProjects();
   const key = project.trim();

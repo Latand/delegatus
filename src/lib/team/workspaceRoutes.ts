@@ -116,6 +116,7 @@ export const WORKSPACE_ROUTES = {
   "/api/projects/directories": "owner",
   "/api/projects/reports": "collection",
   "/api/projects/settings": "project",
+  "/api/projects/cloud-environments": "project",
   "/api/prototype-reviews": "project",
   "/api/prototype-reviews/read": "project",
   "/api/prototype-reviews/scope": "project",

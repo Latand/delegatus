@@ -3,6 +3,8 @@ import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
+import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
 import { HostedCloudError } from "./cloudHostedErrors";
@@ -8280,6 +8282,12 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         const current = resolve(account.accountId);
         if (current.kind !== "available") throw new Error(`Codex Cloud account ${current.kind}`);
         if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error("Codex Cloud account changed");
+        if (!bound.account && !cloud.taskId) {
+          const allowed = allowedAccountIdsForProject(pipeline.project, "codex");
+          if (allowed && !allowed.includes(account.accountId)) throw new Error("Codex Cloud automatic account no longer allowed");
+        }
+        if (!cloud.taskId && cloud.environmentSelection
+          && cloud.environmentSelection !== cloudEnvironmentChoiceFingerprint(pipeline.project, account.accountId)) throw new Error("Codex Cloud environment selection changed");
       };
       let account: AccountContext;
       if (cloud.taskId && (cloud.accountId || attempt.accountId)) {
@@ -8304,20 +8312,46 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           if (pin) break;
         }
         const eligible: AccountContext[] = [];
+        const environments = new Map<string, { environmentId: string; selection?: string; revision?: number; principal?: string }>();
+        const reasons: string[] = [];
+        let pendingAt: number | undefined;
         for (const candidate of candidates) {
           const current = guardAccount(candidate);
-          const available = await boundedCloudCall(() => { current(); return client.hasEnvironment({ account: candidate,
+          if (client.prepareEnvironment) {
+            const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote);
+            if (!repository) { reasons.push("Codex Cloud requires a GitHub repository"); continue; }
+            const prepared = await boundedCloudCall(() => { current(); return client.prepareEnvironment!({ project: pipeline.project,
+              account: candidate, repository, ref: pipeline.baseBranch, signal: abort.signal, assertCurrent: current,
+              now: () => unixMs(ports.now()) }); }, abort.signal);
+            current();
+            if (prepared.state === "ready") {
+              eligible.push(candidate); environments.set(candidate.accountId, prepared);
+            } else if (prepared.state === "pending") pendingAt = Math.min(pendingAt ?? Infinity, prepared.retryAt);
+            else reasons.push(`Account ${candidate.accountId}: ${prepared.reason}`);
+            continue;
+          }
+          const available = !!cloud.environmentId && await boundedCloudCall(() => { current(); return client.hasEnvironment({ account: candidate,
             environmentId: cloud.environmentId, signal: abort.signal, assertCurrent: current }); }, abort.signal);
           current();
-          if (available) eligible.push(candidate);
+          if (available) { eligible.push(candidate); environments.set(candidate.accountId, { environmentId: cloud.environmentId }); }
         }
-        if (!eligible.length) throw new HostedCloudError("Codex Cloud project environment unavailable on allowed accounts", "cloud-limit");
+        if (!eligible.length && pendingAt !== undefined) {
+          cloud.nextPollAt = new Date(pendingAt).toISOString();
+          await checkpoint(cloud); return;
+        }
+        if (!eligible.length) throw new HostedCloudError(reasons.join("; ").slice(0, 1800)
+          || "Codex Cloud project environment unavailable on allowed accounts", "cloud-limit");
         assertLane();
         const selectedId = await reserveCloudStageAccount(pipeline.project, eligible.map(item => item.accountId));
         assertLane();
         const selected = eligible.find(item => item.accountId === selectedId);
         if (!selected) throw new Error("Codex Cloud account reservation could not be persisted");
         account = selected;
+        const binding = environments.get(account.accountId)!;
+        cloud.environmentId = binding.environmentId;
+        if (binding.selection) cloud.environmentSelection = binding.selection;
+        if (binding.revision) cloud.environmentBindingRevision = binding.revision;
+        if (binding.principal) cloud.environmentPrincipal = binding.principal;
       }
       const assertCurrent = guardAccount(account);
       if (cloud.phase === "reserved") {
@@ -8355,7 +8389,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
               : "Use this cloud checkout and its installed tools. Remain read-only. No local Delegatus MCP server is available.",
             'End with one fenced JSON verdict: {"status":"pass|fail|needs_decision","findings":["P1 — file:line and defect"]}. Use the same findings and verdict contract as a local stage. A pass has no findings.',
           ].join("\n\n")), model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
-          account, signal: abort.signal, assertCurrent }); }, abort.signal));
+          account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent }); }, abort.signal));
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
           || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error("Codex Cloud transport returned an invalid task reference; submission outcome unknown");
         cloud.taskId = submitted.taskId; cloud.taskUrl = submitted.taskUrl; cloud.submissionUnresolved = false;
@@ -8437,7 +8471,8 @@ function cloudExecutionFence(lane: Pipeline, stageId: string): string {
   return JSON.stringify([lane.state, lane.cursor?.stageId, lane.controlGeneration, lane.pausedAt, lane.resumedAt, lane.closedAt,
     lane.worktreeDir, lane.branch, lane.lastPassedCommit, lane.delivery?.target, lane.delivery?.epoch,
     lane.delivery?.ownerId, lane.delivery?.active, lane.delivery?.publish, lane.delivery?.disposition,
-    codexCloudEnvironmentId(lane.project), currentAttempt(lane, stageId)?.definition]);
+    // Once a task has custody its frozen environment survives later settings edits.
+    currentAttempt(lane, stageId)?.cloud?.taskId ? null : codexCloudEnvironmentId(lane.project), currentAttempt(lane, stageId)?.definition]);
 }
 
 function sameCloudIntent(lane: Pipeline | null, stageId: string, n: number, cloud: CloudStageAttempt, authority: string): boolean {
@@ -8532,8 +8567,10 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     return reject("Codex Cloud requires an active published lane branch owned by this lane");
   }
   const environmentId = codexCloudEnvironmentId(pipeline.project);
-  if (attempt.cloud && environmentId !== attempt.cloud.environmentId) return reject("Codex Cloud project environment changed during the stage");
-  if (!environmentId) return fallback("Codex Cloud is disabled: set the project's codexCloudEnvironmentId");
+  if (attempt.cloud && !attempt.cloud.taskId && attempt.cloud.environmentSelection && attempt.cloud.accountId
+    && attempt.cloud.environmentSelection !== cloudEnvironmentChoiceFingerprint(pipeline.project, attempt.cloud.accountId)) return fallback("Codex Cloud environment selection changed before submission");
+  if (attempt.cloud && !attempt.cloud.taskId && !attempt.cloud.environmentSelection && environmentId !== attempt.cloud.environmentId)
+    return reject("Codex Cloud project environment changed during the stage");
   if (!attempt.cloud) {
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
