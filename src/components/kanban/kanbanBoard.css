@@ -2036,8 +2036,6 @@
 .card-state-words { min-width: 0; flex: 1; overflow-wrap: break-word; }
 /* A sentence of its own is at most two lines; the motion line keeps its own rules. */
 .card-state-words:not(.motion) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
-/* The bar takes 43px of the line: on a narrow column a sentence that fit two lines without it gets a third, so its reason is not cut. */
-.card-state:has(> .task-progress) .card-state-words:not(.motion) { -webkit-line-clamp: 3; line-clamp: 3; }
 .card-state-age { color: var(--color-muted); white-space: nowrap; }
 .card-state[data-card-state="you"] .card-state-words { color: var(--color-primary); font-weight: 600; }
 .card-state-toggle { display: flex; flex: 1; min-width: 0; text-align: left; color: inherit; border-radius: 4px; padding: 0 2px; margin: 0 -2px; }
@@ -2045,49 +2043,6 @@
 .card-state-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .card-state .prio-mark { flex: none; margin-top: 1px; }
 .kb .card .card-state .motion-line { margin: 0; }
-/* The agent's estimate (docs/design/card-progress-estimate.md, variant 3): a 36 × 8 capsule between the dot
-   and the words. Track, inside and fill use existing tokens. A task with a colour fills with it, eased 40% toward
-   the text colour so every one of the eight clears 3:1 against the track's inside (3.6:1 at the lowest in the
-   light theme, 5.5:1 in the dark). An estimate older than a day fills with stripes, so it differs by form as well
-   as tone. While work on the task runs, the unfilled part carries a sweep that moves by transform alone (no
-   layout, no script). The bar takes no pointer: the dot's wider hit area lies under it. */
-.task-progress {
-  --task-progress-track: color-mix(in srgb, var(--color-muted) 78%, var(--surface-card));
-  --task-progress-ink: var(--color-secondary);
-  --task-progress-stripe: var(--color-muted);
-  position: relative; display: block; flex: none; box-sizing: border-box; width: 36px; height: 8px; margin-top: 4px; margin-left: -1px;
-  border: 1px solid var(--task-progress-track); border-radius: 999px; background: var(--border-default); overflow: hidden; pointer-events: none;
-}
-.task-progress[data-coloured] {
-  --task-progress-ink: color-mix(in srgb, var(--task-progress-colour) 60%, var(--color-primary));
-  --task-progress-stripe: var(--task-progress-ink);
-}
-.task-progress-fill { display: block; height: 100%; width: var(--task-progress-value); border-radius: 999px; background: var(--task-progress-ink); }
-.task-progress[data-task-progress="stale"] .task-progress-fill { background: repeating-linear-gradient(135deg, var(--task-progress-stripe) 0 2px, transparent 2px 4px); }
-.task-progress-glow { position: absolute; top: 0; bottom: 0; right: 0; left: var(--task-progress-value); overflow: hidden; }
-.task-progress-glow::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--task-progress-ink) 55%, transparent), transparent);
-}
-@media (prefers-reduced-motion: no-preference) {
-  .task-progress-glow::after { transform: translateX(-100%); animation: task-progress-glow 1.8s ease-in-out infinite; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .task-progress-glow::after { background: color-mix(in srgb, var(--task-progress-ink) 28%, transparent); }
-}
-@keyframes task-progress-glow {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(100%); }
-}
-/* A dot that has a bar beside it also answers a mouse over the bar and 4px past it. */
-.card-state-dot[role="button"][data-progress]::after { inset: -8px -46px -8px -8px; }
-.card-state-pop-estimate { display: block; color: var(--color-secondary); }
-/* Beside the state line the bubble fits the band between the title and the next row: two lines in 38px. */
-.card-state-pop[data-beside] { padding: 3px 8px; line-height: 15px; }
-/* Where two lines do not fit, both phrases on one line, status first. */
-.card-state-pop[data-beside="line"] { white-space: nowrap; }
-.card-state-pop[data-beside="line"] .card-state-pop-estimate { display: inline; }
-.card-state-pop[data-beside="line"] .card-state-pop-estimate::before { content: " · " / ""; }
 .card-state-pop {
   max-width: 260px; white-space: normal; border-radius: 8px; border: 1px solid var(--border-default); background: var(--surface-card);
   padding: 6px 10px; font-size: var(--text-label); line-height: 16px; color: var(--color-primary); box-shadow: var(--shadow-1);
@@ -2221,8 +2176,7 @@
 .card-state.prio-only .motion-line { flex: 1; }
 /* The task's deadline and images (the old Tasks panel's two facts), quiet, under the state line. */
 .card-meta-line { display: flex; min-width: 0; padding-left: 15px; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); }
-/* The opened phone task: its meta lines start at the motion line's edge. */
-.card-meta-line.phone { padding-left: 0; }
+.card-meta-line.phone { padding-left: 4px; }
 .task-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; font-variant-numeric: tabular-nums; }
 .task-meta .task-due, .task-meta .task-images { white-space: nowrap; }
 .task-meta .task-due.overdue { color: var(--color-danger); font-weight: 600; }

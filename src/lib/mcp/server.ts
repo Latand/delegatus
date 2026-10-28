@@ -4215,8 +4215,6 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     operationId: z.string().min(1).describe("The operationId a send_message call returned."),
   }).passthrough(),
   create_task: z.object({
-    progress: z.number().int().min(0).max(100).nullable().optional()
-      .describe("Task progress estimate from 0 to 100; omitted or null leaves it absent on creation. On a finding match, omitted preserves it and null clears it. Time and reporter are server-derived. Maintain it whenever you update the task."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
@@ -4250,8 +4248,6 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The machine that runs the task on a linked board; a new task always runs on the machine that creates it, so the only value is \"here\"."),
   }).passthrough(),
   update_task: z.object({
-    progress: z.number().int().min(0).max(100).nullable().optional()
-      .describe("Task progress estimate from 0 to 100; null clears it, omitted preserves it. Use taskId; cannot combine with refine. Time and reporter are server-derived. Maintain it whenever you update the task."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
     findingKey: z.string().max(400).refine(value => [...value].length <= 200).nullable().optional()

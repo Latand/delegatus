@@ -37,16 +37,3 @@ test("when neither side fits, a short popover shifts inside the viewport", () =>
   const position = tooltipPlacement(dot, size, { width: 160, height: 40 }, "bottom", "center");
   expect(position.top + size.height).toBeLessThanOrEqual(32);
 });
-
-test("inside its host's box, a bubble taller than the room above opens below instead of over the card above", () => {
-  const dot = { top: 446, bottom: 454, left: 300, right: 308, width: 8 };
-  const card = { top: 400, bottom: 520 };
-  const tall = { width: 223, height: 46 };
-  expect(tooltipPlacement(dot, tall, desktop, "top", "left").top).toBe(446 - 6 - 46);
-  expect(tooltipPlacement(dot, tall, desktop, "top", "left", card).top).toBe(454 + 6);
-});
-
-test("with the host's box too small for either side, the asked side stays", () => {
-  const dot = { top: 446, bottom: 454, left: 300, right: 308, width: 8 };
-  expect(tooltipPlacement(dot, { width: 223, height: 46 }, desktop, "top", "left", { top: 420, bottom: 470 }).top).toBe(446 - 6 - 46);
-});

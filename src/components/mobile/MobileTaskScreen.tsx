@@ -48,7 +48,6 @@ import { attentionReason } from "../attention";
 import { takeRequestedLane } from "./taskLaneRequest";
 import { TaskChronology } from "@/components/kanban/TaskChronology";
 import { laneState } from "@/components/kanban/cardState";
-import { progressLine } from "@/components/kanban/TaskProgressBar";
 import { laneAnswerItems, stopLinkAnswers } from "@/components/kanban/laneAnswerMenu";
 import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { taskChronology } from "@/components/kanban/taskChronologyModel";
@@ -1142,8 +1141,6 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     : null}
                 />
                 {task && hasTaskMeta(task) ? <span className="card-meta-line phone"><TaskMeta task={task} nowMs={now * 1000} /></span> : null}
-                {/* The card's bar prints no number: its value, age and author are said here. */}
-                {task?.progress ? <span className="card-meta-line phone" data-phone-task-progress={task.progress.value}>{progressLine(t, task.progress, now * 1000)}</span> : null}
                 <TaskStepsLine summary={card.stepSummary} />
               </> : null}
               {/* Slot for the needs-you question below the motion line. */}
