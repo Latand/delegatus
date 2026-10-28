@@ -13752,15 +13752,17 @@ export async function createPipelineFromRequest(
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
+  // Both creation paths finish task preflight before entering their pipeline
+  // mutation, so assignment can reuse an earlier explicit creation.
+  const tasks = loadTasksByIds(new Set(taskIds));
+  const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
+  if (taskLinkError) return { error: taskLinkError, status: 400 };
+  const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
+  if (elsewhere) return elsewhere;
+  try {
+    await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
+  } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
   if (!options.ensureTask) {
-    const tasks = loadTasks();
-    const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
-    if (taskLinkError) return { error: taskLinkError, status: 400 };
-    const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
-    if (elsewhere) return elsewhere;
-    try {
-      await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
-    } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
     let created: Pipeline;
     try {
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf });
@@ -13794,9 +13796,6 @@ export async function createPipelineFromRequest(
     if (taskLinkError) return { error: taskLinkError, status: 400 };
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
-    try {
-      await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
-    } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
