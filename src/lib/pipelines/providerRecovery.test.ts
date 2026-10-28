@@ -79,7 +79,7 @@ test.each([false, true])("Cloud capacity recovery respects local fallback=%s", a
   const lane = loadPipelines()[0]!, stage = lane.stages[0]!, attempt = lane.runs[0]!.attempts[0]!;
   stage.runtime = "codex-cloud";
   stage.model = attempt.effectiveRole.model;
-  attempt.definition = { ...attempt.definition!, runtime: stage.runtime, model: stage.model };
+  attempt.definition = { ...attempt.definition!, runtime: stage.runtime };
   attempt.executionRuntime = fallback ? "cloud-then-local" : "cloud";
   attempt.cloud = { phase: "failed", environmentId: "ccarenv_fixture", branch: lane.branch,
     headSha: lane.lastPassedCommit, deadlineAt: f.h.ports.now(), nextPollAt: f.h.ports.now(),
