@@ -2320,6 +2320,29 @@ export class SqliteAgentRegistryStore {
           yield;
         }
       } finally { changeRows.return?.(); }
+      // Routing/quota metadata cannot change row projections or their grant
+      // dependencies. Keep the validated immutable collections on these
+      // passes instead of walking all hot and archived headers again.
+      if (this.coldViewCache && changes.length && changes.every(change => change.collection === "meta" && META_FIELDS.includes(change.row_key as typeof META_FIELDS[number]))) {
+        const file = { ...previous.file };
+        const hot = { ...this.readOnlyHotFile! };
+        for (const { row_key: key } of changes) {
+          const field = key as typeof META_FIELDS[number];
+          const raw = this.meta(field);
+          const value = this.normalizePartial({ version: 2, entries: {}, receipts: {}, [field]: raw === null ? undefined : parseSqliteJson(raw, this.db) })[field];
+          Object.assign(file, { [field]: deepFreeze(value) });
+          Object.assign(hot, { [field]: file[field] });
+          yield;
+        }
+        const snapshot = { file: Object.freeze(file), revision: Number(this.meta("revision") ?? 0), stamp: this.storeStamp() };
+        const changeId = this.changeId();
+        const remembered = this.bindReadOnlyReaders(file, snapshot, changeId, databaseFileIdentity(this.filename), this.coldViewCache.coldIds, this.coldViewCache.coldKeys);
+        if (ownsTransaction) this.db.exec("COMMIT");
+        this.readOnlyHotFile = Object.freeze(hot);
+        this.coldGrantCursor = { changeId, stamp: snapshot.stamp };
+        this.snapshotChangeId = changeId;
+        return remembered;
+      }
       const file = { ...this.readOnlyHotFile! };
       yield* this.refreshColdKeySteps();
       yield* this.refreshCollectionOrdersSteps(changes);
@@ -3157,6 +3180,13 @@ export class SqliteAgentRegistryStore {
       ?? this.constantReader(deliveryDescriptor.value as RegistryFile["heldDeliveries"]);
     this.coldViewCache = nextCache;
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
+    return this.bindReadOnlyReaders(file, snapshot, coldGrantChangeId, identity, coldIds, coldKeys);
+  }
+
+  /** Every immutable envelope carries the same indexed contracts, including
+      an envelope that replaces metadata without changing any row collection. */
+  private bindReadOnlyReaders(file: RegistryFile, snapshot: StampedSnapshot, coldGrantChangeId: number,
+    identity: string | null, coldIds: Map<RowCollection, Map<string, number>>, coldKeys: Map<RowCollection, Set<string>>): StampedSnapshot {
     let startupSelectionChecked = coldGrantChangeId;
     let startupSelectionRefused = false;
     if (this.changesReady) startupSelectionReaders.set(file, () => {

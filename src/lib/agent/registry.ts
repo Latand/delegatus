@@ -5824,13 +5824,13 @@ export class AgentRegistry {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+      const snapshot = deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+    return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */
@@ -9856,6 +9856,11 @@ export class AgentRegistry {
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
     return this.readKeyed(file => clone(file.engineRouting[engine]));
+  }
+
+  /** Both compatibility routes from one read transaction. */
+  engineRoutingSnapshot(): RegistryFile["engineRouting"] {
+    return this.readKeyed(file => clone(file.engineRouting));
   }
 
   migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {

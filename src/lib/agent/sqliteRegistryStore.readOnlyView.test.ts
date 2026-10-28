@@ -6,7 +6,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
-import { registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryHasLookupIndex, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 
@@ -40,6 +40,30 @@ function fixture() {
   };
   return { filename, open, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
 }
+
+test("metadata refresh shares immutable history and equals a fresh full read, including the next row change", () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const before = reader.readOnlySnapshot().file;
+  const beforeRevision = before.engineRouting.codex.revision;
+  for (let index = 1; index <= 3; index++) {
+    writer.mutate(file => { file.engineRouting.codex = { activeAccountId: `account-${index}`, revision: index }; }, false);
+    const after = reader.readOnlySnapshot().file;
+    expect(registryHasLookupIndex(after)).toBe(true);
+    expect(registryRowsMatching(after, "receipts", "launchId", kept)).toEqual([before.receipts[kept]!]);
+    const fresh = open();
+    expect(after).toEqual(fresh.readOnlySnapshot().file);
+    expect(after.receipts).toBe(before.receipts);
+    expect(after.conversations).toBe(before.conversations);
+    expect(Object.isFrozen(after.engineRouting.codex)).toBe(true);
+    expect(before.engineRouting.codex.revision).toBe(beforeRevision);
+  }
+  writer.mutate(file => { file.receipts[kept]!.error = "row after metadata"; }, false);
+  const fresh = open();
+  expect(reader.readOnlySnapshot().file).toEqual(fresh.readOnlySnapshot().file);
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("row after metadata");
+});
 
 function attempt(write: () => void): boolean {
   try {

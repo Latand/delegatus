@@ -726,6 +726,7 @@ test("registry-only custody changes are found by the bounded inventory cursor", 
   const registry = new AgentRegistry(path.join(stateDir, "cursor-inventory.json"), undefined, undefined, { sqliteMode: "sqlite" });
   let files = Array.from({ length: 70 }, (_, index) => ({ path: `/cursor/${index}.jsonl`, engine: "codex", size: 1, mtime: 1 }) as never);
   const batches: string[][] = [];
+  const contexts = spyOn(registry, "activityConversationSnapshot");
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files, projectCatalog: [], complete: true }),
     reconcileInventory: async (current, changed) => { batches.push(changed.map(file => file.path)); return current.activityConversationSnapshot(""); },
@@ -734,7 +735,10 @@ test("registry-only custody changes are found by the bounded inventory cursor", 
     reconcileMigrationCycle: async () => {},
   });
   try {
-    await controller.poll(); await controller.poll();
+    await controller.poll();
+    contexts.mockClear();
+    await controller.poll();
+    expect(contexts).toHaveBeenCalledTimes(32);
     expect(batches).toHaveLength(1);
     registry.reconcileConversations([{ engine: "codex", path: "/cursor/69.jsonl", accountId: null, launchProfile: emptyLaunchProfile(),
       turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: "2026-10-16T00:00:00Z" }], { snapshot: false });
@@ -751,7 +755,7 @@ test("registry-only custody changes are found by the bounded inventory cursor", 
     registry.setEngineRouting("codex", "account-a");
     await controller.poll();
     expect(batches.at(-1)).toHaveLength(70);
-  } finally { registry.close(); }
+  } finally { contexts.mockRestore(); registry.close(); }
 });
 
 
