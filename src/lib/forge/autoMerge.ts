@@ -1157,7 +1157,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       || (entry.pipeline.merge.state === "merging" && !mergeSuccessor(entry.pipeline, byId))));
     const dueNow = ({ pipeline }: QueueEntry) => {
       const due = Date.parse(pipeline.merge!.nextReadAt ?? "");
-      return !Number.isFinite(due) || due <= now || mergeWaitExpired(pipeline.merge!, now);
+      return !Number.isFinite(due) || due <= now || (!pipeline.merge!.readFailures && mergeWaitExpired(pipeline.merge!, now));
     };
     const heldReason = refreshCapacityReason(ports, repository);
     const readable = refreshOutstanding && heldReason ? candidates.filter(entry => entry.pipeline.merge!.state !== "refreshing" && dueNow(entry)).sort((a, b) =>
@@ -1165,7 +1165,9 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       || (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")) : candidates;
     // A merge admitted while refreshes ran can now be behind an older queued
     // PR. Reconcile its landing before that PR can monopolize bounded reads.
-    const selected = [...readable].sort((a, b) =>
+    // Backing-off reads hold no readiness slot; their durable due time
+    // remains authoritative even after a checks deadline or process restart.
+    const selected = readable.filter(entry => !entry.pipeline.merge!.readFailures || dueNow(entry)).sort((a, b) =>
       Number(b.pipeline.merge!.state === "merging" && dueNow(b))
       - Number(a.pipeline.merge!.state === "merging" && dueNow(a))).slice(0, limit);
     const first = candidates[0]?.pipeline;

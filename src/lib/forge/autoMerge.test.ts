@@ -270,6 +270,74 @@ describe("GitHub read failure recovery through production ports", () => {
     }
   });
 
+  test.each([
+    ["HTTP 401: Bad credentials", "authentication failed", false],
+    ["HTTP 403: Resource not accessible by integration", "authentication failed", false],
+    ["HTTP 404: Not Found", "not found", false],
+    ["HTTP 429: Too Many Requests", "rate limited", true],
+    ["HTTP 503: Service Unavailable", "temporarily unavailable", true],
+  ] as const)("real gh diagnostics %s ignore command arguments", async (diagnostic, category, transient) => {
+    const bin = fs.mkdtempSync(path.join(sandbox, "gh-status-"));
+    fs.writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env bun\nprocess.stderr.write(${JSON.stringify(diagnostic)}); process.exit(1);\n`, { mode: 0o700 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      const { githubRunner } = await import("../monitor/githubEvidence");
+      for (const [number, repository] of [[11, REPO], [401, REPO], [429, "acme/timeout"], [503, "acme/authentication"], [404, "acme/429"]] as const) {
+        const h = harness({ lanes: [lane("L1")], prs: [openPr(number)] });
+        const ports = productionAutoMergePorts({ ...h.ports,
+          pullRequestOf: () => ({ repository, number }),
+          run: githubRunner(os.tmpdir(), 30_000, { declared: () => false }),
+        });
+        for (let failure = 1; failure <= 3; failure++) {
+          await sweepAutoMerge(ports);
+          expect(h.merge("L1")).toMatchObject({ readFailures: failure, reason: `GitHub read ${category}: ${diagnostic}` });
+          if (failure < 3) h.advance(Date.parse(h.merge("L1")!.nextReadAt!) - h.now());
+        }
+        expect(h.merge("L1")?.state).toBe(transient ? "queued" : "blocked");
+        expect(h.merge("L1")?.nextReadAt).toBe(transient ? iso(h.now() + 240_000) : null);
+        expect(h.writes).toEqual([]);
+      }
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["clean", "expired check wait", "changed head", "failed review", "red check", "conflict"] as const)("backoff yields to a follower with %s while retries remain paced", async state => {
+    const canMerge = state === "clean" || state === "expired check wait";
+    const follower = lane("L2");
+    const pr = openPr(12);
+    if (state === "changed head") pr.head = HEAD_X;
+    if (state === "red check") pr.checks = [{ name: "ci", conclusion: "FAILURE" }];
+    if (state === "conflict") pr.mergeable = "CONFLICTING";
+    const h = harness({ lanes: [lane("L1"), follower], prs: [openPr(11), pr] });
+    const run = h.ports.run;
+    const failureTimes: number[] = [];
+    const ports = productionAutoMergePorts({ ...h.ports, run: async args => {
+      if (args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+        failureTimes.push(h.now() - T0);
+        throw timeout();
+      }
+      return run(args);
+    } });
+    for (let minute = 0; minute <= 30; minute++) {
+      await sweepAutoMerge(ports);
+      if (minute === 0 && state === "expired check wait") h.merge("L1")!.headSeenAt = iso(T0 - MERGE_WAIT_LIMIT_MS);
+      if (minute === 0 && state === "failed review") h.pipeline("L2").runs.find(run => run.stageId === "review")!.attempts[0]!.state = "failed";
+      if (minute === 6) {
+        expect(h.merge("L2")?.state).toBe(canMerge ? "merged" : "blocked");
+        if (state !== "failed review") expect(h.calls.some(args => args[0] === "pr" && args[1] === "view" && args[2] === "12")).toBe(true);
+      }
+      h.advance(MERGE_POLL_MS);
+    }
+    expect(failureTimes).toEqual([0, 60_000, 180_000, 420_000, 900_000, 1_500_000]);
+    expect(h.merge("L1")).toMatchObject({ readFailures: 6, reason: expect.stringMatching(/^GitHub read timed out:/) });
+    expect(h.merges()).toHaveLength(canMerge ? 1 : 0);
+    if (canMerge) expect(h.merges()[0]).toEqual(["pr", "merge", "12", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A]);
+  });
+
   test("a refused App read never falls back to the CLI identity", async () => {
     const { githubRunner } = await import("../monitor/githubEvidence");
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });

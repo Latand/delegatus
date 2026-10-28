@@ -6,25 +6,30 @@ export function githubReadFailure(error: unknown): { reason: string; transient: 
   const detail = error as { stderr?: unknown; message?: unknown; code?: unknown; killed?: unknown; signal?: unknown } | null;
   const stderr = typeof detail?.stderr === "string" ? detail.stderr : "";
   const message = typeof detail?.message === "string" ? detail.message : typeof error === "string" ? error : "";
-  const raw = `${stderr}\n${message}`;
-  const line = (stderr || message).split(/\r?\n/).map(part => part.replace(/^gh:\s*/, "").trim())
-    .find(part => part && !/^Command failed/.test(part)) ?? "no diagnostic returned";
+  // execFile's message repeats argv before stderr. Only diagnostics classify
+  // the failure; neither a command wrapper nor a URL path supplies evidence.
+  const diagnostics = (stderr || message).split(/\r?\n/)
+    .filter(part => !/^Command failed\b/i.test(part.trim()))
+    .map(part => part.replace(/^gh:\s*/, "").trim()).filter(Boolean);
+  const raw = diagnostics.join("\n").replace(/https?:\/\/[^\s)]+/gi, "");
+  const line = diagnostics[0] ?? "no diagnostic returned";
+  const status = /\bHTTP(?:\/\d+(?:\.\d+)?)?[ :]+(\d{3})\b/i.exec(raw)?.[1];
   const reason = (label: string) => redactBounded(`${label}: ${line}`, 400);
   if (error instanceof ForgeAppWriteRefused) return { reason: reason("GitHub App read refused"), transient: false };
   if (detail?.code === "ETIMEDOUT" || (detail?.killed === true && (detail.signal === "SIGTERM" || detail.signal === "SIGKILL"))
-    || /timed?\s*out|timeout|deadline exceeded/i.test(raw)) {
+    || (!status && /timed?\s*out|timeout|deadline exceeded/i.test(raw))) {
     return { reason: reason("GitHub read timed out"), transient: true };
   }
   // A secondary rate limit can use HTTP 403, so classify it before auth.
-  if (/\b429\b|rate.?limit|secondary rate|abuse detection/i.test(raw)) return { reason: reason("GitHub read rate limited"), transient: true };
-  if (detail?.code === 4 || /\b401\b|\b403\b|authentication|bad credentials|not logged|not signed|gh auth login|requires? auth|resource not accessible/i.test(raw)) {
+  if (status === "429" || /rate.?limit|secondary rate|abuse detection/i.test(raw)) return { reason: reason("GitHub read rate limited"), transient: true };
+  if (status === "401" || status === "403" || (!status && (detail?.code === 4 || /authentication|bad credentials|not logged|not signed|gh auth login|requires? auth|resource not accessible/i.test(raw)))) {
     return { reason: reason("GitHub read authentication failed"), transient: false };
   }
-  if (/\b404\b|not found|could not resolve to a repository|could not resolve to a pullrequest/i.test(raw)) return { reason: reason("GitHub read not found"), transient: false };
+  if (status === "404" || (!status && /not found|could not resolve to a repository|could not resolve to a pullrequest/i.test(raw))) return { reason: reason("GitHub read not found"), transient: false };
   if (error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw)) {
     return { reason: reason("GitHub read invalid response"), transient: false };
   }
-  if (/\b5\d\d\b|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host/i.test(`${detail?.code ?? ""}\n${raw}`)) {
+  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host/i.test(`${detail?.code ?? ""}\n${raw}`)) {
     return { reason: reason("GitHub read temporarily unavailable"), transient: true };
   }
   const code = typeof detail?.code === "number" ? ` (exit ${detail.code})` : "";

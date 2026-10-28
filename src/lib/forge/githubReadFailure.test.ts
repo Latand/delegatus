@@ -36,3 +36,13 @@ function pathFromParts(): string {
 test("retry backoff starts at one minute and remains capped", () => {
   expect([1, 2, 3, 4, 5, 100].map(githubReadBackoff)).toEqual([60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
 });
+
+test.each([401, 403, 404, 429, 503])("status %s in a URL or PR number is not an HTTP status", status => {
+  const result = githubReadFailure(new Error(`request ${status} failed for https://github.com/acme/timeout/pull/${status}: HTTP 503: Service Unavailable`));
+  expect(result).toMatchObject({ transient: true, reason: expect.stringContaining("GitHub read temporarily unavailable:") });
+});
+
+test("message-only command wrappers are stripped before classification", () => {
+  expect(githubReadFailure(new Error("Command failed: gh pr view 429 --repo acme/timeout\nHTTP 401: Bad credentials")))
+    .toEqual({ transient: false, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+});
