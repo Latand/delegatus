@@ -142,7 +142,7 @@ test("an unpromoted candidate scans accounts from an older SQLite schema without
   verify.close();
 });
 
-test("candidate account scans defer interrupted archive cleanup until promotion", () => {
+test.each([...new Set([process.platform, "darwin", "win32"])])("candidate account scans defer interrupted archive cleanup until promotion (%s)", (recoveryPlatform) => {
   const root = sandbox();
   const directory = path.join(root, "state");
   fs.mkdirSync(directory);
@@ -160,6 +160,8 @@ test("candidate account scans defer interrupted archive cleanup until promotion"
     fs.mkdirSync(path.dirname(secret), { recursive: true });
     fs.writeFileSync(secret, "fixture");
   }
+  const histories = secrets.map((secret) => path.join(path.dirname(secret), "history.jsonl"));
+  for (const history of histories) fs.writeFileSync(history, "retained history\n");
   deployedRelease(directory);
   const script = `
     const fs = await import("node:fs");
@@ -167,11 +169,20 @@ test("candidate account scans defer interrupted archive cleanup until promotion"
     const { claudeProjectRoots } = await import(${JSON.stringify(path.resolve("src/lib/accounts/claude.ts"))});
     codexSessionRoots(); claudeProjectRoots();
     for (const file of ${JSON.stringify(secrets)}) if (!fs.existsSync(file)) throw new Error("candidate cleaned an archive");
+    const { readAccountSource } = await import(${JSON.stringify(path.resolve("src/lib/accounts/accountsStore.ts"))});
+    for (const name of ${JSON.stringify([CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE])}) {
+      const read = readAccountSource(name);
+      if (read.kind !== "collection" || JSON.stringify(read.body.removals) !== ${JSON.stringify(JSON.stringify(journal))}) {
+        throw new Error("candidate changed the removal journal");
+      }
+    }
     fs.writeFileSync(${JSON.stringify(path.join(directory, "viewer-release.json"))}, JSON.stringify({
       revision: "a".repeat(40), endpoint: "http://127.0.0.1:19717", hotStateBackend: "sqlite-v1",
     }));
     const { publishHotStateAuthority } = await import(${JSON.stringify(path.resolve("src/lib/state/hotStateAuthority.ts"))});
     publishHotStateAuthority(${JSON.stringify(directory)}, "sqlite", "a".repeat(40), { activationReadyAt: new Date().toISOString() });
+    // Exercise the non-Linux refusal on every host, after native setup and activation.
+    Object.defineProperty(process, "platform", { value: ${JSON.stringify(recoveryPlatform)} });
     codexSessionRoots(); claudeProjectRoots();
   `;
   const child = Bun.spawnSync([process.execPath, "-e", script], {
@@ -182,9 +193,14 @@ test("candidate account scans defer interrupted archive cleanup until promotion"
       LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
   });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
-  for (const secret of secrets) expect(fs.existsSync(secret)).toBe(false);
+  const cleanupSupported = recoveryPlatform === "linux";
+  for (const secret of secrets) {
+    expect(fs.existsSync(secret)).toBe(!cleanupSupported);
+    if (!cleanupSupported) expect(fs.readFileSync(secret, "utf8")).toBe("fixture");
+  }
+  for (const history of histories) expect(fs.readFileSync(history, "utf8")).toBe("retained history\n");
   for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE] as const) {
-    expect(body(directory, name)).toMatchObject({ removals: [] });
+    expect(body(directory, name)).toMatchObject({ removals: cleanupSupported ? [] : journal });
   }
 });
 
