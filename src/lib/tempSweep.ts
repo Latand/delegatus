@@ -1,3 +1,5 @@
+import { startDiskPressureWatch, stopDiskPressureWatch } from "@/lib/state/diskPressureWatch";
+import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -283,6 +285,7 @@ function inside(candidate: string, directory: string): boolean {
 export type TempSweepRemoval = { path: string; via: string; bytes: number; ageHours: number };
 
 export type TempSweepReport = {
+  failed?: boolean;
   at: string;
   mode?: "on" | "dry-run";
   trashFinished?: number;
@@ -515,22 +518,24 @@ async function measureBytes(directory: string, seen = new Set<string>(), include
     } catch {
       continue;
     }
-    for await (const entry of entries) {
-      if (visited >= MEASURE_ENTRY_LIMIT) break;
-      visited += 1;
-      const child = path.join(current, entry.name);
-      try {
-        const stat = await fs.promises.lstat(child);
-        const identity = `${stat.dev}:${stat.ino}`;
-        if (seen.has(identity)) continue;
-        seen.add(identity);
-        if (!stat.isDirectory() && stat.nlink > 1) linkedFiles?.add(identity);
-        bytes += stat.blocks * 512;
-        if (entry.isDirectory() && !excludedDirectories.has(identity)) pending.push(child);
-      } catch {
-        /* Gone mid-walk. */
+    try {
+      for await (const entry of entries) {
+        if (visited >= MEASURE_ENTRY_LIMIT) break;
+        visited += 1;
+        const child = path.join(current, entry.name);
+        try {
+          const stat = await fs.promises.lstat(child);
+          const identity = `${stat.dev}:${stat.ino}`;
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          if (!stat.isDirectory() && stat.nlink > 1) linkedFiles?.add(identity);
+          bytes += stat.blocks * 512;
+          if (entry.isDirectory() && !excludedDirectories.has(identity)) pending.push(child);
+        } catch {
+          /* Gone mid-walk. */
+        }
       }
-    }
+    } catch { /* Iteration can fail after opendir succeeds (Bun EACCES). Keep the measured lower bound. */ }
   }
   return bytes;
 }
@@ -552,11 +557,15 @@ function namespaceStill(anchor: TempSweepRoot["anchor"], procRoot: string): bool
 
 /** Damaged or unknown Git metadata still holds its tree. The empty marker
     in uv's source-distribution cache is the one proved disposable class. */
+export function isUvCacheMarker(entry: string): boolean {
+  return /(?:^|\/)sdists-v\d+(?:\/|$)/.test(path.dirname(entry).replaceAll(path.sep, "/"));
+}
+
 function gitCheckoutMarker(entry: string, directory: boolean): boolean {
   try {
     if (directory) return true;
     const stat = fs.lstatSync(entry);
-    return !stat.isFile() || stat.size !== 0 || !/(?:^|\/)uvcache\/sdists-v\d+(?:\/|$)/.test(entry.replaceAll(path.sep, "/"));
+    return !stat.isFile() || stat.size !== 0 || !isUvCacheMarker(entry);
   } catch {
     // Unreadable repository metadata cannot prove a disposable cache marker.
     return true;
@@ -576,7 +585,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const worktrees = readWorktrees();
   const accounted = (options.accountedWorktrees ?? []).map(entry => path.resolve(entry));
   const maxRemovals = options.maxRemovals ?? MAX_REMOVALS_PER_SWEEP;
-  const measure: typeof measureBytes = options.measure ?? measureBytes;
+  const rawMeasure: typeof measureBytes = options.measure ?? measureBytes;
   const report: TempSweepReport = {
     at: new Date(now).toISOString(), mode: options.mode ?? "on", trashFinished: 0,
     maxAgeHours: options.maxAgeMs / HOUR_MS,
@@ -591,7 +600,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const inspect = (reachable: string, root: TempSweepRoot, candidate: string, afterQuarantine = false) => {
     try { return (options.inspect ?? inspectTree)(reachable, { threshold: (options.now?.() ?? Date.now()) - options.maxAgeMs,
       mounts: (options.mountPoints ?? mountPointsUnder)(candidate, root.via), ignoreRootCtime: afterQuarantine }); }
-    catch { return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const }; }
+    catch (error) {
+      report.errors.push(`${candidate}: inspection failed: ${String(error)}`);
+      return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const };
+    }
   };
   const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? []).some(entry =>
     inside(path.resolve(entry), via && candidate.startsWith(via) ? candidate.slice(via.length) : candidate)
@@ -617,6 +629,13 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     : path.join(root.via + root.path, `.delegatus-sweep-${randomUUID()}.json`);
   const seenCandidates = new Set<string>();
   const seenAllocations = new Set<string>();
+  const measure: typeof measureBytes = async (...args) => {
+    try { return await rawMeasure(...args); }
+    catch (error) {
+      report.errors.push(`${args[0]}: allocation observation failed: ${String(error)}`);
+      return 0;
+    }
+  };
   const candidates: { root: TempSweepRoot; candidate: string; modified: number }[] = [];
   for (const root of roots) {
     if (!namespaceStill(root.anchor, procRoot)) {
@@ -670,124 +689,128 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   // Nested owned roots receive their own allocations before a parent walk.
   for (const { root, candidate } of candidates.sort((a, b) => b.candidate.split(path.sep).length - a.candidate.split(path.sep).length
     || a.modified - b.modified || a.candidate.localeCompare(b.candidate))) {
-    if (!namespaceStill(root.anchor, procRoot)) {
-      report.errors.push(`${root.path} (via ${root.via}): namespace changed before inspection; skipped`);
-      continue;
-    }
-    const reachable = root.via + candidate;
-    let stat: fs.Stats;
-    let originalPath: string;
     try {
-      stat = fs.lstatSync(reachable);
-      originalPath = fs.realpathSync(reachable);
-    } catch {
-      continue;
-    }
-    if (!stat.isDirectory() || (uid !== null && stat.uid !== uid)) continue;
-    const identity = `${stat.dev}:${stat.ino}`;
-    if (seenCandidates.has(identity)) continue;
-    seenCandidates.add(identity);
-    const excluded = accounted.flatMap(checkout => root.via ? [checkout, root.via + checkout] : [checkout]);
-    const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
-    const keep = async (reason: keyof TempSweepReport["kept"], measured?: number): Promise<boolean> => {
-      const bytes = measured ?? await measure(reachable, seenAllocations, includeRoot, excluded);
       if (!namespaceStill(root.anchor, procRoot)) {
-        report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
-        return false;
+        report.errors.push(`${root.path} (via ${root.via}): namespace changed before inspection; skipped`);
+        continue;
       }
-      report.kept[reason] += 1;
-      report.keptBytes![reason] += bytes;
-      return true;
-    };
-    const inspection = inspect(reachable, root, candidate);
-    if (!options.onlyDirectories && fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
-      await keep("inUse");
-      continue;
-    }
-    const newest = inspection.newestMs;
-    const pinned = fs.existsSync(path.join(reachable, ".delegatus-keep")) || (() => { try { fs.lstatSync(path.join(reachable, ".delegatus-keep")); return true; } catch { return false; } })();
-    if (pinned || inspection.hold) {
-      const bytes = inspection.hold === "mount-boundary" ? 0 : await measure(reachable, seenAllocations, includeRoot, excluded);
-      if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: pinned ? "pinned" : inspection.hold!, bytes });
-      continue;
-    }
-    if (now - newest < options.maxAgeMs) {
-      await keep("young");
-      continue;
-    }
-    const processHolds = (entry: string) => inside(entry, candidate)
-      || inside(resolvePhysicalPath(root.via + entry), originalPath);
-    if (inUse.some(processHolds) || conversationHolds(reachable, root.via)) {
-      await keep("inUse");
-      continue;
-    }
-    const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
+      const reachable = root.via + candidate;
+      let stat: fs.Stats;
+      let originalPath: string;
       try {
-        const physical = fs.realpathSync(accessible);
-        return inside(physical, originalPath) || inside(originalPath, physical);
-      } catch { return false; }
-    }));
-    const protectedBy = (entries: readonly string[]) => entries.some(entry => inside(entry, candidate) || inside(candidate, entry)) || physicallyOverlaps(entries);
-    const checkoutHold = (entries: readonly string[]) => protectedBy(entries) ? "git-checkout" : inspection.hold
-      ?? (physicallyOverlaps(accounted) ? "git-checkout" : null);
-    const hold = checkoutHold(worktrees);
-    if (hold) {
-      const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
-      if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
-      continue;
-    }
-    if (report.removed.length >= maxRemovals) {
-      await keep("deferred");
-      continue;
-    }
-    if (!namespaceStill(root.anchor, procRoot)) {
-      report.errors.push(`${root.path} (via ${root.via}): the namespace it was read through is gone; skipped`);
-      continue;
-    }
-    try {
-      const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
-      if (readScan().processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) || conversationHolds(reachable, root.via)) {
-        await keep("inUse", bytes);
+        stat = fs.lstatSync(reachable);
+        originalPath = fs.realpathSync(reachable);
+      } catch {
         continue;
       }
-      // Measurement yields to new owners and filesystem activity. Date and
-      // inspect the same physical tree again immediately before removal.
-      const current = fs.lstatSync(reachable);
-      if (!current.isDirectory() || (uid !== null && current.uid !== uid) || `${current.dev}:${current.ino}` !== identity
-        || fs.realpathSync(reachable) !== originalPath) {
-        report.errors.push(`${reachable}: temp directory changed during measurement; skipped`);
+      if (!stat.isDirectory() || (uid !== null && stat.uid !== uid)) continue;
+      const identity = `${stat.dev}:${stat.ino}`;
+      if (seenCandidates.has(identity)) continue;
+      seenCandidates.add(identity);
+      const excluded = accounted.flatMap(checkout => root.via ? [checkout, root.via + checkout] : [checkout]);
+      const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
+      const keep = async (reason: keyof TempSweepReport["kept"], measured?: number): Promise<boolean> => {
+        const bytes = measured ?? await measure(reachable, seenAllocations, includeRoot, excluded);
+        if (!namespaceStill(root.anchor, procRoot)) {
+          report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
+          return false;
+        }
+        report.kept[reason] += 1;
+        report.keptBytes![reason] += bytes;
+        return true;
+      };
+      const inspection = inspect(reachable, root, candidate);
+      if (!options.onlyDirectories && fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
+        await keep("inUse");
         continue;
       }
-      const finalInspection = inspect(reachable, root, candidate);
-      const finalPin = (() => { try { fs.lstatSync(path.join(reachable, ".delegatus-keep")); return true; } catch { return false; } })();
-      if (finalInspection.hold || finalPin) {
-        if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: finalPin ? "pinned" : finalInspection.hold!, bytes });
+      const newest = inspection.newestMs;
+      const pinned = fs.existsSync(path.join(reachable, ".delegatus-keep")) || (() => { try { fs.lstatSync(path.join(reachable, ".delegatus-keep")); return true; } catch { return false; } })();
+      if (pinned || inspection.hold) {
+        const bytes = inspection.hold === "mount-boundary" ? 0 : await measure(reachable, seenAllocations, includeRoot, excluded);
+        if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: pinned ? "pinned" : inspection.hold!, bytes });
         continue;
       }
-      if ((options.now?.() ?? Date.now()) - finalInspection.newestMs < options.maxAgeMs) {
-        await keep("young", bytes);
+      if (now - newest < options.maxAgeMs) {
+        await keep("young");
         continue;
       }
-      /* A checkout made meanwhile still keeps the measured tree. */
-      const finalHold = checkoutHold(readWorktrees());
-      if (finalHold) {
-        if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
+      const processHolds = (entry: string) => inside(entry, candidate)
+        || inside(resolvePhysicalPath(root.via + entry), originalPath);
+      if (inUse.some(processHolds) || conversationHolds(reachable, root.via)) {
+        await keep("inUse");
+        continue;
+      }
+      const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
+        try {
+          const physical = fs.realpathSync(accessible);
+          return inside(physical, originalPath) || inside(originalPath, physical);
+        } catch { return false; }
+      }));
+      const protectedBy = (entries: readonly string[]) => entries.some(entry => inside(entry, candidate) || inside(candidate, entry)) || physicallyOverlaps(entries);
+      const checkoutHold = (entries: readonly string[]) => protectedBy(entries) ? "git-checkout" : inspection.hold
+        ?? (physicallyOverlaps(accounted) ? "git-checkout" : null);
+      const hold = checkoutHold(worktrees);
+      if (hold) {
+        const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
+        if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
+        continue;
+      }
+      if (report.removed.length >= maxRemovals) {
+        await keep("deferred");
         continue;
       }
       if (!namespaceStill(root.anchor, procRoot)) {
-        report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
+        report.errors.push(`${root.path} (via ${root.via}): the namespace it was read through is gone; skipped`);
         continue;
       }
-      if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
-      if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
-        journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
-        held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash),
-        validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)),
-      })) { await keep("inUse", bytes); continue; }
-      report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
-      report.removedBytes += bytes;
+      try {
+        const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
+        if (readScan().processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) || conversationHolds(reachable, root.via)) {
+          await keep("inUse", bytes);
+          continue;
+        }
+        // Measurement yields to new owners and filesystem activity. Date and
+        // inspect the same physical tree again immediately before removal.
+        const current = fs.lstatSync(reachable);
+        if (!current.isDirectory() || (uid !== null && current.uid !== uid) || `${current.dev}:${current.ino}` !== identity
+          || fs.realpathSync(reachable) !== originalPath) {
+          report.errors.push(`${reachable}: temp directory changed during measurement; skipped`);
+          continue;
+        }
+        const finalInspection = inspect(reachable, root, candidate);
+        const finalPin = (() => { try { fs.lstatSync(path.join(reachable, ".delegatus-keep")); return true; } catch { return false; } })();
+        if (finalInspection.hold || finalPin) {
+          if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: finalPin ? "pinned" : finalInspection.hold!, bytes });
+          continue;
+        }
+        if ((options.now?.() ?? Date.now()) - finalInspection.newestMs < options.maxAgeMs) {
+          await keep("young", bytes);
+          continue;
+        }
+        /* A checkout made meanwhile still keeps the measured tree. */
+        const finalHold = checkoutHold(readWorktrees());
+        if (finalHold) {
+          if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
+          continue;
+        }
+        if (!namespaceStill(root.anchor, procRoot)) {
+          report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
+          continue;
+        }
+        if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
+        if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
+          journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
+          held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash),
+          validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)),
+        })) { await keep("inUse", bytes); continue; }
+        report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
+        report.removedBytes += bytes;
+      } catch (error) {
+        report.errors.push(`${reachable}: ${(error as Error).message}`);
+      }
     } catch (error) {
-      report.errors.push(`${reachable}: ${(error as Error).message}`);
+      report.errors.push(`${candidate}: inspection failed: ${String(error)}`);
     }
   }
   return report;
@@ -812,7 +835,7 @@ export function tempSweepStatus(report: TempSweepReport | null = readTempSweepRe
     heldBytes[hold.reason] = (heldBytes[hold.reason] ?? 0) + hold.bytes;
   }
   return {
-    at: report.at, mode: report.mode ?? "on", trashFinished: report.trashFinished ?? 0, removed: report.removed.length, removedBytes: report.removedBytes,
+    at: report.at, ...(report.failed ? { failed: true } : {}), mode: report.mode ?? "on", trashFinished: report.trashFinished ?? 0, removed: report.removed.length, removedBytes: report.removedBytes,
     kept: { ...report.kept }, keptBytes: report.keptBytes ? { ...report.keptBytes } : null, heldCounts, heldBytes, errors: report.errors.length,
     summary: `[temp sweep] ${report.mode === "dry-run" ? "would remove" : "removed"} ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} for Git preservation or tree inspection; ${report.errors.length} error(s)`,
   };
@@ -868,8 +891,16 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
   const roots = view.roots.filter(root => root.via || writable.has(root.path));
   // Root discovery is one snapshot; deletion gets its own fresh process scan.
   let report: TempSweepReport;
-  try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...ports, roots, ...checkouts }); }
-  finally { await view.close(); }
+  try {
+    try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...ports, roots, ...checkouts }); }
+    finally { await view.close(); }
+  } catch (error) {
+    report = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), failed: true, mode,
+      maxAgeHours: maxAgeMs / HOUR_MS, roots: roots.map(root => root.path), removed: [], removedBytes: 0,
+      kept: { young: 0, inUse: 0, worktree: 0, deferred: 0 }, errors: [String(error)] };
+    recordTempSweep(report);
+    throw error;
+  }
   recordTempSweep(report);
   const { young, inUse, worktree, deferred } = report.kept;
   console.log(
@@ -890,6 +921,8 @@ export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: 
 const sweepHost = globalThis as typeof globalThis & {
   __llvTempSweepTimer?: ReturnType<typeof setTimeout>;
   __llvAttemptTempTimer?: ReturnType<typeof setTimeout>;
+  __llvTempPressureStop?: () => void;
+  __llvAttemptPressureStop?: () => void;
 };
 
 /** Starts the hourly sweep once per process, from the release that owns
@@ -901,39 +934,53 @@ export function startTempSweep(ports: {
   firstDelayMs?: number;
   intervalMs?: number;
 } = {}): void {
+  if (!Object.keys(ports).length) startDiskPressureWatch();
   if (sweepHost.__llvTempSweepTimer) return;
   if (tempSweepMaxAgeMs() === null || tempSweepMode() === null) return;
   const schedule = ports.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const sweep = ports.sweep ?? (() => runTempSweep());
+  let running = false;
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
+      running = true;
       void withViewerOperation("temp.sweep", sweep)
         .catch((error) => console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error)))
         .finally(() => {
+          running = false;
           if (sweepHost.__llvTempSweepTimer === timer) arm(ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);
         });
     }, delayMs);
     timer.unref?.();
     sweepHost.__llvTempSweepTimer = timer;
   };
+  sweepHost.__llvTempPressureStop = registerDiskPressureSweep("temp", () => {
+    if (!running && sweepHost.__llvTempSweepTimer) { clearTimeout(sweepHost.__llvTempSweepTimer); arm(0); }
+  });
   arm(ports.firstDelayMs ?? FIRST_SWEEP_DELAY_MS);
   if (!Object.keys(ports).length) {
-    const attemptArm = () => {
+    let attemptRunning = false;
+    const attemptArm = (delayMs = 60_000) => {
       const timer = setTimeout(() => {
+        attemptRunning = true;
         void import("@/lib/pipelines/worktreeSweepWorker")
           .then(({ runAttemptTempSweepOffThread }) => runAttemptTempSweepOffThread())
           .catch(error => console.error("[attempt temp] tick failed", error instanceof Error ? error.name : "unknown"))
-          .finally(() => { if (sweepHost.__llvAttemptTempTimer === timer) attemptArm(); });
-      }, 60_000);
+          .finally(() => { attemptRunning = false; if (sweepHost.__llvAttemptTempTimer === timer) attemptArm(); });
+      }, delayMs);
       timer.unref?.();
       sweepHost.__llvAttemptTempTimer = timer;
     };
+    sweepHost.__llvAttemptPressureStop = registerDiskPressureSweep("attempt-temp", () => {
+      if (!attemptRunning && sweepHost.__llvAttemptTempTimer) { clearTimeout(sweepHost.__llvAttemptTempTimer); attemptArm(0); }
+    });
     attemptArm();
   }
 }
 
 /** Test seam: the timer is process-global. */
 export function stopTempSweep(): void {
+  stopDiskPressureWatch();
+  sweepHost.__llvTempPressureStop?.(); sweepHost.__llvAttemptPressureStop?.();
   if (sweepHost.__llvTempSweepTimer) clearTimeout(sweepHost.__llvTempSweepTimer);
   sweepHost.__llvTempSweepTimer = undefined;
   if (sweepHost.__llvAttemptTempTimer) clearTimeout(sweepHost.__llvAttemptTempTimer);

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { inspectTree, measureTempBytes, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
+import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
@@ -131,9 +131,47 @@ async function containerMountsClear(roots: readonly string[]): Promise<boolean> 
   return true;
 }
 
-const unsafe = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/.git/worktrees", "-o", "-path", "*/worktrees/*/gitdir",
-  "-o", "-name", ".git", "!", "-type", "d", "!", "(", "-type", "f", "-size", "0",
-  "-regex", ".*/uvcache/sdists-v[0-9][0-9]*/.*", ")", ")", "-print", "-quit"];
+const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
+  "-o", "-name", ".git", "!", "-type", "d", ")"];
+const MARKER_LIMIT = 10_000;
+function markerHolds(file: string, directory: string, original: string): boolean {
+  if (path.basename(file) === ".delegatus-keep") return true;
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.size > 4096) return true;
+  const content = fs.readFileSync(file, "utf8");
+  if (path.basename(file) === ".git" && stat.size === 0 && isUvCacheMarker(file)) return false;
+  const pointer = path.basename(file) === "gitdir" ? content.trim()
+    : /^gitdir: (.+)\s*$/.exec(content)?.[1]?.trim();
+  if (!pointer) return true;
+  const lexical = path.resolve(path.dirname(file), pointer);
+  // Quarantine moves the whole root; absolute fixture links still name its
+  // original location. Translate only that exact containment boundary.
+  const target = inside(lexical, original) ? directory + lexical.slice(original.length) : lexical;
+  try { return !inside(target, directory) || !inside(fs.realpathSync(target), fs.realpathSync(directory)); }
+  catch { return true; }
+}
+
+// Same bounded classifier inside the narrowly mounted cleanup namespace.
+// find supplies file names as argv, so whitespace and newlines stay literal.
+const containerClassifier = `
+  for file do
+    test "$(basename "$file")" != .delegatus-keep || exit 75
+    test -f "$file" && test ! -L "$file" || exit 75
+    size=$(stat -c %s "$file") || exit
+    test "$size" -le 4096 || exit 75
+    if test "$(basename "$file")" = .git && test "$size" = 0; then
+      printf '%s\\n' "$(dirname "$file")" | grep -Eq '/sdists-v[0-9]+(/|$)' && continue
+    fi
+    value=$(cat "$file") || exit
+    case "$file" in */worktrees/*/gitdir) target=$value;;
+      *) case "$value" in "gitdir: "*) target=\${value#gitdir: };; *) exit 75;; esac;; esac
+    case "$target" in "$ORIGINAL"/*) target=/attempt\${target#"$ORIGINAL"};;
+      /*) ;; *) target=$(dirname "$file")/$target;; esac
+    case "$target" in /attempt/*) ;; *) exit 75;; esac
+    test -e "$target" || exit 75
+    target=$(readlink -f "$target") || exit 75
+    case "$target" in /attempt/*) ;; *) exit 75;; esac
+  done`;
 const utilityImages = ["busybox:*", "alpine:*", "debian:*", "ubuntu:*", "postgres:*", "redis:*"];
 export async function attemptTempUtilityImage(): Promise<string> {
   if (process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE) return process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
@@ -152,9 +190,11 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
   const image = await attemptTempUtilityImage();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
-  const body = operation === "inspect" ? 'exec find /attempt -xdev "$@"'
-    : operation === "measure" ? 'exec du -skx /attempt'
-    : 'find /attempt -xdev "$@" > /tmp/holds || exit; test ! -s /tmp/holds || exit 75; exec find /attempt -xdev -depth -mindepth 1 -delete';
+  const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
+    + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
+    + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
+  const body = operation === "measure" ? 'exec du -skx /attempt'
+    : inspection + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
   const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
   const final = fs.lstatSync(directory);
@@ -165,18 +205,35 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   return run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
     "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, ...unsafe]);
+    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
 }
 
 /** Native find streams an arbitrarily large owned tree; the owned worker and
  * each command impose time bounds instead of permanently retaining it at an
  * entry-count ceiling. Linked worktrees remain with their preservation owner. */
 export async function inspectAttemptTree(directory: string, original = directory): Promise<boolean> {
-  if (process.platform === "win32") return !inspectTree(directory, { git: "linked", threshold: Infinity }).hold;
-  try { return !(await run("find", [directory, "-xdev", ...unsafe])).stdout.trim(); }
+  if (process.platform === "win32") {
+    const pending = [directory]; let found = 0;
+    while (pending.length) {
+      const current = pending.pop()!;
+      for (const entry of await fs.promises.readdir(current, { withFileTypes: true })) {
+        const file = path.join(current, entry.name);
+        const marker = entry.name === ".delegatus-keep" || entry.name === ".git" && !entry.isDirectory()
+          || entry.name === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
+        if (marker && (++found > MARKER_LIMIT || markerHolds(file, directory, original))) return false;
+        if (entry.isDirectory()) pending.push(file);
+      }
+    }
+    return true;
+  }
+  try {
+    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"])).stdout.split("\0").filter(Boolean);
+    return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
+  }
   catch (error) {
     if (process.platform !== "linux") throw error;
-    return !(await containerCommand(directory, "inspect", original)).stdout.trim();
+    try { await containerCommand(directory, "inspect", original); return true; }
+    catch { return false; }
   }
 }
 

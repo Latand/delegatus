@@ -1171,6 +1171,8 @@ for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline pres
 for (const code of ["EROFS", "EACCES", "ENOENT"]) {
   test(`controller gate creation falls back from an unavailable /var/tmp (${code}) without using inherited scratch`, () => {
     const original = process.env.TMPDIR;
+    const sandboxRecord = process.env.LLV_GATE_SANDBOX_RECORD;
+    delete process.env.LLV_GATE_SANDBOX_RECORD;
     const calls: string[] = [];
     try {
       process.env.TMPDIR = "/operator-installation/state/scratch";
@@ -1183,6 +1185,7 @@ for (const code of ["EROFS", "EACCES", "ENOENT"]) {
       expect(created).toBe(`${calls[1]}fixture`);
     } finally {
       if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
+      if (sandboxRecord !== undefined) process.env.LLV_GATE_SANDBOX_RECORD = sandboxRecord;
     }
   });
 }
@@ -1224,3 +1227,61 @@ test("shared gate cache and hook fixture changes select every verification consu
     expect(steps.find(step => step.name === "touched tests")?.command.slice(4)).toEqual(tests.map(test => `./${test}`));
   }
 });
+
+
+test("a deadline-killed gate removes the exact sandbox recorded by its creator", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "gate-record-fixture-")); roots.push(directory);
+  const env = isolatedEnvironment(directory, process.env);
+  delete env.LLV_GATE_SANDBOX_RECORD;
+  env.LLV_OWNED_RUN_TIMEOUT_MS = "3000";
+  const marker = path.join(directory, "created.json");
+  const script = path.join(directory, "allocate.ts");
+  writeFileSync(script, `import { createGateSandbox } from ${JSON.stringify(path.join(root, "scripts/local-gate.ts"))};
+    import fs from "node:fs"; import path from "node:path";
+    const directory = createGateSandbox(process.platform, prefix => fs.mkdtempSync(path.join(process.env.TMPDIR!, path.basename(prefix))));
+    fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({directory}));
+    setInterval(() => {}, 1000); await new Promise(() => {});`);
+  const child = Bun.spawn([process.execPath, path.join(root, "scripts/owned-runner.ts"), "--portable", process.execPath, script],
+    { env, stdout: "pipe", stderr: "pipe" });
+  const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ out, error, code }).toMatchObject({ code: 124 });
+  const created = JSON.parse(readFileSync(marker, "utf8")).directory;
+  expect(existsSync(created)).toBeFalse();
+}, 20_000);
+
+
+test.skipIf(process.platform !== "linux")("the real unadmitted hook owns its sandbox before a deadline", async () => {
+  const f = createHookFixture(root, roots);
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n"); f.git("add", "example.ts");
+  const env = isolatedEnvironment(path.join(f.dir, "isolated"), f.env);
+  delete env.LLV_GATE_SANDBOX_RECORD;
+  env.LLV_OWNED_RUN_TIMEOUT_MS = "10000";
+  const marker = path.join(f.dir, "phase.pid"), allocation = path.join(f.dir, "allocation.json"), recorder = path.join(f.dir, "record.ts");
+  const preload = path.join(f.dir, "observe-allocation.ts");
+  writeFileSync(preload, `import fs from "node:fs"; import path from "node:path"; import {mock} from "bun:test";
+    const allocate=fs.mkdtempSync;
+    mock.module("node:fs",()=>({...fs,default:fs,mkdtempSync:(prefix,options)=>{const directory=allocate(prefix,options);
+      if(path.basename(String(prefix))==="delegatus-local-gate-") fs.writeFileSync(${JSON.stringify(allocation)},JSON.stringify(directory));
+      return directory;}}));`);
+  writeFileSync(recorder, readFileSync(recorder, "utf8") + `\n(await import("node:fs")).writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000); await new Promise(() => {});`);
+  const child = Bun.spawn([process.execPath, "--preload", preload, path.join(root, "scripts/local-gate.ts"), "pre-commit"],
+    { cwd: f.dir, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  owned.push(captureProcessIdentity(child.pid));
+  const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const [phase] = await recordFixtureIdentities([marker], 8000);
+    const created = JSON.parse(readFileSync(allocation, "utf8"));
+    expect(path.basename(created)).toStartWith("delegatus-local-gate-"); roots.push(created);
+    const code = await Promise.race([child.exited, new Promise<number>(resolve => {
+      timer = setTimeout(() => { child.kill("SIGTERM"); resolve(143); }, 18000);
+    })]);
+    await stopFixtureIdentity(phase!);
+    const [out, error] = await output;
+    expect(code, out + error).not.toBe(0);
+    expect(existsSync(created)).toBeFalse();
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGTERM");
+  }
+}, 35_000);

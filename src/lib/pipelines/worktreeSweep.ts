@@ -1,3 +1,4 @@
+import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -21,6 +22,7 @@ import type { WorktreeSweepCache } from "./worktreeSweepCache";
 import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
 import { readWorktreeProvenance } from "./worktreeProvenance";
+import { backupWorktree } from "./worktreeBackup";
 import { recordWorktreeDrilldown } from "./worktreeDrilldown";
 
 /**
@@ -216,7 +218,7 @@ export type WorktreeRemoval = {
       `node_modules` counts only what removing it actually frees. */
   bytes: number;
   pr: { number: number; url: string } | null;
-  preservation?: "merged-pr" | "remote-ref" | "base";
+  preservation?: "merged-pr" | "remote-ref" | "base" | "backup";
   branch: string | null;
   pipelineId?: string;
 };
@@ -1072,6 +1074,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   // Fresh guard reads must resolve aliases again after asynchronous work.
   const freshPaths = () => physicalPaths.clear();
   const paths = (entries: readonly string[]) => [...new Set([...new Set(entries)].flatMap(entry => [resolve(entry), physical(entry)]))];
+  const staleTerminal = (owner: SweptPipeline) => SETTLED_STATES.has(owner.state)
+    && latestTerminalTime([owner]) > 0 && now() - latestTerminalTime([owner]) >= FINISHED_WORKTREE_RETENTION_MS;
+  const holdsCheckout = (owner: SweptPipeline) => pipelineHoldsCheckout(owner) && !staleTerminal(owner);
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
   // The live list omits archived lanes. Preserve their settled ownership,
   // letting fresh live entries override the initial snapshot by id.
@@ -1085,7 +1090,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     const conversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.held : conversationStatus;
     const deferredConversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.deferred : [];
     return {
-      open: paths(ownershipPipelines().filter(pipelineHoldsCheckout)
+      open: paths(ownershipPipelines().filter(holdsCheckout)
         .flatMap(pipeline => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean))),
       conversations: paths(conversationCwds),
       deferredConversations: paths(deferredConversationCwds),
@@ -1259,7 +1264,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       }
       /* A finished lane, or a role's temp checkout nobody owns, follows the
          retention rule; a checkout the operator made by hand never does. */
-      const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : batch.owned || tempRoots.some((temp) =>
+      const finished = owners.length > 0 ? !owners.some(holdsCheckout) : batch.owned || tempRoots.some((temp) =>
         inside(worktree, temp) && isOwnedTempName(path.relative(temp, worktree).split(path.sep)[0] ?? ""));
       /* A lane's own terminal time dates it on the first pass; otherwise the
          first sweep that saw it settled starts the clock. */
@@ -1309,6 +1314,52 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         keep({ ...base, reason: "not-created-by-delegatus", detail: NOT_CREATED_DETAIL });
         continue;
       }
+      const retireBackedUp = async (force = false): Promise<boolean> => {
+        if (!(owners.length > 0 && owners.every(staleTerminal))) return false;
+        const nested = [...remaining].find(other => other !== worktree && inside(other, worktree));
+        if (nested) { keep({ ...base, reason: "holds-worktree", detail: nested }); return true; }
+        const quiet = inspect(worktree);
+        if (quiet) { keep({ ...base, reason: quiet }); return true; }
+        const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
+        if (status.code !== 0) { keep({ ...base, reason: "uncommitted", detail: `git status failed: ${status.stderr}` }, NEXT_SWEEP); return true; }
+        const ignored = keptIgnored(accessible(worktree), classifyStatus(status.stdout, true).ignored);
+        if (!force && owners.every(pipelineActivitySettled)
+          && classifyStatus(status.stdout, true).changed.length === 0 && ignored.length === 0) return false;
+        if (report.removed.length >= maxRemovals) { keep({ ...base, reason: "deferred" }); return true; }
+        const bytes = await measure(worktree);
+        const guard = () => !heldBy(readGuards(), worktree, entry.branch)
+          && ownersOf(ownershipPipelines(), worktree).length === owners.length
+          && owners.every(owner => ownersOf(ownershipPipelines(), worktree).some(current => current.id === owner.id))
+          && ownersOf(ownershipPipelines(), worktree).every(staleTerminal) && !inspect(worktree);
+        if (!guard()) { keep({ ...base, reason: "in-use" }); return true; }
+        if (dryRun) { keep({ ...base, reason: "retention", detail: "requires verified backup before removal" }); return true; }
+        const unlock = lockCheckoutHead(worktree, accessible, report.errors);
+        if (!unlock) { keep({ ...base, reason: "locked" }); return true; }
+        let backup: Awaited<ReturnType<typeof backupWorktree>> | undefined;
+        try {
+          if (accessible(worktree) !== worktree) throw new Error("backup filesystem view unavailable");
+          backup = await backupWorktree({ directory: worktree, pipelineId: owners[0]!.id, head: entry.head!,
+            branch: entry.branch, ignored, guard });
+          const listing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
+          const current = parseWorktreeList(listing.stdout);
+          const row = current.find(row => resolve(row.path) === worktree);
+          if (listing.code !== 0 || !row || row.locked || row.prunable || row.head !== entry.head
+            || current.some(row => resolve(row.path) !== worktree && inside(resolve(row.path), worktree)))
+            throw new Error("worktree registration changed after backup");
+          const statusNow = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
+          if (statusNow.code !== 0 || statusNow.stdout !== status.stdout || !await backup.verify()
+            || !guard() || !ports.recordResolution(worktree)) throw new Error("worktree changed after backup");
+          const removed = await ports.git(["worktree", "remove", "--force", worktree], root);
+          if (removed.code !== 0) throw new Error(removed.stderr || "backed-up worktree removal failed");
+          remaining.delete(worktree);
+          report.removed.push({ ...base, bytes, pr: null, preservation: "backup", branch: entry.branch });
+          report.removedBytes += bytes;
+        } catch (error) {
+          keep({ ...base, reason: "uncommitted", detail: `backup retained checkout: ${String(error)}` }, NEXT_SWEEP);
+        } finally { backup?.close(); unlock(); }
+        return true;
+      };
+      if (await retireBackedUp()) continue;
       /* A lane past its hour is screened against the advertised refs. */
       const screened = hourLane && now() - settledSince >= PUSHED_WORKTREE_RETENTION_MS
         ? entry.head ? await onRemote(entry.head, false) : false : undefined;
@@ -1377,7 +1428,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (!current) return { ...base, reason: "unmerged-commits", detail: HEAD_UNREADABLE };
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
         const aged = retained || pushed;
-        if (aged && freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
+        if (aged && freshOwners.some(holdsCheckout)) return { ...base, reason: "open-pipeline" };
         const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
         const settledFor = (ms: number) => now() - freshSettled >= ms;
         const held = (why?: string): WorktreeKept => ({ ...base, firstSettledAt: iso(freshSettled), reason: "retention", detail: retentionDetail(freshSettled, why) });
@@ -1404,6 +1455,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       };
       let proof = await prove(false);
       if ("reason" in proof) {
+        if (["local-only-commits", "unmerged-commits", "pr-head-unknown"].includes(proof.reason) && await retireBackedUp(true)) continue;
         keep(proof, proof.detail === HEAD_UNREADABLE ? NEXT_SWEEP : undefined);
         continue;
       }
@@ -1534,7 +1586,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const source = resolve(pipeline.repoDir);
         return worktree === path.join(path.dirname(source), `${path.basename(source)}-pipeline-${pipeline.id}`);
       });
-      if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(initial, worktree)) continue;
+      if (!owner || owners.some(holdsCheckout) || heldBy(initial, worktree)) continue;
       if (!dryRun) {
         // Only journals written for this settled lane authorize trash replay.
         const trashDir = statePath("worktree-sweep-trash");
@@ -1627,7 +1679,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (!currentEntry || currentEntry.bare || currentEntry.locked || currentEntry.prunable) continue;
         // Measurement yields: refresh both activity and directory guards last.
         const nowOwners = ownersOf(ownershipPipelines(), worktree);
-        if (!nowOwners.some((pipeline) => pipeline.id === owner.id) || nowOwners.some(pipelineHoldsCheckout)
+        if (!nowOwners.some((pipeline) => pipeline.id === owner.id) || nowOwners.some(holdsCheckout)
           || heldBy(readGuards(), worktree) || !safeDirectory(currentWorktrees)) continue;
         const trackedNow = await ports.git(["ls-files", "-z", "--", path.relative(worktree, next)], worktree);
         if (trackedNow.code !== 0 || trackedNow.stdout.length) continue;
@@ -1957,6 +2009,7 @@ export async function runWorktreeSweep(
 
 const sweepHost = globalThis as typeof globalThis & {
   __llvWorktreeSweepTimer?: ReturnType<typeof setTimeout>;
+  __llvWorktreePressureStop?: () => void;
 };
 
 /** Starts the hourly sweep once per process, from the release that owns
@@ -1973,8 +2026,10 @@ export function startWorktreeSweep(ports: {
   if (worktreeSweepMode(ports.env) === null) return;
   const schedule = ports.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const sweep = ports.sweep ?? (() => runWorktreeSweep());
+  let running = false;
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
+      running = true;
       let continuation = false;
       void sweep().then(result => {
         const progress = result && typeof result === "object" && "progress" in result ? (result as WorktreeSweepReport).progress : undefined;
@@ -1984,17 +2039,22 @@ export function startWorktreeSweep(ports: {
       })
         .catch((error) => console.error("[worktree sweep] failed", error instanceof Error ? error.message : String(error)))
         .finally(() => {
+          running = false;
           if (sweepHost.__llvWorktreeSweepTimer === timer) arm(continuation ? 5000 : ports.intervalMs ?? WORKTREE_SWEEP_INTERVAL_MS);
         });
     }, delayMs);
     timer.unref?.();
     sweepHost.__llvWorktreeSweepTimer = timer;
   };
+  sweepHost.__llvWorktreePressureStop = registerDiskPressureSweep("worktrees", () => {
+    if (!running && sweepHost.__llvWorktreeSweepTimer) { clearTimeout(sweepHost.__llvWorktreeSweepTimer); arm(0); }
+  });
   arm(ports.firstDelayMs ?? FIRST_SWEEP_DELAY_MS);
 }
 
 /** Test seam: the timer is process-global. */
 export function stopWorktreeSweep(): void {
+  sweepHost.__llvWorktreePressureStop?.();
   if (sweepHost.__llvWorktreeSweepTimer) clearTimeout(sweepHost.__llvWorktreeSweepTimer);
   sweepHost.__llvWorktreeSweepTimer = undefined;
 }

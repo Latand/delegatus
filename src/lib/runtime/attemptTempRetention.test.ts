@@ -43,7 +43,11 @@ test("the capped sweep evicts old unowned roots oldest first within its tick bud
 
 test.each(["live", "unknown"] as const)("%s ownership retains scratch", async state => {
   const f = fixture(); const directory = f.make(state);
-  try { expect((await f.sweep(state)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue(); }
+  try {
+    const report = await f.sweep(state);
+    expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
+    expect(report.liveHeldBytes > 0).toBe(state === "live");
+  }
   finally { f.store.close(); }
 });
 
@@ -60,6 +64,7 @@ test("a process holder retains a settled directory", async () => {
   try {
     const report = await f.sweep("settled", { scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [path.join(directory, "future")] }] }) });
     expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
+    expect(report.liveHeldBytes).toBeGreaterThanOrEqual(4096);
   } finally { f.store.close(); }
 });
 
@@ -323,3 +328,45 @@ test.each(["release", "crash"] as const)("concurrent helpers serialize retiremen
     }
   }
 }, 20000);
+
+
+test("legacy scratch adoption survives reopening and preserves foreign and live roots", async () => {
+  const f = fixture(), scratch = path.join(f.root, "scratch"); fs.mkdirSync(scratch, { mode: 0o700 });
+  const old = path.join(scratch, "llv-stage-AbC123"), live = path.join(scratch, "llv-stage-DeF456");
+  for (const directory of [old, live, path.join(scratch, "my-proof")]) fs.mkdirSync(directory, { mode: 0o700 });
+  fs.symlinkSync(old, path.join(scratch, "llv-stage-XyZ789"));
+  try {
+    expect((await f.sweep("orphan")).removed).toBe(0);
+    expect(f.store.has(old)).toBeTrue(); expect(f.store.has(live)).toBeTrue();
+  } finally { f.store.close(); }
+  const store = new AttemptTempStore(f.filename);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => NOW + 2 * 86400000, state: async () => "orphan",
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [live] }] }),
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true) });
+    expect(report.removed).toBe(1); expect(fs.existsSync(old)).toBeFalse(); expect(fs.existsSync(live)).toBeTrue();
+    expect(store.has(path.join(scratch, "my-proof"))).toBeFalse();
+    expect(store.has(path.join(scratch, "llv-stage-XyZ789"))).toBeFalse();
+  } finally { store.close(); }
+});
+
+test("a settled attempt containing the real uv cache retires through the ledger", async () => {
+  const f = fixture(), directory = f.make("uv");
+  fs.mkdirSync(path.join(directory, "cache/uv/sdists-v9"), { recursive: true });
+  fs.writeFileSync(path.join(directory, "cache/uv/sdists-v9/.git"), "");
+  try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
+  finally { f.store.close(); }
+});
+
+
+test("legacy adoption advances its bounded cursor across store restarts", () => {
+  const f = fixture(), scratch = path.join(f.root, "scratch"); fs.mkdirSync(scratch, { mode: 0o700 });
+  const directories = Array.from({ length: 37 }, (_, index) => path.join(scratch, `llv-stage-A${String(index).padStart(5, "0")}`));
+  for (const directory of directories) fs.mkdirSync(directory, { mode: 0o700 });
+  expect(f.store.adopt(NOW)).toEqual({ adopted: 32, errors: 0 }); f.store.close();
+  const resumed = new AttemptTempStore(f.filename);
+  try {
+    expect(resumed.adopt(NOW + 1)).toEqual({ adopted: 5, errors: 0 });
+    for (const directory of directories) expect(resumed.has(directory)).toBeTrue();
+  } finally { resumed.close(); }
+});

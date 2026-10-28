@@ -1,3 +1,4 @@
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 import { systemBootEpoch } from "@/lib/processIdentity";
 import { enterStageHost, includeIdleHostViews, openHostTempRoots, stageHostNamespace, tempViewAvailable } from "@/lib/state/hostTempViews";
@@ -17,16 +19,12 @@ import { enterStageHost, includeIdleHostViews, openHostTempRoots, stageHostNames
  * pipeline worktrees and the temp roots. A server once filled its disk and
  * every agent on it died mid-run; this sees it coming.
  *
- * Below `DISK_WARNING_BYTES` on any of them a pressure episode opens: the
- * project orchestrator gets one wake item naming the free space and the
- * largest Delegatus-owned consumers, and the System panel shows it. The
- * episode closes only once every volume is back above
- * `DISK_RECOVERY_BYTES`, so free space wobbling around the threshold is one
- * warning. Below `DISK_CRITICAL_BYTES` a new worktree waits before `git
- * worktree add` with the reason on its lane, and retries by itself; nothing
- * that is already running is stopped.
- * Volumes smaller than 100 GiB use 10%, 12% and 2% of their capacity for
- * warning, recovery and admission, capped by the byte thresholds above.
+ * Warnings use diskWarningBytes(): 10% of capacity up to 100 GiB on
+ * large disks, with a 20% recovery margin. Small temp volumes keep their
+ * proportional limits. The environment setting can select another threshold
+ * or explicitly restore the legacy 10/12 GiB rule. Below DISK_CRITICAL_BYTES
+ * (scaled on small volumes), new worktrees wait and retry automatically.
+ * Existing agents keep running.
  */
 export const DISK_WARNING_BYTES = 10 * 1024 ** 3;
 export const DISK_RECOVERY_BYTES = 12 * 1024 ** 3;
@@ -42,13 +40,26 @@ const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
 
 export type DiskVolume = { volume?: string; views?: string[]; roles: string[]; freeBytes: number | null; totalBytes?: number; provisioning?: boolean; level: "ok" | "warning" | "critical" | "unknown" };
 export type DiskConsumer = { kind: "state" | "worktrees" | "temp"; bytes: number; measuredAt: string };
-export type DiskPressure = { at: string; episode: string | null; kernelBoot?: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
+export type DiskCategory = { name: string; bytes: number };
+export type DiskPressure = { categories?: DiskCategory[]; at: string; episode: string | null; kernelBoot?: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
 export type DiskRoot = { role: string; directory: string; provisioning?: boolean; view?: TempSweepRoot };
 export type DiskProbe = (directory: string) => { volume: string; freeBytes: number; totalBytes?: number } | null;
 
 /** Small volumes use 10%, 12% and 2% of their capacity respectively. */
 function threshold(bytes: number, totalBytes?: number): number {
   return totalBytes === undefined ? bytes : Math.min(bytes, totalBytes * bytes / (100 * 1024 ** 3));
+}
+
+/** Large disks warn at 10% (capped at 100 GiB); small temp volumes keep
+ * their proportional threshold. Zero explicitly selects the legacy rule. */
+export function diskWarningBytes(totalBytes?: number, env: Readonly<Record<string, string | undefined>> = process.env): number {
+  const raw = env.LLV_DISK_PRESSURE_FREE_GIB;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  if (Number.isFinite(configured) && configured >= 0) return configured === 0
+    ? threshold(DISK_WARNING_BYTES, totalBytes) : Math.max(DISK_WARNING_BYTES, configured * 1024 ** 3);
+  return totalBytes === undefined ? DISK_WARNING_BYTES
+    : totalBytes < 100 * 1024 ** 3 ? totalBytes * 0.1
+      : Math.max(DISK_WARNING_BYTES, Math.min(totalBytes * 0.1, 100 * 1024 ** 3));
 }
 
 /** Provisioning may name a checkout that does not exist yet. */
@@ -128,7 +139,7 @@ export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probe
       ...(observation?.totalBytes === undefined ? {} : { totalBytes: observation.totalBytes }), level: "unknown" });
   }
   return [...volumes.values()].map(row => ({ ...row, level: row.freeBytes === null ? "unknown"
-    : row.freeBytes < threshold(DISK_CRITICAL_BYTES, row.totalBytes) ? "critical" : row.freeBytes < threshold(DISK_WARNING_BYTES, row.totalBytes) ? "warning" : "ok" }));
+    : row.freeBytes < threshold(DISK_CRITICAL_BYTES, row.totalBytes) ? "critical" : row.freeBytes < diskWarningBytes(row.totalBytes) ? "warning" : "ok" }));
 }
 
 /** Every stage writes scratch and agent config. Full-access Claude also
@@ -137,6 +148,7 @@ export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probe
 function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweepRoot[] = [], usesClaude = true): DiskRoot[] {
   const scratch = statePath("scratch");
   const roots: DiskRoot[] = [{ role: "state", directory: scratch, provisioning: true },
+    { role: "state", directory: attemptTempConfigParent(source), provisioning: true },
     { role: "state", directory: agentConfigSandboxRoot({ ...source, TMPDIR: path.join(scratch, "tmp") }), provisioning: true }];
   if (usesClaude) roots.push({ role: "temp", directory: source.CLAUDE_CODE_TMPDIR || source.TMPDIR || os.tmpdir(), provisioning: true });
   // The image's CLI shims enter the host namespace. Their canonical temp
@@ -189,13 +201,13 @@ export function observeDiskPressure(volumes: DiskVolume[], prior: DiskPressure |
   const observedViews = new Set(volumes.filter(row => row.level !== "unknown").flatMap(row => row.views ?? []));
   const missing = prior?.episode && prior.kernelBoot === kernelBoot ? prior.volumes.filter(row => row.volume && row.views?.length
     && !observed.has(row.volume) && !row.views.every(view => observedViews.has(view))
-    && (row.level === "unknown" || (row.freeBytes !== null && row.freeBytes < threshold(DISK_RECOVERY_BYTES, row.totalBytes)))) : [];
+    && (row.level === "unknown" || (row.freeBytes !== null && row.freeBytes < diskWarningBytes(row.totalBytes) * 1.2))) : [];
   volumes = [...volumes, ...missing.map(row => ({ ...row, freeBytes: null, level: "unknown" as const }))];
   const low = volumes.some(row => row.level === "warning" || row.level === "critical");
   const unknown = volumes.some(row => row.level === "unknown");
-  const recovering = volumes.some(row => row.freeBytes !== null && row.freeBytes < threshold(DISK_RECOVERY_BYTES, row.totalBytes));
+  const recovering = volumes.some(row => row.freeBytes !== null && row.freeBytes < diskWarningBytes(row.totalBytes) * 1.2);
   const episode = low ? prior?.episode ?? at : unknown || recovering ? prior?.episode ?? null : null;
-  return { at, kernelBoot, volumes, consumers: episode && episode === prior?.episode ? prior.consumers : [], warningBytes: DISK_WARNING_BYTES, criticalBytes: DISK_CRITICAL_BYTES, episode };
+  return { at, kernelBoot, volumes, ...(episode && episode === prior?.episode && prior.categories ? { categories: prior.categories } : {}), consumers: episode && episode === prior?.episode ? prior.consumers : [], warningBytes: Math.max(0, ...volumes.map(row => diskWarningBytes(row.totalBytes))), criticalBytes: DISK_CRITICAL_BYTES, episode };
 }
 
 /** The wake item, once the consumer sizes measured in this episode are in,
@@ -316,13 +328,13 @@ export async function readDiskPressureInHelper(ports: {
           const bytes = await allocatedBytes(consumerPath(worktree), [directory], seenAllocations);
           if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
         }
-        let tempBytes = 0;
+        let tempBytes = 0, unmanagedTempBytes = 0;
         for (const root of consumerRoots) {
           if (!tempViewAvailable(root)) continue;
           const base = root.via + root.path;
           try {
             for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-              if (!entry.isDirectory() || !isOwnedTempConsumerName(entry.name)) continue;
+              if (!entry.isDirectory()) continue;
               const child = path.join(base, entry.name);
               const canonicalChild = path.join(root.path, entry.name);
               // Scratch is part of state. Other owned roots can contain both a
@@ -330,17 +342,45 @@ export async function readDiskPressureInHelper(ports: {
               if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
               if (!tempViewAvailable(root)) break;
               const bytes = await allocatedBytes(child, [directory, ...worktreePaths], seenAllocations);
-              if (tempViewAvailable(root)) tempBytes += bytes;
+              if (tempViewAvailable(root)) {
+                if (isOwnedTempConsumerName(entry.name)) tempBytes += bytes; else unmanagedTempBytes += bytes;
+              }
             }
           } catch { /* An inaccessible root has no attributable consumer count. */ }
         }
         if (target.pressure.episode !== episode) return;
+        const scratchBytes = await allocatedBytes(statePath("scratch"));
+        if (target.pressure.episode !== episode) return;
+        const evidenceBytes = await allocatedBytes(statePath("evidence"));
+        if (target.pressure.episode !== episode) return;
+        let ledgerBytes = 0, liveHeldBytes = 0, overCapBytes = 0;
+        try {
+          const attempt = JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8"));
+          ledgerBytes = attempt.bytes || 0; liveHeldBytes = attempt.liveHeldBytes || 0; overCapBytes = attempt.overCapBytes || 0;
+        } catch { /* No measured ledger yet. */ }
+        const kept = readWorktreeSweepReport()?.kept ?? [];
+        const worktreeKinds = new Map<string, number>();
+        for (const row of kept) worktreeKinds.set(row.reason, (worktreeKinds.get(row.reason) ?? 0) + (row.bytes ?? 0));
+        let releaseBytes = 0;
+        try { releaseBytes = JSON.parse(fs.readFileSync(statePath("self-update/retention.json"), "utf8")).kept.reduce((total: number, row: { bytes?: number }) => total + (row.bytes ?? 0), 0); } catch { /* No release measurement yet. */ }
+        const used = target.pressure.volumes.reduce((total, row) => total + (row.totalBytes !== undefined && row.freeBytes !== null ? Math.max(0, row.totalBytes - row.freeBytes) : 0), 0);
         target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
+        target.pressure.categories = [
+          { name: `Тимчасові дані агентів (утримує активність, перевірена частина: ${formatDiskBytes(liveHeldBytes)}; понад ліміт: ${formatDiskBytes(overCapBytes)})`, bytes: ledgerBytes },
+          { name: "Scratch поза обліком розміру", bytes: Math.max(0, scratchBytes - ledgerBytes) },
+          { name: "Збережені зображення та звіти", bytes: evidenceBytes },
+          ...[...worktreeKinds].map(([reason, bytes]) => ({ name: `Робочі дерева (${reason})`, bytes })),
+          { name: "Обліковані тимчасові дані поза scratch", bytes: tempBytes },
+          { name: "Необліковані тимчасові дані", bytes: unmanagedTempBytes },
+          { name: "Збережені релізи", bytes: releaseBytes },
+          { name: "Інші дані стану", bytes: Math.max(0, stateBytes - scratchBytes - evidenceBytes) },
+          { name: "Поза обліком Delegatus", bytes: Math.max(0, used - stateBytes - worktreeBytes - tempBytes - unmanagedTempBytes - releaseBytes) },
+        ];
         target.consumersAt = now();
         withFileTransactionSync(file, "disk pressure report is busy", () => {
           const latest = readReport(file);
           if (latest?.episode !== episode) return;
-          writeJsonDurably(file, { ...latest, consumers: target.pressure.consumers });
+          writeJsonDurably(file, { ...latest, consumers: target.pressure.consumers, categories: target.pressure.categories });
         });
       } finally { await reader.close(); }
     })().catch((error) => console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error)))
@@ -353,6 +393,13 @@ export async function readDiskPressureInHelper(ports: {
  * consumer walks. Only the compact pressure report crosses back to readers. */
 export async function readDiskPressure(ports: Parameters<typeof readDiskPressureInHelper>[0] = {}): Promise<DiskPressure> {
   if (Object.keys(ports).length || process.env.LLV_STATE_OWNER === "mcp") return readDiskPressureInHelper(ports);
+  if (process.env.LLV_STATE_OWNER === "viewer" && !viewerReleaseOwnsTraffic()) return readDiskPressureInHelper({ readOnly: true });
   const { readDiskPressureOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
-  return readDiskPressureOffThread();
+  const pressure = await readDiskPressureOffThread();
+  if (process.env.LLV_STATE_OWNER === "viewer") {
+    const { reconcileDiskPressure, productionDiskPressureActions } = await import("./diskPressureActions");
+    try { await reconcileDiskPressure(pressure, productionDiskPressureActions()); }
+    catch (error) { console.warn("[disk pressure] notice delivery deferred", error instanceof Error ? error.message : String(error)); }
+  }
+  return pressure;
 }

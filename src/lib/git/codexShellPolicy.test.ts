@@ -81,3 +81,19 @@ test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides pr
     expect(run(["git", "config", "user.email"])).toBe(personal);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test.skipIf(!nativeBinary)("native Codex accepts the production scratch and evidence permission profiles", async () => {
+  const { materializeStructuredHostAccess, structuredHostAccessPolicy } = await import("@/lib/runtime/structuredSpawn");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  for (const policy of [true, structuredHostAccessPolicy(emptyLaunchProfile({ readOnly: true, sandbox: "restricted" }))]) {
+    const access = materializeStructuredHostAccess(policy, { ...process.env }, null);
+    try {
+      const config = access.codex.permissionProfileConfig!;
+      const name = access.codex.permissionProfile!;
+      const answer = await readCodexShellPolicy(nativeBinary!, access.env.TMPDIR!, access.env,
+        ["-c", config, "-c", `default_permissions=${JSON.stringify(name)}`], { ignoreUserConfig: true });
+      expect(answer).toBeObject();
+    } finally { access.cleanup(); }
+  }
+}, 30_000);

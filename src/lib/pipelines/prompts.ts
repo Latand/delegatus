@@ -121,7 +121,7 @@ export function renderStagePrompt(
     "",
     ...roleContext,
     ...(PROTOTYPE_STAGE_ROLES.includes(role.roleId)
-      ? ["Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]
+      ? ["Prototype stages write numbered frames under $LLV_EVIDENCE_DIR and report their directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]
       : []),
     access,
     hostAccess,

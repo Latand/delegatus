@@ -348,7 +348,21 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             const target = path.join(candidate.dir, ignored);
             let stat: fs.Stats;
             try { stat = fs.lstatSync(target); } catch { content = { ...content, ignored: [ignored] }; break; }
-            if (!stat.isDirectory() || stat.isSymbolicLink()) { content = { ...content, ignored: [ignored] }; break; }
+            if (stat.isFile() || stat.isSymbolicLink()) {
+              const { current, processes: fresh } = await freshObservation();
+              const final = fs.lstatSync(target, { throwIfNoEntry: false });
+              if (protect(candidate, current, fresh, true) || heldByProcess(target, fresh) || current.fenced !== true
+                || !final || final.dev !== stat.dev || final.ino !== stat.ino
+                || !disposableIgnoredPath(candidate.dir, ignored)) {
+                content = { ...content, ignored: [ignored] }; break;
+              }
+              fs.unlinkSync(target);
+              report.reclaimedCacheBytes += stat.blocks * 512;
+              content = await worktreeStatus(candidate.dir);
+              if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)) break;
+              continue;
+            }
+            if (!stat.isDirectory()) { content = { ...content, ignored: [ignored] }; break; }
             const generated = ignored.split("/").some(name => ["node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage", "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".venv", "venv", ".tox", ".nox"].includes(name) || name.endsWith(".egg-info"));
             const journal = path.join(path.dirname(reportFile), `release-output-trash-${randomUUID()}.json`);
             const row = quarantineTree(target, journal);

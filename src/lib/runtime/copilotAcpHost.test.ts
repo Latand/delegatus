@@ -701,3 +701,15 @@ for (const ending of ["release", "external"] as const) test(`Copilot host exit o
     expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
 });
+
+
+test("Copilot child environments keep the production scratch and evidence allocations", async () => {
+  const { materializeStructuredHostAccess } = await import("./structuredSpawn");
+  const access = materializeStructuredHostAccess(false, { ...process.env }, null, sandbox);
+  try {
+    const env = copilotChildEnv(access.env, path.join(sandbox, "home"));
+    expect(env.TMPDIR).toBe(path.join(access.scratchDirectory!, "tmp"));
+    expect(env.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
+    expect(fs.statSync(env.LLV_EVIDENCE_DIR!).isDirectory()).toBeTrue();
+  } finally { access.cleanup(); }
+});

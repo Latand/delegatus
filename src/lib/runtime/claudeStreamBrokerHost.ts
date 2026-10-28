@@ -308,6 +308,7 @@ const CHILD_ENV_ALLOWLIST = [
   /* Explicit opt-in for Claude's bypass-permissions mode under container root. */
   "IS_SANDBOX",
   "LLV_SPAWN_CAPABILITY",
+  "LLV_EVIDENCE_DIR",
   "LLV_GATE_CPU_PRIORITY_SOURCE",
   /* Where Claude Code writes background-task output. A pipeline stage runs
      with TMPDIR in its scratch directory and this pinned to the temp root the

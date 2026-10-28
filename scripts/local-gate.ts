@@ -1,7 +1,9 @@
+import { recordGateSandbox } from "./gateSandboxRecords";
 import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -213,10 +215,10 @@ export function createGateSandbox(
   create: (prefix: string) => string = mkdtempSync,
 ): string {
   try {
-    return create(path.join(gateTemporaryRoot(platform), "delegatus-local-gate-"));
+    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform), "delegatus-local-gate-")));
   } catch (error) {
     if (platform === "win32" || !["EROFS", "EACCES", "ENOENT"].includes((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
-    return create(path.join("/tmp", "delegatus-local-gate-"));
+    return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")));
   }
 }
 
@@ -902,6 +904,23 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   let runtime: Promise<string> | undefined;
   let runtimeTree: string | undefined;
   const fixtures = new Map<string, Promise<string>>();
+  // The outer hook also allocates logs and Cloud input. Acquire its cleanup
+  // owner before allocation; admitted children inherit the same journal.
+  if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) };
+    if (deadline) {
+      const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
+      const allowance = supervisorTimeoutMs(deadline.at, env);
+      env.LLV_OWNED_RUN_TIMEOUT_MS = String(Number.isFinite(inherited) && inherited > 0 ? Math.min(inherited, allowance) : allowance);
+      env.LLV_GATE_PUSH_DEADLINE = String(deadline.at);
+    }
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "owned-runner.ts"),
+      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, import.meta.path, ...process.argv.slice(2)],
+      { cwd: root, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const code = await child.exited;
+    if (code !== 0) throw new AdmittedGateFailed(code);
+    return;
+  }
   const sandbox = createGateSandbox();
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and

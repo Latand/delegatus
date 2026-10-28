@@ -324,7 +324,7 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
     expect(access.scratchDirectory!.startsWith(`${stateDirectory}${path.sep}`)).toBeTrue();
     expect(access.codex).toEqual({
       permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-      permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write"}}`,
+      permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write",${JSON.stringify(access.env.LLV_EVIDENCE_DIR)}="write"}}`,
     });
     expect(access.host).toEqual({
       forwardGitHubConfig: true,
@@ -339,10 +339,11 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
     const sourceEnv: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: "/shared/home", TMPDIR: "/original/tmp" };
     const readWrite = materializeStructuredHostAccess(false, sourceEnv, "capability", directory);
     expect(readWrite).toMatchObject({
-      env: { ...sourceEnv, LLV_SPAWN_CAPABILITY: "capability" },
+      env: { ...sourceEnv, TMPDIR: path.join(readWrite.scratchDirectory!, "tmp"), LLV_SPAWN_CAPABILITY: "capability" },
       codex: { sandbox: "danger-full-access" },
-      scratchDirectory: null,
+      scratchDirectory: expect.any(String),
     });
+    readWrite.cleanup();
   } finally {
     if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDirectory;
@@ -6937,4 +6938,18 @@ for (const ending of ["release", "external", "code"] as const) test(`Codex host 
     expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
     expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
+});
+
+
+test.each([false, true])("Codex child environments preserve the production evidence folder (resume=%s)", async resumed => {
+  const access = materializeStructuredHostAccess(false, { ...process.env }, null);
+  const server = new FakeAppServer("evidence-thread");
+  const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+  const options = { cwd: metadataState, env: access.env, ...access.codex, ...access.host,
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+  const host = resumed ? await CodexAppServerHost.adopt("evidence-thread", options) : await CodexAppServerHost.start(options);
+  try {
+    expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
+    expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
+  } finally { await host.release(); access.cleanup(); }
 });

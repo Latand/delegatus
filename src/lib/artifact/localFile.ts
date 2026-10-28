@@ -35,16 +35,11 @@ export function underRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(root + path.sep);
 }
 
-/* Where agents write rendered evidence outside the home directory (#2084):
-   stage specs keep rasters out of the repository and the config root, so
-   renders land under `/var/tmp/<lane>/`. `LLV_EVIDENCE_ROOTS` (a `:`-separated
-   list of absolute directories) replaces the default for an install whose
-   agents write elsewhere. */
-const DEFAULT_EVIDENCE_ROOTS = ["/var/tmp"];
-
+/* Durable rendered evidence is outside every managed scratch root. The
+   historical OS temp location remains readable for existing report links. */
 export function evidenceRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
-  const roots = configured === undefined ? DEFAULT_EVIDENCE_ROOTS : configured.split(":");
+  const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(":");
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
 }
 

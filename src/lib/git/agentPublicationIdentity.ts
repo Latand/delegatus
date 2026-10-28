@@ -36,7 +36,8 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
   const identity = agentPublicationIdentityEnv(source);
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
-  const set = { ...identity, ...shellBindings };
+  const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
+  const set = { ...identity, ...shellBindings, ...storage };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
   const override: Record<string, unknown> = { set };

@@ -1,0 +1,1086 @@
+{
+  "recordedAt": "2026-10-28T21:05:23.780932+00:00",
+  "baselineRevision": "1facbf0fd24449e076a6ee1eef8cc3c857439049",
+  "regressionBaselineRevision": "cca87131968c270db72d6155076da8ecf1c232d4",
+  "gateWrapper": "scripts/gate-slot.sh",
+  "environmentBuilders": [
+    "scripts/gate-cache.ts:checkEnvironment",
+    "scripts/local-gate.ts:isolatedEnvironment"
+  ],
+  "serial": true,
+  "typecheck": {
+    "command": [
+      "bash",
+      "scripts/gate-slot.sh",
+      "bunx",
+      "tsc",
+      "--noEmit"
+    ],
+    "headExit": 0,
+    "baseExit": 0,
+    "cold": true
+  },
+  "regressions": [
+    {
+      "cause": "temp",
+      "baseRevision": "cca87131968c270db72d6155076da8ecf1c232d4",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/tempSweep.test.ts",
+        "-t",
+        "unreadable retained directory|refused inspection|failed production sweep"
+      ],
+      "baseExit": 1,
+      "baseCounts": {
+        "pass": 0,
+        "fail": 3,
+        "skip": 0
+      },
+      "baseFailingCases": [
+        "a failed production sweep records a fresh failed report before refusing",
+        "a refused inspection is recorded and the next candidate is still handled",
+        "an unreadable retained directory does not abort the sweep or its report"
+      ],
+      "headFile": "src/lib/tempSweep.test.ts",
+      "headExit": 0
+    },
+    {
+      "cause": "filesystem",
+      "baseRevision": "cca87131968c270db72d6155076da8ecf1c232d4",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "-t",
+        "real uv layout|fixture Git worktrees"
+      ],
+      "baseExit": 1,
+      "baseCounts": {
+        "pass": 1,
+        "fail": 3,
+        "skip": 0
+      },
+      "baseFailingCases": [
+        "fixture Git worktrees contained in the attempt can retire",
+        "real uv layout cache/uv/sdists-v9 is disposable",
+        "real uv layout uv-cache/sdists-v9 is disposable"
+      ],
+      "headFile": "src/lib/runtime/attemptTempFilesystem.test.ts",
+      "headExit": 0
+    },
+    {
+      "cause": "adoption",
+      "baseRevision": "cca87131968c270db72d6155076da8ecf1c232d4",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts",
+        "-t",
+        "legacy scratch adoption|real uv cache"
+      ],
+      "baseExit": 1,
+      "baseCounts": {
+        "pass": 0,
+        "fail": 2,
+        "skip": 0
+      },
+      "baseFailingCases": [
+        "a settled attempt containing the real uv cache retires through the ledger",
+        "legacy scratch adoption survives reopening and preserves foreign and live roots"
+      ],
+      "headFile": "src/lib/runtime/attemptTempRetention.test.ts",
+      "headExit": 0
+    },
+    {
+      "cause": "release",
+      "baseRevision": "cca87131968c270db72d6155076da8ecf1c232d4",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/selfUpdate/retention.test.ts",
+        "-t",
+        "generated regular files"
+      ],
+      "baseExit": 1,
+      "baseCounts": {
+        "pass": 0,
+        "fail": 1,
+        "skip": 0
+      },
+      "baseFailingCases": [
+        "generated regular files no longer hold an old release"
+      ],
+      "headFile": "src/lib/selfUpdate/retention.test.ts",
+      "headExit": 0
+    }
+  ],
+  "checks": [
+    {
+      "file": "scripts/local-gate-tests.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "scripts/local-gate-tests.test.ts",
+        "--timeout",
+        "60000"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 67,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "scripts/local-gate.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "scripts/local-gate.test.ts",
+        "--timeout",
+        "60000"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 96,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "scripts/owned-runner.integration.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "scripts/owned-runner.integration.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 49,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/accounts/migration/provider.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/accounts/migration/provider.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 49,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/artifact/localFile.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/artifact/localFile.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/git/agentPublicationIdentity.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/git/agentPublicationIdentity.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 9,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/git/codexShellPolicy.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/git/codexShellPolicy.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.delivery.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/monitor/seatTickController.delivery.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 32,
+        "fail": 22,
+        "skip": 0
+      },
+      "baselineComparisons": [
+        "baseline-0-4",
+        "baseline-1-4"
+      ],
+      "preExistingFailures": [
+        "a dead-host original-key retry refreshes its snapshot and recovers without acknowledging early",
+        "a delivery whose terminal acknowledgement the record never received lands on the journal's word, on the plan the raising check wrote",
+        "a dispatch paused before reservation blocks rotation until its returned refusal is fenced (#1465)",
+        "a drain retains an unaccepted wake's original key until its retry is admitted",
+        "a journal answer that proves nothing keeps the fence: a late admission the queue fenced, and an old host's unverified failure",
+        "a journal verdict the record cannot take still releases: a reservation compacted to its owner row is not what the replacement needs",
+        "a late Claude confirmation closes a retired wake under its original key without sending or crediting it",
+        "a paused old lookup cannot dispatch after a successor replaces the refused wake (#1465)",
+        "a released wake is raised again as a new message the journal admits, through the real transport, and lands exactly once (#1672)",
+        "a replacement released in its turn is raised under a third key, distinct from both before it (#1672)",
+        "a returned 409 or 503 refusal is fenced across rotation and the successor acknowledges once (#1465)",
+        "a send the host admitted and rejected outright is released in the same check, whatever disposition the record kept",
+        "a wake stranded by a replaced seat is retired, and the successor's own wake goes out (#1594)",
+        "a wake the settlement ended unrecorded fences inside its bound, the board names the operation, the record's reason and the journal's silence, and the bound is what ends it (#1746)",
+        "a wake waits out the seat's running turn instead of interrupting it, and reaches the seat once, when it is idle",
+        "a wake whose identity crosses the bound is admitted by the real journal through the real transport, and lands (#1771)",
+        "dead Viewer MCP withholds a recordless refusal retry under its original key until recovery",
+        "the #1672 shape — a key anchored eight days back that no evidence can settle — is retired on its bound and the first check past it delivers a wake (#1746)",
+        "the journal's own terminal verdict outranks a record settled without it: rejected releases the fence and the next wake goes out",
+        "the permitted recovery for the stranded shape is supersession: the attempt retires whole and the successor is woken (#1594)",
+        "the wake replacing an attempt retired on its age stays inside the bound the runtime journal admits, and reaches the seat (#1771)",
+        "the wake that replaces an attempt retired on its age is the project's only one in flight (#1746)"
+      ]
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/monitor/seatTickController.reporting.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 25,
+        "fail": 27,
+        "skip": 0
+      },
+      "baselineComparisons": [
+        "baseline-0-3",
+        "baseline-1-3"
+      ],
+      "preExistingFailures": [
+        "a deploy admitted before a lost reply still wakes its idle seat exactly once (#2346)",
+        "seat auto-rotation through production seams > a fresh process reconciles a lost automatic request with a busy predecessor",
+        "seat auto-rotation through production seams > a fresh process reconciles a lost automatic request with a idle predecessor",
+        "seat auto-rotation through production seams > a fresh process reconciles a lost automatic request with a unknown predecessor",
+        "seat auto-rotation through production seams > a large estimate waits until the transcript reports usage",
+        "seat auto-rotation through production seams > a lost outcome write recovers the accepted key and finishes a refused card without a second rotation",
+        "seat auto-rotation through production seams > a manual rotation winning between decision and command supersedes the automatic attempt",
+        "seat auto-rotation through production seams > a provisional successor rollback is reported once and its failure card stays open until disabled",
+        "seat auto-rotation through production seams > a turn starting during handoff digest defers automatic replacement until completion",
+        "seat auto-rotation through production seams > a turn starting during usage read defers automatic replacement until completion",
+        "seat auto-rotation through production seams > a turn starting while spawn is awaited keeps incumbent authority and reports one failed replacement",
+        "seat auto-rotation through production seams > a turn-held attempt executed after an hour keeps a full cooldown after failed, including restart",
+        "seat auto-rotation through production seams > a turn-held attempt executed after an hour keeps a full cooldown after rotated, including restart",
+        "seat auto-rotation through production seams > a update-held attempt executed after an hour keeps a full cooldown after failed, including restart",
+        "seat auto-rotation through production seams > a update-held attempt executed after an hour keeps a full cooldown after rotated, including restart",
+        "seat auto-rotation through production seams > an update-held attempt waits on stalled/busy before replay",
+        "seat auto-rotation through production seams > an update-held attempt waits on stalled/unknown before replay",
+        "seat auto-rotation through production seams > an update-held launch replays its own pending intent and key at the next safe check",
+        "seat auto-rotation through production seams > busy seat receives one steer-or-queue nudge at fifteen minutes and rotates only after the turn ends",
+        "seat auto-rotation through production seams > failures keep the incumbent, report once per epoch and retry after the persisted cooldown",
+        "seat auto-rotation through production seams > idle reported usage rotates through the normal command once, preserving handoff, lineage and project settings",
+        "seat auto-rotation through production seams > panel reconciliation during spawn preserves a predecessor that started a turn",
+        "seat auto-rotation through production seams > positive idle liveness corrects a stale busy registry turn at admission",
+        "seat auto-rotation through production seams > seat tick launches its successor through the production spawn defer without a request scope",
+        "seat auto-rotation through production seams > stalled seat with busy liveness keeps authority until positive idle evidence",
+        "seat auto-rotation through production seams > stalled seat with unknown liveness keeps authority until positive idle evidence",
+        "seat auto-rotation through production seams > wakes off withholds the busy nudge and still permits idle automatic rotation"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.creation.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 96,
+        "fail": 0,
+        "skip": 3
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/prompts.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/prompts.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/runtimeSwitch.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/runtimeSwitch.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 171,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/stageCompletion.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 33,
+        "fail": 25,
+        "skip": 0
+      },
+      "baselineComparisons": [
+        "baseline-0-2",
+        "baseline-1-2"
+      ],
+      "preExistingFailures": [
+        "a brief written before stage_report survives a shorter closing message",
+        "a delivered parked attempt accepts its fenced verdict and takes the fail edge (#1979)",
+        "a delivered parked attempt accepts its report verdict and takes the fail edge (#1979)",
+        "a live attempt's reported completion settles it when the turn ends, with server-collected provenance",
+        "a long final brief is bounded in bytes with an explicit truncation marker",
+        "a long stage_report finding survives settlement and the fix relay intact",
+        "a needs_decision parks with no fail edge, and parks with no findings (#1785)",
+        "a needs_decision with findings fires the fail edge and hands the findings to the fix stage (#1785)",
+        "a needs_decision with findings on a spent default edge is handed to the fix stage once, then follows the pass edge (#1868)",
+        "a needs_decision with findings parks once a park edge's budget is spent (#1785)",
+        "a pass reported without a summary relays its prose without the fenced JSON verdict",
+        "a persisted legacy attempt without final prose relays its summary",
+        "a plain fail still routes under its own heading, and a plain pass still advances (#1785)",
+        "a reported fail routes along the fail edge and relays the summary as the stage's output",
+        "a review-loop stage's reviewer cannot report a completion, and nothing is written",
+        "a routed needs_decision leaves no chip claiming the operator is needed, while a parked one still reads needs you (#1785)",
+        "a second call replaces the first before settlement, and is refused after it",
+        "a spent-budget handoff keeps the fix's whole brief and cuts a longer one with a marker, on a character boundary",
+        "a stage parked before spawn replaces the preceding stage note, while newer notes still win",
+        "claude final brief reaches the next stage through {{prev.output}} and the automatic relay",
+        "codex final brief reaches the next stage through {{prev.output}} and the automatic relay",
+        "publication blocked, a failed stage and a spent budget each leave a plain current note",
+        "retrying a signed-out park clears its automatic note through running and completion",
+        "stage_report and controller ticks ignore a future stage beside a healthy running lane",
+        "terminal JSON with a bare severity cannot settle as a review finding"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/worktreeSweep.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/worktreeSweep.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 390,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/worktreeSweepCache.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/worktreeSweepCache.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/worktreeSweepWorker.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/pipelines/worktreeSweepWorker.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 33,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/roles/parameters.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/roles/parameters.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/roles/registry.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/roles/registry.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 23,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/roles/workerLimit.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/roles/workerLimit.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/agentConfigSandbox.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/agentConfigSandbox.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 4,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/attemptTempFilesystem.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 21,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/attemptTempProduction.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/attemptTempRetention.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 31,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/claudeStreamBrokerHost.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/claudeStreamBrokerHost.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 159,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/codexAppServerHost.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 248,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/copilotAcpHost.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/copilotAcpHost.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 39,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/startup.handoverRetry.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/startup.handoverRetry.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 4,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/startup.quarantine.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/startup.quarantine.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/startup.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/startup.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 161,
+        "fail": 4,
+        "skip": 0
+      },
+      "baselineComparisons": [
+        "baseline-0-0",
+        "baseline-1-0"
+      ],
+      "preExistingFailures": [
+        "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)",
+        "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+        "startup socket recovery retains a partially adopted host and drains its held send once",
+        "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/startupRowRetries.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/startupRowRetries.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/structuredSpawn.integration.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/structuredSpawn.integration.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 143,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/structuredSpawn.memory.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/runtime/structuredSpawn.memory.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/selfUpdate/auto.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/selfUpdate/auto.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 106,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/selfUpdate/retention.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/selfUpdate/retention.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 125,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/selfUpdate/retentionPass.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/selfUpdate/retentionPass.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 9,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/state/diskPressure.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/state/diskPressure.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 51,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/state/diskPressureActions.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/state/diskPressureActions.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/state/diskPressureSweeps.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/state/diskPressureSweeps.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/state/diskPressureWatch.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/state/diskPressureWatch.test.ts"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/stateOwnership.entryPoints.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/stateOwnership.entryPoints.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 30,
+        "fail": 2,
+        "skip": 0
+      },
+      "baselineComparisons": [
+        "ownership-base-0-1",
+        "ownership-base-1-1"
+      ],
+      "preExistingFailures": [
+        "an entry point that owns the operator's state, under a home holding only ~/.config/agent-log-viewer > scripts/codex-update.ts reaches its own body",
+        "an entry point that owns the operator's state, under a home holding only ~/.config/delegatus > scripts/codex-update.ts reaches its own body"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/stateOwnership.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 14,
+        "fail": 1,
+        "skip": 0
+      },
+      "baselineComparisons": [
+        "ownership-base-0-0",
+        "ownership-base-1-0"
+      ],
+      "preExistingFailures": [
+        "the operator's state directory > an MCP registry reader leaves operator-owned legacy cleanup for the release fence"
+      ]
+    },
+    {
+      "file": "src/lib/tempSweep.test.ts",
+      "command": [
+        "bash",
+        "scripts/gate-slot.sh",
+        "bun",
+        "test",
+        "src/lib/tempSweep.test.ts",
+        "--timeout",
+        "60000"
+      ],
+      "exit": 0,
+      "counts": {
+        "pass": 75,
+        "fail": 0,
+        "skip": 0
+      },
+      "baselineComparisons": [],
+      "preExistingFailures": []
+    }
+  ],
+  "nativeCodex": {
+    "binaryVersion": "0.162.1",
+    "metadataOnly": true,
+    "exit": 0
+  },
+  "browser": {
+    "engine": "agent-browser with Chromium headless shell",
+    "fixture": "offline data URL",
+    "managedTempBuilder": "materializeStructuredHostAccess(false)",
+    "exit": 0
+  },
+  "sourceSha256": {
+    "scripts/gateSandboxRecords.ts": "3048284cf6942500da1ebffd89b7a6789c1a4ef162462b33ab78f56715f6e037",
+    "scripts/local-gate-tests.ts": "b03ea54618548dc434e5a5f3205a4690f254013785e951c29d0d69bb7e738fd8",
+    "scripts/local-gate.test.ts": "2b54d54fd101c4332c2613c1b533c09775bed94cb9ab40228524c9fce8958996",
+    "scripts/local-gate.ts": "df27afa4476db950fbddb2b24c266090a80da0d69604dfc3c93f8dd35a2acc53",
+    "scripts/owned-runner.ts": "bc0d2ea96766bf8893110f82206614f6d75b56d9eea424e639ef567588d8c34c",
+    "src/lib/accounts/migration/provider.ts": "89f916142b81b87c449d32d18aff94053427ded1ca9f9a861795adc379715f9b",
+    "src/lib/artifact/localFile.ts": "28496d89f2724f63a88694fa38c70fee966b6a8767dd90d7e749d453ec93dd89",
+    "src/lib/git/agentPublicationIdentity.test.ts": "3501cde407c5aef1b839313784f4090beb29dc61dd8aa940ca7c1fd999b91174",
+    "src/lib/git/agentPublicationIdentity.ts": "75c2ac040b8f10833c532e57007859d641182976300e03ee69a697ae5747a982",
+    "src/lib/git/codexShellPolicy.test.ts": "20904c9504e3b202abaedfb6b25a78e5894482eddc17ace288905017fd0b1876",
+    "src/lib/mcp/server.ts": "e14d9cae349d635f205032bcfe45cc95f81da165bede965cb8a4af9da998561c",
+    "src/lib/monitor/seatTickController.ts": "d1a7a545b07b21ee4dcd5c50b55fb715c46bce7b5b89548b97658c60f99b3c52",
+    "src/lib/monitor/types.ts": "54bb3c383777790b039526a76c66a2fe28126c8221e185aefe9d93058f576b58",
+    "src/lib/pipelines/prompts.test.ts": "b21d4022596fcc7b5b9504a990bc22bec81f20822453d97e2e4d6e6cf4171102",
+    "src/lib/pipelines/prompts.ts": "e9647609d445d0781318141570d3075fb882a8898f5d67db0d9de290ae262a1e",
+    "src/lib/pipelines/worktreeBackup.ts": "dc1b0ed630dcc70d55263b60513ff86dd20968d56c5b2aa1001948b9f0baa7e2",
+    "src/lib/pipelines/worktreeSweep.test.ts": "95ca3cff2c2952615299a7805fe34e2c70f9d61112cc6b192bbbd5f86228f9be",
+    "src/lib/pipelines/worktreeSweep.ts": "ff5dce557770fccc48406dccc5d5192377d95a76affe560fb3588f358d515f18",
+    "src/lib/roles/defaults.ts": "cb1ff7b16f84480a7b55d033b53c7b9ce4c171acfc1dda6cabd0aab18e97180b",
+    "src/lib/runtime/attemptTempFilesystem.test.ts": "1659f9fea976b0fda1c1f5c20f664aad9bffc7c16924c5563299d4b428f673b6",
+    "src/lib/runtime/attemptTempFilesystem.ts": "56b0e5a7a39bbd37ac53423e7bb79d7b5d542689ec5baad7b85092b561c7ebd5",
+    "src/lib/runtime/attemptTempPaths.ts": "cb7b8a210403f7abd1e39194eedb2d4abca3eda6b36cc13e44d74488b3279949",
+    "src/lib/runtime/attemptTempProduction.test.ts": "5b5c1f5abce6400a0967db7f37de9b630afb4ad8f90d6ae7bb8dab2ea391fff5",
+    "src/lib/runtime/attemptTempProduction.ts": "fc7b8aefc13fe09fd52815c92cab6bb9ef25b7f22e3b8d0e86e02027108afcf7",
+    "src/lib/runtime/attemptTempRetention.test.ts": "c29f068c0ae720d35de72abfa12881ec6a1b4ab5b26f79d13564d1914719f1b0",
+    "src/lib/runtime/attemptTempRetention.ts": "7c8002c0487ec07bf065585719b9c15e797c0541d8ccf9083ee314af944116b0",
+    "src/lib/runtime/claudeStreamBrokerHost.test.ts": "63c86b3c8150c4e7f4e9a581c52790b3db6870d2a3e07ce52ceab5bb659f878e",
+    "src/lib/runtime/claudeStreamBrokerHost.ts": "4c1494b533329f9e2c602a5eac8e1c9451643694ac21ca0a28d1a5ec37f0e852",
+    "src/lib/runtime/codexAppServerHost.test.ts": "8f2a4723cb8f4d8de71dfa8ca6adc60cbca86987f5d8798b18b4136db66d646d",
+    "src/lib/runtime/codexAppServerHost.ts": "495a311837d481a86453b3e588cbe3eab5837ef611a5ba80c0af23bce7c46bc6",
+    "src/lib/runtime/copilotAcpHost.test.ts": "cc64f69ccb6784c66f4d47f2ea0941982e2939d76f8383893ba3c490e62757e0",
+    "src/lib/runtime/copilotAcpHost.ts": "8dfe9fc73a043178049af0a9555ab2913b7ba5f52489238a9dad7852ac076720",
+    "src/lib/runtime/startup.test.ts": "4908a8c3c5850278bf7e7e03f1ff277e4254e566de6bb325be7de6e6efc4e4ca",
+    "src/lib/runtime/startup.ts": "b7d0c05b147c9123fb85523d2a4a7e01dcb471c00d0829e798bbce3168274926",
+    "src/lib/runtime/structuredSpawn.ts": "577d86abd042d4e836dee3bb9fc62b2ba69e362d98d039274abb24605b91a544",
+    "src/lib/selfUpdate/retention.test.ts": "df0df46f6fa696f7d1b3ddea51a3c1034f84ef231f1e2cbbf1d51f38c1b417bc",
+    "src/lib/selfUpdate/retention.ts": "e76262a845ae3460ea5aabbc525a0c8ab34d66fab8d5c18621891b1c5f434ed3",
+    "src/lib/selfUpdate/service.ts": "e86939f99c38654ed0d5a09bcc3d4948f9d95f47bbe6b5bb7625c5983fed9f20",
+    "src/lib/state/diskPressure.test.ts": "a49c921b217149fd9247d7f3a006ce6f29dd88dca5b60f4bc01bf6e9494af1f3",
+    "src/lib/state/diskPressure.ts": "befc787023cfdff1b590f65084edaf865afe716b6228aadee3a6d7897ded43d9",
+    "src/lib/state/diskPressureActions.fixture.ts": "ca4060ad35654579575b39db70af358cdc4892c3d0d19a828b743884acfe51bc",
+    "src/lib/state/diskPressureActions.test.ts": "9d468951a6a1f355552b7496db049abc484b7e86d405b1f9103e3a74fb36ff50",
+    "src/lib/state/diskPressureActions.ts": "86370c75b6461d9fd40f13c807c91c93abbda8e7a53761382bdba88ed9c66717",
+    "src/lib/state/diskPressureSweeps.test.ts": "1b3d36a4124b3a7d51255d911e76558788096693860e32df6a5168d894dfc9d4",
+    "src/lib/state/diskPressureSweeps.ts": "186eefd4981da375c62ca6dd5eb7a4c732b800ef29974486431e00ef0487c8ce",
+    "src/lib/state/diskPressureWatch.test.ts": "968dc0f09a52306acd3d3e701e212eab83f558d31bde3baba0d3261379b2e700",
+    "src/lib/state/diskPressureWatch.ts": "2d5a31124e303e05af39fd2081d0df0a937b55cb83f0fc5fff26f459b65d2f34",
+    "src/lib/stateOwnership.ts": "8f038f0e7927deb23163c1609f682be42f4cfee26a237395e00777bc7ca3159a",
+    "src/lib/tempSweep.test.ts": "f3c7a80af88fe9d87f3cf820f64aee9bd0e8c1f2ca0c80d67fea6de3c18e8ecb",
+    "src/lib/tempSweep.ts": "35ae1aadb1a4161db47e728621246c951be461d11bbaeaaa10b61a71e9fdbaad"
+  },
+  "noPerformanceClaim": true,
+  "promptBytes": {
+    "fixture": "buildPipeline with Retention task and Implement the acceptance stage, rendered by renderStagePrompt over ROLE_DEFAULTS",
+    "baseBuilder": 13288,
+    "overlappingProgressChangeBuilder": 13284,
+    "headBuilder": 13459,
+    "headLargestRole": 19182,
+    "limit": 32000
+  },
+  "ownedFinalRunExit": 0,
+  "standaloneHook": {
+    "baseRevision": "cca87131968c270db72d6155076da8ecf1c232d4",
+    "baseExit": 1,
+    "headExit": 0,
+    "case": "the real unadmitted hook owns its sandbox before a deadline",
+    "observes": "native allocator in the real CLI process, before phase readiness"
+  },
+  "caseTimeoutControl": {
+    "file": "src/lib/tempSweep.test.ts",
+    "earlierDefaultTimeoutMs": 5000,
+    "earlierHeadExit": 1,
+    "finalTimeoutMs": 60000,
+    "headExit": 0,
+    "cleanBaseWholeFileExits": [
+      0,
+      0
+    ]
+  }
+}

@@ -106,10 +106,48 @@ export function setStateOwnershipPathsForTests(paths: OwnershipTestPaths): () =>
   };
 }
 
+/** Ledger-created config roots live on the mounted home, beside scratch.
+ * Their explicit private marker is the same sandbox proof after the child
+ * changes TMPDIR; ordinary operator config has neither this layout nor marker. */
+function managedAttemptConfigRoot(env: NodeJS.ProcessEnv, directory: string): string | null {
+  const config = env.XDG_CONFIG_HOME;
+  if (!config || path.basename(config) !== "config") return null;
+  const root = path.dirname(config), parent = path.dirname(root);
+  if (directory !== root && !directory.startsWith(root + path.sep)) return null;
+  if (!/^llv-stage-config-[A-Za-z0-9]{6}$/.test(path.basename(root))
+    || path.basename(parent) !== "attempt-temp" || path.basename(path.dirname(parent)) !== "delegatus"
+    || path.basename(path.dirname(path.dirname(parent))) !== ".cache") return null;
+  try {
+    const stat = fs.lstatSync(root), marker = path.join(root, ".delegatus-attempt-owner"), proof = fs.lstatSync(marker);
+    if (!stat.isDirectory() || stat.isSymbolicLink()
+      || !proof.isFile() || proof.nlink !== 1 || proof.size !== 20
+      || (process.platform !== "win32" && ((stat.mode & 0o777) !== 0o700 || (process.getuid && stat.uid !== process.getuid())))
+      || fs.readFileSync(marker, "utf8") !== "attempt-temp.sqlite\n") return null;
+    return root;
+  } catch { return null; }
+}
+
+/** Resolve absent suffixes without following an unproved link out of a
+ * managed config root. Failed observations keep the directory protected. */
+function physicallyWithin(directory: string, root: string): boolean {
+  const suffix: string[] = [];
+  let current = directory;
+  try {
+    while (!fs.lstatSync(current, { throwIfNoEntry: false })) {
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      suffix.unshift(path.basename(current)); current = parent;
+    }
+    const actual = path.join(fs.realpathSync(current), ...suffix), physicalRoot = fs.realpathSync(root);
+    return actual === physicalRoot || actual.startsWith(physicalRoot + path.sep);
+  } catch { return false; }
+}
+
 function underTemp(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const resolved = path.resolve(directory);
+  const managed = managedAttemptConfigRoot(env, resolved);
   const roots = ownershipPlatform[ownershipPathsKey]?.tempRoots ?? [os.tmpdir(), "/tmp", "/var/tmp"];
-  return uniqueStrings([...roots, env.TMPDIR])
+  return (managed !== null && physicallyWithin(resolved, managed)) || uniqueStrings([...roots, env.TMPDIR])
     .map((root) => path.resolve(root))
     .some((root) => resolved === root || resolved.startsWith(root + path.sep));
 }
@@ -174,6 +212,8 @@ export function underOperatorRoot(directory: string, env: NodeJS.ProcessEnv = pr
  * caller-chosen `LLV_STATE_DIR` is admitted untouched.
  */
 export function isOperatorOwnedDirectory(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const resolved = path.resolve(directory), managed = managedAttemptConfigRoot(env, resolved);
+  if (managed) return !physicallyWithin(resolved, managed);
   if (underTemp(directory, env)) return false;
   return underOperatorRoot(directory, env);
 }

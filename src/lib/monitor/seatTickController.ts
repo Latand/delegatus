@@ -265,7 +265,7 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
-  if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
+  if (card.kind === "auth-failed" || card.kind === "disk-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -331,10 +331,10 @@ function cardDetails(card: SeatTickCard): string | undefined {
  * a per-outage receipt (see {@link SeatTickCard.instance}) a replay means this
  * very outage was carded by an earlier check.
  */
-function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
+export function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
   // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the

@@ -902,3 +902,41 @@ test("portable process scans include a registered config root outside system tem
     expect(scan.processes.find(process => process.pid === 456)?.paths).toEqual([path.join(config, "held")]);
   } finally { descriptors.mockRestore(); list.mockRestore(); }
 });
+
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable retained directory does not abort the sweep or its report", async () => {
+  const root = tempRoot();
+  const a = aged(root, "llv-a", 2 * DAY), b = aged(root, "llv-b", 2 * DAY);
+  const locked = path.join(a, "locked"); fs.mkdirSync(locked); fs.chmodSync(locked, 0);
+  try {
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: DAY,
+      scan: { ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [a] }] } });
+    expect(report.removed.map(row => row.path)).toContain(b);
+    expect(fs.existsSync(a)).toBeTrue();
+    recordTempSweep(report);
+    expect(tempSweepStatus()?.at).toBe(report.at);
+  } finally { fs.chmodSync(locked, 0o700); }
+});
+
+
+test("a refused inspection is recorded and the next candidate is still handled", async () => {
+  const root = tempRoot();
+  const held = aged(root, "llv-a-refused", 3 * DAY);
+  const stale = aged(root, "llv-b-stale", 3 * DAY);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY,
+    inspect: (directory, options) => { if (directory === held) throw new Error("fixture observation refused"); return inspectTree(directory, { ...options, threshold: Infinity }); },
+    now: () => Date.now() + 4 * DAY });
+  expect(report.errors.some(error => error.includes("fixture observation refused"))).toBeTrue();
+  expect(fs.existsSync(held)).toBeTrue();
+  expect(report.removed.map(row => row.path)).toContain(stale);
+});
+
+test("a failed production sweep records a fresh failed report before refusing", async () => {
+  const root = tempRoot();
+  const roots = [{ path: root, via: "" }];
+  const scan = { ownNamespace: null, get processes(): never { throw new Error("fixture process observation refused"); } };
+  await expect(runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots, scan })).rejects.toThrow("fixture process observation refused");
+  const status = tempSweepStatus();
+  expect(status?.failed).toBeTrue();
+  expect(status?.errors).toBe(1);
+});

@@ -1500,3 +1500,50 @@ test.skipIf(process.platform !== "linux")("a helper scan of the sealed remover i
     expect(observed.processes.find(proc => proc.pid === process.pid)?.paths).toContain(h.dirs[1]!);
   } finally { process.chdir(cwd); unseal?.(); await worker.close(); }
 }, 30_000);
+
+
+test("generated regular files no longer hold an old release", async () => {
+  const h = fixture(), dir = h.dirs[1]!;
+  fs.writeFileSync(path.join(dir, "next-env.d.ts"), "generated");
+  const run = h.ports.git!;
+  h.ports.git = async (args, cwd) => args[0] === "status" && cwd === dir
+    ? { code: 0, stderr: "", stdout: fs.existsSync(path.join(dir, "next-env.d.ts")) ? "!! next-env.d.ts\0" : "" }
+    : run(args, cwd);
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.some(row => row.dir === dir)).toBeTrue();
+});
+
+
+test("a generated-file replacement during the final owner read keeps the release", async () => {
+  const h = fixture(), dir = h.dirs[1]!, target = path.join(dir, "next-env.d.ts");
+  fs.writeFileSync(target, "original");
+  const run = h.ports.git!;
+  let inspecting = false, armed = false, replaced = false;
+  h.ports.git = async (args, cwd) => {
+    if (args[0] === "status") inspecting = cwd === dir;
+    if (args[0] === "for-each-ref" && inspecting) armed = true;
+    return args[0] === "status" && cwd === dir
+      ? { code: 0, stderr: "", stdout: fs.existsSync(target) ? "!! next-env.d.ts\0" : "" } : run(args, cwd);
+  };
+  h.ports.current = async () => {
+    if (!replaced && armed) {
+      replaced = true; fs.writeFileSync(target + ".replacement", "replacement"); fs.renameSync(target + ".replacement", target);
+    }
+    return { record: h.record, inputs: h.inputs, fenced: true };
+  };
+  const report = await h.run();
+  expect(replaced).toBeTrue(); expect(report.removed.some(row => row.dir === dir)).toBeFalse();
+  expect(fs.readFileSync(target, "utf8")).toBe("replacement");
+});
+
+
+test("an unknown ignored file keeps an old release", async () => {
+  const h = fixture(), dir = h.dirs[1]!; fs.writeFileSync(path.join(dir, "notes.txt"), "keep");
+  const run = h.ports.git!;
+  h.ports.git = async (args, cwd) => args[0] === "status" && cwd === dir
+    ? { code: 0, stderr: "", stdout: "!! notes.txt\0" } : run(args, cwd);
+  const report = await h.run();
+  expect(report.removed.some(row => row.dir === dir)).toBeFalse();
+  expect(fs.readFileSync(path.join(dir, "notes.txt"), "utf8")).toBe("keep");
+});

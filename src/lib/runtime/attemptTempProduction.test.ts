@@ -146,3 +146,66 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
     expect(await attemptTempState(owner)).toBe("closed");
   }
 });
+
+
+test.each([false, true])("production access gives managed scratch and durable evidence (restricted=%s)", async restricted => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { structuredHostAccessPolicy } = await import("./structuredSpawn");
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { admittedAs, lexicalAllowedRoots } = await import("@/lib/artifact/localFile");
+  const profile = emptyLaunchProfile(restricted ? { readOnly: true, sandbox: "restricted" } : {});
+  const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), { ...process.env }, null,
+    undefined, { pipelineId: "evidence-lane", launchId: "evidence-launch", retainUntilClose: false });
+  const store = new AttemptTempStore();
+  try {
+    expect(access.env.TMPDIR?.startsWith(statePath("scratch") + path.sep)).toBeTrue();
+    expect(store.has(access.scratchDirectory!)).toBeTrue();
+    const evidence = statePath("evidence/evidence-lane/frame.png");
+    expect(access.env.LLV_EVIDENCE_DIR).toBe(path.dirname(evidence));
+    fs.writeFileSync(evidence, "frame");
+    const allowed = lexicalAllowedRoots();
+    expect(admittedAs(evidence, allowed)).toBe("evidence");
+    expect(admittedAs(evidence.replace(".png", ".svg"), allowed)).toBeNull();
+    expect(admittedAs(evidence.replace(".png", ".json"), allowed)).toBeNull();
+    access.cleanup();
+    await sweepAttemptTemps(store, { state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect(fs.existsSync(access.scratchDirectory!)).toBeFalse();
+    await sweepStaleTempDirs({ roots: [{ path: statePath("scratch"), via: "" }], maxAgeMs: 0,
+      scan: { ownNamespace: null, processes: [] } });
+    expect(fs.readFileSync(evidence, "utf8")).toBe("frame");
+  } finally { store.close(); }
+});
+
+
+test.each(process.platform === "win32" ? ["intact", "missing", "operator"] : ["intact", "missing", "operator", "redirected"])("a real agent child requires its managed config proof (%s)", async proof => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { structuredHostAccessPolicy } = await import("./structuredSpawn");
+  const access = materializeStructuredHostAccess(structuredHostAccessPolicy(emptyLaunchProfile({ sandbox: "full" })), { ...process.env }, null, undefined,
+    { pipelineId: null, launchId: "state-child", retainUntilClose: false });
+  const env = withAgentConfigSandbox({ NODE_ENV: "test", TMPDIR: access.env.TMPDIR, HOME: access.env.HOME }, access.env);
+  try {
+    if (proof === "missing") fs.unlinkSync(path.join(access.env.LLV_AGENT_SANDBOX_ROOT!, ".delegatus-attempt-owner"));
+    if (proof === "redirected") {
+      const config = path.join(access.env.LLV_AGENT_SANDBOX_ROOT!, "config");
+      fs.renameSync(config, config + "-saved");
+      const outside = path.join(env.HOME!, ".config"); fs.mkdirSync(outside, { recursive: true });
+      fs.symlinkSync(outside, config, "dir");
+    }
+    const child = Bun.spawn([process.execPath, "-e", `
+      const ownership = await import(${JSON.stringify(path.join(import.meta.dir, "../stateOwnership.ts"))});
+      ownership.setStateOwnershipPathsForTests({home: process.env.HOME, tempRoots: []});
+      const { stateDir } = await import(${JSON.stringify(path.join(import.meta.dir, "../configDir.ts"))});
+      const { assertStateStartupMutation } = await import(${JSON.stringify(path.join(import.meta.dir, "../stateOwnership.ts"))});
+      const directory = ${proof === "operator" ? 'require("node:path").join(process.env.HOME, ".config/delegatus/state")' : 'stateDir()'};
+      assertStateStartupMutation(directory, "fixture startup");
+      console.log(directory);
+    `], { env, stdout: "pipe", stderr: "pipe" });
+    const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (proof === "intact") {
+      expect({ code, error }).toEqual({ code: 0, error: "" });
+      expect(out.trim()).toBe(env.LLV_STATE_DIR!);
+    } else {
+      expect(code).not.toBe(0); expect(error).toContain(proof === "operator" ? "StateStartupMutationRefused" : "OperatorStateUnderTestError"); expect(out).toBe("");
+    }
+  } finally { access.cleanup(); }
+});

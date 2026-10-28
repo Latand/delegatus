@@ -9,6 +9,8 @@ import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { agentMemoryScopes, agentMemoryCapForPlan, PIPELINE_MEMORY_DEFAULT_ROLE } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
+import { attemptTempConfigParent } from "./attemptTempPaths";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -190,15 +192,6 @@ export function materializeStructuredHostAccess(
   };
   const explicitAxes = typeof policy !== "boolean";
   const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
-  if (!restricted && !explicitAxes) {
-    return {
-      env: baseEnv,
-      codex: { sandbox: "danger-full-access" },
-      host: { forwardGitHubConfig: true },
-      scratchDirectory: null,
-      cleanup: () => {},
-    };
-  }
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -206,12 +199,17 @@ export function materializeStructuredHostAccess(
   let configDirectory: string | undefined;
   try {
     fs.chmodSync(scratchDirectory, 0o700);
+    const evidenceId = owner?.pipelineId ?? `agents/${createHash("sha256").update(owner?.launchId ?? path.basename(scratchDirectory)).digest("hex").slice(0, 32)}`;
+    if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/.test(evidenceId)) throw new Error("invalid evidence owner");
+    const evidenceDirectory = statePath("evidence", evidenceId);
+    fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
+    baseEnv.LLV_EVIDENCE_DIR = evidenceDirectory;
     const temporaryDirectory = path.join(scratchDirectory, "tmp");
     fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
     if (owner) {
       // The mounted home has the same path in the Viewer and agent mount
       // namespaces. Container /tmp and host /tmp can name different inodes.
-      const configParent = path.join(sourceEnv.HOME || os.homedir(), ".cache", "delegatus", "attempt-temp");
+      const configParent = attemptTempConfigParent(sourceEnv);
       fs.mkdirSync(configParent, { recursive: true, mode: 0o700 });
       configDirectory = fs.mkdtempSync(path.join(configParent, "llv-stage-config-"));
       const store = new AttemptTempStore();
@@ -244,10 +242,11 @@ export function materializeStructuredHostAccess(
       };
     }
     const codex = explicitAxes
-      ? { sandbox: "workspace-write" }
+      ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
+          permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
       : {
           permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write"}}`,
+          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}`,
         };
     return {
       env: {
@@ -270,17 +269,27 @@ export function materializeStructuredHostAccess(
   }
 }
 
-function tempOwnerForSpawn(input: StructuredSpawnInput) {
-  const memberships = input.registry.readOnlySnapshot().memberships[input.registry.canonicalConversationId(input.receipt.conversationId)] ?? [];
+export function tempOwnerForConversation(registry: AgentRegistry, conversationId: string | undefined, launchId: string) {
+  const id = conversationId?.startsWith("conversation_") ? registry.canonicalConversationId(conversationId as ViewerConversationId) : null;
+  const memberships = id ? registry.readOnlySnapshot().memberships[id] ?? [] : [];
   const owners = memberships.filter(member => member.kind === "pipeline");
-  // Two lanes cannot both own one attempt root. An ambiguous conversation
-  // keeps the unowned contract: its scratch goes with the host.
-  return owners.length === 1 ? { pipelineId: owners[0]!.containerId, launchId: input.receipt.launchId, retainUntilClose: false } : undefined;
+  return { pipelineId: owners.length === 1 ? owners[0]!.containerId : null, launchId, retainUntilClose: false };
+}
+
+function tempOwnerForSpawn(input: StructuredSpawnInput) {
+  return tempOwnerForConversation(input.registry, input.receipt.conversationId, input.receipt.launchId);
+}
+
+export function materializeOwnedStructuredHostAccess(
+  policy: StructuredHostAccessPolicy, sourceEnv: NodeJS.ProcessEnv, capability: string | null,
+  owner: () => NonNullable<Parameters<typeof materializeStructuredHostAccess>[4]>,
+) {
+  return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
+    materializeStructuredHostAccess(policy, sourceEnv, capability, undefined, owner())));
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
-  return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
-    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, undefined, tempOwnerForSpawn(input))));
+  return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, () => tempOwnerForSpawn(input));
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency

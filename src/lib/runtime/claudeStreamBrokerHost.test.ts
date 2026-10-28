@@ -334,6 +334,7 @@ test.each([
         const expected = path.join(access.scratchDirectory!, "tmp");
         expect(path.dirname(access.scratchDirectory!)).toBe(directory);
         expect(captured.options?.env?.TMPDIR).toBe(expected);
+        expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
         expect(expected).not.toBe(sourceEnv.TMPDIR);
         const child = Bun.spawnSync([process.execPath, "-e",
           'require("node:fs").writeFileSync(require("node:path").join(process.env.TMPDIR, "probe"), "stage")',
@@ -2855,19 +2856,23 @@ describe("ClaudeStreamBrokerHost", () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    let builtEnv: NodeJS.ProcessEnv | undefined;
     const adopted = await adoptClaudeRegistryHosts(
       registry,
-      async (entry) => ({
+      async (entry) => {
+        const options = await claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" });
+        builtEnv = options.env;
+        return ({
         /* The production boot builder, not a hand-written option object. The
            #1346 fix was asserted against its own options, so nothing ever ran
            this and the managed-only config dir it answered stayed invisible. */
-        ...await claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" }),
+        ...options,
         deliveryLedger: ledger,
         eventStore: new MemoryEventStore(),
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.197" }),
         readTranscript: () => [],
         spawnProcess: fakeSpawn(child, captured),
-      }),
+      }); },
       { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
     );
 
@@ -2882,7 +2887,7 @@ describe("ClaudeStreamBrokerHost", () => {
     });
     expect(captured.options?.env).toMatchObject({
       CLAUDE_CONFIG_DIR: accountHome,
-      LLV_STATE_DIR: agentSandboxEnv(accountHome).LLV_STATE_DIR,
+      LLV_STATE_DIR: path.join((await import("./agentConfigSandbox")).agentConfigSandboxRoot(builtEnv!, accountHome), "config/agent-log-viewer/state"),
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });

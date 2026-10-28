@@ -1,3 +1,4 @@
+import { recordGateSandbox } from "./gateSandboxRecords";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -368,7 +369,7 @@ function isBaselineRecord(value: unknown): value is BaselineRecord {
 
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
   const started = performance.now();
-  const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"));
+  const sandbox = recordGateSandbox(mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-")));
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
   const inherited = budget.env;

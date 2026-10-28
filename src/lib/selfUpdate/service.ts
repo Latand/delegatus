@@ -1,3 +1,4 @@
+import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
 import { resolveTrackedRevision } from "./git";
 import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
@@ -194,6 +195,7 @@ export class SelfUpdateService {
   private checking: Promise<void> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private retaining = false;
+  private stopPressureSweep?: () => void;
   private retentionChecking = false;
   private retentionAbort: AbortController | null = null;
   private runner: RunnerPort | null = null;
@@ -287,6 +289,7 @@ export class SelfUpdateService {
 
   /** Called only by the release-owning web process after its fence is active. */
   startAuto(): void {
+    this.stopPressureSweep ??= registerDiskPressureSweep("releases", () => { void this.retentionTick(); });
     if (this.autoTimer) return;
     // Restore durable custody before startup hands pending stages or seats to
     // their controllers, even when future automatic updates are switched off.
@@ -2352,6 +2355,7 @@ export class SelfUpdateService {
   }
 
   stop(): void {
+    this.stopPressureSweep?.(); this.stopPressureSweep = undefined;
     this.stopped = true;
     this.retentionAbort?.abort();
     if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);
