@@ -1762,9 +1762,9 @@ function expectPipelineLeaseFree() {
   finally { db.close(); }
 }
 
-async function reserveActivationOnly() {
+async function reserveActivationOnly(stages = RUN_STAGES as never) {
   const h = harness();
-  await create(h.ports);
+  await create(h.ports, stages);
   await tickPipelines([], h.ports);
   process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
   let checks = 0;

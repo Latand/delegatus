@@ -425,7 +425,9 @@ describe("callback retry proof", () => {
 
   test.each([false, true])("retry-stage retries a retired callback failure after controller restart=%s", async restart => {
     namespace = restart ? 2 : 1;
-    const h = await reserveActivationOnly();
+    const h = await reserveActivationOnly([
+      { id: "plan", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
+    ] as never);
     const lane = loadPipelines()[0]!;
     const attempt = lane.runs[0]!.attempts[0]!;
     let now = Date.parse(h.ports.now());
@@ -440,7 +442,8 @@ describe("callback retry proof", () => {
     h.ports.spawnReceipt = durablePorts.spawnReceipt;
     h.ports.claimSpawnRetry = durablePorts.claimSpawnRetry;
     h.ports.spawnAgent = async (input, onReserved) => {
-      const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: input.cwd, transport: "structured",
+      expect(input.role.engine).toBe("codex");
+      const begun = beginLegacySpawnFixture(registry, { engine: input.role.engine, cwd: input.cwd, transport: "structured",
         clientAttemptId: input.clientAttemptId, launchProfile: { title: input.title }, memberships: [input.membership] });
       expect(begun.kind).toBe("created");
       failedLaunchId = begun.receipt.launchId;
