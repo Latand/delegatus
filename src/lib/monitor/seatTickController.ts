@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, SEAT_TICK_CHECK_ERROR_LIMIT } from "./seatTickWatchdog";
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { SeatTickWork, outsideSeatTickWork, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
@@ -51,7 +51,7 @@ import {
   seatTickSourceGapRef,
 } from "./cards";
 import { openIssuesForProposal, type ProposalIssue } from "./githubEvidence";
-import { appendSeatTickRecord, readSeatTickRecords } from "./journalStore";
+import { appendSeatTickRecord, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
@@ -1455,8 +1455,8 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     // gets one separate, bounded admission and carries no delivery authority.
     try {
       const recent = dependencies.readRecords
-        ? dependencies.readRecords(project, SEAT_TICK_CHECK_ERROR_LIMIT)
-        : readSeatTickRecords(SEAT_TICK_CHECK_ERROR_LIMIT, undefined, project);
+        ? dependencies.readRecords(project, SEAT_TICK_RUN_HISTORY)
+        : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project);
       const alarm = seatTickCheckErrorAlarm(recent);
       if (alarm || record.verdict !== "error") await waitForStateLock("seat-tick.check-alarm", () =>
         (dependencies.ensureCard ?? ensureSeatTickCard)(project, {

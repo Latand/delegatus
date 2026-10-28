@@ -1,4 +1,4 @@
-import { expect, test, fs, path, spawn, SANDBOX, harness, PROJECT, NOW, MINUTE, OPEN_LANE, OVERDUE, runSeatTickCheck, WALL_DATE, emptySeatTickState, writeSeatTickState, Database, statePath } from "./seatTickController.fixture";
+import { expect, test, fs, path, spawn, SANDBOX, harness, PROJECT, NOW, MINUTE, OPEN_LANE, OVERDUE, runSeatTickCheck, WALL_DATE, emptySeatTickState, writeSeatTickState, Database, statePath, outstandingWake } from "./seatTickController.fixture";
 import { appendSeatTickRecord, readSeatTickRecords } from "./journalStore";
 import { seatTickCheckErrorAlarm } from "./seatTickWatchdog";
 import { seatTickSettingsAnswer } from "./seatTickSettingsAnswer";
@@ -20,7 +20,10 @@ test.skipIf(!restartRoot)("check alarm subprocess", async () => {
   rig.deps.appendRecord = appendSeatTickRecord;
   rig.deps.readRecords = (key, limit) => readSeatTickRecords(limit, undefined, key);
   rig.deps.ensureCard = undefined;
-  if (mode !== "healthy") rig.deps.sources!.prepareRead = async () => { throw new Error("fixture source unavailable"); };
+  if (mode === "reconcile-error") {
+    rig.deps.sources!.wakeState = async () => "uncertain";
+    rig.deps.sources!.tasks = () => { throw new Error("fixture task source unavailable"); };
+  } else if (mode !== "healthy") rig.deps.sources!.prepareRead = async () => { throw new Error("fixture source unavailable"); };
   const result = await runSeatTickCheck(project, rig.deps);
   expect(result?.verdict).toBe(mode === "healthy" ? "wake" : "error");
 });
@@ -131,4 +134,49 @@ test("an alarm blocked by the real state writer yields before release and retrie
   }
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(loadTasks(board).filter(task => task.text.includes("monitor-ref: seat-tick-check-errors"))).toHaveLength(1);
+});
+
+
+test.skipIf(!!restartRoot)("reconciliation rows preserve the failed-check alarm across process restarts", async () => {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "interleaved-alarm-"));
+  writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, accounting: undefined,
+    outstandingWake: outstandingWake() }, path.join(root, "tick.json"));
+  const cards = () => loadTasks(path.join(root, "state", "tasks.json"))
+    .filter(task => task.project === project && task.text.includes("monitor-ref: seat-tick-check-errors"));
+  for (let index = 0; index < 3; index++) {
+    await restart(root, "reconcile-error");
+    expect(cards()).toHaveLength(index === 2 ? 1 : 0);
+  }
+  const card = cards()[0]!;
+  expect(card.status).toBe("inbox");
+  expect(card.text).toContain("fixture task source unavailable");
+  const journal = readSeatTickRecords(500, path.join(root, "state", "seat-tick", "runs.ndjson"), project);
+  expect(journal.map(record => record.verdict)).toEqual(["uncertain", "error", "uncertain", "error", "uncertain", "error"]);
+  const ports = { now: () => NOW, records: () => journal };
+  const answer = seatTickSettingsAnswer(project, false, { kind: "gateway", project: null, conversationId: null, seatEpoch: null }, ports);
+  expect(answer.checkErrorAlarm?.detail).toContain("fixture task source unavailable");
+  expect((await seatTickDiagnostics(project, 1, ports)).checkErrorAlarm).toEqual(answer.checkErrorAlarm);
+  await restart(root, "reconcile-error");
+  expect(cards()).toEqual([card]);
+  await restart(root, "healthy");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toMatchObject({ id: card.id, status: "done" });
+  for (let index = 0; index < 2; index++) {
+    await restart(root, "reconcile-error");
+    expect(cards()[0]!.status).toBe("done");
+  }
+  await restart(root, "reconcile-error");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toMatchObject({ id: card.id, status: "inbox" });
+});
+
+
+test("only completed checks reset the error streak", () => {
+  const error = { schemaVersion: 1 as const, at: new Date(NOW).toISOString(), project, seatEpoch: 7,
+    verdict: "error" as const, reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null, detail: "source unavailable" };
+  const reconciliations = (["uncertain", "landed", "dropped", "revoked", "retired"] as const).map(verdict => ({ ...error, verdict }));
+  expect(seatTickCheckErrorAlarm([error, ...reconciliations, error, ...reconciliations, error])).not.toBeNull();
+  for (const verdict of ["quiet", "wake", "proactive", "no-seat", "skipped", "refused"] as const) {
+    expect(seatTickCheckErrorAlarm([error, error, { ...error, verdict }, ...reconciliations, error])).toBeNull();
+  }
 });

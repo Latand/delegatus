@@ -1,6 +1,6 @@
 import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SeatTickAccounting, AgentRegistry,
   PROJECT, NOW, MINUTE, harness, OVERDUE, OPEN_LANE, outstandingWake,
-  wakeStateFromRecord, resolveOriginalSend, defaultSeatTickSettings } from "./seatTickController.fixture";
+  wakeStateFromRecord, resolveOriginalSend, defaultSeatTickSettings, childFixture, childRig, settleRecordFromJournal } from "./seatTickController.fixture";
 import { seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { seatTickSettingsAnswer } from "./seatTickSettingsAnswer";
 
@@ -228,4 +228,52 @@ test.each(["landed", "codex-landed", "absent", "unreadable", "oversized"] as con
   });
   expect(observation.state).toBe((state === "landed" || state === "codex-landed") ? "landed" : state === "absent" ? "absent" : "unknown");
   if (state === "landed" || state === "codex-landed") expect(observation.evidence!.confirmation).toBe("destination-transcript");
+});
+
+
+test.each(["in-flight", "unverified"] as const)("reconciliation preserves arrival during an awaited journal read (%s)", async initial => {
+  const Clock = Date;
+  globalThis.Date = new Proxy(Clock, { construct(target, args) { return Reflect.construct(target, args.length ? args : [NOW]); },
+    get(target, key, receiver) { return key === "now" ? () => NOW : Reflect.get(target, key, receiver); } });
+  const f = childFixture(`journal-arrival-${initial}`);
+  f.seed(OVERDUE);
+  const pipelines = [{ ...OPEN_LANE[0]!, id: "arrival-lane", project: f.project, state: "completed", src: f.seat.conversationId }];
+  const first = childRig(f, { pipelines, delivery: { ok: true, target: null, outcome: "queued", operationId: "arrival-operation" } });
+  first.deps.sources!.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+  expect(await runSeatTickCheck(f.project, first.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "queued" } });
+  const wake = f.row().outstandingWake!;
+  expect(wake.commit.announcedLanes).toHaveLength(1);
+  expect(wake.commit.reportsOwed).toHaveLength(1);
+  const held = f.registry.holdDelivery(f.seat.conversationId as never, wake.text!, wake.clientMessageId, "text", [], null,
+    { operationId: wake.operationId!, kind: "send", policy: "queue" });
+  if (initial === "unverified") f.registry.recordDeliveryOutcome(held.id, "failed", "arrival unknown", "unverified");
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const next = childRig(f, { pipelines });
+  let observation: Awaited<ReturnType<typeof wakeStateFromRecord>> | undefined;
+  next.deps.sources!.wakeState = async pending => {
+    let evidence: Awaited<ReturnType<typeof resolveOriginalSend>>;
+    observation = await wakeStateFromRecord(pending, {
+      lookup: async binding => (evidence = await resolveOriginalSend(binding, { registry: f.registry, client: null })),
+      settle: async () => evidence.kind === "found" && evidence.current.readable ? evidence.current.value : null,
+      journal: async () => { entered(); await waiting; return { status: "rejected", reason: "earlier journal rejection" }; },
+      settleFromJournal: (target, receipt) => settleRecordFromJournal(f.registry, target, receipt),
+    });
+    return observation;
+  };
+  const checking = runSeatTickCheck(f.project, next.deps);
+  try {
+    await ready;
+    f.registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    release();
+    await checking;
+    expect(observation).toMatchObject({ state: "landed", evidence: { record: { state: "delivered" } } });
+    expect(next.sent).toHaveLength(0);
+    const landing = next.journal.find(record => record.verdict === "landed" && record.delivery?.clientMessageId === wake.clientMessageId);
+    expect(landing).toBeDefined();
+    expect(landing!.detail).not.toContain("settled delivered on the journal's own verdict");
+    expect(f.row()).toMatchObject({ outstandingWake: null, announcedLanes: wake.commit.announcedLanes });
+    expect(f.row().reportsOwed?.map(entry => entry.key)).toEqual(wake.commit.reportsOwed!.map(entry => entry.key));
+  } finally { release(); await checking; }
 });

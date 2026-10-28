@@ -7,9 +7,11 @@ export const SEAT_TICK_CHECK_ERROR_LIMIT = 3;
 export interface SeatTickCheckErrorAlarm { since: string; detail: string }
 
 /** The project journal is the counter, so process succession cannot reset it.
- * A completed check ends the streak, including a quiet or refused check. */
+ * Reconciliation events carry no completed-check outcome. A completed check
+ * ends the streak, including a quiet or refused check. */
 export function seatTickCheckErrorAlarm(records: readonly SeatTickRunRecord[]): SeatTickCheckErrorAlarm | null {
-  const recent = records.slice(-SEAT_TICK_CHECK_ERROR_LIMIT);
+  const recent = records.filter(record => ["quiet", "wake", "proactive", "no-seat", "skipped", "refused", "error"].includes(record.verdict))
+    .slice(-SEAT_TICK_CHECK_ERROR_LIMIT);
   if (recent.length < SEAT_TICK_CHECK_ERROR_LIMIT || recent.some(record => record.verdict !== "error")) return null;
   return { since: recent[0]!.at,
     detail: `Seat tick check alarm: the last ${SEAT_TICK_CHECK_ERROR_LIMIT} checks failed; latest failure: ${recent.at(-1)!.detail ?? "reason unavailable"}` };

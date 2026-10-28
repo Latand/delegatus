@@ -1572,8 +1572,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 
      The guard and the interval are untouched by any of it: the reasons here
      passed both, and a gap adds none. */
+  // Partial pages promised a final report even if their remaining work has
+  // since disappeared. Only a complete agenda observation can finish it.
+  if (input.state.catchUpProgress && wakeDue && !input.deploySettlementWakeDue
+    && reasons.length === 0 && gaps.length === 0) {
+    reasons.push({ kind: "interval", detail: "the remaining catch-up agenda is complete; its final report is owed" });
+  }
   if (reasons.length > 0) {
-    const catchUp = seatTickCatchUp(input);
+    // The priority deployment projection deliberately omits ordinary backlog.
+    const catchUp = input.deploySettlementWakeDue ? null : seatTickCatchUp(input);
     if (catchUp && (input.childrenCatchUpPending || ["discovery-incomplete", "ledger-pending", "migration-pending"].includes(input.childrenUnavailable ?? ""))) {
       return { verdict: { kind: "error", detail: "catch-up is collecting the remaining held child outcomes; the next check continues" },
         state, cards, reportedSourceGap, reportedChildrenGap };

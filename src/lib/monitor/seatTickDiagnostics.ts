@@ -1,4 +1,4 @@
-import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, SEAT_TICK_CHECK_ERROR_LIMIT, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 
 import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
@@ -175,7 +175,7 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
   const records = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, canonical))
     .filter((record) => record.project === canonical);
   const journal = records.slice(-bounded);
-  const checkErrorAlarm = seatTickCheckErrorAlarm(records.slice(-SEAT_TICK_CHECK_ERROR_LIMIT));
+  const checkErrorAlarm = seatTickCheckErrorAlarm(records);
 
   return {
     ...(checkErrorAlarm ? { checkErrorAlarm } : {}),

@@ -417,6 +417,8 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
       if (typeof journal !== "string" && (proven === "landed" || proven === "dropped")) {
         const written = await ports.settleFromJournal?.({ conversationId: wake.conversationId,
           operationId: evidence.operationId, deliveryId: evidence.deliveryId }, journal);
+        // Settlement can observe arrival after the journal snapshot was read.
+        if (written?.state === "delivered") return { state: "landed", evidence: withRecord(written, journal) };
         return { state: proven, evidence: withRecord(written ?? settled, journal) };
       }
       return { state: "retained", evidence: withRecord(settled, journal) };
@@ -472,8 +474,8 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
      its owner row, or absorbing — changes nothing about it. It is said on the
      evidence, and the journal's own proof is what the release rests on. */
   const written = await ports.settleFromJournal({ conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId }, journal);
-  if (proven === "landed") {
-    return { state: "landed", evidence: { ...withRecord(written ?? current, journal), ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+  if (proven === "landed" || written?.state === "delivered") {
+    return { state: "landed", evidence: { ...withRecord(written ?? current, journal), ...(proven === "landed" && written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
   }
   if (written?.resend === "safe") return { state: "dropped", evidence: { ...withRecord(written, journal), recorded: "lost" } };
   return { state: "dropped", evidence: { ...withRecord(written ?? current, journal), recorded: "refused" } };
