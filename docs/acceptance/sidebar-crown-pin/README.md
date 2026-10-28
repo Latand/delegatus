@@ -1,6 +1,6 @@
 # Sidebar crown+pin and manual project creation — visual evidence
 
-Captured against the isolated demo fixture home by `scripts/evidence-crown-capture.ts`,
+Captured against the isolated demo fixture home by a one-shot capture script (`scripts/evidence-crown-capture.ts`, since removed with no caller),
 which boots the same Stage A demo runtime as `bun run demo:capture` and drives the
 real UI through the pinned mcp/puppeteer image. The created project's root is a
 neutral `/tmp/projects/nova-docs` directory, so no host paths appear in the captures.
@@ -8,12 +8,8 @@ neutral `/tmp/projects/nova-docs` directory, so no host paths appear in the capt
 Per this repository's publication policy (synthetic-and-redacted-media-only), the
 committed PNGs are deterministic redacted placeholders from
 `scripts/generate-privacy-placeholders.ts`; each records the SHA-256 of the live
-capture it stands in for (see `privacy-manifest.json`). To reproduce the real
-captures locally, run:
-
-```
-bun scripts/evidence-crown-capture.ts
-```
+capture it stands in for (see `privacy-manifest.json`). The capture script is no
+longer kept; new rail evidence is a case in an existing browser test driver.
 
 | Capture | What it showed |
 | --- | --- |

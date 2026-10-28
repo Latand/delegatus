@@ -67,9 +67,18 @@ const { runtimeHostClient } = await import("@/lib/runtime/client");
 const { probeRuntimeSocket } = await import("@/runtime-host/hostRehearsalRun");
 const { RUNTIME_HOST_CONTAINER_ENV } = await import("@/runtime-host/hostRelease");
 const { buildPipeline, loadPipelines, savePipelines } = await import("./store");
-const { defaultPipelinePorts, drainStageActivations, patchPipeline, stopPipelineStageAgent, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, drainStageActivations, patchPipeline, stopPipelineStageAgent, tickPipelines: engineTickPipelines } = await import("./engine");
+const { registerPipelineTick } = await import("./controllerSignal");
 const { PATCH } = await import("@/app/api/pipelines/[id]/route");
 type Pipeline = import("./types").Pipeline;
+
+// Direct scheduler observations run as the controller. HTTP close calls keep
+// the caller's sidecar shape and still cross the real transport above.
+async function tickPipelines(...args: Parameters<typeof engineTickPipelines>) {
+  const unregister = registerPipelineTick(async () => {});
+  try { return await engineTickPipelines(...args); }
+  finally { unregister(); }
+}
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const generationFixture = path.join(import.meta.dir, "fixtures", "stageHostGeneration.ts");

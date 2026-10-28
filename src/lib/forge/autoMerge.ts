@@ -123,7 +123,9 @@ export function mergeEligible(pipeline: Pipeline): boolean {
     reviewed += 1;
     if (latest.state === "passed" || latest.state === "skipped") continue;
     if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
-    if (latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
+    // Older completed records may predate the terminal re-check. They cannot
+    // enter automatic merging on the final fix's unreviewed head (#3037).
+    if (stage.next !== null && latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
       const fix = pipeline.runs.find((run) => run.stageId === stage.onFail!.to)?.attempts.find((attempt) => !attempt.historical
         && attempt.state === "passed"
         && attempt.activatedBy?.edge === "fail"
@@ -470,6 +472,18 @@ async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: Pip
   return changed;
 }
 
+/** Queued work from an older release and a changed record after a forge await
+    must meet the current review bar before merging. */
+async function commitReviewed(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge) => void): Promise<boolean> {
+  let admitted = false;
+  const changed = await commit(ports, read, (merge, live) => {
+    if (!mergeEligible(live)) { block(merge, "lane has not met the review merge bar", ports.now()); return; }
+    change(merge);
+    admitted = true;
+  });
+  return changed && admitted;
+}
+
 /** Reconciles a retained update issued by an older runner into its chain:
     two parents, the first the chain's tip, committed by GitHub (`web-flow`).
     A web-UI edit is `web-flow` too, with one parent. */
@@ -498,6 +512,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   const now = ports.now();
   const merge = structuredClone(read.merge!);
   const setting = ports.setting(read.project);
+  if (merge.state !== "merging" && !mergeEligible(read)) {
+    await commit(ports, read, live => block(live, "lane has not met the review merge bar", now));
+    return;
+  }
   if (merge.prNumber === null) {
     /* A retry resolves the PR before any GitHub command can name it. */
     const pr = ports.pullRequestOf(read);
@@ -658,7 +676,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   const method = await mergeMethod(merge.repository, ports).catch(() => "squash" as const);
-  const recorded = await commit(ports, read, (live) => {
+  const recorded = await commitReviewed(ports, read, (live) => {
     bookkeeping(live);
     live.state = "merging";
     live.method = method;
