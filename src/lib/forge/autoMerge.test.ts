@@ -342,12 +342,12 @@ describe("GitHub read failure recovery through production ports", () => {
     if (canMerge) expect(h.merges()[0]).toEqual(["pr", "merge", "12", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A]);
   });
 
-  test.each([10, 12, 20])("%s failing predecessors cannot starve a healthy follower", async count => {
+  test.each([[10, 1], [12, 1], [20, 1], [21, 2]])("%s failing predecessors cannot starve a healthy follower with %s slots", async (count, slots) => {
     const ids = Array.from({ length: count }, (_, index) => `failed-${String(index).padStart(2, "0")}`);
     const h = harness({ lanes: [...ids.map(id => lane(id)), lane("healthy", { closedAt: T0 })],
       prs: Array.from({ length: count + 1 }, (_, index) => openPr(index + 11)) });
     const failures = new Map<string, number>();
-    const ports = productionAutoMergePorts({ ...h.ports, run: async args => {
+    const ports = productionAutoMergePorts({ ...h.ports, refreshConcurrency: slots, run: async args => {
       if (args[0] === "pr" && args[1] === "view" && Number(args[2]) < count + 11) {
         const previous = failures.get(args[2]!);
         if (previous !== undefined) {

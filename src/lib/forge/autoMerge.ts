@@ -1188,7 +1188,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
         && reservation.base === pipeline.refreshOf!.base && pipeline.creationRequest?.key === reservation.key
         && pipeline.creationRequest.digest === reservation.digest) await startRefresh(parent, ports);
     }
-    let merged = false;
+    let merged = false, readFailed = false;
     for (const [index, { pipeline: head }] of selected.entries()) {
       const capacity = () => refreshCapacityReason(ports, repository);
       if (head.merge!.state === "refreshing") {
@@ -1202,9 +1202,10 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
         continue;
       }
       try {
-        await stepLane(head, ports, !merged && (refreshOutstanding || index === 0), capacity, index > 0 ? queueReason : null);
-        merged ||= ports.loadPipelines().some(pipeline => pipeline.id === head.id
-          && (pipeline.merge?.state === "merged" || pipeline.merge?.state === "merging"));
+        await stepLane(head, ports, !merged && (refreshOutstanding || index === 0 || readFailed), capacity, index > 0 ? queueReason : null);
+        const progress = ports.loadPipelines().find(pipeline => pipeline.id === head.id)?.merge;
+        readFailed = Boolean(progress?.readFailures);
+        merged ||= progress?.state === "merged" || progress?.state === "merging";
       } catch (error) {
         ports.log?.(`[auto merge] ${head.id}: step failed`, error);
         if (head.merge!.state !== "merging" && mergeWaitExpired(head.merge!, ports.now())) {

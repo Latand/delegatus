@@ -544,8 +544,7 @@ test("transient backoff yields to a healthy follower across fresh processes and 
   expect(await run(clock + MERGE_SETTLE_MS + MERGE_POLL_MS, true)).toMatchObject({ writes: 0, merge: { state: "merged" } });
 });
 
-test("many due failures yield to a healthy follower after every process restart", async () => {
-  const count = 12;
+test.each([[12, 1], [21, 2]])("%s due failures yield to a healthy follower with %s slots after every process restart", async (count, slots) => {
   const rows = Array.from({ length: count }, (_, index) => completedLane(`failed-${String(index).padStart(2, "0")}`));
   const follower = completedLane("healthy-follower");
   follower.closedAt = iso(T0);
@@ -556,7 +555,7 @@ test("many due failures yield to a healthy follower after every process restart"
     const clock = Number(process.env.FIXTURE_CLOCK);
     let merged = false;
     const failures = [], writes = [];
-    const ports = productionAutoMergePorts({ loadPipelines, now: () => clock,
+    const ports = productionAutoMergePorts({ loadPipelines, now: () => clock, refreshConcurrency: ${slots},
       setting: () => ({ enabled: true, changedAt: "2026-09-25T08:00:00Z", changedBy: "operator" }),
       pullRequestOf: lane => ({ repository: "acme/widgets", number: lane.id === "healthy-follower" ? 99 : Number(lane.id.slice(7)) + 1 }),
       cachedState: () => null, log: () => {},
