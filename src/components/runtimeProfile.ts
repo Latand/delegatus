@@ -1,11 +1,25 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId, defaultModelFor } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId, modelDisplayName } from "@/lib/agent/models";
+import type { TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
-    the pill face, the live-tmux draft and the resume/stage pickers. */
-export type RuntimeDraft = { model: string; effort: string; fast: boolean };
+    the pill face, the live-tmux draft and the resume/stage pickers. `serviceTier`
+    names a Codex catalog tier the fast flag cannot say (ultrafast); absent or
+    null, `fast` alone is the speed. */
+export type RuntimeDraft = { model: string; effort: string; fast: boolean; serviceTier?: string | null };
+
+/** The tier as a draft field: present only when one is named, so a draft that has
+    none keeps the shape every earlier reader and stored record has. */
+function tierField(tier: string | null | undefined): { serviceTier?: string } {
+  return tier ? { serviceTier: tier } : {};
+}
+
+/** The tiers that are `fast` itself: a named tier beyond them only `serviceTier` can carry. */
+function namedServiceTier(tier: string | null | undefined): string | null {
+  return tier && !["default", "standard", "priority"].includes(tier) ? tier : null;
+}
 
 /** A *sparse* per-conversation runtime selection: only the fields the user has
     explicitly chosen. Persisted under the `:profile` key so a synthesized
@@ -42,24 +56,92 @@ export function profileKey(file: FileEntry): string {
   return storageKey(file) + ":profile";
 }
 
-/** The observed/boot model id the running (or recorded) agent resolves to. */
-export function observedModelId(file: FileEntry): string | null {
-  const engine = file.engine as "claude" | "codex" | "copilot";
-  return engine === "claude"
-    ? claudeCatalogModelId(file.launchModel ?? file.model) ?? file.model ?? null
-    : file.model ?? null;
+const COPILOT_MODEL = /^[a-z0-9][a-z0-9.-]{0,127}$/;
+
+function trimmedModel(value: string | null | undefined): string | null {
+  const model = typeof value === "string" ? value.trim() : "";
+  return model ? model : null;
 }
 
-/** Engine defaults for a conversation: the observed model when it is a known
-    catalog entry, else the shipped launch fallback; the observed effort when it is
-    in that model's scale, else the scale's lowest tier. */
+/** The catalogue row an engine's model id names, or null. A Claude transcript id
+    reads as its catalogue row only when that row names the same release: a
+    versioned id the catalogue has no row for (`opus-4-1`) is not the family
+    alias row (`opus` = Opus 5.5), and picking the alias would name another model. */
+function catalogModelId(engine: "claude" | "codex" | "copilot", raw: string | null): string | null {
+  if (!raw) return null;
+  if (engine === "copilot") return COPILOT_MODEL.test(raw) ? raw : null;
+  if (engine === "codex") return ENGINE_MODELS.codex.some((item) => item.id === raw) ? raw : null;
+  const stem = raw.trim().toLowerCase().replace(/-20\d{6}$/, "");
+  const pinned = ENGINE_MODELS.claude.find((item) => item.id === `claude-${stem}`);
+  if (pinned) return pinned.id;
+  const id = claudeCatalogModelId(raw);
+  const row = ENGINE_MODELS.claude.find((item) => item.id === id);
+  if (!row) return null;
+  return row.id === stem || !/\d/.test(stem) || modelDisplayName("claude", stem) === row.label || standsForFamily(row) ? row.id : null;
+}
+
+/** An alias row whose label carries no version (`fable`) stands for every release
+    of its family when the catalogue lists no other release of that family: the
+    transcript's `fable-5-1` is that row. A family with a pinned sibling row
+    (`sonnet` next to `claude-sonnet-5-5`) or a versioned label (`opus` = Opus 5.5)
+    names one release, and another version is not it. */
+function standsForFamily(row: { id: string; label: string }): boolean {
+  if (/\d/.test(row.label)) return false;
+  return !ENGINE_MODELS.claude.some((item) => item.id !== row.id && item.id.startsWith(`claude-${row.id}-`));
+}
+
+/** The model the transcript reports, as the catalogue names it when it does and as stored otherwise. */
+export function observedModelId(file: FileEntry): string | null {
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  const reported = trimmedModel(file.model);
+  return engine === "claude" ? catalogModelId(engine, reported) ?? reported : reported;
+}
+
+/** The model the launch asked for (stage override, project or role setting), recorded before any transcript line. */
+export function launchedModelId(file: FileEntry): string | null {
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  const requested = trimmedModel(file.launchModel);
+  return engine === "claude" ? catalogModelId(engine, requested) ?? requested : requested;
+}
+
+/** The model the conversation runs on: the observed one, else the launch's, else
+    null. Never an engine default: a name nobody observed or asked for is a guess. */
+export function runningModelId(file: FileEntry): string | null {
+  return observedModelId(file) ?? launchedModelId(file);
+}
+
+/** The running model as the catalogue lists it, or "" when it is unknown or
+    outside the catalogue (the pill then names the stored id itself). */
+export function listedModelId(file: FileEntry): string {
+  return catalogModelId(file.engine as "claude" | "codex" | "copilot", runningModelId(file)) ?? "";
+}
+
+/** The running model's own name where the catalogue has no row for it (a model
+    the transcript reports that the pickers do not list), or "" when none is known. */
+export function unlistedModelName(file: FileEntry): string {
+  const id = runningModelId(file);
+  return id && !listedModelId(file) ? modelDisplayName(file.engine, id) : "";
+}
+
+/** Why a change that sends a model is held, in words: one line for a conversation
+    with no known model and another for one whose model the pickers cannot send,
+    worded for the change held (a reasoning or speed edit, or an account move).
+    Null when the conversation runs on a listed model. */
+export function modelHoldMessage(t: TFunction, file: FileEntry, held: "edit" | "move" = "edit"): string | null {
+  if (listedModelId(file)) return null;
+  const name = unlistedModelName(file);
+  if (held === "move") return name ? t("runtimeConfig.moveModelUnlisted", { model: name }) : t("runtimeConfig.moveModelUnknown");
+  return name ? t("runtimeConfig.modelUnlisted", { model: name }) : t("runtimeConfig.modelUnknown");
+}
+
+/** Engine defaults for a conversation: the running model when the catalogue lists
+    it, else "" (no model); the observed effort when it is in that model's scale,
+    else the scale's lowest tier. */
 export function defaults(file: FileEntry): RuntimeDraft {
   const engine = file.engine as "claude" | "codex" | "copilot";
-  const models = ENGINE_MODELS[engine];
-  const observed = observedModelId(file);
-  const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : defaultModelFor(engine);
+  const model = listedModelId(file);
   const efforts = effortScale(engine, model) ?? [];
-  return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false };
+  return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false, ...tierField(file.serviceTier) };
 }
 
 /** The live-tmux persisted draft (full), or the conversation's defaults. */
@@ -74,10 +156,19 @@ export function readDraft(file: FileEntry): RuntimeDraft {
       model,
       effort: efforts.includes(value?.effort ?? "") ? value!.effort! : fallback.effort,
       fast: engine === "codex" && typeof value?.fast === "boolean" ? value.fast : fallback.fast,
+      ...tierField(storedServiceTier(engine, value, fallback)),
     };
   } catch {
     return fallback;
   }
+}
+
+/** A stored draft's tier: its own, else the conversation's while the stored speed
+    still agrees with it, since a draft written before tiers existed names none. */
+function storedServiceTier(engine: string, value: Partial<RuntimeDraft> | null, fallback: RuntimeDraft): string | null {
+  if (engine !== "codex") return null;
+  if (typeof value?.serviceTier === "string") return value.serviceTier;
+  return typeof value?.fast !== "boolean" || value.fast === fallback.fast ? fallback.serviceTier ?? null : null;
 }
 
 /** The persisted resume profile for a conversation, or its defaults — for
@@ -108,6 +199,7 @@ function readConcreteProfile(file: FileEntry, key: string): RuntimeDraft | null 
       model,
       effort: efforts.includes(value.effort ?? "") ? value.effort! : fallback.effort,
       fast: engine === "codex" && typeof value.fast === "boolean" ? value.fast : fallback.fast,
+      ...tierField(storedServiceTier(engine, value, fallback)),
     };
   } catch {
     return null;
@@ -166,6 +258,9 @@ export function writeResumeProfile(file: FileEntry, patch: RuntimeProfile): Runt
     next.effort = clampEffortToScale(engine, next.model, next.effort) ?? next.effort;
   }
   if (engine !== "codex") next.fast = false;
+  /* A speed choice replaces the tier along with `fast`; the tier names only what `fast` cannot. */
+  if (patch.fast !== undefined) next.serviceTier = (patch as Partial<RuntimeDraft>).serviceTier ?? null;
+  if (engine !== "codex" || !next.serviceTier) delete next.serviceTier;
   try {
     localStorage.setItem(resumeKey(file), JSON.stringify(next));
   } catch { /* quota/opaque-origin: the in-memory selection still rides the send */ }
@@ -195,7 +290,8 @@ export function effectiveProfile(file: FileEntry): RuntimeDraft {
   const effort = profile.effort && efforts.includes(profile.effort)
     ? profile.effort
     : clampEffortToScale(engine, model, profile.effort ?? base.effort) ?? base.effort;
-  return { model, effort, fast: engine === "codex" ? profile.fast ?? base.fast : false };
+  const fast = engine === "codex" ? profile.fast ?? base.fast : false;
+  return { model, effort, fast, ...tierField(fast === base.fast ? base.serviceTier : null) };
 }
 
 /** The subset of a concrete draft to ride a structured send as `runtime`: only
@@ -208,7 +304,10 @@ export function sendRuntimeFrom(file: FileEntry): RuntimeProfile | undefined {
   const runtime: RuntimeProfile = {};
   if (profile.model) runtime.model = profile.model;
   if (profile.effort) runtime.effort = profile.effort;
-  if (engine === "codex" && typeof profile.fast === "boolean" && profile.fast !== (file.fast ?? null)) runtime.fast = profile.fast;
+  /* A per-turn `fast` is priority: on a thread running a named tier beyond it
+     (ultrafast) it would slow every turn down to Fast. */
+  if (engine === "codex" && typeof profile.fast === "boolean" && profile.fast !== (file.fast ?? null)
+    && !(profile.fast && namedServiceTier(file.serviceTier))) runtime.fast = profile.fast;
   return Object.keys(runtime).length ? runtime : undefined;
 }
 
