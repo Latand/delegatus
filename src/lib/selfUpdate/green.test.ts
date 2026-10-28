@@ -111,6 +111,47 @@ describe("green merge evidence", () => {
     expect((await reader({ tree: "d".repeat(40) }).subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("untested-tree");
   });
 
+
+  test("a mismatched PR tree can use successful checks on the exact target only with a required runtime gate", async () => {
+    const runs = [
+      { name: "runtime-gate", status: "completed", conclusion: "success", started_at: "2026-01-01", app: { id: 15368 }, check_suite: { id: 77 } },
+      { name: "typecheck", status: "completed", conclusion: "success", started_at: "2026-01-01", app: { id: 15368 } },
+    ];
+    const calls: string[] = [];
+    const workflow = { id: 1, created_at: "2026-01-01T00:00:00Z", path: ".github/workflows/bun-runtime.yml", head_sha: SHA, event: "push", status: "completed", conclusion: "success", check_suite_id: 77 };
+    const workflows = [workflow];
+    const fetcher = async (input: string | URL | Request) => {
+      const url = String(input); calls.push(url);
+      const body = url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: SHA, base: { ref: "main" }, head: { sha: HEAD } }]
+        : url.includes("/check-runs") ? { check_runs: runs }
+        : url.includes("/actions/runs") ? { workflow_runs: workflows }
+        : url.includes("/statuses") ? []
+        : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [ { context: "runtime-gate", app_id: 15368 }, { context: "typecheck", app_id: 15368 } ] } } }
+        : { commit: { tree: { sha: "d".repeat(40) } } };
+      return Response.json(body);
+    };
+    const subject = new GreenReader({ fetch: fetcher as typeof fetch, treeOf: async () => TREE, now: () => 1000 });
+    expect((await subject.read("github.com/Latand/delegatus", "main", SHA, "/checkout")).state).toBe("green");
+    expect(calls.some(url => url.includes(`/commits/${SHA}/check-runs`))).toBe(true);
+    expect(calls.some(url => url.includes(`/commits/${HEAD}/check-runs`))).toBe(false);
+    for (const conclusion of ["skipped", "neutral", "failure"]) {
+      runs[0]!.conclusion = conclusion;
+      expect((await subject.read("github.com/Latand/delegatus", "main", SHA, "/checkout", undefined, true)).state).not.toBe("green");
+    }
+    runs[0]!.conclusion = "success";
+    runs[0]!.app.id = 999;
+    expect((await subject.read("github.com/Latand/delegatus", "main", SHA, "/checkout", undefined, true)).state).not.toBe("green");
+    runs[0]!.app.id = 15368;
+    for (const [key, value] of [["path", ".github/workflows/other.yml"], ["head_sha", HEAD], ["event", "pull_request"], ["check_suite_id", 78]] as const) {
+      const original = workflow[key];
+      Object.assign(workflow, { [key]: value });
+      expect((await subject.read("github.com/Latand/delegatus", "main", SHA, "/checkout", undefined, true)).state).not.toBe("green");
+      Object.assign(workflow, { [key]: original });
+    }
+    workflows.push({ ...workflow, id: 2, created_at: "2026-01-02T00:00:00Z", status: "in_progress", conclusion: "" });
+    expect((await subject.read("github.com/Latand/delegatus", "main", SHA, "/checkout", undefined, true)).state).toBe("pending");
+  });
+
   test("neutral checks are green; absent checks are not; a missing required context waits", async () => {
     expect((await reader({ runs: [{ name: "suite", status: "completed", conclusion: "neutral" }] }).subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("green");
     expect((await reader({ runs: [], statuses: [] }).subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("no-checks");

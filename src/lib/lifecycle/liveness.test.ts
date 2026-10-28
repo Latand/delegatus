@@ -1159,6 +1159,7 @@ function productionShapedCorpus(dir: string): ProductionCorpus {
 
 interface GenerationStub {
   read: CompletedGenerationRead;
+  describe: AgentLivenessSources["describeTranscript"];
   starts: () => number;
   reads: () => number;
 }
@@ -1187,7 +1188,14 @@ function publishedGeneration(files: FileEntry[], options: { coldDelayMs?: number
       cloneDurationMs: 0,
     };
   };
-  return { read, starts: () => starts, reads: () => reads };
+  const byPath = new Map(files.map(entry => [entry.path, entry]));
+  return { read, starts: () => starts, reads: () => reads, describe: async target => {
+    const entry = byPath.get(target);
+    if (!entry) throw new Error("host description missing from fixture");
+    return { path: entry.path, project: entry.project, title: entry.title, engine: entry.engine,
+      mtimeMs: entry.mtime * 1000, sizeBytes: entry.size, conversationId: entry.conversationId ?? null,
+      activity: entry.activity ?? null, activityReason: entry.activityReason ?? null };
+  } };
 }
 
 function corpusSources(
@@ -1205,9 +1213,7 @@ function corpusSources(
       completedFileScan: generation.read,
       signal: options?.signal ?? null,
     }),
-    describeTranscript: async () => {
-      throw new Error("a project-scoped read describes nothing by path");
-    },
+    describeTranscript: generation.describe,
     registrySnapshot: () => ({ entries: {}, conversations: {} }) as unknown as RegistryFile,
     pipelines: () => [],
     transcriptEvidence: readLivenessTranscriptEvidence,
@@ -1332,7 +1338,7 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
     describeTranscript: async (target) => {
       described.push(target);
       return {
-        path: target, project: PROJECT, title: "owner", engine: "codex",
+        path: target, project: target === outside ? "other-project" : PROJECT, title: "owner", engine: "codex",
         mtimeMs: target === current ? ownerMtime : ownerMtime - 1_000,
         sizeBytes: 4096, conversationId: null, activity: null, activityReason: null,
       };
@@ -1346,13 +1352,16 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
 
   expect(project.conversations.map((row) => row.transcriptPath)).toEqual([current]);
   expect(project.conversations[0]).toMatchObject({ lifecycle: "running", host: { state: "alive", kind: "headless", pid: process.pid } });
+  // The outside owner consumes one description slot; a catalogued current
+  // owner is selected rather than recovered.
   expect(project.selection).toMatchObject({
-    recovered: capped ? HOSTED_RECOVERY_MAX : present ? 0 : 1,
+    recovered: capped ? HOSTED_RECOVERY_MAX - (present ? 2 : 1) : present ? 0 : 1,
     recoveryTruncated: capped, selected: 1, hydrated: 1, evidenceBytes: 4096, freshScan: false,
   });
-  expect(described).toHaveLength(capped ? HOSTED_RECOVERY_MAX : present ? 0 : 1);
-  expect(described.includes(current)).toBe(!present);
-  expect(described).not.toContain(outside);
+  expect(described).toHaveLength(capped ? HOSTED_RECOVERY_MAX : 2);
+  expect(described).toContain(current);
+  expect(described).toContain(outside);
+  expect(described).not.toContain(history);
   expect(hydrated).toEqual([current]);
   expect(generation.reads()).toBe(1);
 
@@ -1981,7 +1990,7 @@ test("identity recovery honours the project filter and the row limit (#860)", as
   expect(snapshot.selection).toMatchObject({ recovered: 1, selected: 1 });
 });
 
-test("a hosted transcript the generation already contains is never re-described (#860)", async () => {
+test("a catalogued hosted transcript refreshes identity without counting as recovery (#860)", async () => {
   const dir = sandbox();
   const hosted = path.join(dir, "hosted.jsonl");
   fs.writeFileSync(hosted, liveTranscriptText(NOW - 1_000), "utf8");
@@ -2010,7 +2019,7 @@ test("a hosted transcript the generation already contains is never re-described 
   );
 
   expect(snapshot.conversations.map((record) => record.transcriptPath)).toEqual([hosted]);
-  expect(describes).toBe(0);
+  expect(describes).toBe(1);
   expect(snapshot.selection.recovered).toBe(0);
 });
 

@@ -54,6 +54,7 @@ import {
 } from "./draftSpawn";
 import { draftWorkingDirectory } from "./projectModel";
 import { cleanTitle } from "@/lib/title";
+import { speedBody } from "@/components/ReasoningControls";
 
 type Engine = "claude" | "codex" | "copilot";
 
@@ -775,7 +776,8 @@ export function DraftAgentPane({
       model,
       cwd: launchCwd,
       effort: launchEffort,
-      fast: engine === "codex" && speed ? speed === "fast" : null,
+      fast: null,
+      ...speedBody(engine, speed),
       accountId: launch.launchAccountId,
       "prompt": payloadText,
       images: attachments.images.map((image) => ({ base64: image.base64, mime: image.mime })),

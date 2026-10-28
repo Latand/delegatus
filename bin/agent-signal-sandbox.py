@@ -167,6 +167,13 @@ def inner(directory, command):
 
 
 def execute(command):
+    # Only the final engine changes priority, after every resident waiter forks.
+    score = os.environ.pop("LLV_SIGNAL_OOM_SCORE", None)
+    if score is not None:
+        try:
+            Path("/proc/self/oom_score_adj").write_text(str(int(score)))
+        except (OSError, ValueError):
+            print("Delegatus: workload OOM score unavailable; continuing with inherited score", file=sys.stderr, flush=True)
     # Socket engines outlive their Viewer and inherit no Viewer pipes. A caller
     # that bounds stderr itself keeps it, so a startup failure shows its cause.
     if os.environ.get("LLV_SIGNAL_IGNORE_NATIVE_STDIO") == "1":

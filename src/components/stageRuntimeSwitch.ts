@@ -62,10 +62,11 @@ export function stageSwitchRequest(run: StageRun, engine: string, draft: Runtime
     expectedAttempt: run.attempt.n,
     ...(run.attempt.conversationId ? { expectedConversationId: run.attempt.conversationId } : {}),
     ...(engine === "claude" || engine === "codex" ? { engine } : {}),
-    model: draft.model,
+    // A pill that knows no model sends none: the stage keeps the one it runs on.
+    ...(draft.model ? { model: draft.model } : {}),
     effort: draft.effort,
     // Claude has no speed: a tier the next attempt was given for Codex is cleared with the engine.
-    ...(engine === "codex" ? { serviceTier: displayedTier ?? (draft.fast ? "priority" : "standard") } : engine === "claude" ? { serviceTier: null } : {}),
+    ...(engine === "codex" ? { serviceTier: displayedTier ?? draft.serviceTier ?? (draft.fast ? "priority" : "standard") } : engine === "claude" ? { serviceTier: null } : {}),
     ...(accountId ? { account: accountId } : {}),
   };
 }

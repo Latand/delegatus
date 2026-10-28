@@ -70,6 +70,7 @@ import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
 import { DecisionColumn, DecisionStripLine, defaultDecisionTab, useOpenDecisionCount, type DecisionTab } from "@/components/decisions/DecisionColumn";
 import { useDecisionSurface } from "@/components/decisions/decisionSurface";
+import { speedBody } from "@/components/ReasoningControls";
 
 /* The report log beside the chat (#2146). It first opened at a 720 px seat
    as a 300 px column, which left the chat 420 px; the chat now keeps at least
@@ -466,7 +467,7 @@ export function OrchestratorPanel({
         engine: launch.engine,
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.effort ? { effort: launch.effort } : {}),
-        ...(launch.engine === "codex" && launch.speed ? { fast: launch.speed === "fast" } : {}),
+        ...speedBody(launch.engine, launch.speed),
         ...(launch.launchAccountId ? { accountId: launch.launchAccountId } : {}),
         /* The project's own root, resolved by the shell — the operator never
            types a directory for their own project's orchestrator. Absent, the
@@ -968,7 +969,7 @@ function RotateDraft({
         engine: launch.engine,
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.effort ? { effort: launch.effort } : {}),
-        ...(launch.engine === "codex" && launch.speed ? { fast: launch.speed === "fast" } : {}),
+        ...speedBody(launch.engine, launch.speed),
         ...(launch.launchAccountId ? { accountId: launch.launchAccountId } : {}),
       },
       launch: { draft: launch, cwd: cwd ?? "", firstMessage: mandate },
@@ -1143,7 +1144,7 @@ function OrchestratorDraft({
 
         {rotate ? (
           <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
-            <AgentLaunchControls draft={launch} disabled={submitting} stacked />
+            <AgentLaunchControls draft={launch} disabled={submitting} stacked inheritSpeed />
           </div>
         ) : (
           <RunsOnRow draft={launch} disabled={submitting} cwd={cwd} revealRef={launchChoices} />
