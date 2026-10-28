@@ -3193,11 +3193,22 @@ test("lifecycle_events queries the journal by lineage and polls the bounded dige
 /* #1026 — an agent driving the board must not get less than an HTTP caller: a
    rejected create carries every violated constraint, with its field and the
    shape that field expects, as structured refusal details. */
+function pipelineContractBindings(src: string) {
+  const conversationId = "conversation_creator";
+  return viewerMcpBindings(undefined, undefined, {
+    attentionAuthority: () => ({ kind: "worker", conversationId, role: "builder" }),
+    callerAttribution: () => ({ kind: "agent", conversationId, role: "builder" }),
+    registrySnapshot: () => ({ entries: {}, receipts: {}, memberships: {}, lineageEdges: {}, conversationAliases: {}, conversations: {
+      [conversationId]: { id: conversationId, engine: "codex", generations: [{ path: src }], continuityPaths: [] },
+    } }),
+  } as never);
+}
+
 test("create_pipeline refuses with every violated constraint attached", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-binding-pipeline-"));
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
-  const bindings = viewerMcpBindings();
+  const bindings = pipelineContractBindings(path.join(sandbox, "creator.jsonl"));
 
   const refusal = await bindings.create_pipeline({
     clientRequestId: "create-pipeline-invalid",
@@ -3220,7 +3231,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-binding-pipeline-models-"));
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
-  const bindings = viewerMcpBindings();
+  const bindings = pipelineContractBindings(path.join(sandbox, "creator.jsonl"));
 
   const refusal = await bindings.create_pipeline({
     clientRequestId: "create-pipeline-invalid-models",
