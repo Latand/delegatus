@@ -8,13 +8,13 @@ import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
-import type { ExecPort } from "@/lib/workflows/provision";
+import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 import { pipelinePublicationTextSafe } from "./git";
 import { pipelineArtifactsDir } from "./store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type PullRequestTextRefusal = { part: "title" | "body" | "title/body"; check: string; kind: string; line?: number };
-export type StagePullRequestResult = { ok: true } | { ok: false; error: string; privacy?: PullRequestTextRefusal };
+export type StagePullRequestResult = { ok: true } | { ok: false; error: string; inspection?: true; privacy?: PullRequestTextRefusal };
 
 function isFinalBudgetFix(attempt: PipelineStageAttempt): boolean {
   return attempt.activatedBy?.edge === "fail" && attempt.activatedBy.budgetSpent === true;
@@ -63,7 +63,58 @@ const repositoryClassNames: Record<string, string> = { home_path: "absolute-path
 function repositoryRefusal(part: "title" | "body", output: string): StagePullRequestResult {
   const kinds = repositoryClasses.filter(kind => new RegExp(`^${kind}: [1-9][0-9]*$`, "m").test(output))
     .map(kind => repositoryClassNames[kind] ?? kind.replaceAll("_", "-"));
-  return refused(part, "repository publication privacy gate", kinds.join(", ") || "inspection-error");
+  const content = kinds.filter(kind => !["configuration-error", "inspection-error", "tool-unavailable"].includes(kind));
+  // A reported content finding stays decisive even beside an inspection error.
+  return content.length ? refused(part, "repository publication privacy gate", content.join(", "))
+    : { ok: false, inspection: true, error: `pull request publication privacy gate inspection-error for ${part}` };
+}
+
+const INSPECTION_BUDGET_MS = 60_000;
+async function available(file: string): Promise<string> {
+  return fs.access(file, fs.constants.R_OK).then(() => "available").catch(error =>
+    (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable");
+}
+
+/** Inspect the complete diagnostic with the publication rules before retaining
+ * a bounded tail. Unsafe diagnostics retain only the fixed refusal class. */
+async function diagnosticTail(stderr: string): Promise<string> {
+  if (!stderr.trim()) return "no stderr";
+  const safe = await inspectPullRequestText("title/body", stderr);
+  return safe.ok ? stderr.trim().slice(-1_000) : `[redacted: ${safe.privacy?.kind ?? "inspection-error"}]`;
+}
+
+async function inspectRepositoryText(part: "title" | "body", file: string, gate: string, titleFile: string,
+  bodyFile: string, pipeline: Pipeline, exec: ExecPort, timing: HeadRetryTiming): Promise<StagePullRequestResult> {
+  const fingerprints = path.join(pipeline.worktreeDir, "scripts", "privacy-known-value-fingerprints.json");
+  const inputs = Object.fromEntries(await Promise.all(Object.entries({ gate, fingerprints, title: titleFile,
+    body: bodyFile, worktree: pipeline.worktreeDir }).map(async ([name, input]) => [name, await available(input)])));
+  const started = timing.now();
+  let checked: ExecResult;
+  let spawn = "none";
+  try {
+    checked = await exec("bun", [gate, "--require-known-values", "--paths", file], pipeline.worktreeDir,
+      { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints }, { timeoutMs: INSPECTION_BUDGET_MS });
+  } catch (error) {
+    const failure = error as { code?: unknown; signal?: unknown; stderr?: unknown } | null;
+    const code = failure?.code;
+    spawn = typeof code === "string" && ["ENOENT", "EACCES", "EAGAIN", "ETIMEDOUT"].includes(code) ? code : "exception";
+    checked = { code: typeof code === "number" && Number.isSafeInteger(code) ? code : null, stdout: "",
+      signal: typeof failure?.signal === "string" && /^SIG[A-Z0-9]+$/.test(failure.signal) ? failure.signal as NodeJS.Signals : null,
+      stderr: [error instanceof Error ? error.message : "subprocess threw", typeof failure?.stderr === "string" ? failure.stderr : ""].join("\n") };
+  }
+  if (checked.code === 0 && !checked.signal && Object.values(inputs).every(value => value === "available")) return { ok: true };
+  const elapsedMs = Math.max(0, Math.round(timing.now() - started));
+  // A killed/timed-out child has no trustworthy completed content verdict.
+  const result = checked.code === null || checked.signal || spawn !== "none"
+    ? { ok: false as const, inspection: true as const, error: `pull request publication privacy gate inspection-error for ${part}` }
+    : repositoryRefusal(part, checked.stdout);
+  if (result.ok) return result;
+  const cause = Object.values(inputs).some(value => value !== "available") ? "missing-input"
+    : spawn === "ETIMEDOUT" || /^command timed out after [0-9]+ms/.test(checked.stderr) ? "timeout"
+    : checked.signal ? "signal" : checked.code === null || spawn !== "none" ? "spawn" : "exit";
+  return { ...result, error: `${result.error}; gate diagnostic ${JSON.stringify({ cause, exit: checked.code,
+    signal: /^SIG[A-Z0-9]+$/.test(checked.signal ?? "") ? checked.signal : null, spawn,
+    elapsedMs, budgetMs: INSPECTION_BUDGET_MS, inputs, stderrTail: await diagnosticTail(checked.stderr) })}` };
 }
 
 const HEAD_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 14_000];
@@ -114,8 +165,6 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     ].filter(Boolean);
     if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
       ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };
-    if (refresh && (typeof pr.body !== "string" || typeof pr.title !== "string"))
-      return { ok: false, error: "the delivery pull request body refresh could not read its existing text" };
     return { ok: true, number: pr.number, body: pr.body, title: pr.title };
   };
   const find = async (): Promise<Found> => {
@@ -141,6 +190,14 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     const found = await find();
     if (!found.ok) return { ok: false, error: found.error };
     let number = found.number;
+    if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
+    if (refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string")) {
+      delivery.target.pr = number;
+      attempt.error = `pull request publication privacy gate inspection-error: existing PR inputs ${JSON.stringify({
+        body: typeof found.body === "string" ? "available" : "missing", title: typeof found.title === "string" ? "available" : "missing" })}`;
+      delete attempt.pullRequestInspection;
+      return { ok: true };
+    }
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
       const summary = producer.report?.summary?.trim() || producer.output?.trim() || "";
@@ -174,10 +231,21 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         });
         if (hasGate) {
           for (const [part, file] of [["title", titleFile], ["body", bodyFile]] as const) {
-            const checked = await Promise.resolve().then(() => exec("bun", [gate, "--require-known-values", "--paths", file], pipeline.worktreeDir,
-              { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(pipeline.worktreeDir, "scripts", "privacy-known-value-fingerprints.json") }, { timeoutMs: 60_000 }))
-              .catch(() => ({ code: 1, stdout: "", stderr: "" }));
-            if (checked.code !== 0) return repositoryRefusal(part, checked.stdout);
+            const checked = await inspectRepositoryText(part, file, gate, titleFile, bodyFile, pipeline, exec, timing);
+            if (!checked.ok) {
+              if (checked.inspection) {
+                // A create may have landed independently, or a final fix may
+                // already have a PR. Re-read its identity after the failure.
+                const existing = await find();
+                if (existing.ok && existing.number !== null) {
+                  delivery.target.pr = existing.number;
+                  attempt.error = checked.error;
+                  delete attempt.pullRequestInspection;
+                  return { ok: true };
+                }
+              }
+              return checked;
+            }
           }
         }
         const creating = number === null;
@@ -198,6 +266,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       } finally { await fs.rm(directory, { recursive: true, force: true }); }
     }
     delivery.target.pr = number;
+    delete attempt.pullRequestInspection;
     return { ok: true };
   } catch { return { ok: false, error: refresh
     ? "the delivery pull request body refresh could not be verified; the stage cannot pass without it"

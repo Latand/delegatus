@@ -511,6 +511,9 @@ export type PipelineStageAttempt = {
       Each failed operation is counted once; `exhausted` waits for an explicit
       push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Gate infrastructure retries are independent of producer summary repairs.
+      The accepted head and due time survive controller restarts. */
+  pullRequestInspection?: { sha: string; failures: number; retryAt: string; detail: string; exhausted?: boolean };
   /** Bounded PR summary corrections preserve the accepted verdict and SHA.
       Persisted before delivery so a restart reuses the same request. */
   publicationTextRepair?: {

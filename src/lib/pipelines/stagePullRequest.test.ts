@@ -235,8 +235,9 @@ test("the final budget PR refresh keeps the repository's publication gate", asyn
   const f = await finalBudgetFixFixture();
   try {
     const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "process.exit(1);\n");
-    await f.git(f.worktree, "add", "scripts/privacy-publication-gate.ts");
+    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "console.log(\"known_value: 1\"); process.exit(1);\n");
+    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
+    await f.git(f.worktree, "add", "scripts");
     await f.commit();
     const p = await f.finish(fixSummary, 3);
     expect(p.state).toBe("needs_decision");
@@ -246,7 +247,7 @@ test("the final budget PR refresh keeps the repository's publication gate", asyn
   } finally { f.close(); }
 });
 
-test.each(["body", "title"] as const)("the final budget refresh refuses an unreadable existing PR %s", async field => {
+test.each(["body", "title"] as const)("the final budget refresh adopts the matching PR with a missing %s diagnostic", async field => {
   const f = await finalBudgetFixFixture();
   try {
     const exec = f.h.ports.exec;
@@ -259,8 +260,11 @@ test.each(["body", "title"] as const)("the final budget refresh refuses an unrea
       return result;
     };
     const p = await f.finish(fixSummary, 3);
-    expect(p.state).toBe("needs_decision");
-    expect(p.stateDetail).toContain("body refresh could not read its existing text");
+    expect(p.state).toBe("running");
+    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
+    const error = p.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.error;
+    expect(error).toContain("inspection-error");
+    expect(error).toContain(`"${field}":"missing"`);
     expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
     expect(f.body()).toBe(originalBudgetBody);
   } finally { f.close(); }
@@ -749,7 +753,8 @@ test("C: the repository's privacy gate can refuse otherwise public summary text"
   const f = await fixture();
   try {
     const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "process.exit(1);\n");
+    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "console.log(\"known_value: 1\"); process.exit(1);\n");
+    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
     await f.git(f.worktree, "add", "scripts"); await f.commit();
     const p = await f.finish();
     expect(p.state).toBe("needs_decision"); expect(p.stateDetail).toContain("repository publication privacy gate");
@@ -829,7 +834,8 @@ test("a legacy privacy rewrite checkpoint removes the old terminal marker before
     f.h.ports.exec = async (command, args, cwd, env, options) => command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")
       ? { code: 0, stdout: "PRIVACY GATE: PASS\n", stderr: "" }
       : initialExec(command, args, cwd, env, options);
-    await f.git(f.worktree, "add", "scripts/privacy-publication-gate.ts");
+    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
+    await f.git(f.worktree, "add", "scripts");
     await f.commit(); f.setExisting();
     await f.finish();
     const current = loadPipelines().find(p => p.id === f.id)!;
@@ -1103,6 +1109,7 @@ test("ORM identifiers, counts and a full SHA pass every real PR text check", asy
     const fingerprints = path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json");
     const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Fixture uses the real gate through its exec port.\n");
+    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
     await f.git(f.worktree, "add", "scripts");
     const exec = f.h.ports.exec;
     f.h.ports.exec = async (command, args, cwd, env, options) => command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")
@@ -1156,6 +1163,7 @@ test.each(["known-value", "unavailable"] as const)("repository PR text refusal i
   try {
     const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled gate fixture.\n");
+    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
     await f.git(f.worktree, "add", "scripts");
     const exec = f.h.ports.exec;
     f.h.ports.exec = async (command, args, cwd, env, options) => {
@@ -1169,7 +1177,7 @@ test.each(["known-value", "unavailable"] as const)("repository PR text refusal i
     };
     await f.commit();
     const parked = await f.finish();
-    expect(parked.stateDetail).toContain(mode === "known-value" ? "body [redacted]" : "title [redacted]");
+    expect(parked.stateDetail).toContain(mode === "known-value" ? "body [redacted]" : "inspection-error for title");
     expect(parked.stateDetail).toContain(mode === "known-value" ? "known-value" : "inspection-error");
     expect(parked.stateDetail).not.toContain(unsafeSummary);
     expect(f.calls.some(call => call[1] === "create")).toBe(false);
@@ -1267,4 +1275,177 @@ test("a static refusal locates its decoded line without quoting the match", asyn
   const result = await inspectPullRequestText("body", "Public result.\nEvidence:\n/home/" + "private-user/evidence");
   expect(result).toMatchObject({ ok: false, privacy: { kind: "absolute-path", line: 3 } });
   if (!result.ok) expect(result.error).toContain("decoded line 3");
+});
+
+
+async function inspectionFixture(mode: "timeout" | "empty" | "signal" | "spawn" | "finding" | "missing") {
+  const f = await fixture();
+  let clock = Date.parse(f.h.ports.now());
+  f.h.ports.now = () => new Date(clock).toISOString();
+  const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
+  fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled gate process.\n");
+  if (mode !== "missing") fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"),
+    path.join(scripts, "privacy-known-value-fingerprints.json"));
+  await f.git(f.worktree, "add", "scripts");
+  const exec = f.h.ports.exec;
+  let checks = 0, recover = false, adopt = false;
+  const sends: string[] = [];
+  f.h.ports.resumeSeveredTurn = async input => { sends.push(input.text); return true; };
+  f.h.ports.exec = async (command, args, cwd, env, options) => {
+    if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
+      expect(options?.timeoutMs).toBe(60_000);
+      if (recover || args.at(-1)?.endsWith("title.txt")) return { code: 0, stdout: "", stderr: "" };
+      checks++;
+      if (adopt) f.setExisting();
+      if (mode === "spawn") throw Object.assign(new Error(unsafeSummary), { code: "EAGAIN" });
+      return mode === "timeout" ? { code: null, signal: "SIGKILL", stdout: "", stderr: "command timed out after 60000ms" }
+        : mode === "signal" ? { code: null, signal: "SIGTERM", stdout: "", stderr: unsafeSummary }
+        : mode === "finding" ? { code: 1, stdout: "known_value: 1\ninspection_error: 1\n", stderr: unsafeSummary }
+        : { code: 1, stdout: "", stderr: "gate could not load its input" };
+    }
+    return exec(command, args, cwd, env, options);
+  };
+  await f.commit();
+  return { ...f, checks: () => checks, sends, advance: (ms: number) => { clock += ms; }, recover: () => { recover = true; }, adopt: () => { adopt = true; } };
+}
+
+test.each(["timeout", "empty", "signal", "spawn", "missing"] as const)("PR inspection %s retries without summary rewrites and recovers", async mode => {
+  const f = await inspectionFixture(mode);
+  try {
+    const waiting = await f.finish();
+    const first = waiting.runs[0]!.attempts[0]!;
+    expect(waiting.state).toBe("running");
+    expect(waiting.cursor?.state).toBe("committing");
+    expect(first.publicationTextRepair).toBeUndefined();
+    expect(first.pullRequestInspection?.failures).toBe(1);
+    expect(first.error).toContain('"budgetMs":60000');
+    expect(first.error).toContain('"body":"available"');
+    expect(first.error).toContain(mode === "missing" ? '"fingerprints":"missing"' : '"fingerprints":"available"');
+    expect(first.error).toContain(mode === "timeout" ? '"signal":"SIGKILL"' : mode === "spawn" ? '"spawn":"EAGAIN"' : mode === "signal" ? '"signal":"SIGTERM"' : mode === "missing" ? '"exit":0' : '"exit":1');
+    expect(first.error).not.toContain(unsafeSummary);
+    expect(f.sends).toEqual([]);
+    await tickPipelines([], f.h.ports);
+    expect(f.checks()).toBe(mode === "missing" ? 0 : 1); // Repeated ticks respect the due time.
+    if (mode === "missing") return;
+    f.recover(); f.advance(1_001);
+    await tickPipelines([], f.h.ports);
+    const done = loadPipelines().find(p => p.id === f.id)!;
+    expect(done.cursor?.stageId).toBe("review");
+    expect(done.delivery?.target.pr).toBe(17);
+    expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
+    expect(f.sends).toEqual([]);
+  } finally { f.close(); }
+});
+
+test("PR inspection adopts an open PR created during the failed inspection and retains its diagnostic", async () => {
+  const f = await inspectionFixture("empty");
+  try {
+    f.adopt();
+    const done = await f.finish();
+    expect(done.cursor?.stageId).toBe("review");
+    expect(done.delivery?.target.pr).toBe(17);
+    expect(done.runs[0]!.attempts[0]!.error).toContain('"exit":1');
+    expect(done.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
+    expect(f.calls.some(call => call[1] === "create")).toBe(false);
+    expect(f.sends).toEqual([]);
+  } finally { f.close(); }
+});
+
+test("PR inspection real content finding still refuses beside an inspection error and withholds its diagnostic", async () => {
+  const f = await inspectionFixture("finding");
+  try {
+    f.adopt();
+    const refused = await f.finish();
+    const attempt = refused.runs[0]!.attempts[0]!;
+    expect(attempt.publicationTextRepair?.state).toBe("pending");
+    expect(attempt.pullRequestInspection).toBeUndefined();
+    expect(attempt.error).toContain("known-value");
+    expect(attempt.error).toContain("stderrTail");
+    expect(attempt.error).not.toContain(unsafeSummary);
+    expect(f.sends).toHaveLength(1);
+    expect(refused.delivery?.target.pr).toBeUndefined();
+  } finally { f.close(); }
+});
+
+
+test("PR inspection backoff and exhaustion survive fresh controller processes", async () => {
+  const f = await inspectionFixture("empty");
+  try {
+    let lane = await f.finish();
+    const accepted = lane.lastPassedCommit;
+    const restart = async (at: number) => {
+      const driver = `
+        const { defaultPipelinePorts, settlePendingStageGit } = await import("@/lib/pipelines/engine");
+        const { loadPipelines } = await import("@/lib/pipelines/store");
+        const { realExec } = await import("@/lib/workflows/provision");
+        const sends = []; let checks = 0;
+        const ports = { ...defaultPipelinePorts(), now: () => new Date(${at}).toISOString(),
+          conversationAgentActive: async () => false, conversationDeliveryOutstanding: () => false,
+          resumeSeveredTurn: async input => { sends.push(input.clientMessageId); return true; },
+          exec: async (command, args, cwd, env, options) => {
+            if (command === "gh") return { code: 0, stdout: "[]", stderr: "" };
+            if (command === "bun") { checks++; return { code: 1, stdout: "", stderr: "input unavailable" }; }
+            return realExec(command, args.map(arg => arg === ${JSON.stringify(REMOTE)} ? ${JSON.stringify(f.origin)} : arg), cwd, env, options);
+          } };
+        await settlePendingStageGit(ports);
+        const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(f.id)});
+        console.log(JSON.stringify({ lane, checks, sends }));
+      `;
+      const result = await realExec(process.execPath, ["-e", driver], process.cwd(), {
+        ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_CONTROL_URL: "http://127.0.0.1:1",
+      }, { timeoutMs: 30_000 });
+      expect(result.code, result.stderr).toBe(0);
+      return JSON.parse(result.stdout.trim());
+    };
+    const before = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) - 1);
+    expect(before.checks).toBe(0);
+    for (const failures of [2, 3, 4]) {
+      const result = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 1);
+      lane = result.lane;
+      expect(lane.runs[0]!.attempts[0]!.pullRequestInspection!.failures).toBe(failures);
+      expect(result.checks).toBe(1);
+      expect(result.sends).toEqual([]);
+      expect(lane.lastPassedCommit).toBe(accepted);
+    }
+    expect(lane.state).toBe("needs_decision");
+    expect(lane.stateDetail).toContain("inspection retry budget exhausted");
+    expect(lane.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
+    const after = await restart(Date.parse(lane.updatedAt) + 60_000);
+    expect(after.checks).toBe(0);
+  } finally { f.close(); }
+});
+
+
+test("PR inspection adopts a matching PR during a final-fix refresh without changing its body", async () => {
+  const f = await inspectionFixture("empty");
+  try {
+    const lane = await f.finish();
+    const attempt = lane.runs[0]!.attempts[0]!;
+    attempt.activatedBy = { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true };
+    f.setExisting();
+    const result = await ensureStagePullRequest(lane, attempt, f.h.ports.exec);
+    expect(result).toEqual({ ok: true });
+    expect(lane.delivery?.target.pr).toBe(17);
+    expect(attempt.error).toContain("inspection-error");
+    expect(f.calls.some(isBodyPatch)).toBe(false);
+    expect(f.body()).toBe("");
+  } finally { f.close(); }
+});
+
+test("PR inspection retires a legacy inspection-error summary wait and adopts the matching PR", async () => {
+  const f = await rewritingFixture();
+  try {
+    const lane = loadPipelines().find(p => p.id === f.id)!;
+    lane.runs[0]!.attempts[0]!.publicationTextRepair!.detail = "pull request publication privacy gate refused body [redacted]: repository publication privacy gate (inspection-error)";
+    savePipelines([lane]);
+    f.setExisting();
+    const sent = f.sends.length;
+    await tickPipelines([], f.h.ports);
+    const done = loadPipelines().find(p => p.id === f.id)!;
+    expect(done.cursor?.stageId).toBe("review");
+    expect(done.delivery?.target.pr).toBe(17);
+    expect(done.runs[0]!.attempts[0]!.error).toContain("inspection-error");
+    expect(done.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
+    expect(f.sends).toHaveLength(sent);
+  } finally { f.close(); }
 });
