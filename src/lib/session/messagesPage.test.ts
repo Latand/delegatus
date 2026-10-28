@@ -59,6 +59,27 @@ const times = [
   "2026-08-30T10:03:00.000Z",
 ] as const;
 
+test("a deeply nested JSON line leaves a bounded marker between intact cursor pages", () => {
+  const ordinary = (text: string) => ({ type: "event_msg", timestamp: times[0], payload: { type: "agent_message", message: text } });
+  const pathname = fixture([]);
+  const nested = '{"type":"event_msg","payload":{"type":"file_change_output_delta","delta":'
+    + "[".repeat(100_000) + '"x"' + "]".repeat(100_000) + "}}";
+  fs.writeFileSync(pathname, [JSON.stringify(ordinary("before 😀")), nested, "{malformed", JSON.stringify(ordinary("after Ж"))].join("\n") + "\n");
+  const newest = page(pathname, "codex", { limit: 1, maxChars: 100 });
+  expect(newest.records.map(record => record.text)).toEqual(["after Ж"]);
+  expect(newest.hasMore).toBe(true);
+  const middle = page(pathname, "codex", { limit: 1, maxChars: 100, cursor: newest.cursor! });
+  expect(middle.records.map(({ kind, role, name, text }) => ({ kind, role, name, text }))).toEqual([{
+    kind: "trace", role: "system", name: "normalization_limit", text: "Record skipped: JSON nesting exceeds 64 levels",
+  }]);
+  expect(middle.hasMore).toBe(true);
+  const oldest = page(pathname, "codex", { limit: 1, maxChars: 100, cursor: middle.cursor! });
+  expect(oldest.records.map(record => record.text)).toEqual(["before 😀"]);
+  expect(oldest.hasMore).toBe(false);
+  expect(page(pathname, "codex", { kinds: new Set(["message"]) }).records.map(record => record.text))
+    .toEqual(["after Ж", "before 😀"]);
+});
+
 test("a caller scan allowance includes timestamp and pinned-record probes, and tool evidence stays private", () => {
   const filename = fixture([
     { type: "assistant", timestamp: times[0], message: { content: [{ type: "tool_use", id: "call-private", name: "mcp__viewer__create_task", input: withTaskDue({ text: "Task title" }) }] } },
