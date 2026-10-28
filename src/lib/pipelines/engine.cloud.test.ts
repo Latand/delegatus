@@ -26,7 +26,7 @@ const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 const lane = () => loadPipelines()[0]!;
 const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 
-async function fixture(options: { enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[] } = {}) {
+async function fixture(options: { accountId?: string; enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[] } = {}) {
   await settlePipelineControllerJobs();
   const h = harness();
   let clock = Date.UTC(2026, 9, 23);
@@ -35,7 +35,7 @@ async function fixture(options: { enabled?: boolean; publication?: "internal" | 
   const submits: Parameters<CloudStageClient["submit"]>[0][] = [];
   const reads: Parameters<CloudStageClient["poll"]>[0][] = [];
   h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: {
-    engine: "codex", accountId: request.requestedId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
+    engine: "codex", accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
   } });
   h.ports.cloudClient = {
     supportsModel: model => model === "gpt-6.1-sol",
@@ -1162,7 +1162,8 @@ for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["build
 
 
 for (const createEnvironment of [false, true]) test(`an unconfigured project discovers or creates its account environment through real hosted HTTP/WebSocket transport (create: ${createEnvironment})`, async () => {
-  const { h, submits } = await fixture({ enabled: false });
+  const accountId = createEnvironment ? "cloud-create" : "cloud-discover";
+  const { h, submits } = await fixture({ enabled: false, accountId });
   const backend = stubCloudBackend({ create: createEnvironment, repository: "sample/project", ref: "main" });
   try {
     // The normal create() helper above uses the production stage normalizer.
@@ -1175,18 +1176,20 @@ for (const createEnvironment of [false, true]) test(`an unconfigured project dis
     backend.setHead(record.lastPassedCommit);
     h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
     await submitted(h, ["00000000", "0000", "0000", "0000", "000000000000"].join("-"));
-    expect(attempt().cloud).toMatchObject({ environmentId: "asenvcfg_cloud-account", accountId: "cloud-account" });
+    expect(attempt().cloud).toMatchObject({ environmentId: `asenvcfg_${accountId}`, accountId });
     await step(h); await step(h);
     expect(attempt().verdict).toMatchObject({ status: "pass" });
     expect(h.spawnInputs).toHaveLength(0);
     expect(submits).toHaveLength(0);
     expect(backend.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
-    expect(backend.calls.find(call => call.method === "thread/start")?.body.environments).toEqual([{ environmentConfigId: "asenvcfg_cloud-account", cwd: "/workspace/project" }]);
+    expect(backend.calls.filter(call => call.path === "/backend-api/wham/github/repositories/repo-fixture").length).toBeGreaterThanOrEqual(2);
+    expect(backend.calls.find(call => call.method === "thread/start")?.body.environments).toEqual([{ environmentConfigId: `asenvcfg_${accountId}`, cwd: "/workspace/project" }]);
+    expect(backend.calls.filter(call => call.method === "POST" && call.path === "/v1/environment-configs")).toHaveLength(createEnvironment ? 1 : 0);
   } finally { backend.stop(); }
 });
 
 test("a missing workspace GitHub connection produces one durable local fallback with its exact prerequisite", async () => {
-  const { h } = await fixture({ enabled: false });
+  const { h } = await fixture({ enabled: false, accountId: "cloud-missing" });
   const backend = stubCloudBackend({ create: true, missingConnector: true, repository: "sample/project", ref: "main" });
   try {
     await step(h); const record = lane();
@@ -1201,5 +1204,30 @@ test("a missing workspace GitHub connection produces one durable local fallback 
     });
     expect(restarted.status).toBe(0); expect(JSON.parse(restarted.stdout).fallback).toEqual(attempt().cloud?.fallback);
     await step(h); await step(h); expect(h.spawnInputs).toHaveLength(1);
+  } finally { backend.stop(); }
+});
+
+
+test("an environment changed after pipeline preparation falls back once before Cloud work", async () => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-changed" });
+  const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    backend.setHead(record.lastPassedCommit);
+    const client = createHostedCloudStageClient(backend.dependencies);
+    const prepare = client.prepareEnvironment!;
+    client.prepareEnvironment = async input => {
+      const prepared = await prepare(input);
+      if (prepared.state === "ready") backend.configs.get(prepared.environmentId)!.repositories = [
+        { repository_id: "repo-fixture", ref: "other", mount_path: "/workspace/project" }];
+      return prepared;
+    };
+    h.ports.cloudClient = client;
+    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
+    expect(attempt().cloud?.fallback?.reason).toContain("base ref changed");
+    expect(backend.calls.some(call => call.method === "thread/start" || call.method === "turn/start")).toBe(false);
+    await step(h); await step(h);
+    expect(h.spawnInputs).toHaveLength(1);
   } finally { backend.stop(); }
 });

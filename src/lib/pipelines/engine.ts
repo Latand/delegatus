@@ -8381,6 +8381,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           attempt.input ?? normalizedOutput(pipeline), effectiveWorkerLimit(pipeline.project).value,
           resolveStageTestGuidance());
         const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
+          environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
           branch: cloud.branch, headSha: cloud.headSha, prompt: hardenedRedact([prompt,
             "Cloud runtime instructions (override local host, scratch and MCP mechanics above):",
             `Start from exactly commit ${cloud.headSha} on branch ${cloud.branch}; report a failure if the checkout differs.`,

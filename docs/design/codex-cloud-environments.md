@@ -29,7 +29,9 @@ uses the desktop's numbered `wham/github/list-repositories` pages, at most 20
 pages of 20 repositories, and verifies the result through repository metadata.
 An incomplete catalog refuses creation. Repository identity and base ref are
 checked even when a configuration supplies a mount path. Display names do not
-establish repository ownership.
+establish repository ownership. Submission rereads repository metadata and the
+base ref before starting a thread, including configurations with a mount path;
+a changed configuration produces a confirmed local fallback before model work.
 
 An existing ready configuration is preferred, with private configurations first
 and configuration ID breaking ties. A new private configuration contains the

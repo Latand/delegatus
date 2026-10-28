@@ -61,7 +61,7 @@ export type CloudTaskAccess = {
 export interface CloudStageClient {
   supportsModel(model: string, reasoningEffort: string | null): boolean;
   submit(input: { environmentId: string; branch: string; headSha: string; prompt: string; model: string;
-    reasoningEffort: string | null; serviceTier?: string | null; environmentPrincipal?: string; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
+    reasoningEffort: string | null; serviceTier?: string | null; environmentPrincipal?: string; environmentScope?: { repository: string; ref: string }; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
     assertCurrent: () => void }): Promise<{ taskId: string; taskUrl: string; thread?: CloudThreadReference }>;
   poll(input: CloudTaskAccess): Promise<CloudTaskObservation>;
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string }>;
