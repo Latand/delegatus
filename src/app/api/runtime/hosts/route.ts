@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
@@ -74,6 +75,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<KillResponse 
   const key = ref.sessionId === null ? null : { engine: ref.engine, sessionId: ref.sessionId };
   const observed = key ? agentRegistry().readOnlySnapshot().entries[sessionKeyId(key)] : null;
   const outcome = await terminateStructuredHostTree(ref, {
+    stopOrigin: { path: `resources-${intent.kind}-kill`, operationId: randomUUID() },
     retainedSurvivors: observed?.structuredTerminationSurvivors ?? [],
     persistCapturedTree: identities => ref.sessionId === null || agentRegistry().deliveryWriteOrBusy({ label: "registry.operator-stop-capture" }, () => {
       if (structuredHostKillRefusal(ref, intent, body.includeSeat === true)) return false;

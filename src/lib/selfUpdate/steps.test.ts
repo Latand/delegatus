@@ -1021,6 +1021,27 @@ describe("a release directory that already passed its ready check", () => {
   }
   const commands = (calls: string[][]) => calls.map(stepOf);
 
+  test("a fresh runner reuses a verified release found on disk without prior runner state", async () => {
+    const h = built();
+    mkdirSync(join(h.dir, ".next"), { recursive: true });
+    writeFileSync(join(h.dir, ".next", "BUILD_ID"), "previous-build");
+    writeFileSync(join(h.dir, ".next", "DELEGATUS_RELEASE_READY"), `${TARGET}\n`);
+    h.setMemory(0);
+
+    const runner = h.runner();
+    expect(runner.state.state).toBe("idle");
+    await runner.start(TARGET);
+
+    expect(runner.state.state).toBe("done");
+    expect(commands(h.calls)).toEqual(["fetch", "checkout"]);
+    expect(h.published).toEqual([{ sha: TARGET, dir: h.dir }]);
+    expect(readFileSync(join(h.dir, ".next", "BUILD_ID"), "utf8")).toBe("previous-build");
+    expect(runner.state.steps.map(step => [step.name, step.state, step.exitCode]))
+      .toEqual(STEP_NAMES.map(name => [name, "done", name === "fetch" || name === "checkout" ? 0 : null]));
+    expect(readFileSync(runner.logPath("install"), "utf8")).toContain("its dependencies are kept");
+    expect(readFileSync(runner.logPath("build"), "utf8")).toContain("the build is reused");
+  });
+
   test("is published again without an install or a build, and without waiting for build memory", async () => {
     const h = built();
     await h.runner().start(TARGET);

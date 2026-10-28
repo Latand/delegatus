@@ -25,6 +25,7 @@ import { AgentControlStrip } from "./AgentControlStrip";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 import { DeadHostBanner } from "./runtime/DeadHostBanner";
 import { SupersededBanner } from "./runtime/SupersededBanner";
+import { RetiredOrchestratorBanner, useRetiredOrchestrator } from "./orchestrator/RetiredOrchestratorBanner";
 import { FlipRow } from "./FlipRow";
 import { HintScope } from "./Hint";
 import { conversationSpeech } from "./feed/conversationSpeech";
@@ -40,7 +41,7 @@ import { TaskRelationStrip } from "./tasks/TaskRelationStrip";
 import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
 import { EngineBadge } from "./EngineMark";
-import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fileModelLabel, fmtAge } from "./utils";
+import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, conversationModelLabel, fmtAge } from "./utils";
 import { isLaunchedConversation } from "./launchedConversations";
 
 const noop = () => undefined;
@@ -131,8 +132,8 @@ interface Props {
   dragHandle?: React.HTMLAttributes<HTMLElement>;
   /** Hides the tmux composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
-  /** A conversation the operator reads and nobody here acts on (a relay
-      chat's, which only the relay writes): no control strip and no composer. */
+  /** Archive and relay readers keep navigation and transcript disclosure,
+      with no transcript, host, account or delivery mutation controls. */
   readOnly?: boolean;
   /** Slim context bar pinned under the header (e.g. «Round 2 · ✖ REQUEST_CHANGES»). */
   banner?: React.ReactNode;
@@ -239,15 +240,17 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
      conversation is never messaged through the legacy pane-bound delivery
      path (finding 1). */
   const { caps, runtime } = useAgentCapabilities(file);
+  const retiredOrchestrator = useRetiredOrchestrator(file, !dormant && !neverStarted);
   /* `useAgentCapabilities` resolves the card once for every consumer below:
      banner, strip, and composer must never tell three liveness stories. */
-  const deadHost = caps.surface === "dead";
+  const deadHost = !retiredOrchestrator && caps.surface === "dead";
   /* A terminally superseded round (issue #383): the banner replaces recovery
      with navigation to the live successor, and the composer unmounts — the
      retired round takes no input unless the operator explicitly forks it. */
   const superseded = caps.surface === "superseded";
   const sendCap = caps.controls.send;
-  const sendBlockedReason = !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
+  const sendBlockedReason = retiredOrchestrator ? t("retiredOrchestrator.sendBlocked")
+    : !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
   /* A surface whose Send is hidden exposes no composer at all (it stands
      down by itself), so the agent's controls stay in their strip there. */
   const composerShown = !(noComposer || superseded || neverStarted) && sendCap.state !== "hidden";
@@ -305,7 +308,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
       {tone.glow ? <span aria-hidden className="pane-attention-ring"><span className="pane-attention-comets" /></span> : null}
       {/* The favorited-state crown perched on the top edge (issue #224); lives on
           this unclipped wrapper so it can overhang the card frame from above. */}
-      {showFavorite ? <FavoriteCrownMarker id={cardId} touch={isMobile} /> : null}
+      {showFavorite && !readOnly ? <FavoriteCrownMarker id={cardId} touch={isMobile} /> : null}
       <section
         ref={paneRef}
         /* Text inside the column must stay selectable: the canvas drag-pan skips
@@ -358,15 +361,15 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                 >
                   {titleOverride}
                 </span>
-              ) : file.renamable ? (
+              ) : file.renamable && !readOnly ? (
                 <SessionTitle file={file} displayMax={90} titleClassName="text-[12px] font-semibold" autoEditToken={autoEditToken} />
               ) : (
                 <span className="min-w-0 flex-1 truncate text-[12px] font-semibold" title={cleanTitle(file.title)}>
                   {cleanTitle(file.title, 90)}
                 </span>
               )}
-              {neverStarted ? null : <ProcessStatusControls file={file} compact />}
-              {showFavorite ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
+              {neverStarted || readOnly ? null : <ProcessStatusControls file={file} compact />}
+              {showFavorite && !readOnly ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
               <SpeakButton scope={file.path} header />
               {onToggleExpand ? (
                 <button
@@ -379,7 +382,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                 </button>
               ) : null}
               {headerActions}
-              {file.spawn ? null : <DeleteFileButton file={file} onDeleted={onClose} />}
+              {file.spawn || readOnly ? null : <DeleteFileButton file={file} onDeleted={onClose} />}
               {onClose ? (
                 <button
                   className={"inline-flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
@@ -397,13 +400,13 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                 {/* Model + reasoning is read-only identity only (issue #241):
                     the picker moved out of the header into the unified control
                     strip; the chip and the effort bars are identity. */}
-                {file.model ? (
+                {conversationModelLabel(file) ? (
                   <span
                     className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold"
                     style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
                     title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
                   >
-                    {fileModelLabel(file)}
+                    {conversationModelLabel(file)}
                   </span>
                 ) : (
                   <EngineBadge engine={file.engine} className="px-2 py-0.5 text-[10px] font-bold" title={effortTitle(file)} />
@@ -443,7 +446,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                     the id is read from the live transcript path so a migrated
                     conversation reflects its current account. OpenClaw skips it
                     for the same reason: the Viewer owns no OpenClaw account. */}
-                {file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? null : (
+                {readOnly || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? null : (
                   <AccountBadge
                     engine={file.engine}
                     accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}
@@ -476,19 +479,20 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
             currentLabel={liveMigration?.sourceLabel}
             error={liveMigration?.failure ?? null}
             actionError={recoveryError}
-            onRetry={recover ? () => void recover("retry") : undefined}
-            onKeep={recover ? () => void recover("rollback") : undefined}
+            onRetry={!readOnly && recover ? () => void recover("retry") : undefined}
+            onKeep={!readOnly && recover ? () => void recover("rollback") : undefined}
           />
         ) : null}
         {banner ?? null}
+        {retiredOrchestrator ? <RetiredOrchestratorBanner retirement={retiredOrchestrator} /> : null}
         {/* Dead-host banner (issue #247 §5): sits in the MigrationRibbon slot
             family, between the header and the feed. Owns recovery so the stale
             attention cards and composer stand down below. */}
-        {deadHost ? <DeadHostBanner file={file} /> : null}
+        {deadHost && !readOnly ? <DeadHostBanner file={file} /> : null}
         {/* Superseded-round banner (issue #383): same slot family; wins over
             the dead-host banner via surface classification and swaps recovery
             for navigation to the live successor plus the explicit fork. */}
-        {superseded ? <SupersededBanner file={file} /> : null}
+        {superseded && !readOnly ? <SupersededBanner file={file} /> : null}
         {chromeInMenu ? null : relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
         {/* A launch's task arrives a poll after its pane: the strip's row is held, so the feed does not move when it lands. */}
         {!chromeInMenu && !relatedTasks?.length && onOpenTask && isLaunchedConversation(file) ? <div aria-hidden data-task-relations-slot className="min-h-9 shrink-0 pointer-coarse:min-h-[53px]" /> : null}
@@ -517,6 +521,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
           <MigrationDivider predecessorLabel={file.predecessorLabel} />
           <div data-composer-yields="" className="flex min-h-0 min-w-0 flex-1 flex-col">
             <LogFeed
+              readOnly={readOnly}
               file={file}
               showSvc={false}
               lineFilter=""
@@ -525,7 +530,8 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
               follow
               setFollow={noop}
               compact
-              onLaunchRetry={onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
+              sendBlockedReason={retiredOrchestrator ? sendBlockedReason : null}
+              onLaunchRetry={!readOnly && onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
               stepsMount={stepsMount}
             />
           </div>

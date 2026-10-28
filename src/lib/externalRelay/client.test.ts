@@ -304,7 +304,7 @@ test("a confirm that lists no targets reads them once from the service", async (
     const relay = await confirmRelayPairing(pending.id, owner.id);
     expect(targetReads).toBe(1);
     expect(relay.targets).toMatchObject([
-      { id: target.target_id, name: target.name, engine: null, model: null },
+      { id: target.target_id, name: target.name, engine: "codex-cloud", model: "gpt-6.1-sol" },
     ]);
     expect(readRelayStore().relays[0]?.targets.map((item) => item.id)).toEqual([
       target.target_id,

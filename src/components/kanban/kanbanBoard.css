@@ -107,7 +107,12 @@
 .kb .bar[data-bar="project"] .bar-lead { flex-shrink: 1; min-width: 48px; }
 /* The panel toggles and the ⋯ menu are two groups: 16 px apart, like every other pair of groups. */
 .kb .bar[data-bar="project"] .bar-trail { gap: 16px; }
-.kb .bar[data-bar="project"] .summary { white-space: nowrap; flex-shrink: 0; }
+/* The status keeps its dot and count whole; its words (a reconnect, a failure, «updating») stay
+   whole while a step is left (`data-bar-whole`) and then end with an ellipsis, the whole line in
+   the tooltip. Its automatic minimum keeps the count and one word. */
+.kb .bar[data-bar="project"] .summary { white-space: nowrap; flex-shrink: 1; }
+.kb .bar[data-bar="project"] .summary > :is(.dot, .num) { flex-shrink: 0; }
+.kb .bar[data-bar="project"] .summary > [data-bar-whole] { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .bar[data-bar="project"] .grow { flex: 1 1 0; min-width: 0; }
 /* The find group: the field and the one filter, joined into one control. The search gives way
    first, down to the 144 px that keep «Знайти задачу» whole, and the project name only after it.
@@ -149,14 +154,39 @@
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-attention-count]:has([data-attention-dot]):not([aria-expanded="true"]):hover { background: color-mix(in srgb, var(--color-warning) 24%, var(--surface-card)); }
 
 /* What the bar gives up, step by step (`BAR_FIT_STEPS`). The bar of a leaf without a board
-   (`[data-project-bar]`) takes the first two from its width. */
+   (`[data-project-bar]`) takes the same steps by the same rule; it has no `+` to give up. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="accounts"] [data-bar-group="where"] > :not(h1) { display: none; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-fit-label] { display: none; }
+[data-project-bar]:not([data-fit~="labels"]) [data-fit-short] { display: none; }
+/* With the word shortened to «Search», the leaf's find slot may shrink to what holds that word
+   before the chip, the groups' gaps or the panel group give anything up. */
+[data-project-bar][data-fit~="labels"] [data-testid="dash-search"] { min-width: 96px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
-.kb .bar[data-bar="project"][data-fit~="chip"] [data-attention-chip-label] { display: none; }
-.kb .bar[data-bar="project"][data-fit~="tight"], .kb .bar[data-bar="project"][data-fit~="tight"] .bar-trail { gap: 8px; }
-/* The last step, on a window narrower than the board is made for: the field may go under its placeholder. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-chip-label] { display: none; }
+/* Tight, the groups stand 8 px apart, and the spacer goes with its two gaps. The board's search
+   fills what the spacer would hold; the leaf bar's find slot does not (at its last step it is a
+   32 px icon), so there the trail is pushed to the right edge instead, as at every other step. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"],
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-group="trail"] { gap: 8px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-spacer] { display: none; }
+[data-project-bar][data-fit~="tight"] [data-bar-group="trail"] { margin-left: auto; }
+/* A 640–700 px window (#1698): the panel group's segments leave for rows of ⋯. The recent agents'
+   segment stays as an empty anchor, as tall as the control it held and as wide as ⋯, standing
+   where ⋯ stands, so its list opens under the row's controls and ends at ⋯'s right edge, clear
+   of the name; the group takes back the anchor's width and the gap it would leave. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] { margin-right: -8px; }
+.kb .bar[data-bar="project"][data-fit~="panels"] [data-bar-group="panels"]:has([data-bar-recent]) { margin-right: -40px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] :is([data-orchestrator-toggle], [data-bar-recent-toggle]) { display: none; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-recent] { width: 32px; height: 32px; }
+/* Then `+` leaves for its two rows of ⋯. */
+.kb .bar[data-bar="project"][data-fit~="create"] .bar-slot:has(> [data-bar-group="create"]) { display: none; }
+/* The last step, on a window narrower than the board is made for: the field may go under its
+   placeholder, and the placeholder goes rather than show a cut word; the icon, the name and the
+   tooltip say what the field is. The other leaves' message search keeps its icon alone. */
 .kb .bar[data-bar="project"][data-fit~="find"] .bar-find .search { min-width: 64px; }
+.kb .bar[data-bar="project"][data-fit~="find"] .bar-find .search input::placeholder { color: transparent; }
+[data-project-bar][data-fit~="find"] [data-testid="dash-search"] { flex: 0 0 32px; min-width: 32px; padding: 0; justify-content: center; }
+[data-project-bar][data-fit~="find"] [data-testid="dash-search"] [data-fit-short] { display: none; }
 
 /* The Overview's bar, as it was before #1801 (that lane was the project board only). The
    Viewer's attention island is fixed to the top-right corner just under the header row, over
@@ -887,6 +917,7 @@
      second click mid-way reverses from where the box is.
    - The Stages sheet rises 8 px and fades in, and its scrim fades. The sheet
      unmounts on close, so the exit is instant.
+   - The agent window fades in where it stands; its exit is instant.
    A pressed button is 4 % smaller, so a press that began near its edge could
    end past it and the click would land on what is behind. While it is held,
    an invisible layer keeps its whole unpressed box: 2 % of each side plus the
@@ -902,6 +933,12 @@
     transition: height var(--motion-base) var(--ease-standard), content-visibility var(--motion-base) allow-discrete;
   }
   .kb .card .history[open]::details-content, .kb .draft-added[open]::details-content { height: auto; }
+  /* The agent window fades in, its field and scrim with it, once its reader
+     has come to rest (useReaderReady): opacity only, at its final box, so
+     nothing in it moves while it appears. A switch or a close inside the open
+     window keeps it on screen and does not fade it again. */
+  .kb .agent-window-layer[data-agent-window] > * { animation: kb-conversation-in var(--motion-base) var(--ease-standard); }
+  @keyframes kb-conversation-in { from { opacity: 0; } to { opacity: 1; } }
   .kb .gsheet-scrim { transition: opacity var(--motion-base) var(--ease-standard); }
   .kb .gsheet { transition: translate var(--motion-slow) var(--ease-standard), opacity var(--motion-base) var(--ease-standard); }
   @starting-style {
@@ -1999,6 +2036,8 @@
 .card-state-words { min-width: 0; flex: 1; overflow-wrap: break-word; }
 /* A sentence of its own is at most two lines; the motion line keeps its own rules. */
 .card-state-words:not(.motion) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+/* The bar takes 43px of the line: on a narrow column a sentence that fit two lines without it gets a third, so its reason is not cut. */
+.card-state:has(> .task-progress) .card-state-words:not(.motion) { -webkit-line-clamp: 3; line-clamp: 3; }
 .card-state-age { color: var(--color-muted); white-space: nowrap; }
 .card-state[data-card-state="you"] .card-state-words { color: var(--color-primary); font-weight: 600; }
 .card-state-toggle { display: flex; flex: 1; min-width: 0; text-align: left; color: inherit; border-radius: 4px; padding: 0 2px; margin: 0 -2px; }
@@ -2006,6 +2045,49 @@
 .card-state-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .card-state .prio-mark { flex: none; margin-top: 1px; }
 .kb .card .card-state .motion-line { margin: 0; }
+/* The agent's estimate (docs/design/card-progress-estimate.md, variant 3): a 36 × 8 capsule between the dot
+   and the words. Track, inside and fill use existing tokens. A task with a colour fills with it, eased 40% toward
+   the text colour so every one of the eight clears 3:1 against the track's inside (3.6:1 at the lowest in the
+   light theme, 5.5:1 in the dark). An estimate older than a day fills with stripes, so it differs by form as well
+   as tone. While work on the task runs, the unfilled part carries a sweep that moves by transform alone (no
+   layout, no script). The bar takes no pointer: the dot's wider hit area lies under it. */
+.task-progress {
+  --task-progress-track: color-mix(in srgb, var(--color-muted) 78%, var(--surface-card));
+  --task-progress-ink: var(--color-secondary);
+  --task-progress-stripe: var(--color-muted);
+  position: relative; display: block; flex: none; box-sizing: border-box; width: 36px; height: 8px; margin-top: 4px; margin-left: -1px;
+  border: 1px solid var(--task-progress-track); border-radius: 999px; background: var(--border-default); overflow: hidden; pointer-events: none;
+}
+.task-progress[data-coloured] {
+  --task-progress-ink: color-mix(in srgb, var(--task-progress-colour) 60%, var(--color-primary));
+  --task-progress-stripe: var(--task-progress-ink);
+}
+.task-progress-fill { display: block; height: 100%; width: var(--task-progress-value); border-radius: 999px; background: var(--task-progress-ink); }
+.task-progress[data-task-progress="stale"] .task-progress-fill { background: repeating-linear-gradient(135deg, var(--task-progress-stripe) 0 2px, transparent 2px 4px); }
+.task-progress-glow { position: absolute; top: 0; bottom: 0; right: 0; left: var(--task-progress-value); overflow: hidden; }
+.task-progress-glow::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--task-progress-ink) 55%, transparent), transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .task-progress-glow::after { transform: translateX(-100%); animation: task-progress-glow 1.8s ease-in-out infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-progress-glow::after { background: color-mix(in srgb, var(--task-progress-ink) 28%, transparent); }
+}
+@keyframes task-progress-glow {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+/* A dot that has a bar beside it also answers a mouse over the bar and 4px past it. */
+.card-state-dot[role="button"][data-progress]::after { inset: -8px -46px -8px -8px; }
+.card-state-pop-estimate { display: block; color: var(--color-secondary); }
+/* Beside the state line the bubble fits the band between the title and the next row: two lines in 38px. */
+.card-state-pop[data-beside] { padding: 3px 8px; line-height: 15px; }
+/* Where two lines do not fit, both phrases on one line, status first. */
+.card-state-pop[data-beside="line"] { white-space: nowrap; }
+.card-state-pop[data-beside="line"] .card-state-pop-estimate { display: inline; }
+.card-state-pop[data-beside="line"] .card-state-pop-estimate::before { content: " · " / ""; }
 .card-state-pop {
   max-width: 260px; white-space: normal; border-radius: 8px; border: 1px solid var(--border-default); background: var(--surface-card);
   padding: 6px 10px; font-size: var(--text-label); line-height: 16px; color: var(--color-primary); box-shadow: var(--shadow-1);
@@ -2139,7 +2221,8 @@
 .card-state.prio-only .motion-line { flex: 1; }
 /* The task's deadline and images (the old Tasks panel's two facts), quiet, under the state line. */
 .card-meta-line { display: flex; min-width: 0; padding-left: 15px; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); }
-.card-meta-line.phone { padding-left: 4px; }
+/* The opened phone task: its meta lines start at the motion line's edge. */
+.card-meta-line.phone { padding-left: 0; }
 .task-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; font-variant-numeric: tabular-nums; }
 .task-meta .task-due, .task-meta .task-images { white-space: nowrap; }
 .task-meta .task-due.overdue { color: var(--color-danger); font-weight: 600; }

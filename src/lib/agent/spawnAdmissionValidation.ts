@@ -16,6 +16,7 @@ import { spawnSizingRefusal, type Briefer } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { spawnTaskProjectError } from "@/lib/agent/spawnAdmission";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { prepareAgentRegistry } from "./registry";
 
 type SpawnValidationDependencies = Pick<SpawnCommandDependencies, "registry">;
 
@@ -70,7 +71,7 @@ export async function executeSpawnAdmissionValidation(
   if (isAgentInitiatedSpawn(req)) {
     let caller: ReturnType<typeof authenticatedAgentSpawnCaller>;
     try {
-      const registry = dependencies.registry();
+      const registry = await prepareAgentRegistry(req.signal, () => dependencies.registry());
       caller = authenticatedAgentSpawnCaller(req, body.src, registry);
       if (!("error" in caller) && caller.kind === "agent") {
         briefer = { kind: "agent", runtime: conversationRuntime(registry.readOnlySnapshot(), caller.conversationId) };

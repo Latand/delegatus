@@ -1,3 +1,4 @@
+import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
@@ -5446,10 +5447,13 @@ describe("CodexAppServerHost", () => {
     });
     const receipt = await adopted[0]!.host.send({ id: "persist-turn", text: "start" });
     expect(receipt.outcome).toBe("turn-started");
-    expect(registry.snapshot().entries["codex:adopted-thread"]?.structuredHost).toMatchObject({
-      eventCursor: 14,
+    const persistedTurn = registry.snapshot().entries["codex:adopted-thread"]?.structuredHost;
+    expect(persistedTurn).toMatchObject({
       activeTurnRef: "turn-1",
     });
+    // A following cursor event can coalesce with the turn's material write.
+    expect(persistedTurn!.eventCursor).toBeGreaterThanOrEqual(14);
+    expect(persistedTurn!.eventCursor).toBeLessThanOrEqual((await adopted[0]!.host.health()).eventCursor);
     expect(eventStore.load("adopted-thread").at(-1)?.seq).toBe(15);
     server.request("persist-attention", "item/commandExecution/requestApproval", { command: "date" });
     await Bun.sleep(0);
@@ -6891,3 +6895,51 @@ for (const { midAnswer = false, graceful = false, reconnectFailure, crashBeforeW
     fs.rmSync(socketRoot, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("Codex records its stop before EOF can end the native host", async () => {
+  const server = new FakeAppServer("host-eof-thread");
+  let nativeAlive = true;
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: () => server as never,
+    processIdentity: () => nativeAlive ? "fixture-codex-eof" : null, pidAlive: () => nativeAlive, signalProcess: () => {} });
+  const process = (await host.health()).exitProcess!;
+  const beforeEof: { value: ReturnType<typeof readHostExit> } = { value: null };
+  let deliveredEof = false;
+  const end = spyOn(server.stdin, "end").mockImplementation(() => {
+    if (!deliveredEof) {
+      deliveredEof = true;
+      beforeEof.value = readHostExit(process);
+      nativeAlive = false;
+      queueMicrotask(() => { server.emit("exit", 0, null); server.emit("close", 0, null); });
+    }
+    return server.stdin;
+  });
+  try {
+    await withHostStopOrigin({ path: "deploy-cut", operationId: "eof-operation" }, () => host.release());
+    expect(end).toHaveBeenCalled();
+    expect(beforeEof.value?.stop).toMatchObject({ path: "deploy-cut", operationId: "eof-operation", signal: "EOF" });
+    expect(readHostExit(process)?.exit).toMatchObject({ code: 0, signal: null });
+  } finally { end.mockRestore(); await host.release(); }
+});
+
+for (const ending of ["release", "external", "code"] as const) test(`Codex host exit observer retains ${ending} status and source after release`, async () => {
+  const server = new FakeAppServer("host-exit-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    processIdentity: () => "fixture-codex-host-exit", pidAlive: () => true, shutdownGraceMs: 10,
+    signalProcess: (_pid, signal) => {
+      queueMicrotask(() => server.emit("close", null, signal));
+    } });
+  const process = (await host.health()).exitProcess!;
+  try {
+    expect(process.startIdentity).toBe("fixture-codex-host-exit");
+    if (ending === "release") await withHostStopOrigin({ path: "deploy-cut", operationId: "deploy-fixture-operation" }, () => host.release());
+    else {
+      server.emit("exit", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+      server.emit("close", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+    }
+    const evidence = readHostExit(process)!;
+    expect(evidence.exit).toMatchObject({ code: ending === "code" ? 23 : null, signal: ending === "external" ? "SIGKILL" : ending === "release" ? "SIGTERM" : null });
+    expect(evidence.stop).toEqual(ending === "release" ? expect.objectContaining({ path: "deploy-cut", operationId: "deploy-fixture-operation" }) : null);
+    expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
+    expect((await host.health()).exitProcess).toEqual(process);
+  } finally { await host.release(); }
+});

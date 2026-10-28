@@ -1354,17 +1354,19 @@ test("a late successful response keeps its automatic text-file attachment on the
 });
 
 test.each([
-  ["headers", false], ["body", false], ["headers", true], ["body", true],
-] as const)("an idle conversation drains when the seat lookup loses its %s response (image=%s)", async (lost, attachment) => {
+  ["manager", "headers", false], ["manager", "body", false], ["manager", "headers", true], ["manager", "body", true],
+  ["history", "headers", false], ["history", "body", false], ["history", "headers", true], ["history", "body", true],
+] as const)("an idle conversation drains when the %s seat lookup loses its %s response (image=%s)", async (readKind, lost, attachment) => {
   setLocale("en");
   mobileViewport = true;
   resetManagerIdentityForTest();
   // Real conversation ids enter the manager lookup; the older conv-* fixtures
   // skipped it before reaching the transport admission deadline.
-  const conversationId = `conversation_seat_lookup_${lost}_${attachment}`;
+  const conversationId = `conversation_seat_lookup_${readKind}_${lost}_${attachment}`;
   const prompt = "keep the original queued message";
   const sends: { text: string; idempotencyKey: string; images: { base64: string }[] }[] = [];
   let seatReads = 0;
+  let historyReads = 0;
   let releaseSeat!: () => void;
   const lateSeat = new Promise<void>(resolve => { releaseSeat = resolve; });
   const view = {
@@ -1384,12 +1386,20 @@ test.each([
     const url = String(input);
     if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     if (url.startsWith("/api/bridge?")) return Response.json({ prelude: null });
+    if (url === "/api/orchestrator/seat?scope=all") {
+      historyReads += 1;
+      if (readKind === "history" && lost === "headers") await lateSeat;
+      return { ok: true, json: async () => {
+        if (readKind === "history" && lost === "body") await lateSeat;
+        return { all: { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } } };
+      } } as Response;
+    }
     if (url.startsWith("/api/orchestrator/seat?")) {
       seatReads += 1;
-      if (lost === "headers") await lateSeat;
+      if (readKind === "manager" && lost === "headers") await lateSeat;
       return { ok: true, json: async () => {
-        if (lost === "body") await lateSeat;
-        return { exists: true, seat: { conversationId } };
+        if (readKind === "manager" && lost === "body") await lateSeat;
+        return readKind === "manager" ? { exists: true, seat: { conversationId } } : { exists: false, seat: null };
       } } as Response;
     }
     if (url === "/api/runtime/send") {
@@ -1424,6 +1434,7 @@ test.each([
     const key = readOutbox(conversationId)[0]!.id;
     await until(() => sends.length === 1);
     expect(seatReads).toBe(1);
+    expect(historyReads).toBe(1);
     expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({ text: prompt, idempotencyKey: key });
     expect(sends[0]!.images.map(image => image.base64)).toEqual(attachment ? [btoa("original-image")] : []);

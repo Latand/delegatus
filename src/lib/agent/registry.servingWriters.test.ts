@@ -28,7 +28,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "./registry";
 import { registryLockHolder } from "./registryLockHolderFixture";
 import { runIdentityWaveMigrationAtStartupOffLoop } from "./identityWaveStartup";
 import { resolveSpawnLineageOffLoop } from "./spawnParent";
-import { recordActualSpawnAccountOffLoop } from "./spawnCommand";
+import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
 import { beginRegistryResumeOffLoop, reconcileObservedTranscriptHostsOffLoop } from "./transcriptHost";
 
 const AT = "2026-10-19T00:00:00.000Z";

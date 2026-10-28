@@ -9,7 +9,7 @@ export interface SpawnRequestIdentity {
   effort: string | null;
   fast: boolean | null;
   serviceTier?: string | null;
-  serviceTierSource?: "explicit" | "fast" | "role-default";
+  serviceTierSource?: "explicit" | "fast" | "inherited" | "role-default";
   accountId: string | null;
   role: string | null;
   title: string;

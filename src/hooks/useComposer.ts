@@ -6,7 +6,7 @@ import { useImageAttachments } from "@/components/imageAttachments";
 import { performVoiceSend } from "@/hooks/composerVoiceSend";
 import { useDictation } from "@/hooks/useDictation";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { cardComposerCeiling, keyboardInset, mobileComposerCeiling, visibleViewportHeight } from "@/lib/composerScroll";
+import { cardComposerCeiling, keyboardInset, mobileComposerCeiling, visibleViewportHeight, wholeLineCeiling } from "@/lib/composerScroll";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
 /* Live VISIBLE viewport height, tracked the same way as `useIsMobile`
@@ -233,9 +233,20 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   const isMobile = useIsMobile(viewActive);
   const viewportH = useViewportHeight(viewActive);
   const layoutH = useLayoutViewportHeight(viewActive);
-  const maxPx = isMobile
+  const ceiling = isMobile
     ? mobileComposerCeiling(viewportH, layoutH, accessorySurfaces, boxBudget, innerRows)
     : cardComposerCeiling(boxHeight, accessorySurfaces, boxBudget === null ? null : boxBudget - innerRows);
+  /* On the phone the field stops at a whole line, so the top line of a long
+     draft is never cut by the field's edge. */
+  const maxPx = useMemo(() => {
+    if (!isMobile || !field) return ceiling;
+    const style = field.ownerDocument.defaultView?.getComputedStyle(field);
+    if (!style) return ceiling;
+    const chrome = style.boxSizing === "border-box"
+      ? parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)
+      : 0;
+    return wholeLineCeiling(ceiling, parseFloat(style.lineHeight), chrome);
+  }, [isMobile, field, ceiling]);
 
   const attachments = useImageAttachments({
     onError: (message) => setStatus({ kind: "err", text: message }),

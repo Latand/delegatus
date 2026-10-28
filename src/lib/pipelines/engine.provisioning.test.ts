@@ -1344,7 +1344,9 @@ test("a read-only stage whose host was lost re-runs on the same head instead of 
   const rerun = loadPipelines()[0]!;
   expect(rerun.state).toBe("running");
   expect(rerun.cursor).toMatchObject({ stageId: "review", state: "pending" });
-  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: READ_ONLY_RERUN });
+  const rerunError = `${READ_ONLY_RERUN}; exit: status unavailable; no Delegatus stop recorded`;
+  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: rerunError });
+  expect(rerun.stateDetail).toBe(rerunError);
   expect(rerun.runs[1]!.attempts).toHaveLength(0);
 
   await tickPipelines([], h.ports);
@@ -3053,4 +3055,23 @@ test.skip("an operator pause during relay stays paused across pipeline reconcili
     state: "needs_decision",
     error: "review flow paused in relaying: paused by user",
   });
+});
+
+test("an unbound sidecar signals the Viewer before any local pipeline preparation", async () => {
+  const h = harness();
+  await create(h.ports);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { tickPipelines, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    let requests = 0, effects = 0;
+    globalThis.fetch = async () => { requests++; return new Response("{}", { status: 202 }); };
+    const ports = { ...defaultPipelinePorts(), structuredDeliveryPublication: () => "unbound",
+      exec: async () => { effects++; throw new Error("sidecar must hand preparation to the Viewer"); } };
+    const result = await tickPipelines([], ports);
+    await new Promise(resolve => setImmediate(resolve));
+    console.log(JSON.stringify({ requests, effects, changed: result.changed }));
+  `], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited,
+    new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  expect(JSON.parse(stdout.trim())).toEqual({ requests: 1, effects: 0, changed: false });
 });

@@ -1127,7 +1127,6 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | `src/lib/agent/failedSpawnDelivery.test.ts` | F | P | C73 |
 | `src/lib/agent/identityWaveMigration.test.ts` | P | P | — |
 | `src/lib/agent/mcpAllowlist.test.ts` | P | P | — |
-| `src/lib/agent/migration.test.ts` | P | P | — |
 | `src/lib/agent/models.test.ts` | P | P | — |
 | `src/lib/agent/nestingPolicy.test.ts` | P | P | — |
 | `src/lib/agent/operatorAuthority.test.ts` | F | P | C10 |

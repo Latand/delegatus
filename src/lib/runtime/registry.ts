@@ -1,3 +1,4 @@
+import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -33,7 +34,8 @@ import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liven
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
-import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
+import { randomUUID } from "node:crypto";
+import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
@@ -68,6 +70,7 @@ function registryProcess(state: HostState): ProcessIdentity | null {
 
 export function codexHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "codex-app-server",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -85,6 +88,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
 
 export function claudeHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "claude-broker",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -107,6 +111,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
 
 export function copilotHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "copilot-acp",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -137,6 +142,8 @@ export async function persistCodexHost(
 
 export interface StructuredHostPersistenceOptions {
   cursorDebounceMs?: number;
+  /** Initial retry delay, doubled on consecutive refusals up to the cursor interval or 30 s. */
+  checkpointRetryMs?: number;
   /** Termination ladder seams for the tree a host stop captured (#2790). */
   terminationStop?: StructuredOrphanStopDependencies;
   /** How long a captured tree that outlived its ladder waits before the next one. */
@@ -161,6 +168,10 @@ export const DEFAULT_CURSOR_DEBOUNCE_MS = 30_000;
     its claim. The write waits; nothing about the host is decided by it. */
 class StructuredHostWriteHeld extends Error {
   constructor() { super("structured host row is held by a captured termination tree"); }
+}
+
+class StructuredHostClaimLost extends Error {
+  constructor() { super("structured host writer claim is stale"); }
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
@@ -207,49 +218,62 @@ async function bindStructuredHostPersistence(
   options: StructuredHostPersistenceOptions,
 ): Promise<StructuredHostPersistenceStop> {
   host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
-  let lastPersistedState!: HostState;
+  const initialState = await host.health();
   /* Whether the tree holding the row is the one this host's own stop
      captured. Another stop's capture is that stop's to finish, so this
      binding gives its terminal write up to it; its own it finishes itself. */
   let ownCapture = false;
-  const persist = async (state: HostState, terminal = false): Promise<AgentRegistryEntry> => {
-    const columns = columnsFromState(state, writerClaimEpoch);
-    const persisted = await registry.deliveryWriteOrBusy({ label: "registry.host-checkpoint" }, () => registry.setStructuredHostClaimed(
-      key,
-      /* `unhosted` releases the writer claim permanently. Keeping its wrapper
-         PID would make the released row appear owned for every successor. */
-      terminal && state.status === "unhosted" ? { ...columns, process: null } : columns,
-      terminal && releasedStatus === "dead" ? "dead" : registryStatus(state),
-      claimOwner,
-      writerClaimEpoch,
-      terminal,
-    ));
-    if (!persisted) {
-      /* Two refusals share one null. A captured termination tree holds the row
-         while this writer still owns it; a lost claim means another writer does. */
-      if ((!terminal || ownCapture) && registry.structuredHostWriteHeldByTermination(key, claimOwner, writerClaimEpoch)) {
-        throw new StructuredHostWriteHeld();
-      }
-      throw new Error("structured host writer claim is stale");
-    }
-    lastPersistedState = structuredClone(state);
-    return persisted;
-  };
-  try {
-    await persist(await host.health());
-  } catch (error) {
-    await host.release();
-    throw error;
-  }
-
   const cursorDebounceMs = Number.isFinite(options.cursorDebounceMs)
     ? Math.max(0, options.cursorDebounceMs!)
     : DEFAULT_CURSOR_DEBOUNCE_MS;
+  const checkpointRetryMs = Number.isFinite(options.checkpointRetryMs)
+    ? Math.min(30_000, Math.max(1, options.checkpointRetryMs!))
+    : 1_000;
+  const checkpointRetryCapMs = Math.max(checkpointRetryMs,
+    Math.min(cursorDebounceMs || DEFAULT_CURSOR_DEBOUNCE_MS, DEFAULT_CURSOR_DEBOUNCE_MS));
+  let checkpointRetryDelayMs = 0;
+  const persist = async (state: HostState, terminal = false): Promise<AgentRegistryEntry> => {
+    try {
+      const columns = columnsFromState(state, writerClaimEpoch);
+      const persisted = await registry.deliveryWriteOrBusy({ label: "registry.host-checkpoint" }, () => registry.setStructuredHostClaimed(
+        key,
+        /* `unhosted` releases the writer claim permanently. Keeping its wrapper
+           PID would make the released row appear owned for every successor. */
+        terminal && state.status === "unhosted" ? { ...columns, process: null } : columns,
+        terminal && releasedStatus === "dead" ? "dead" : registryStatus(state),
+        claimOwner,
+        writerClaimEpoch,
+        terminal,
+      ));
+      if (!persisted) {
+        /* Two refusals share one null. A captured termination tree holds the row
+           while this writer still owns it; a lost claim means another writer does. */
+        if ((!terminal || ownCapture) && registry.structuredHostWriteHeldByTermination(key, claimOwner, writerClaimEpoch)) {
+          throw new StructuredHostWriteHeld();
+        }
+        throw new StructuredHostClaimLost();
+      }
+      if (checkpointRetryDelayMs > 0) {
+        console.info("[runtime] host checkpoint recovered");
+        checkpointRetryDelayMs = 0;
+      }
+      return persisted;
+    } catch (error) {
+      if (!(error instanceof StructuredHostClaimLost) && !(error instanceof StructuredHostWriteHeld)) {
+        if (checkpointRetryDelayMs === 0) console.warn("[runtime] host checkpoint deferred", error instanceof Error ? error.message : String(error));
+        checkpointRetryDelayMs = checkpointRetryDelayMs === 0
+          ? checkpointRetryMs
+          : Math.min(checkpointRetryCapMs, checkpointRetryDelayMs * 2);
+      }
+      throw error;
+    }
+  };
   let failed = false;
   let stopped = false;
   let claimReleased = false;
   let pendingState: HostState | null = null;
-  let lastQueuedState = lastPersistedState;
+  let pendingMaterial = false;
+  let lastQueuedState = initialState;
   let cursorTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe = () => {};
   /* A host stop signals its child's process group, and a tool that left the
@@ -264,19 +288,31 @@ async function bindStructuredHostPersistence(
   const terminationRetryMs = Number.isFinite(options.terminationRetryMs)
     ? Math.max(0, options.terminationRetryMs!)
     : DEFAULT_TERMINATION_RETRY_MS;
-  /* The host signals nothing until this answers true (#2790). A row that
-     still records the host's child takes the tree whoever holds its claim:
-     the capture is what refuses a successor once the child is gone. Only a
-     row that records another process has no place for it, and there the stop
-     goes ahead as it always did. A capture the registry refused answers
-     false, so the child keeps running and keeps its own fence. */
-  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteOrBusy({ label: "registry.host-stop-capture" }, () => {
-    const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
-    const root = entry?.structuredHost?.process ?? null;
-    if (!entry || !root || root.pid !== rootPid) return true;
+  /* The host signals nothing until its still-owned row records the tree
+     (#2790). That capture refuses a successor once the child is gone. A row
+     recording another live process cannot take it; a refusal keeps the
+     child running under its own fence. */
+  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
+    let entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+    let root = entry?.structuredHost?.process ?? null;
+    /* The first checkpoint may still be deferred over a pending row or the
+       dead predecessor a reclaim retained. Keep the process we bound, even
+       if newer health is terminal. Install it only under this live claim,
+       then capture the tree in the same batch before its first signal. */
+    const columns = columnsFromState(initialState, writerClaimEpoch);
+    const boundRoot = columns.process;
+    if (!boundRoot || boundRoot.pid !== rootPid || !boundRoot.startIdentity || !boundRoot.bootEpoch) return false;
+    if (entry?.structuredHost && (!root || !sameRecordedProcessIdentity(root, boundRoot)) && entry.claimOwner === claimOwner
+      && entry.claimEpoch === writerClaimEpoch && entry.structuredHost.writerClaimEpoch === writerClaimEpoch) {
+      if (root && !processIdentityProvenDead(root)) return false;
+      const bound = registry.setStructuredHostClaimed(key, columns, registryStatus(initialState), claimOwner, writerClaimEpoch);
+      if (!bound) return false;
+      entry = bound;
+      root = bound.structuredHost?.process ?? null;
+    }
+    if (!entry || !root || !sameRecordedProcessIdentity(root, boundRoot)) return false;
     if (entry.claimOwner !== claimOwner || entry.claimEpoch !== writerClaimEpoch
-      || entry.structuredHost?.writerClaimEpoch !== writerClaimEpoch
-      || root.startIdentity !== lastPersistedState.processStartIdentity) return false;
+      || entry.structuredHost?.writerClaimEpoch !== writerClaimEpoch) return false;
     if (!root.startIdentity || !root.bootEpoch) return false;
     const prior = (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
     const capture = registry.captureStructuredTerminationSurvivors(key, root, tree, HOST_STOP_SOURCE);
@@ -289,6 +325,7 @@ async function bindStructuredHostPersistence(
   }));
 
   let updates = Promise.resolve();
+  let checkpointQueued = false;
   const enqueue = (write: () => Promise<void>) => {
     const next = updates.then(write);
     updates = next.catch(() => {});
@@ -314,43 +351,77 @@ async function bindStructuredHostPersistence(
     try { await releaseClaim(); } finally {
       /* A release that could not record its child's tree sends nothing and
          says so; the child keeps its own fence, so nothing here awaits it. */
-      void host.release().catch(() => undefined);
+      void withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release()).catch(() => undefined);
     }
   };
   const persistPending = async () => {
+    if (failed || stopped) return;
     const state = pendingState;
+    const material = pendingMaterial;
     pendingState = null;
+    pendingMaterial = false;
     clearCursorTimer();
-    if (state) await persist(state);
+    if (!state) return;
+    const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
+    try {
+      await persist(state, terminal);
+      if (terminal) {
+        claimReleased = true;
+        stopped = true;
+        unsubscribe();
+      }
+    } catch (error) {
+      // A flush must still report that it did not land. Keep its newest state
+      // for the paced retry, without releasing a host whose claim is unproven.
+      if (error instanceof StructuredHostClaimLost) {
+        await fail();
+      } else if (terminal && error instanceof StructuredHostWriteHeld) {
+        heldTerminal = pendingState ?? state;
+        pendingState = null;
+        clearCursorTimer();
+        settleHeldTerminal();
+        // This host's durable capture owns terminal completion now. Release
+        // may acknowledge the stop while that capture still fences takeover.
+        return;
+      } else {
+        pendingState ??= state;
+        pendingMaterial ||= material;
+        clearCursorTimer();
+        schedulePending(error instanceof StructuredHostWriteHeld ? cursorDebounceMs : checkpointRetryDelayMs);
+      }
+      throw error;
+    }
   };
-  const schedulePending = () => {
+  const schedulePending = (delayMs = cursorDebounceMs) => {
     if (cursorTimer !== null) return;
     cursorTimer = setTimeout(() => {
-      void enqueue(async () => {
-        cursorTimer = null;
-        if (failed || stopped || pendingState === null) return;
-        const state = pendingState;
-        const material = lastQueuedState;
-        try {
-          await persistPending();
-        } catch (error) {
-          /* A refused checkpoint has two meanings. Held by a captured termination
-             tree while this writer still owns its claim, it waits one more
-             period: a withdrawn stop lets it land, and a termination that
-             proceeds ends the process itself. Only a lost claim means another
-             writer owns the row, and only that ends this host. */
-          if (error instanceof StructuredHostWriteHeld) {
-            if (lastQueuedState === material) {
-              pendingState ??= state;
-              schedulePending();
-            }
-            return;
-          }
-          await fail();
-        }
-      }).catch(() => {});
-    }, cursorDebounceMs);
+      cursorTimer = null;
+      queueCheckpoint();
+    }, delayMs);
     cursorTimer.unref?.();
+  };
+  const continuePending = () => {
+    if (failed || stopped || pendingState === null || cursorTimer !== null) return;
+    if (checkpointRetryDelayMs > 0) schedulePending(checkpointRetryDelayMs);
+    else if (pendingMaterial) queueCheckpoint();
+    else schedulePending();
+  };
+  /* Notifications retain one newest snapshot while admission is in flight.
+     A refusal paces that snapshot and every material event superseding it. */
+  const queueCheckpoint = () => {
+    if (checkpointQueued || failed || stopped || pendingState === null) return;
+    checkpointQueued = true;
+    void enqueue(async () => {
+      try {
+        // An explicit flush ahead of us may have installed a fresh retry.
+        if (cursorTimer === null) await persistPending();
+      }
+      catch { /* persistPending retained the checkpoint and its retry. */ }
+      finally {
+        checkpointQueued = false;
+        continuePending();
+      }
+    }).catch(() => {});
   };
   const settleHeldTerminal = () => {
     if (settling || failed || heldTerminal === null) return;
@@ -366,6 +437,7 @@ async function bindStructuredHostPersistence(
           await fail();
           return;
         }
+        let retryDelayMs = terminationRetryMs;
         if (outcome === "settled") {
           try {
             await persist(state, true);
@@ -375,17 +447,18 @@ async function bindStructuredHostPersistence(
             unsubscribe();
             return;
           } catch (error) {
-            if (!(error instanceof StructuredHostWriteHeld)) {
+            if (error instanceof StructuredHostClaimLost) {
               heldTerminal = null;
               await fail();
               return;
             }
+            if (!(error instanceof StructuredHostWriteHeld)) retryDelayMs = checkpointRetryDelayMs;
           }
         }
         settleTimer = setTimeout(() => {
           settleTimer = null;
           settleHeldTerminal();
-        }, terminationRetryMs);
+        }, retryDelayMs);
         settleTimer.unref?.();
       });
   };
@@ -402,14 +475,39 @@ async function bindStructuredHostPersistence(
     } catch (error) {
       /* A held final checkpoint is dropped; the caller stopping this binding
          keeps deciding about the host. */
-      if (!(error instanceof StructuredHostWriteHeld)) {
+      if (error instanceof StructuredHostClaimLost) {
         await fail();
         return;
       }
+      if (!(error instanceof StructuredHostWriteHeld)) throw error;
     }
+    if (heldTerminal !== null) {
+      stopped = true;
+      unsubscribe();
+      return;
+    }
+    pendingState = null;
+    clearCursorTimer();
     unsubscribe();
     await releaseClaim();
     stopped = true;
+  });
+
+  // Queue the initial write before subscribing; subscription emits synchronously,
+  // and later states must stay behind it while admission waits.
+  checkpointQueued = true;
+  const initialWrite = enqueue(async () => {
+    try {
+      await persist(initialState);
+    } catch (error) {
+      if (error instanceof StructuredHostClaimLost) throw error;
+      pendingState ??= initialState;
+      clearCursorTimer();
+      schedulePending(checkpointRetryDelayMs || checkpointRetryMs);
+    } finally {
+      checkpointQueued = false;
+      continuePending();
+    }
   });
 
   unsubscribe = host.onStateChange((observed) => {
@@ -420,38 +518,30 @@ async function bindStructuredHostPersistence(
       if (terminal) heldTerminal = state;
       return;
     }
-    if (!terminal && sameMaterialHostState(lastQueuedState, state)) {
-      pendingState = state;
-      schedulePending();
-      return;
-    }
-    lastQueuedState = state;
+    // A queued terminal checkpoint cannot be replaced by a late running state.
+    if (!terminal && (lastQueuedState.status === "unhosted"
+      || (lastQueuedState.status === "dead" && lastQueuedState.pid === null))) return;
+    const material = terminal || !sameMaterialHostState(lastQueuedState, state);
+    if (material) lastQueuedState = state;
+    pendingState = state;
+    pendingMaterial ||= material;
+    if (checkpointQueued) return;
+    if (material && checkpointRetryDelayMs === 0) {
+      clearCursorTimer();
+      queueCheckpoint();
+    } else continuePending();
+  });
+  try {
+    await initialWrite;
+  } catch (error) {
+    failed = true;
+    stopped = true;
     pendingState = null;
     clearCursorTimer();
-    void enqueue(async () => {
-      if (failed || stopped) return;
-      try {
-        await persist(state, terminal);
-        if (terminal) {
-          claimReleased = true;
-          stopped = true;
-          unsubscribe();
-        }
-      } catch (error) {
-        if (error instanceof StructuredHostWriteHeld) {
-          if (terminal) {
-            heldTerminal = state;
-            settleHeldTerminal();
-          } else if (lastQueuedState === state) {
-            pendingState ??= state;
-            schedulePending();
-          }
-          return;
-        }
-        await fail();
-      }
-    }).catch(() => {});
-  });
+    unsubscribe();
+    await withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release());
+    throw error;
+  }
   if (stopped) unsubscribe();
   const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
   hostPersistence.set(host, binding);
@@ -632,9 +722,13 @@ async function terminateVerifiedProcess(processIdentity: ProcessIdentity): Promi
   const status = processIdentityStatus(processIdentity);
   if (status === "dead") return true;
   if (processIdentity.pid === process.pid || status !== "alive") return false;
-  try { process.kill(processIdentity.pid, "SIGTERM"); } catch { /* process exited */ }
+  const withdraw = recordHostStop(processIdentity, "SIGTERM", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") { withdraw?.(); return processIdentityProvenDead(processIdentity); }
+  try { process.kill(processIdentity.pid, "SIGTERM"); } catch { withdraw?.(); }
   if (await waitForVerifiedProcessExit(processIdentity, ORPHAN_TERM_GRACE_MS)) return true;
-  try { process.kill(processIdentity.pid, "SIGKILL"); } catch { /* process exited */ }
+  const withdrawKill = recordHostStop(processIdentity, "SIGKILL", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") { withdrawKill?.(); return processIdentityProvenDead(processIdentity); }
+  try { process.kill(processIdentity.pid, "SIGKILL"); } catch { withdrawKill?.(); }
   return waitForVerifiedProcessExit(processIdentity, ORPHAN_KILL_GRACE_MS);
 }
 
@@ -697,6 +791,7 @@ async function endRecordedStructuredTree(
     kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
+    stopOrigin: { path: source, operationId: sessionKeyId(key) },
     retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
@@ -775,7 +870,8 @@ export async function reapSeveredStructuredHost(
   const liveness = await conversationTurnLiveness(registry, conversationId, dependencies);
   if (liveness?.state !== "severed") return null;
   if (sessionKeyId(liveness.key) !== sessionKeyId(key)) return null;
-  return { reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason };
+  return withHostStopOrigin({ path: "registry-recovery", operationId: randomUUID() }, async () =>
+    ({ reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason }));
 }
 
 /** Admits consecutive dead-process reconciles in one hold. It answers a
@@ -792,13 +888,18 @@ export async function demoteSkippedStructuredRegistryHosts(
   orphanStop: StructuredOrphanStopDependencies = {},
   assertActive: () => void = () => {},
   admitBatch?: StructuredDemotionBatchAdmission,
+  preparedSnapshot?: RegistryFile,
 ): Promise<void> {
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const reuse = preparedSnapshot && registryStartupSelectionUnchanged(preparedSnapshot) === true;
+  const prepared = reuse ? preparedSnapshot : typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
   const rows: AgentRegistryEntry[] = [];
   const selected = prepared ? await startupStructuredHostEntries(prepared, assertActive) : registry.structuredHostEntries();
   await withViewerOperation("runtime.startup", () => forEachCooperatively(selected, entry => {
     performanceSpans.sync("runtime.startup.select", () => {
-      if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
+      if (entry.structuredHost && !shouldAdopt(entry)) {
+        const current = reuse ? startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)] : entry;
+        if (current?.structuredHost && (!reuse || !shouldAdopt(current))) rows.push(current);
+      }
     });
   }, { batchSize: 16, timeBudgetMs: 8 }));
   /* A row whose recorded process is gone settles in one write. A startup
@@ -942,11 +1043,13 @@ export async function adoptCodexRegistryHosts(
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
     assertActive?: () => void;
+    /** Selection only; ownership and grants are rechecked by key. */
+    preparedSnapshot?: RegistryFile;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const prepared = dependencies.preparedSnapshot ?? (typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined);
   const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
@@ -1039,7 +1142,7 @@ export async function adoptCodexRegistryHosts(
                 claimed.claimEpoch,
                 "dead",
               );
-              await error.host.release();
+              await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
@@ -1099,10 +1202,12 @@ export async function adoptClaudeRegistryHosts(
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
     assertActive?: () => void;
+    /** Selection only; ownership and grants are rechecked by key. */
+    preparedSnapshot?: RegistryFile;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const prepared = dependencies.preparedSnapshot ?? (typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined);
   const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
@@ -1186,7 +1291,7 @@ export async function adoptClaudeRegistryHosts(
                 claimed.claimEpoch,
                 "dead",
               );
-              await error.host.release();
+              await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
@@ -1246,11 +1351,15 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   registry: AgentRegistry,
   shouldRetain: StructuredHostAdoptionFilter = entry => restartCutEvidenceHolds(sessionKeyId(entry.key)),
   assertActive: () => void = () => {},
+  preparedSnapshot?: RegistryFile,
 ): Promise<void> {
-  const prepared = await registry.prepareReadOnlySnapshot();
+  const reuse = preparedSnapshot && registryStartupSelectionUnchanged(preparedSnapshot) === true;
+  const prepared = reuse ? preparedSnapshot : await registry.prepareReadOnlySnapshot();
   const rows = await startupStructuredHostEntries(prepared, assertActive);
-  for (const [index, observed] of rows.entries()) {
-    if (!observed.structuredHost?.process) continue;
+  for (const [index, selected] of rows.entries()) {
+    if (!selected.structuredHost?.process) continue;
+    const observed = reuse ? startupHostSnapshot(registry, selected.key).entries[sessionKeyId(selected.key)] : selected;
+    if (!observed?.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
     await registry.deliveryWriteOrBusy({ label: "registry.dead-hosts" }, () => {
       assertActive();

@@ -8,6 +8,7 @@ import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity"
 import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 import { shortId } from "@/lib/shortIds";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
+import { frozenWallClock } from "./engine.fixture";
 
 async function detachedAttemptFixture(name: string) {
   const f = await realWorktreeLane(name, [
@@ -234,6 +235,7 @@ test("an owner publishes a review-fix commit before the passing review starts", 
   ], undefined, false, true);
   try {
     const { git, h, id, origin, worktree } = fixture;
+    const advance = frozenWallClock(h);
     const branch = loadPipelines().find((item) => item.id === id)!.branch;
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
@@ -256,6 +258,10 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     });
     expect(h.spawnInputs).toHaveLength(3);
     fs.renameSync(offline, origin);
+    await tickPipelines([], h.ports);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(built);
+    expect(h.spawnInputs).toHaveLength(3);
+    advance(60_000);
     await tickPipelines([], h.ports);
     expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(fixed);
     for (let n = 0; n < 4 && h.spawnInputs.length < 4; n += 1) await tickPipelines([], h.ports);
@@ -371,6 +377,7 @@ for (const completion of ["pass", "skip"] as const) {
     ], "remote-branch");
     const offline = `${fixture.origin}.offline`;
     try {
+      const advance = frozenWallClock(fixture.h);
       fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
       if (completion === "skip") {
         (await fixture.git(fixture.worktree, "add", "fix.txt"));
@@ -391,6 +398,14 @@ for (const completion of ["pass", "skip"] as const) {
       expect(fixture.h.spawnInputs).toHaveLength(1);
       fs.renameSync(offline, fixture.origin);
       await tickPipelines([], fixture.h.ports);
+      if (completion === "pass") {
+        const deferred = loadPipelines().find((item) => item.id === fixture.id)!;
+        expect(deferred.delivery!.operation!.id).toBe(waiting.delivery!.operation!.id);
+        expect(deferred.publishedCommit).toBeNull();
+        expect(fixture.h.spawnInputs).toHaveLength(1);
+        advance(60_000);
+        await tickPipelines([], fixture.h.ports);
+      }
       await tickPipelines([], fixture.h.ports);
       expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
       expect(fixture.h.spawnInputs).toHaveLength(2);
@@ -495,6 +510,7 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
           statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: completed.closedAt }],
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
         });
+        if (args[0] === "api" && args[1] === "repos/acme/widgets/rules/branches/main") return "[]";
         if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main") return "[]";
         if (args[0] === "api" && args[1] === "repos/acme/widgets/pulls/11/reviews?per_page=100") return "";
         if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });

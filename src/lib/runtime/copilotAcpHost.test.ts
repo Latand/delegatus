@@ -1,3 +1,4 @@
+import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -753,4 +754,17 @@ for (const mechanism of ["scope", "watchdog"] as const) for (const platform of [
     expect(child.stdout.destroyed).toBe(true);
     expect(child.stderr.destroyed).toBe(true);
   } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
+});
+
+for (const ending of ["release", "external"] as const) test(`Copilot host exit observer retains ${ending} source during cleanup`, async () => {
+  const child = new FakeCopilot();
+  const host = await CopilotAcpHost.start(options(child, { processIdentity: () => `fixture-copilot-exit-${ending}` }));
+  const process = (await host.health()).exitProcess!;
+  try {
+    if (ending === "release") await withHostStopOrigin({ path: "kill-action", operationId: "kill-fixture-operation" }, () => host.release());
+    else { child.emit("exit", null, "SIGKILL"); child.emit("close", null, "SIGKILL"); }
+    expect(readHostExit(process)?.exit?.signal).toBe(ending === "release" ? "SIGTERM" : "SIGKILL");
+    expect(readHostExit(process)?.stop?.operationId ?? null).toBe(ending === "release" ? "kill-fixture-operation" : null);
+    expect((await host.health()).exitProcess).toEqual(process);
+  } finally { await host.release(); }
 });

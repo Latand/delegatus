@@ -512,3 +512,45 @@ test("a reason write cannot supply attribution and a refused write preserves the
   const effective = effectiveSeatTickSettings({ ...written, enabled: false, until: AT }, NOW, HOUR_MS);
   expect(seatTickSettingsAfterLapse(PROJECT, effective).instructionLines).toEqual(written.instructionLines!);
 });
+
+test("maintenance window is optional, validated, preserved on partial edits and explicitly removable", () => {
+  const initial = defaultSeatTickSettings(PROJECT);
+  expect(effectiveSeatTickSettings(initial, NOW, HOUR_MS).maintenance).toMatchObject({ enabled: false, window: null });
+  const window = { timeZone: "Europe/Paris", weekdays: [1, 3, 5], startHour: 9, endHour: 17 };
+  const enabled = change(initial, { maintenance: { enabled: true, window } });
+  expect(enabled.ok).toBe(true);
+  if (!enabled.ok) return;
+  const edited = change(enabled.settings, { maintenance: { intervalHours: 12 } });
+  expect(edited.ok && edited.settings.maintenance?.window).toEqual(window);
+  const file = settingsFile();
+  writeSeatTickSettings(PROJECT, enabled.settings, file);
+  expect(readSeatTickSettings(PROJECT, file).maintenance?.window).toEqual(window);
+  const lapsed = effectiveSeatTickSettings({ ...enabled.settings, enabled: false, until: AT }, NOW, HOUR_MS);
+  expect(seatTickSettingsAfterLapse(PROJECT, lapsed).maintenance?.window).toEqual(window);
+  const removed = change(enabled.settings, { maintenance: { window: null } });
+  expect(removed.ok && removed.settings.maintenance?.window).toBeNull();
+  expect(change(initial, { maintenance: { window: { ...window, timeZone: "Invalid/Zone" } } }).ok).toBe(false);
+});
+
+test("malformed persisted windows turn maintenance off without changing curation or another writer's rows", async () => {
+  const window = { timeZone: "Invalid/Zone", weekdays: [1], startHour: 9, endHour: 17 };
+  const timer = { enabled: true, intervalHours: 3, updatedAt: AT, setBy: SEAT, window };
+  const file = settingsFile();
+  fs.writeFileSync(file, JSON.stringify({ version: 1, projects: { [PROJECT]: { ...defaultSeatTickSettings(PROJECT), maintenance: timer, curation: timer } } }));
+  const effective = effectiveSeatTickSettings(readSeatTickSettings(PROJECT, file), NOW, HOUR_MS);
+  expect(effective.maintenance).toMatchObject({ enabled: false, window: null });
+  expect(effective.curation).toMatchObject({ enabled: true, intervalHours: 3 });
+  const sqliteFile = settingsFile();
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), maintenance: timer, curation: { ...timer, window: undefined } }, sqliteFile);
+  const sqlite = effectiveSeatTickSettings(readSeatTickSettings(PROJECT, sqliteFile), NOW, HOUR_MS);
+  expect(sqlite.maintenance).toMatchObject({ enabled: false, window: null });
+  expect(sqlite.curation).toMatchObject({ enabled: true, intervalHours: 3 });
+  const { Database } = await import("bun:sqlite");
+  const database = new Database(path.join(path.dirname(sqliteFile), "state.sqlite"));
+  try {
+    const row = () => database.query("SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?").get("seat_tick_settings", `p:${PROJECT}`);
+    const before = row();
+    writeSeatTickSettings("other-project", defaultSeatTickSettings("other-project"), sqliteFile);
+    expect(row()).toEqual(before);
+  } finally { database.close(); }
+});

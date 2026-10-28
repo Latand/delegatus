@@ -1,5 +1,6 @@
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
-import type { Flow, Round } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import type { Round } from "@/lib/flows/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { effortTierLabel } from "@/components/builderCopy";
+import type { UltraRow } from "@/components/codexTierOffer";
 import { Select } from "@/components/ui/Select";
 import { effortScale } from "@/lib/agent/efforts";
 import { listedModels } from "@/lib/agent/models";
@@ -8,7 +9,14 @@ import { useLocale } from "@/lib/i18n";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 
 /** Codex speed choice: empty string keeps the user's config.toml default. */
-export type SpeedChoice = "" | "fast" | "standard";
+export type SpeedChoice = "" | "fast" | "standard" | "ultrafast";
+
+/** The launch body fields a speed choice sends, for every surface that starts an
+    agent: ultrafast is a named tier `fast` cannot carry, and no choice sends nothing. */
+export function speedBody(engine: string, speed: SpeedChoice): { fast?: boolean; serviceTier?: string } {
+  if (engine !== "codex" || !speed) return {};
+  return speed === "ultrafast" ? { serviceTier: "ultrafast" } : { fast: speed === "fast" };
+}
 
 /**
  * Reasoning-effort select plus the codex-only speed (fast/standard) select —
@@ -28,6 +36,8 @@ export function ReasoningControls({
   onEffort,
   onSpeed,
   copilotModels,
+  ultra = null,
+  inheritSpeed = false,
 }: {
   engine: "claude" | "codex" | "copilot";
   model: string;
@@ -41,6 +51,10 @@ export function ReasoningControls({
   onEffort: (value: string) => void;
   onSpeed: (value: SpeedChoice) => void;
   copilotModels?: readonly CopilotModelEntry[] | null;
+  /** The ultrafast option, offered as the launch account's catalog says; absent, the select has none. */
+  ultra?: UltraRow | null;
+  /** A rotation: no choice continues the incumbent's own tier, which the server resolves, so the empty option says so. */
+  inheritSpeed?: boolean;
 }) {
   const { t } = useLocale();
   const availableModels = engine === "copilot" && copilotModels
@@ -95,9 +109,15 @@ export function ReasoningControls({
           title={t("draft.speedTitle")}
           onChange={(event) => onSpeed(event.target.value as SpeedChoice)}
         >
-          <option value="">{t("draft.speedDefault")}</option>
+          <option value="">{t(inheritSpeed ? "draft.speedInherited" : "draft.speedDefault")}</option>
           <option value="fast">{t("draft.speedFast")}</option>
           <option value="standard">{t("draft.speedStandard")}</option>
+          {/* A native option shows no tooltip, so the reason rides its own text. */}
+          {ultra ? (
+            <option value="ultrafast" disabled={!ultra.enabled}>
+              {ultra.reason ? `${t("draft.speedUltra")} — ${ultra.reason}` : t("draft.speedUltra")}
+            </option>
+          ) : null}
         </Select>
       ) : null}
     </>

@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,13 +7,16 @@ import path from "node:path";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { codexHostColumns, claudeHostColumns, copilotHostColumns } from "./registry";
-import { normalizeAgentSignalDomain, normalizeSignalBoundaryOff, signalBoundaryOff, signalDomain, spawnHeadlessSignalSandbox, spawnManagedEngine,
+import { headlessFixtureTransport, setHeadlessSpawnForTests, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, signalBoundaryOff, signalDomain, spawnHeadlessSignalSandbox, spawnManagedEngine,
   spawnSignalSandbox, terminalSignalSandboxCommand, type AgentSignalDomain } from "./agentSignalSandbox";
 import { CopilotAcpHost } from "./copilotAcpHost";
 import { FileRuntimeEventStore } from "./eventStore";
 import type { HostState } from "./engineHost";
 import { Database } from "bun:sqlite";
 import { cpuOwnerExited, cpuOwnerStatus } from "./signalSandboxContext";
+import { AgentMemoryCell, GIB, planAgentMemory, setAgentMemoryPortsForTests, wrapAgentLaunch } from "./agentMemory";
+import { headlessRuns, launchDetached } from "@/lib/agent/headless";
+import { readHostExit } from "./hostExit";
 
 test.skipIf(process.platform !== "linux")("a missing namespace marker never proves an unseen namespace's queue owner dead", () => {
   const current = captureProcessIdentity(process.pid);
@@ -112,6 +115,85 @@ async function launchEach(env: NodeJS.ProcessEnv, marker: string) {
 function expectEnginesRan(marker: string) {
   for (const name of ["structured", "managed", "headless"]) expect(fs.readFileSync(`${marker}.${name}`, "utf8")).toBe("ran");
 }
+
+test.skipIf(process.platform !== "linux").each([
+  ["managed", "monitor"], ["managed", "fallback"], ["headless", "monitor"], ["headless", "fallback"],
+  ["managed", "bridge-monitor"], ["managed", "bridge-fallback"], ["headless", "bridge-monitor"], ["headless", "bridge-fallback"],
+] as const)("%s %s keeps supervisors below the CLI and its children in OOM priority", async (adapter, boundary) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-oom-score-"));
+  const marker = path.join(root, "scores.json"), release = path.join(root, "release");
+  const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+  const previousTransport = headlessFixtureTransport();
+  const previousCpu = process.env.DELEGATUS_AGENT_CPU, previousMemory = process.env.DELEGATUS_AGENT_MEMORY;
+  // Only namespace admission is replaced. The monitor really waits for its
+  // child; launch composition, scoring, native waiter and headless runner run.
+  const python = Bun.which("python3")!;
+  fs.writeFileSync(path.join(root, "python3"), `#!${python}\n` + String.raw`
+import importlib.util, json, os, pathlib, sys
+args = sys.argv[1:]
+receipt = args[args.index('--receipt') + 1]
+spec = importlib.util.spec_from_file_location('launcher', args[0])
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+child = os.fork()
+if child == 0:
+    launcher.execute(args[args.index('--') + 1:])
+pathlib.Path(receipt).write_text(json.dumps({'policyVersion': 1, 'boundary': 'off', 'reason': 'fixture monitor'}))
+_, status = os.waitpid(child, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+`, { mode: 0o700 });
+  const bridge = boundary.startsWith("bridge-");
+  const env = fallbackEnv(root, bridge
+    ? { PATH: process.env.PATH!, LLV_DOCKER_NSENTER_SHIMS: "1", FIXTURE_ENTER: recordingEnter(root).enter }
+    : { PATH: boundary === "monitor" ? root : "/nonexistent-signal-path" });
+  const command = bridge ? bridgeShim(root, boundary === "bridge-monitor" ? path.join(root, "python3") : path.join(root, "absent-python3"), process.execPath) : process.execPath;
+  const args = ["$literal", "two words", '"quote"'];
+  const script = `const fs=require('node:fs');const score=p=>Number(fs.readFileSync('/proc/'+p+'/oom_score_adj','utf8'));
+const grandchild=require('node:child_process').spawnSync(process.execPath,['-e','console.log(require("node:fs").readFileSync("/proc/self/oom_score_adj","utf8").trim())'],{encoding:'utf8'});
+fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,score:score('self'),parent:process.ppid,parentScore:score(process.ppid),grandchild:Number(grandchild.stdout),grandchildExit:grandchild.status,args:process.argv.slice(1),pendingScore:process.env.LLV_SIGNAL_OOM_SCORE??null}));
+setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)}))process.exit(23)},10);`;
+  let child: ChildProcess | undefined, cell: AgentMemoryCell | undefined;
+  const key = `oom-score-${adapter}-${boundary}`;
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    process.env.DELEGATUS_AGENT_CPU = "off";
+    process.env.DELEGATUS_AGENT_MEMORY = "watchdog";
+    setAgentMemoryPortsForTests({ totalBytes: 16 * GIB, probe: () => null });
+    setHeadlessSpawnForTests(null);
+    const plan = planAgentMemory({ engine: "codex", sessionKey: key, liveAgents: 1 })!;
+    if (adapter === "managed") {
+      cell = new AgentMemoryCell(plan);
+      child = await spawnManagedEngine(command, ["-e", script, ...args], { env, detached: true }, cell);
+      child.stdout!.resume(); child.stderr!.resume();
+    } else {
+      child = launchDetached({ key, cwd: root, built: { command, args: ["-e", script, ...args], env,
+        stdin: null, outputPath: null, sessionId: null, reviewerPath: null },
+        stdoutPath: path.join(root, "stdout"), stderrPath: path.join(root, "stderr"), timeoutMs: 10_000, onExit: () => {} })!.handle;
+    }
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(marker)) {
+      if (Date.now() >= deadline || child.exitCode !== null || child.signalCode !== null) throw new Error("score fixture did not become ready");
+      await Bun.sleep(10);
+    }
+    const scores = JSON.parse(fs.readFileSync(marker, "utf8"));
+    const identity = captureProcessIdentity(child.pid!);
+    expect(scores).toMatchObject({ score: plan.score, parentScore: inherited, grandchild: plan.score, grandchildExit: 0, args, pendingScore: null });
+    expect(scores.score).toBeGreaterThanOrEqual(500);
+    expect(scores.parentScore).toBeLessThan(scores.score);
+    if (adapter === "managed" && boundary === "fallback") expect(scores.pid).toBe(child.pid);
+    fs.writeFileSync(release, "exit");
+    expect(await exited(child)).toBe(23);
+    if (adapter === "managed") expect(readHostExit(identity)?.exit).toMatchObject({ code: 23, signal: null });
+  } finally {
+    fs.writeFileSync(release, "exit");
+    if (child) await exited(child);
+    cell?.close(); headlessRuns.delete(key);
+    setHeadlessSpawnForTests(previousTransport); setAgentMemoryPortsForTests(null);
+    if (previousCpu === undefined) delete process.env.DELEGATUS_AGENT_CPU; else process.env.DELEGATUS_AGENT_CPU = previousCpu;
+    if (previousMemory === undefined) delete process.env.DELEGATUS_AGENT_MEMORY; else process.env.DELEGATUS_AGENT_MEMORY = previousMemory;
+    warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test.each([
   ["a non-Linux platform", "darwin", {}, null, "unavailable on darwin"],
@@ -340,17 +422,37 @@ const ENTER_HOST = 'nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid=
 
 /** The Dockerfile's host CLI shim, written into the fixture with its host
  * entry replaced by the fixture's own and, optionally, its python3 moved. */
-function bridgeShim(root: string, python = "/usr/bin/python3"): string {
+function bridgeShim(root: string, python = "/usr/bin/python3", engine = "/bin/sh"): string {
   const bin = path.join(root, "bridge-bin"); fs.mkdirSync(bin, { recursive: true });
   const source = fs.readFileSync(path.resolve("Dockerfile"), "utf8").match(/make_nsenter_shim\(\) \{[\s\S]*?\n\}/)![0];
   for (const part of [ENTER_HOST, '"/usr/local/bin/$name"', "/usr/bin/python3"]) expect(source).toContain(part);
   const fixture = source.replace(ENTER_HOST, '"\\$FIXTURE_ENTER"').replaceAll('"/usr/local/bin/$name"', `"${bin}/$name"`).replaceAll("/usr/bin/python3", python);
-  const made = spawnSync("bash", ["-c", `${fixture}\nmake_nsenter_shim engine /bin/sh`], { encoding: "utf8" });
+  const made = spawnSync("bash", ["-c", `${fixture}\nmake_nsenter_shim engine '${engine.replaceAll("'", "'\\''")}'`], { encoding: "utf8" });
   expect(made.status, made.stderr).toBe(0);
   return path.join(bin, "engine");
 }
 
 const signalRuns = path.join(os.homedir(), ".cache/delegatus/signal-runs");
+
+test.skipIf(process.platform !== "linux")("the host shim warns on a refused score before hiding native stdio and still execs", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-score-refused-"));
+  try {
+    const shim = bridgeShim(root, path.join(root, "absent-python3"), process.execPath);
+    const plan = planAgentMemory({ engine: "codex", sessionKey: "bridge-score-refused", liveAgents: 1 },
+      { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+    plan.score = -1001;
+    const marker = path.join(root, "native.json");
+    const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+    const env = fallbackEnv(root, { FIXTURE_ENTER: recordingEnter(root).enter, LLV_SIGNAL_LAUNCHER: "unused-launcher",
+      LLV_SIGNAL_RECEIPT: path.join(root, "receipt"), LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1" });
+    const wrapped = wrapAgentLaunch(plan, shim, ["-e", `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({score:Number(fs.readFileSync('/proc/self/oom_score_adj','utf8')),pending:process.env.LLV_SIGNAL_OOM_SCORE??null}));process.exit(23);`], env);
+    const result = spawnSync(wrapped.command, wrapped.args, { env: wrapped.env, encoding: "utf8", timeout: 5_000 });
+    expect(result.status).toBe(23);
+    expect(JSON.parse(fs.readFileSync(marker, "utf8"))).toEqual({ score: inherited, pending: null });
+    expect(result.stderr).toContain("workload OOM score unavailable");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 const runEntries = () => { try { return fs.readdirSync(signalRuns); } catch { return []; } };
 const userNamespaceMounts = process.platform === "linux" && spawnSync("unshare", ["-r", "-m", "true"], { stdio: "ignore", timeout: 5_000 }).status === 0;
 const tempOutsideHome = path.relative(os.homedir(), os.tmpdir()).startsWith("..");
@@ -570,6 +672,37 @@ const SECRET_STDERR = {
   "a key clipped past the read bound": `bind refused\n-----BEGIN PRIVATE KEY-----\n${KEY_BODY}\n${KEY_BODY}\n`,
   "a bearer value and a private path": `bind refused\nAuthorization: ${["Bea", "rer"].join("")} ${"abcdefghij".repeat(3)}\n@ROOT@/private/file\n`,
 };
+test.skipIf(process.platform !== "linux").each(["closed", "rejected"] as const)("a launcher with %s spawn readiness keeps its cause and completes cleanup", async (readiness) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-ready-close-"));
+  const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "python3"), readiness === "closed"
+    ? "#!/bin/sh\nprintf 'bind refused during readiness\\n' >&2\nexit 9\n"
+    : "#!/bin/sh\nexec /bin/sleep 60\n", { mode: 0o755 });
+  let child: ChildProcess | undefined;
+  const start = ((command: string, args: readonly string[], options: SpawnOptions) => {
+    const launched = spawn(command, args, options);
+    child = launched;
+    launched.stderr?.resume();
+    Object.assign(launched, { spawnReady: new Promise<void>((resolve, reject) => readiness === "closed"
+      ? launched.once("close", () => resolve())
+      : launched.once("spawn", () => reject(new Error("launcher readiness refused")))) });
+    return launched;
+  }) as typeof spawn;
+  try {
+    const env = fallbackEnv(root, { PATH: `${bin}:/usr/bin:/bin` });
+    await expect(spawnSignalSandbox("/bin/true", [], { env, stdio: ["ignore", "pipe", "pipe"] }, start))
+      .rejects.toThrow(readiness === "closed" ? "agent signal sandbox unavailable: bind refused during readiness" : "launcher readiness refused");
+    if (readiness === "closed") expect(child!.exitCode).toBe(9);
+    else expect(child!.signalCode).toBe("SIGKILL");
+    expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-signal-"))).toEqual([]);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, "close"); child.kill("SIGKILL"); await closed;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const [secret, text] of Object.entries(SECRET_STDERR)) for (const channel of ["pipe", "file"] as const) {
   test.skipIf(process.platform !== "linux")(`a launcher that fails after printing ${secret} on its ${channel} reports the cause without the secret`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-wrapper-secret-"));
