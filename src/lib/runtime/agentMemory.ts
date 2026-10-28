@@ -70,19 +70,39 @@ export interface AgentMemoryPlan {
   systemdVersion: number;
   cpu?: AgentCpuPlan | null;
 }
-export function wrapAgentCommand(plan: AgentMemoryPlan | null, command: string, args: string[]): { command: string; args: string[] } {
-  if (!plan) return { command, args };
-  const scored = plan.platform === "linux" && plan.mechanism !== "none"
-    ? ["/bin/sh", "-c", `echo ${plan.score} >/proc/self/oom_score_adj 2>/dev/null; exec "$@"`, "delegatus-agent", command, ...args]
+/** Apply only at the final engine exec, after resident supervisors fork. */
+function wrapAgentWorkloadCommand(plan: AgentMemoryPlan | null, command: string, args: string[]): { command: string; args: string[] } {
+  const scored = plan && plan.platform === "linux" && plan.mechanism !== "none"
+    ? ["/bin/sh", "-c", `if ! { echo ${plan.score} >/proc/self/oom_score_adj; } 2>/dev/null; then echo 'Delegatus: workload OOM score unavailable; continuing with inherited score' >&2; fi; exec "$@"`, "delegatus-agent", command, ...args]
     : [command, ...args];
-  if (plan.mechanism !== "scope" && !plan.cpu) return { command: scored[0], args: scored.slice(1) };
+  return { command: scored[0], args: scored.slice(1) };
+}
+/** Keep containment around the whole launch without raising supervisors' scores. */
+function wrapAgentResourceCommand(plan: AgentMemoryPlan | null, command: string, args: string[]): { command: string; args: string[] } {
+  if (!plan || (plan.mechanism !== "scope" && !plan.cpu)) return { command, args };
   const systemdVersion = Math.min(plan.systemdVersion, plan.cpu?.systemdVersion ?? Infinity);
   return { command: "systemd-run", args: ["--user", "--scope", "--quiet", "--collect",
     ...(systemdVersion >= 254 ? ["--expand-environment=no"] : []),
     `--unit=${plan.unit}`, `--slice=${plan.cpu?.slice ?? plan.slice}`, "--description=Delegatus agent", "-p", "Delegate=yes",
     ...(plan.mechanism === "scope" ? ["-p", `MemoryMax=${plan.limitBytes}`, "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"] : []),
     ...(plan.cpu ? cpuScopeProperties(plan.cpu) : []),
-    ...(plan.viewerUnit ? ["-p", `BindsTo=${plan.viewerUnit}`, "-p", `After=${plan.viewerUnit}`] : []), "--", ...scored] };
+    ...(plan.viewerUnit ? ["-p", `BindsTo=${plan.viewerUnit}`, "-p", `After=${plan.viewerUnit}`] : []), "--", command, ...args] };
+}
+export function wrapAgentCommand(plan: AgentMemoryPlan | null, command: string, args: string[]): { command: string; args: string[] } {
+  const workload = wrapAgentWorkloadCommand(plan, command, args);
+  return wrapAgentResourceCommand(plan, workload.command, workload.args);
+}
+/** The namespace launcher (also reached through Docker's host shim) applies
+ * the score at final exec. Its monitor, init and native waiter inherit the
+ * caller's score; resource containment still surrounds the whole launch. */
+export function wrapAgentLaunch(plan: AgentMemoryPlan | null, command: string, args: string[], env: NodeJS.ProcessEnv) {
+  env = { ...env };
+  delete env.LLV_SIGNAL_OOM_SCORE;
+  if (env.LLV_SIGNAL_LAUNCHER && plan?.platform === "linux" && plan.mechanism !== "none") {
+    env.LLV_SIGNAL_OOM_SCORE = String(plan.score);
+    return { ...wrapAgentResourceCommand(plan, command, args), env };
+  }
+  return { ...wrapAgentCommand(plan, command, args), env };
 }
 export function probeAgentScopes(options: { platform: NodeJS.Platform; cgroupRoot: string; uid: number; runner: MemoryRunner; docker: boolean; slice?: string }): number | null {
   if (options.platform !== "linux" || options.docker || !fs.existsSync(path.join(options.cgroupRoot, "cgroup.controllers"))) return null;
@@ -314,8 +334,8 @@ export class AgentMemoryCell {
   }
   wrapSpawn(base = (command: string, args: string[], options: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams => spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })) {
     return (command: string, args: string[], options: SpawnOptionsWithoutStdio) => {
-      const wrapped = wrapAgentCommand(this.plan, command, args);
-      const child = base(wrapped.command, wrapped.args, options);
+      const wrapped = wrapAgentLaunch(this.plan, command, args, options.env ?? process.env);
+      const child = base(wrapped.command, wrapped.args, { ...options, env: wrapped.env });
       let tail = "";
       child.stderr.on("data", (chunk) => { tail = (tail + String(chunk)).slice(-1024); });
       child.once("close", () => {

@@ -176,9 +176,10 @@ test("supported Codex CLIs run the full native contracts at the proposed commit"
   }
 });
 
-test("runtime CI runs on every PR and supports dispatch", () => {
+test("runtime CI checks main pushes as well as PRs and supports dispatch", () => {
   const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
-  expect(Object.keys(triggers.on)).toEqual(["pull_request", "workflow_dispatch"]);
+  expect(Object.keys(triggers.on)).toEqual(["pull_request", "push", "workflow_dispatch"]);
+  expect(triggers.on.push).toEqual({ branches: ["main"] });
 });
 
 test("runtime CI requires installed-package MCP and audio smoke after prepack", () => {
