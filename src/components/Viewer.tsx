@@ -11,6 +11,7 @@ import { useFleetCues } from "@/hooks/useFleetCues";
 import { useWorkCues } from "@/hooks/useWorkCues";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
 import { useProjectCuration } from "@/hooks/useProjectCuration";
+import { ReviewHistoryHost } from "@/components/flows/ReviewHistory";
 import { useEffectiveFlows } from "@/components/flows/flowModel";
 import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
 import { useFiles } from "@/hooks/useFiles";
@@ -2014,6 +2015,7 @@ function ViewerApp() {
           root agent's focus handoff when there is one to answer. Renders
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
+      <ReviewHistoryHost files={allFiles} />
       {/* A short toast for each event sound that plays, beside the needs-you
           chip. Fixed at the toast layer so an opened task does not cover it;
           nothing mounts on the phone. */}

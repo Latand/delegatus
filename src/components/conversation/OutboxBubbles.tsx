@@ -100,6 +100,7 @@ export interface CanonicalMessage {
 
 /** What the operator's message row can be asked to do about its delivery. */
 export interface MessageRowActions {
+  sendBlockedReason?: string | null;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onClear?: (id: string) => void;
@@ -120,6 +121,7 @@ export function ConversationMessageRow({
   switchHold = null,
   session = null,
   actions,
+  readOnly = false,
 }: {
   /**
    * The local record of the submission. Present while the delivery is still
@@ -134,6 +136,7 @@ export function ConversationMessageRow({
   switchHold?: SwitchHold | null;
   session?: OutboxSessionAxes | null;
   actions?: MessageRowActions;
+  readOnly?: boolean;
 }) {
   const coarse = useCoarsePointer();
   const [open, setOpen] = useState(false);
@@ -210,12 +213,14 @@ export function ConversationMessageRow({
           that can replay gets Retry, a payload that cannot comes back to the
           composer, and an operation only the server can settle gets the
           re-read under its original identity — never two of them. */}
-      {row.failure.action === "retry" ? (
+      {readOnly ? null : row.failure.action === "retry" ? (
         <button
           type="button"
           data-outbox-retry={entry!.id}
+          disabled={Boolean(actions?.sendBlockedReason)}
+          title={actions?.sendBlockedReason ?? undefined}
           onClick={() => actions?.onRetry(entry!.id)}
-          className={`${ROW_ACTION} hover:text-accent`}
+          className={`${ROW_ACTION} hover:text-accent disabled:opacity-50`}
         >
           {t("outbox.action.retry")}
         </button>
@@ -227,8 +232,10 @@ export function ConversationMessageRow({
           type="button"
           data-outbox-operation-retry={entry!.id}
           data-delivery-notice-retry
+          disabled={Boolean(actions?.sendBlockedReason)}
+          title={actions?.sendBlockedReason ?? undefined}
           onClick={() => actions?.onRetryOperation?.(entry!)}
-          className={`${ROW_ACTION} hover:text-accent`}
+          className={`${ROW_ACTION} hover:text-accent disabled:opacity-50`}
         >
           {t("outbox.action.retry")}
         </button>
@@ -313,7 +320,7 @@ export function ConversationMessageRow({
             DO about a delivery nobody has confirmed. Check status asks the
             runtime again under THIS message's original key — the row's own id —
             and is the only thing an unconfirmed delivery is ever offered. */}
-        {row.recovery === "check" && actions?.onCheck ? (
+        {!readOnly && row.recovery === "check" && actions?.onCheck ? (
           <button
             type="button"
             data-outbox-check={entry.id}
@@ -329,7 +336,7 @@ export function ConversationMessageRow({
             nobody has established authorizes none at all (round-4 P2). */}
         {/* Ending the operation is the operator's decision that this message
             must not arrive. Only ever offered for one the server admitted. */}
-        {actions?.onDiscard && row.discardable ? (
+        {!readOnly && actions?.onDiscard && row.discardable ? (
           <button
             type="button"
             data-outbox-discard={entry.id}
@@ -340,7 +347,7 @@ export function ConversationMessageRow({
             {t("runtime.receipt.discard")}
           </button>
         ) : null}
-        {row.cancellable && actions ? (
+        {!readOnly && row.cancellable && actions ? (
           <button
             type="button"
             data-outbox-cancel={entry.id}
@@ -411,12 +418,14 @@ export function FeedMessageRow({
   switchHold = null,
   session = null,
   actions,
+  readOnly = false,
 }: {
   entry: OutboxEntry | null;
   canonical?: CanonicalMessage | null;
   switchHold?: SwitchHold | null;
   session?: OutboxSessionAxes | null;
   actions?: MessageRowActions;
+  readOnly?: boolean;
 }) {
   const { t } = useLocale();
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -435,6 +444,7 @@ export function FeedMessageRow({
       switchHold={switchHold}
       session={session}
       actions={actions}
+      readOnly={readOnly}
     />
   );
 }
@@ -511,11 +521,12 @@ export function OutboxBubblesView({
  * unconfirmed delivery is settled by asking, never by sending again — lives in
  * one place.
  */
-export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntry[]): MessageRowActions {
+export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntry[], sendBlockedReason: string | null = null): MessageRowActions {
   const recovery = useMessageRowRecovery(cardId);
   return {
+    sendBlockedReason,
     onCancel: (id) => cancelOutbox(cardId, id),
-    onRetry: (id) => retryOutbox(cardId, id),
+    onRetry: (id) => { if (!sendBlockedReason) retryOutbox(cardId, id); },
     /* The row goes and its words come back, appended to whatever the operator
        has already typed — never over it, the same gesture that drops context
        into a composer from elsewhere. Attachments cannot come back: their
@@ -559,7 +570,7 @@ export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntr
       if (recovery) recovery.check(entry.id);
       else void refreshRuntime();
     },
-    ...(recovery?.retryOperation ? { onRetryOperation: (entry: OutboxEntry) => recovery.retryOperation!(entry.id) } : {}),
+    ...(recovery?.retryOperation ? { onRetryOperation: (entry: OutboxEntry) => { if (!sendBlockedReason) recovery.retryOperation!(entry.id); } } : {}),
     ...(recovery?.discard ? { onDiscard: (entry: OutboxEntry) => recovery.discard!(entry.id) } : {}),
   };
 }

@@ -1,0 +1,4950 @@
+{
+  "capturedAt": "2026-10-26T09:22:14.893Z",
+  "verifiedAt": "2026-10-26T09:30:02.638815+00:00",
+  "comparisonBase": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+  "command": "provided gate-slot.sh: setsid --wait bun run test ./src/components/kanban/kanbanBoard.browser.test.tsx -t \"retired review history|conversation open motion|the board header fits a narrow\"",
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR",
+    "closed Viewer control endpoint",
+    "short directory-descriptor path resolving to owned Chrome scratch"
+  ],
+  "result": {
+    "passed": 5,
+    "failed": 0,
+    "assertions": 3118,
+    "integrationMeasurements": 340,
+    "integrationFrames": 332,
+    "archiveReaderFrames": 40,
+    "preservedMainSuites": [
+      "conversation open motion",
+      "the board header fits a narrow 640\u2013700 px window"
+    ]
+  },
+  "matrix": {
+    "languages": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "viewports": [
+      [
+        320,
+        844
+      ],
+      [
+        390,
+        844
+      ],
+      [
+        640,
+        320
+      ],
+      [
+        1280,
+        900
+      ],
+      [
+        1440,
+        900
+      ]
+    ]
+  },
+  "sourceDigests": {
+    "src/components/flows/ReviewHistory.tsx": "fc5c09b9be2ab3a3d5c0cc7ccda7a0f9ec3f585864fff36b6a408b60c83c191b",
+    "src/components/flows/RoundDeck.tsx": "4994bf5f561a253c157ee77197b4696f6400095e578978f009c3bc151e3aae7f",
+    "src/components/flows/directReviewGroups.ts": "1f2808f91e30ffccd65f1435b3c5a3cbf83d1b01256fe9d65a3d2069e772c146",
+    "src/components/mobile/MobilePipelineScreen.tsx": "b0a0b24ab77b8514c67a2668906dce55344ba440c08d60176abe8e6e2f78add4",
+    "src/components/kanban/KanbanBoard.tsx": "36814c64ec4ddc6e71657cc64169d45090e988c1f936d7eeacff72a5002929f1",
+    "src/components/scheme/taskBands.ts": "747f94f301d772722fbf74751ed127458d7fd9a16d7a975dec1207b1ff4a9330",
+    "src/lib/i18n/en.ts": "35bc00c643f4f53d2ca069b4d8185e56772e2f364963a377b0c3d704a0906f9a",
+    "src/lib/i18n/uk.ts": "7c6b47b7c9c958449bc0271d2182c6bc4196f26972be9b276d9e475ae6ac0fb9",
+    "src/components/BranchPane.tsx": "be8733cae971347bf8eaefa17ca2a1b2feeb7e876312bf12d0c13a1edb300142",
+    "src/components/LogFeed.tsx": "34f0e04a08bca71c9b96374ae0efa0ca138f76c71259061a5862d365866751e6",
+    "src/components/conversation/DeputyBlock.tsx": "b1a7647f3e23b126cc06d2192c9e5dec316114240e20812958f5726bc84a8ea3",
+    "src/components/conversation/OutboxBubbles.tsx": "8036098122cc06b0def878ec2bf36190a0c1bd72ea9eea643d614643b7151977",
+    "src/components/kanban/StagesSheet.tsx": "c8d923b07364fe21ff7be3585230e0972228504ef0dd827ade220fe3d7ffff51",
+    "src/components/pipelines/PipelineTemplatePicker.tsx": "e3c0f36a45099a1e64cabf40b40bff984f607ecb00d695d6dd43e55aabefbb45",
+    "src/components/kanban/PipelineSection.tsx": "cdf26d4c4af36d49346d08fde85ac012c74bac3c790ab90044e7219e4d2a7d56",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "96e19f92b426bf4fc86470f5a750d40d145964f97c3df863b2eec96f82aef432",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "51bb7805fef979f67efb1d125d2b1cacbac02f37f7d929a286d5e4aef43e00e0"
+  },
+  "visualInspection": {
+    "method": "All final S6 frames inspected in contact sheets. Integration frames are cropped to the measured visible surface; portrait crops are split vertically into adjacent panels. Native-size checks supplement the layout review. Browser assertions verify required-state clipping and coverage. No OCR used.",
+    "inspectedAt": "2026-10-26T09:30:02.638815+00:00",
+    "contactSheets": 19,
+    "nativeSizeChecks": [
+      "review-history-integration/en-light-320-phone-creation.png",
+      "review-history-integration/uk-light-640-phone-creation.png",
+      "review-history-integration/uk-light-640-phone-creation-last.png",
+      "review-history-integration/uk-dark-320-spent-budget.png",
+      "review-history-integration/en-dark-1280-direct-viewer.png",
+      "review-history-integration/uk-light-640-legacy-round-2.png",
+      "review-history/last-uk-dark-320.png"
+    ],
+    "sheets": {
+      "sheet-01.jpg": "b9a8b151b227787e10d737dc15a9ea2b8e34826c36254ce5dcd073d615c3e131",
+      "sheet-02.jpg": "4d4880b30d106c93b4687d841e54909e4260cb3f551e4f92f1f9d0346f8d4183",
+      "sheet-03.jpg": "340b25ff47748ba76ffcab1eba61588e68f49efb0970d10493d65ca4e41d722d",
+      "sheet-04.jpg": "cbfe4e5e0407bff52d784934b9797110f164263913ae13c1cc0b4ab7c219cdec",
+      "sheet-05.jpg": "6d3dfb7bb14fafd16407cbd6039e7af9d939f007ab8be0d4f8cc6d4d877c0277",
+      "sheet-06.jpg": "f719a8399c5eccce624c9a274e5632d7364921f324ce91172b5a3891083f9a12",
+      "sheet-07.jpg": "b9017c26f7c69e0408f0686ca13fec8542645322e665ff3f34628a2eb1b4b4b2",
+      "sheet-08.jpg": "8b0db31731a8473a4d993b310cb24e6b27f70f514dfa6eab1a29e8699bfed0df",
+      "sheet-09.jpg": "f5a654104838d69935ca643a18a1fe278b8ec138251986293586c0edef8e8896",
+      "sheet-10.jpg": "14688773d14de38fa2714d8b345d19ba0e54caca38aad67e99a282347a3af64b",
+      "sheet-11.jpg": "8d76a25e5113d7e146ebb9723ede436c2b28c1e7a54f8bfaa090f46f01a8d5d0",
+      "sheet-12.jpg": "a55400cd82327b47ba41239626a921389559612d1df08f8773a3ba5a0f025c62",
+      "sheet-13.jpg": "579a0835545c53b158a5b93f62054e3641524a6150a2045ec24914b85fc14796",
+      "sheet-14.jpg": "38f97c61e050830fe1082aad1edd7f7da231c5a1a1674585a83d67c57ed52c51",
+      "sheet-15.jpg": "e5bb1dd4631c8bb87e822784961b7b185087ac8d4c1634fff13927f3767eb755",
+      "sheet-16.jpg": "b64f6d4817b9e581332bc3e4c6062a8d03a6ffb2be440c0f6783b9b4077b9abf",
+      "sheet-17.jpg": "1b98c41396aa52f5e6106b1ef983d629c653a6a98a6b072776196a6b2e476315",
+      "sheet-18.jpg": "159c32901ab6ea9944f5ac0e3309740cc1930c451b2786430b44201567353330",
+      "sheet-19.jpg": "0dbcd0c05224d098ca7bc5632b6b6a6552a940d389736ebb47348b3544941399"
+    }
+  },
+  "frames": [
+    {
+      "frame": "review-history-integration/en-dark-1280-archive-deck-history.png",
+      "sha256": "6e6c49689aa2632c10c40d183d0b29ffe56b7828bc276a569210983cf1425310",
+      "sheet": "sheet-01.jpg",
+      "cell": 1,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-archive-deck.png",
+      "sha256": "ae8ee2dad71e7753ca06147670b4e70539a04466411b69a6338e56640c102e2e",
+      "sheet": "sheet-01.jpg",
+      "cell": 2,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-current-compact.png",
+      "sha256": "2c066c2e47c1cd74ca3ee3aaf8c456749cd181bae3f1e42b03f0b1388a309fec",
+      "sheet": "sheet-01.jpg",
+      "cell": 3,
+      "crop": [
+        974,
+        498,
+        1234,
+        883
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-current-search.png",
+      "sha256": "7ea8484df8f6b70521c464ebd65026ae636761e5b686d7be91e7b8f888a3db62",
+      "sheet": "sheet-01.jpg",
+      "cell": 4,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-direct-deck.png",
+      "sha256": "a5161488d6d7918ff59d485f50c84c0a1a2a660f89970b3bef0524db9a5921dc",
+      "sheet": "sheet-01.jpg",
+      "cell": 5,
+      "crop": [
+        324,
+        232,
+        941,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-direct-viewer.png",
+      "sha256": "7980a134ffd0e11f561a78d35193f19e15277d744a9f80150cff298e42fe9be8",
+      "sheet": "sheet-01.jpg",
+      "cell": 6,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-fresh-review-after-fix.png",
+      "sha256": "38dcb475205c7defd8f26c714c2dd2aa45e3f400ecd107f47719c8523ea06189",
+      "sheet": "sheet-01.jpg",
+      "cell": 7,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-legacy-round-1-source.png",
+      "sha256": "3d570d310c5a792a04eb358b6f6401e3675fb32b39315fe675a5ce0c623ca054",
+      "sheet": "sheet-01.jpg",
+      "cell": 8,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-legacy-round-1.png",
+      "sha256": "b2d9831b9e1b0cc3e0737c1c6d239d35b7d9e29a7784947b6d68bb01a9c6cd46",
+      "sheet": "sheet-01.jpg",
+      "cell": 9,
+      "crop": [
+        248,
+        268,
+        1032,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-legacy-round-2-source.png",
+      "sha256": "0dc806adc359adac4cd8c40ee54acb715bee4eb73e5fcfc9ccc016c239fd325b",
+      "sheet": "sheet-01.jpg",
+      "cell": 10,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-legacy-round-2.png",
+      "sha256": "d3d6203086dee4aec4a91e6b568141e7e4d8c9e8edbae52183b3edfa62a33e93",
+      "sheet": "sheet-01.jpg",
+      "cell": 11,
+      "crop": [
+        248,
+        268,
+        1032,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-missing-archive-source.png",
+      "sha256": "c3e14947bd461580efe783052eee111156691c13ba776be1e1dd52ab89a3d250",
+      "sheet": "sheet-01.jpg",
+      "cell": 12,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-missing-deck-history.png",
+      "sha256": "00f87f57c4a2272c4e5db14b884a712e5016ec177958517da15ec2d333fc8f24",
+      "sheet": "sheet-01.jpg",
+      "cell": 13,
+      "crop": [
+        248,
+        366,
+        1032,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-resolved-question.png",
+      "sha256": "785e7022db0a0a5e01b0eb72ed5cd9f35e0505b12321ac9d9e44cfa5a89647ec",
+      "sheet": "sheet-01.jpg",
+      "cell": 14,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-spent-budget.png",
+      "sha256": "037463c66ac9f5d85dc3ce679a2198c188ac95cf7aa6bd6907432e21a97b673e",
+      "sheet": "sheet-01.jpg",
+      "cell": 15,
+      "crop": [
+        561,
+        327,
+        1021,
+        721
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1280-stages-missing.png",
+      "sha256": "50200c1f2bbed3d71dc49ebb87c95b7e66389dd34b4dbf28f7db552f4d6ce018",
+      "sheet": "sheet-01.jpg",
+      "cell": 16,
+      "crop": [
+        248,
+        366,
+        1032,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-archive-deck-history.png",
+      "sha256": "9fa98f253fb6571697d7ac738b69822a3153458053da6c784a8fa029de760b18",
+      "sheet": "sheet-01.jpg",
+      "cell": 17,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-archive-deck.png",
+      "sha256": "d5c804b6bf1db708fdca6eccca7f89b1cfae8f5890063dc422d23b1abf15b5a5",
+      "sheet": "sheet-01.jpg",
+      "cell": 18,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-current-compact.png",
+      "sha256": "038a9a58eada2f36ce129653f689a37c326ec774c144cd7583d98fb6aacfb16b",
+      "sheet": "sheet-01.jpg",
+      "cell": 19,
+      "crop": [
+        1134,
+        442,
+        1394,
+        827
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-current-search.png",
+      "sha256": "b4a6646a1295358a0f5ff8b94be6955915cd7e643458bc75d515da6675a96c0a",
+      "sheet": "sheet-01.jpg",
+      "cell": 20,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-direct-deck.png",
+      "sha256": "4711844688d05463bae84c24bf509bf56dc56fa33cc1d5079892bbc0a0ee6788",
+      "sheet": "sheet-02.jpg",
+      "cell": 1,
+      "crop": [
+        404,
+        232,
+        1021,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-direct-viewer.png",
+      "sha256": "61324995949ed0e35fd4d0e809fbeb07fc2b0be18746df6230b02d560ddeee88",
+      "sheet": "sheet-02.jpg",
+      "cell": 2,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-fresh-review-after-fix.png",
+      "sha256": "93f419f099a0a8189461e2ced00ec1fbe3f5ceb59db9d10f45eeb45bc4fe6de5",
+      "sheet": "sheet-02.jpg",
+      "cell": 3,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-legacy-round-1-source.png",
+      "sha256": "554a4316b4801767598c6ef6ce8fb166bacb2e775dc40c283b320918b967199f",
+      "sheet": "sheet-02.jpg",
+      "cell": 4,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-legacy-round-1.png",
+      "sha256": "97b3975d2c7c8d9c4c093ff1e0f57180b7b033e0a8ee8e3d823f3082ea489f74",
+      "sheet": "sheet-02.jpg",
+      "cell": 5,
+      "crop": [
+        328,
+        268,
+        1112,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-legacy-round-2-source.png",
+      "sha256": "2099c57eff5f99035b365322d4346287736c8b1b784bdc3f418aa1741e5fd3fb",
+      "sheet": "sheet-02.jpg",
+      "cell": 6,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-legacy-round-2.png",
+      "sha256": "a63dd88dbc978dbf6c0ceb28e104836316d47c98b6a3b6f14d717925775a98a2",
+      "sheet": "sheet-02.jpg",
+      "cell": 7,
+      "crop": [
+        328,
+        268,
+        1112,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-missing-archive-source.png",
+      "sha256": "6302e930d6a0c72c43742e3a6628ad73e89ebfd50e49b78635ceac44bc7988b5",
+      "sheet": "sheet-02.jpg",
+      "cell": 8,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-missing-deck-history.png",
+      "sha256": "caac1d48cf8c1af95551426332624363ed375648b04ac6d76a6416e7d4a35df1",
+      "sheet": "sheet-02.jpg",
+      "cell": 9,
+      "crop": [
+        328,
+        366,
+        1112,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-resolved-question.png",
+      "sha256": "3999fe609803f5c1e4ef660546274954d17a3a3c77a0e219f971ff8bdb69a189",
+      "sheet": "sheet-02.jpg",
+      "cell": 10,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-spent-budget.png",
+      "sha256": "8688d0f8f9d992ab189367389733c96b89f1446924e43872d0fe58808a585c3c",
+      "sheet": "sheet-02.jpg",
+      "cell": 11,
+      "crop": [
+        561,
+        327,
+        1021,
+        721
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-1440-stages-missing.png",
+      "sha256": "2c708e8cf03f7394ed11db449c474f5cf5b04383374036538d74f89541dddef1",
+      "sheet": "sheet-02.jpg",
+      "cell": 12,
+      "crop": [
+        328,
+        366,
+        1112,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-archive-deck-history.png",
+      "sha256": "55dbfdf7d4ef03d76478f870aa31208867869be823e98bdae60ef513249ef68c",
+      "sheet": "sheet-02.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-archive-deck.png",
+      "sha256": "55dbfdf7d4ef03d76478f870aa31208867869be823e98bdae60ef513249ef68c",
+      "sheet": "sheet-02.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-current-compact.png",
+      "sha256": "f1c64e6f7ef1c71abac23236bdbc3b3dea2021d03787c417504555e6944399fd",
+      "sheet": "sheet-02.jpg",
+      "cell": 15,
+      "crop": [
+        4,
+        209,
+        316,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-current-search.png",
+      "sha256": "b8118968358966f09416bfac0097771e7470af443289bd5d8303e38a8b6c76cf",
+      "sheet": "sheet-02.jpg",
+      "cell": 16,
+      "crop": [
+        4,
+        172,
+        316,
+        516
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-direct-deck.png",
+      "sha256": "94d7556f9efdde2a3abe4679a516838a41294115f9b5697d02c1fb26ac378a42",
+      "sheet": "sheet-02.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        176,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-fresh-review-after-fix.png",
+      "sha256": "2254cb4b4cd89663a17d0d49cf0ef805ffae5e26bbfb4a306e6088bd0204c843",
+      "sheet": "sheet-02.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        89,
+        316,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-legacy-round-1-source.png",
+      "sha256": "e47bdee03230971c34c027dc7217eb7aa0f6dd94117bf6be5224bf2935df0d52",
+      "sheet": "sheet-02.jpg",
+      "cell": 19,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-legacy-round-1.png",
+      "sha256": "25170969fb2cdb0467c71ec5f463cf77036231f6af7ee1ecbcaa3a92eb2223dc",
+      "sheet": "sheet-02.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        210,
+        320,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-legacy-round-2-source.png",
+      "sha256": "3e2a401184a7db8471c77bcd2c138c02c9afd9d24d5afa0163768a6499b87dfa",
+      "sheet": "sheet-03.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-legacy-round-2.png",
+      "sha256": "bebdb541b62c0bb75b257a333b096c63e64c19267e1919666545df359cbd2d3b",
+      "sheet": "sheet-03.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        210,
+        320,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-missing-archive-source.png",
+      "sha256": "e47bdee03230971c34c027dc7217eb7aa0f6dd94117bf6be5224bf2935df0d52",
+      "sheet": "sheet-03.jpg",
+      "cell": 3,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-missing-deck-history.png",
+      "sha256": "8152a4b5aaff847089829defbbe7caa7141aa1a7fd9e08f36354e7da9246d4e1",
+      "sheet": "sheet-03.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        318,
+        320,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-phone-creation-last.png",
+      "sha256": "cf6576fb19e785875103806127de2e16feda7aa0d4fd7d286e4bd83c6c6cf498",
+      "sheet": "sheet-03.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-phone-creation.png",
+      "sha256": "cf6576fb19e785875103806127de2e16feda7aa0d4fd7d286e4bd83c6c6cf498",
+      "sheet": "sheet-03.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-resolved-question.png",
+      "sha256": "e475a5cddd6d6b48f56c203767f1859da034880f79939345f5ad99ab6f8e9665",
+      "sheet": "sheet-03.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        89,
+        320,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-spent-budget.png",
+      "sha256": "3049d6d896126c19629fd7bef351256970c652f6066902e693a1151fbcde1df8",
+      "sheet": "sheet-03.jpg",
+      "cell": 8,
+      "crop": [
+        4,
+        172,
+        316,
+        596
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-320-stages-missing.png",
+      "sha256": "584b1b31e7138906729d0302954baf11f07a2491ec88ffeda8a6ea54cac105b9",
+      "sheet": "sheet-03.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        318,
+        320,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-archive-deck-history.png",
+      "sha256": "d92e0d707a9b53121ce133de5eaa7528aa7ef687434129c27c0c2ef9ede966d8",
+      "sheet": "sheet-03.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-archive-deck.png",
+      "sha256": "d92e0d707a9b53121ce133de5eaa7528aa7ef687434129c27c0c2ef9ede966d8",
+      "sheet": "sheet-03.jpg",
+      "cell": 11,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-current-compact.png",
+      "sha256": "2d46c081d22c03e135a015ecf4aef8088b24afbd6c8d3b1e75e6a83ee9081153",
+      "sheet": "sheet-03.jpg",
+      "cell": 12,
+      "crop": [
+        4,
+        209,
+        386,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-current-search.png",
+      "sha256": "14e04c1b8763aa514ca4d159c6c4944d5ccc4c9b02b944f1e1e689e9588c979f",
+      "sheet": "sheet-03.jpg",
+      "cell": 13,
+      "crop": [
+        4,
+        172,
+        386,
+        516
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-direct-deck.png",
+      "sha256": "2d9a3f9b49dc547c9d701f1e461d9491c9994295c0b19e5e9ad2ac842a78d33d",
+      "sheet": "sheet-03.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        176,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-fresh-review-after-fix.png",
+      "sha256": "645800be28a88015c60691c51d05a4f5e7b64268fc706266e3859b209b406026",
+      "sheet": "sheet-03.jpg",
+      "cell": 15,
+      "crop": [
+        4,
+        89,
+        386,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-legacy-round-1-source.png",
+      "sha256": "c75b5c4ded3a980604b8a06c3185bf0f08178f706b8a41e1cc294316cd20ff61",
+      "sheet": "sheet-03.jpg",
+      "cell": 16,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-legacy-round-1.png",
+      "sha256": "aa2368d4e71ab8a16add95d1aaf4b02b556ecc32f9fab203995aa8ff6122519c",
+      "sheet": "sheet-03.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-legacy-round-2-source.png",
+      "sha256": "d6eea6f1c5645adf89153992a6a0d2d7131f6d021ce351e7ffe21778b351ffb3",
+      "sheet": "sheet-03.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-legacy-round-2.png",
+      "sha256": "354bfb792d8957641c9213b4c42e5ab7caaf5d97bb5e96e17c39c192e9a4d3de",
+      "sheet": "sheet-03.jpg",
+      "cell": 19,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-missing-archive-source.png",
+      "sha256": "c75b5c4ded3a980604b8a06c3185bf0f08178f706b8a41e1cc294316cd20ff61",
+      "sheet": "sheet-03.jpg",
+      "cell": 20,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-missing-deck-history.png",
+      "sha256": "462a9991793e617b77920d0a3c1fc4892e573e8a407e9f296bed04fefad6ece4",
+      "sheet": "sheet-04.jpg",
+      "cell": 1,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-phone-creation-last.png",
+      "sha256": "e8793acacd78857a5fac70d70b7f9b11e7d0a3fdbace98f739ea4d4fb3d87ffa",
+      "sheet": "sheet-04.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-phone-creation.png",
+      "sha256": "e8793acacd78857a5fac70d70b7f9b11e7d0a3fdbace98f739ea4d4fb3d87ffa",
+      "sheet": "sheet-04.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-resolved-question.png",
+      "sha256": "744da29302e56e66255e3be49fffaaedafc199ab0aacd36eedcda6c4a64520f9",
+      "sheet": "sheet-04.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        89,
+        390,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-spent-budget.png",
+      "sha256": "c4cd9bf953d42652ac1cd2dceeb60258af338cd8cf160cff0296326447512326",
+      "sheet": "sheet-04.jpg",
+      "cell": 5,
+      "crop": [
+        4,
+        172,
+        386,
+        596
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-390-stages-missing.png",
+      "sha256": "6fcf6f7c6340a890948a6ac2f3b83e0c477fde55e7156f21636cc0db9625880f",
+      "sheet": "sheet-04.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-archive-deck-history.png",
+      "sha256": "aa9fb98ceb4be617bd0cca299fb1f635ae093d2fc046766418e65cd03f07a7b7",
+      "sheet": "sheet-04.jpg",
+      "cell": 7,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-archive-deck.png",
+      "sha256": "aa9fb98ceb4be617bd0cca299fb1f635ae093d2fc046766418e65cd03f07a7b7",
+      "sheet": "sheet-04.jpg",
+      "cell": 8,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-current-compact.png",
+      "sha256": "731717f0adf5ac27d1ca120c3f5e7e8744a0d4d865a5bafb8fd34683bd63dd57",
+      "sheet": "sheet-04.jpg",
+      "cell": 9,
+      "crop": [
+        4,
+        161,
+        636,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-current-search.png",
+      "sha256": "420fc5e2ba34575242d2aa7a1f4674572d690533032ed1eec53e36542fee7b14",
+      "sheet": "sheet-04.jpg",
+      "cell": 10,
+      "crop": [
+        4,
+        89,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-direct-deck.png",
+      "sha256": "db53622368b66354f406bbefe55733155b6c82c90470618cc416c4f7b446c345",
+      "sheet": "sheet-04.jpg",
+      "cell": 11,
+      "crop": [
+        12,
+        24,
+        628,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-fresh-review-after-fix.png",
+      "sha256": "9f573cc166df777c61e0431efe3250153d7ee439e320b3371219a6626579162d",
+      "sheet": "sheet-04.jpg",
+      "cell": 12,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-legacy-round-1-source.png",
+      "sha256": "6adff7679d94fce26359d42ab8de5fea3a1706f728c1ebc77cbda13870c05b0d",
+      "sheet": "sheet-04.jpg",
+      "cell": 13,
+      "crop": [
+        4,
+        4,
+        636,
+        312
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-legacy-round-1.png",
+      "sha256": "a293d73b00f3e86ddf939f8c2161b7d53411c59a1c474081b93dbffc49e05799",
+      "sheet": "sheet-04.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-legacy-round-2-source.png",
+      "sha256": "36f09798c436da4de9321ccc175529ec90147b2211944f3c25d80920668d1b27",
+      "sheet": "sheet-04.jpg",
+      "cell": 15,
+      "crop": [
+        4,
+        20,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-legacy-round-2.png",
+      "sha256": "cd363054ae5421db6e4b38bc358dda500769b3fcf8b55d7ca6d77a902397feb0",
+      "sheet": "sheet-04.jpg",
+      "cell": 16,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-missing-archive-source.png",
+      "sha256": "f4a480c14cc017c4e72200213dff832015ffa070bc4a0863cc86216c975fcf5f",
+      "sheet": "sheet-04.jpg",
+      "cell": 17,
+      "crop": [
+        4,
+        70,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-missing-deck-history.png",
+      "sha256": "3d38350ec78e1132952297f0869577c1e75163116f290f6254c1432b63d3bc59",
+      "sheet": "sheet-04.jpg",
+      "cell": 18,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-phone-creation-last.png",
+      "sha256": "ae3851f308ea1c41724374b9086b71dcd643b3fc4b715be1ac0b1179a64007da",
+      "sheet": "sheet-04.jpg",
+      "cell": 19,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-phone-creation.png",
+      "sha256": "11ffce6fb3d4bb08c6905c34f76cb3524ce2139e16f4770d0bee28686194054c",
+      "sheet": "sheet-04.jpg",
+      "cell": 20,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-resolved-question.png",
+      "sha256": "bf656ef44528f7a8c31ba65e6db286c8fbb3773d501505532be79a2b2b077ab0",
+      "sheet": "sheet-05.jpg",
+      "cell": 1,
+      "crop": [
+        0,
+        89,
+        640,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-spent-budget.png",
+      "sha256": "afb56304b978c2eb7b8b1e3e576080074613f0a2b6a7c5219aee4fb1a3e073e8",
+      "sheet": "sheet-05.jpg",
+      "cell": 2,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-dark-640-stages-missing.png",
+      "sha256": "afd092b821c8331927c2f1df4f61915d235ff4cc9547c3889b2f48e03124652d",
+      "sheet": "sheet-05.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-archive-deck-history.png",
+      "sha256": "187de14176c60b0e8ddefa3ae2a8ba3812273807c2b0fcf8d823469de6adec1b",
+      "sheet": "sheet-05.jpg",
+      "cell": 4,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-archive-deck.png",
+      "sha256": "41d419d893db4df4f4963af32bec32fd33a91051df26e37ba7bd9f339018709e",
+      "sheet": "sheet-05.jpg",
+      "cell": 5,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-current-compact.png",
+      "sha256": "ec8935423f79684983955ec365cbb457e2dd905239987168531bdc89888262a8",
+      "sheet": "sheet-05.jpg",
+      "cell": 6,
+      "crop": [
+        974,
+        498,
+        1234,
+        883
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-current-search.png",
+      "sha256": "421a74a232c5ec52260c70be40a659962edbc35b122a9d0e002ecd3c48352095",
+      "sheet": "sheet-05.jpg",
+      "cell": 7,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-direct-deck.png",
+      "sha256": "ee303f102699a0e7c89b4797264a5f25e729082fa5c5a489589967310c22c092",
+      "sheet": "sheet-05.jpg",
+      "cell": 8,
+      "crop": [
+        324,
+        232,
+        941,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-direct-viewer.png",
+      "sha256": "bd00590b6f25ef6c089257f8b7a795420483a4731d005eec7ee42181051fb7b3",
+      "sheet": "sheet-05.jpg",
+      "cell": 9,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-fresh-review-after-fix.png",
+      "sha256": "5e8fd7ed37b3b0565f87eb7cde5ab8e764526f21ef791f15cf7f8cda4da5ffaf",
+      "sheet": "sheet-05.jpg",
+      "cell": 10,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-legacy-round-1-source.png",
+      "sha256": "b59c5923b2572a662cb8c52e592a2e72980829923692cc3273ea236de3c1a622",
+      "sheet": "sheet-05.jpg",
+      "cell": 11,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-legacy-round-1.png",
+      "sha256": "e01f22420b5589a8c1dc301362cd3d0f968d35c2801bfa5337f740e550c84f45",
+      "sheet": "sheet-05.jpg",
+      "cell": 12,
+      "crop": [
+        248,
+        268,
+        1032,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-legacy-round-2-source.png",
+      "sha256": "6252dd7134552416edb64fc0f74bac65b00f4c7dbffc937238da54329dcb2718",
+      "sheet": "sheet-05.jpg",
+      "cell": 13,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-legacy-round-2.png",
+      "sha256": "48cfab83a0aed70d9319ffa73efbc1ba14addb898ba844a13849f2e4c9acbaaa",
+      "sheet": "sheet-05.jpg",
+      "cell": 14,
+      "crop": [
+        248,
+        268,
+        1032,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-missing-archive-source.png",
+      "sha256": "ba2cb22fe7c1a40d403877a9678e3d9bdba8d2b6e1d9e4676dbd7b1381a87964",
+      "sheet": "sheet-05.jpg",
+      "cell": 15,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-missing-deck-history.png",
+      "sha256": "90e0e19d2db1a8503111bad70e12bf69e82ef0c4786aa6fbf3a120a393879629",
+      "sheet": "sheet-05.jpg",
+      "cell": 16,
+      "crop": [
+        248,
+        366,
+        1032,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-resolved-question.png",
+      "sha256": "5789a402603dc69d8ace6bfd97684344bcbe0f01e0123cba5015873b24ccd45d",
+      "sheet": "sheet-05.jpg",
+      "cell": 17,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-spent-budget.png",
+      "sha256": "8f1df11ce1638e95852b9923d4e9cc19a29c37050d1380b34d377ed5f856267b",
+      "sheet": "sheet-05.jpg",
+      "cell": 18,
+      "crop": [
+        561,
+        327,
+        1021,
+        721
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1280-stages-missing.png",
+      "sha256": "6ee4f2c8a6e349641e3b58151ce3c7c12b225abcbba1bf0fbd1136fa2d75a2a9",
+      "sheet": "sheet-05.jpg",
+      "cell": 19,
+      "crop": [
+        248,
+        366,
+        1032,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-archive-deck-history.png",
+      "sha256": "16dc033ff9973275cc5a3500f3b7983594e41886f5d8f5f1d80efd6ca733634d",
+      "sheet": "sheet-05.jpg",
+      "cell": 20,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-archive-deck.png",
+      "sha256": "b227f1189221ffd63d69957910d7dceef0ac2d5bba9a83b98173ef3fbb2b39e1",
+      "sheet": "sheet-06.jpg",
+      "cell": 1,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-current-compact.png",
+      "sha256": "885eeb8353d3baf9b8aa7e56844d998da519dfefdf83b8410100b0c007f72c9c",
+      "sheet": "sheet-06.jpg",
+      "cell": 2,
+      "crop": [
+        1134,
+        442,
+        1394,
+        827
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-current-search.png",
+      "sha256": "c217a1c31387bb68c5c3bad6cf064dadbc7cdd92d130c04e9ac8be12e8067019",
+      "sheet": "sheet-06.jpg",
+      "cell": 3,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-direct-deck.png",
+      "sha256": "a12bf3731aca5ac253c7d73a1d2620f729552325f382a71a18761bc0d7b55835",
+      "sheet": "sheet-06.jpg",
+      "cell": 4,
+      "crop": [
+        404,
+        232,
+        1021,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-direct-viewer.png",
+      "sha256": "fe2b551416abb7a27a34469a82e0f179c0633a49277e07442a50aec57af9adb9",
+      "sheet": "sheet-06.jpg",
+      "cell": 5,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-fresh-review-after-fix.png",
+      "sha256": "677e16667dc75a268ee902f7f06337888564499f10f83961110d7ff885cea578",
+      "sheet": "sheet-06.jpg",
+      "cell": 6,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-legacy-round-1-source.png",
+      "sha256": "31edd3884327a177ed964804944735b451951cd3667b756daa749f64e707faf1",
+      "sheet": "sheet-06.jpg",
+      "cell": 7,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-legacy-round-1.png",
+      "sha256": "939a5a7df6eefae6341576442d758773e026487d4c837246e3aae54376ff8693",
+      "sheet": "sheet-06.jpg",
+      "cell": 8,
+      "crop": [
+        328,
+        268,
+        1112,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-legacy-round-2-source.png",
+      "sha256": "98a6c3e4bce64d2ee059a0f9d446bb857d9602112770d3e7b01c7ef609db75b7",
+      "sheet": "sheet-06.jpg",
+      "cell": 9,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-legacy-round-2.png",
+      "sha256": "8a74e27143b0ca7d65cb6b67410b7805982fa9efd229d505f354bc9ad0d3320f",
+      "sheet": "sheet-06.jpg",
+      "cell": 10,
+      "crop": [
+        328,
+        268,
+        1112,
+        632
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-missing-archive-source.png",
+      "sha256": "974c259dc7dcbe39e3fc2d3ad29d08106db866cf1377f906c7a8e65a2528afef",
+      "sheet": "sheet-06.jpg",
+      "cell": 11,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-missing-deck-history.png",
+      "sha256": "8bd3254e8fc5468fa1d1943de70c3cf45e6df9d1587e2536f2b1e954795361c2",
+      "sheet": "sheet-06.jpg",
+      "cell": 12,
+      "crop": [
+        328,
+        366,
+        1112,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-resolved-question.png",
+      "sha256": "9ef64d324c3befa2b4eff8e784eb8cac7f0df980330c5ab34985d5f53cd9b795",
+      "sheet": "sheet-06.jpg",
+      "cell": 13,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-spent-budget.png",
+      "sha256": "8bf5a2fce58873fc44c6745cd4f93262a7531cf69b1a24e4ad81111312f8b012",
+      "sheet": "sheet-06.jpg",
+      "cell": 14,
+      "crop": [
+        561,
+        327,
+        1021,
+        721
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-1440-stages-missing.png",
+      "sha256": "e147975bb690396652ff1290fe7a1602511e90fc19520e88618525b87efa9eec",
+      "sheet": "sheet-06.jpg",
+      "cell": 15,
+      "crop": [
+        328,
+        366,
+        1112,
+        534
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-archive-deck-history.png",
+      "sha256": "07a3473df55a9f497754d387bf82c41e8fba03dde1882f7cbec3461dca6a99ee",
+      "sheet": "sheet-06.jpg",
+      "cell": 16,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-320-archive-deck.png",
+      "sha256": "07a3473df55a9f497754d387bf82c41e8fba03dde1882f7cbec3461dca6a99ee",
+      "sheet": "sheet-06.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-320-current-compact.png",
+      "sha256": "860b90b845c17afac96248d728f9f3306131b0d9e3661cd0f666a6e9578f5f45",
+      "sheet": "sheet-06.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        209,
+        316,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-current-search.png",
+      "sha256": "9b8d9f0d96dc70b53db6588cd6b855ed56a0cd201a2e4317df1f2c89ef5bd6fc",
+      "sheet": "sheet-06.jpg",
+      "cell": 19,
+      "crop": [
+        4,
+        172,
+        316,
+        516
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-direct-deck.png",
+      "sha256": "7c528e04127d02b695f44ee0df62abbc4865796eb1fbbcf034481ee9626af119",
+      "sheet": "sheet-06.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        176,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-320-fresh-review-after-fix.png",
+      "sha256": "f8ad90eb82060e31f8874db55b974d1a6c3bfd8debf84383e8fa029244492c21",
+      "sheet": "sheet-07.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        89,
+        316,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-320-legacy-round-1-source.png",
+      "sha256": "4eaad0e8e98d6bba20956a6b5cc47d4517727f4056a3e914cf471552aea38cf1",
+      "sheet": "sheet-07.jpg",
+      "cell": 2,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-legacy-round-1.png",
+      "sha256": "b84f2666566d86db57a44addc11f52d1802d4d79028889414a3ae1638321d773",
+      "sheet": "sheet-07.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        210,
+        320,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-legacy-round-2-source.png",
+      "sha256": "536ea60a900bf4e99af5fb00a788cfcee22e916698dd300e5ad73c9e61d482a9",
+      "sheet": "sheet-07.jpg",
+      "cell": 4,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-legacy-round-2.png",
+      "sha256": "e5899439941dacf57e42508a08fe2d98ae982c3493bb3b7b0866cc4bb5da4b51",
+      "sheet": "sheet-07.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        210,
+        320,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-missing-archive-source.png",
+      "sha256": "4eaad0e8e98d6bba20956a6b5cc47d4517727f4056a3e914cf471552aea38cf1",
+      "sheet": "sheet-07.jpg",
+      "cell": 6,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-missing-deck-history.png",
+      "sha256": "04e4fbd5a562ba3c4fff4b2aa1bf8000fff05138de1d020ff311fa9232de3f39",
+      "sheet": "sheet-07.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        318,
+        320,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-phone-creation-last.png",
+      "sha256": "22db3112cd7d340d890be304be2fa17f5d420d3c380e5a313f17db66bf2dbc44",
+      "sheet": "sheet-07.jpg",
+      "cell": 8,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-phone-creation.png",
+      "sha256": "22db3112cd7d340d890be304be2fa17f5d420d3c380e5a313f17db66bf2dbc44",
+      "sheet": "sheet-07.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-resolved-question.png",
+      "sha256": "b682a1360c5c5997996b702f84f53bfb186013f19d04e2412aca5acccc2e1382",
+      "sheet": "sheet-07.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        89,
+        320,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-320-spent-budget.png",
+      "sha256": "98f93f784153eb4963df89eff8750e358a612e30eb87e4286c4bb0ac07e25b6d",
+      "sheet": "sheet-07.jpg",
+      "cell": 11,
+      "crop": [
+        4,
+        172,
+        316,
+        596
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-320-stages-missing.png",
+      "sha256": "4e0910842db900a1b22899c531bbf35642241a8aea8f77182505e5904a53abf7",
+      "sheet": "sheet-07.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        318,
+        320,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-archive-deck-history.png",
+      "sha256": "5776e926a9c0a642ddd4db352156f02e2c35c9e8ea94ec5fac7696cbdac1465e",
+      "sheet": "sheet-07.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-390-archive-deck.png",
+      "sha256": "5776e926a9c0a642ddd4db352156f02e2c35c9e8ea94ec5fac7696cbdac1465e",
+      "sheet": "sheet-07.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-390-current-compact.png",
+      "sha256": "4ef0b4045983c3d9b4814facb9515c2975e580a7d3d27e62376047caceb55530",
+      "sheet": "sheet-07.jpg",
+      "cell": 15,
+      "crop": [
+        4,
+        209,
+        386,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-current-search.png",
+      "sha256": "b4cee0d1a72dac44a7084341cb67bf385f4ffeb541a9cae187e06d844ffb0fbf",
+      "sheet": "sheet-07.jpg",
+      "cell": 16,
+      "crop": [
+        4,
+        172,
+        386,
+        516
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-direct-deck.png",
+      "sha256": "4720cb069f819e2f7bb92af64aaafa5fa75fe017cd694444712fb5860b4b4424",
+      "sheet": "sheet-07.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        176,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-390-fresh-review-after-fix.png",
+      "sha256": "8ae0bf81829e7724df3ca4683d74caec60a569a894472f4b2b2e45263b530836",
+      "sheet": "sheet-07.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        89,
+        386,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-390-legacy-round-1-source.png",
+      "sha256": "2f0e8086c0f27d0f7088ac5bdadda62ff9200ec01b3cb1f9d59cba8886689472",
+      "sheet": "sheet-07.jpg",
+      "cell": 19,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-legacy-round-1.png",
+      "sha256": "40b5125081b9de99534a43ddcfd5eb72cd43b2cea403a1a7e8a6279bd96dd618",
+      "sheet": "sheet-07.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-legacy-round-2-source.png",
+      "sha256": "e999804d286adf640c3a8a7e3c129362a643024102764681ef64e29b0f1831b1",
+      "sheet": "sheet-08.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-legacy-round-2.png",
+      "sha256": "747548de4042fa2f844b6a00fa4a5d796372bef33739a4eeb10c37b2df5d2641",
+      "sheet": "sheet-08.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-missing-archive-source.png",
+      "sha256": "2f0e8086c0f27d0f7088ac5bdadda62ff9200ec01b3cb1f9d59cba8886689472",
+      "sheet": "sheet-08.jpg",
+      "cell": 3,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-missing-deck-history.png",
+      "sha256": "eb3d4c1568e9431ddf5f41f25470a17b3745184cae9acbcc806d630059d395fb",
+      "sheet": "sheet-08.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-phone-creation-last.png",
+      "sha256": "ef2bb2e8e8fc6cda0bab76d505f10436099525ff95112ec898cfaffb660f3efa",
+      "sheet": "sheet-08.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-phone-creation.png",
+      "sha256": "ef2bb2e8e8fc6cda0bab76d505f10436099525ff95112ec898cfaffb660f3efa",
+      "sheet": "sheet-08.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-resolved-question.png",
+      "sha256": "f61bd32e37b807048970d2b40f7e8d66a8349db5f221fc5e5e5d75a7a49f7d69",
+      "sheet": "sheet-08.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        89,
+        390,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/en-light-390-spent-budget.png",
+      "sha256": "8d3f17103d068f06aa8f823d2a2580b095d430eb5fd6a3f238c171b312def59c",
+      "sheet": "sheet-08.jpg",
+      "cell": 8,
+      "crop": [
+        4,
+        172,
+        386,
+        596
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-390-stages-missing.png",
+      "sha256": "1e88051dea3b78ac91f06dc33238ba039eaa7bf72490329737e59aa542279808",
+      "sheet": "sheet-08.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-archive-deck-history.png",
+      "sha256": "78b7c03169d29db8a92ace4883aedd7484823018f9823af1f812e8e0134c5a78",
+      "sheet": "sheet-08.jpg",
+      "cell": 10,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-archive-deck.png",
+      "sha256": "78b7c03169d29db8a92ace4883aedd7484823018f9823af1f812e8e0134c5a78",
+      "sheet": "sheet-08.jpg",
+      "cell": 11,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-current-compact.png",
+      "sha256": "00a49270cba25434b566c34599dbd5f4bf4ee4b99a39d5a7e81885020aa32d0e",
+      "sheet": "sheet-08.jpg",
+      "cell": 12,
+      "crop": [
+        4,
+        161,
+        636,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-current-search.png",
+      "sha256": "4a4e0c50a1bca3d5ed82f94f4b2b3a66eacc795f4ca78a18b0559f9ea5b8fd5b",
+      "sheet": "sheet-08.jpg",
+      "cell": 13,
+      "crop": [
+        4,
+        89,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-direct-deck.png",
+      "sha256": "4cc0237f7ff832c30b8dcb4ad4e5fea88082a9debad2adb2aea1991ff6bdfe2f",
+      "sheet": "sheet-08.jpg",
+      "cell": 14,
+      "crop": [
+        12,
+        24,
+        628,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-fresh-review-after-fix.png",
+      "sha256": "1e974a709e88dd36c19215dd63402ae1ae37de1edbcec17c659fa61135f97067",
+      "sheet": "sheet-08.jpg",
+      "cell": 15,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-legacy-round-1-source.png",
+      "sha256": "fd39160545af1ed9798dd4c0c411f0df21b676cfebc13db15a803371ef771ff5",
+      "sheet": "sheet-08.jpg",
+      "cell": 16,
+      "crop": [
+        4,
+        4,
+        636,
+        312
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-legacy-round-1.png",
+      "sha256": "6e0428e930fd2b3add78464a80e40ac11bf3ec70d42a08606e6b886521be52fb",
+      "sheet": "sheet-08.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-legacy-round-2-source.png",
+      "sha256": "a33e86e0f5d845471e8e55a394c2b611425d7691d3064b199e9ae262aa5312ec",
+      "sheet": "sheet-08.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        20,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-legacy-round-2.png",
+      "sha256": "a18e2cde9fbd91038f653a167e73915ee331fe42820aa70b35db82ba2dca9b41",
+      "sheet": "sheet-08.jpg",
+      "cell": 19,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-missing-archive-source.png",
+      "sha256": "3b450d555522a49acbab3a51f9c2667e6c7a71f4ac6cc833f4c0dbed69f1e741",
+      "sheet": "sheet-08.jpg",
+      "cell": 20,
+      "crop": [
+        4,
+        70,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-missing-deck-history.png",
+      "sha256": "2de3fe447df2074b14d0fb32fabfaafc97636b05a630d9c065582e710a5849ea",
+      "sheet": "sheet-09.jpg",
+      "cell": 1,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-phone-creation-last.png",
+      "sha256": "1ff2aac70dcd7d32fe143fe0da08a73b3d1241db6768b09d5f47fba83f7b47ae",
+      "sheet": "sheet-09.jpg",
+      "cell": 2,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-phone-creation.png",
+      "sha256": "6225b17a34fd56bee46d56f3582854e37c2ffe7da2d9352d89b5a2dc6df56a83",
+      "sheet": "sheet-09.jpg",
+      "cell": 3,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-resolved-question.png",
+      "sha256": "b2bd96bf420469949db6adbfe92eb1fe7df60dad36222a70190c6f5d20580ada",
+      "sheet": "sheet-09.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        89,
+        640,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-spent-budget.png",
+      "sha256": "28f0b1396277df616f63ee005f326006a6b0f5d01a4b7f7529a4277894377e69",
+      "sheet": "sheet-09.jpg",
+      "cell": 5,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/en-light-640-stages-missing.png",
+      "sha256": "0724b9077c3818f44c7d3f8bd6c507d7c552e777e90ce988c8bcc50c1fc35f00",
+      "sheet": "sheet-09.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-archive-deck-history.png",
+      "sha256": "ed0325f5b00037bec5e61fe0ab9b1779c0772dbc5a0527a3b328259f424c7afc",
+      "sheet": "sheet-09.jpg",
+      "cell": 7,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-archive-deck.png",
+      "sha256": "4d6d3fdcb3f653b0b18e14086047db31c2273a549f37b8897a9e2b213c1e31f0",
+      "sheet": "sheet-09.jpg",
+      "cell": 8,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-current-compact.png",
+      "sha256": "c0a62286e678fded3256048e0de74366a76eed6dd9a4cdb96817fbb581866436",
+      "sheet": "sheet-09.jpg",
+      "cell": 9,
+      "crop": [
+        974,
+        498,
+        1234,
+        883
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-current-search.png",
+      "sha256": "38e8a7401506bc9c858596943294fefda3d4701078c8ed7087370a2abb846e13",
+      "sheet": "sheet-09.jpg",
+      "cell": 10,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-direct-deck.png",
+      "sha256": "94e4ecd7fa1da09b4c59df72470f9e537c874ed5b5665b537c901d6a0deeae00",
+      "sheet": "sheet-09.jpg",
+      "cell": 11,
+      "crop": [
+        324,
+        232,
+        941,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-direct-viewer.png",
+      "sha256": "b23f21838d7d1489756c6ceb209e6f1639d5110778c06fa2b48b89481ab80743",
+      "sheet": "sheet-09.jpg",
+      "cell": 12,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-fresh-review-after-fix.png",
+      "sha256": "341d27924c39d497ffb9b5ebf1f72f15d9ef258594363950873649a5d8f4b914",
+      "sheet": "sheet-09.jpg",
+      "cell": 13,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-legacy-round-1-source.png",
+      "sha256": "0fdafe02613f0ca9681bb1f387655727ecb19d8e880a0635df411b4ad06abc03",
+      "sheet": "sheet-09.jpg",
+      "cell": 14,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-legacy-round-1.png",
+      "sha256": "f75b45c4a443db9aed244880c03dd2ddeea34d86863d884d7e8b03f067c5ad7d",
+      "sheet": "sheet-09.jpg",
+      "cell": 15,
+      "crop": [
+        248,
+        258,
+        1032,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-legacy-round-2-source.png",
+      "sha256": "4f94142746e7d2522d7fae72b1bb2adc1af66c65998403dfe8f8e2dd1d7a6ac8",
+      "sheet": "sheet-09.jpg",
+      "cell": 16,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-legacy-round-2.png",
+      "sha256": "434d2ae53b790d9c45c9365c307ed36b7ae12e070657a7507cf82a71f787c02c",
+      "sheet": "sheet-09.jpg",
+      "cell": 17,
+      "crop": [
+        248,
+        258,
+        1032,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-missing-archive-source.png",
+      "sha256": "f551d0e245707c1970a5f3ce3c5bf9b4bb79b385e4c84ca4d62f3a02f2cdccfd",
+      "sheet": "sheet-09.jpg",
+      "cell": 18,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-missing-deck-history.png",
+      "sha256": "c191f2907aac9c58415fe026a74fa7b3fdf25572d6c8d3c13c18a557372e88f1",
+      "sheet": "sheet-09.jpg",
+      "cell": 19,
+      "crop": [
+        248,
+        356,
+        1032,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-resolved-question.png",
+      "sha256": "f4b2b8c84a2342b69668dd5d82baf51f0fc4043811890e63beb6cb869ae00574",
+      "sheet": "sheet-09.jpg",
+      "cell": 20,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-spent-budget.png",
+      "sha256": "697c9abf9d3b19714afe8cb06f3abab152d73c0647df6d428decff7aba2f2978",
+      "sheet": "sheet-10.jpg",
+      "cell": 1,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1280-stages-missing.png",
+      "sha256": "590107fa7975ec9f0c6dc9fa168b22dacce05fffbbd5dd15282b870b2ce5f764",
+      "sheet": "sheet-10.jpg",
+      "cell": 2,
+      "crop": [
+        248,
+        356,
+        1032,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-archive-deck-history.png",
+      "sha256": "fed33a83af0291ad39cc9ce66aaa483588a52c91b2353e46c28b57df458a1606",
+      "sheet": "sheet-10.jpg",
+      "cell": 3,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-archive-deck.png",
+      "sha256": "96431d86d1379ab948ae553e9274a4c9df6fe7178f45c9436f3847039e04dc82",
+      "sheet": "sheet-10.jpg",
+      "cell": 4,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-current-compact.png",
+      "sha256": "44006bb2cb5ce5dc949f00603b664b4128662132d8a3f45fcebf5260bb0d11c9",
+      "sheet": "sheet-10.jpg",
+      "cell": 5,
+      "crop": [
+        1134,
+        442,
+        1394,
+        827
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-current-search.png",
+      "sha256": "3ec548253cc03b21a0bd49520a2de9046692b84f951bb58252202a3a0ef370a5",
+      "sheet": "sheet-10.jpg",
+      "cell": 6,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-direct-deck.png",
+      "sha256": "94191f7a6da3de5ba484f708ea0dbfe6abfd93b1ea46b3252cfe2ab536bc3e95",
+      "sheet": "sheet-10.jpg",
+      "cell": 7,
+      "crop": [
+        404,
+        232,
+        1021,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-direct-viewer.png",
+      "sha256": "c64ab92e6c77175ac222c9db4f1de902544add60d26c330ad41b97271c268ff5",
+      "sheet": "sheet-10.jpg",
+      "cell": 8,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-fresh-review-after-fix.png",
+      "sha256": "76560c6b164994f8995d9f1a4e487281b21e5849839b9cd524d9eac304586921",
+      "sheet": "sheet-10.jpg",
+      "cell": 9,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-legacy-round-1-source.png",
+      "sha256": "ed065a517fb5f03e5796a2e0559d59f024143449db6f6365964eb0887db06333",
+      "sheet": "sheet-10.jpg",
+      "cell": 10,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-legacy-round-1.png",
+      "sha256": "d238c09bee28043ddab832a268910acd032141b462731af827de490f30308cb8",
+      "sheet": "sheet-10.jpg",
+      "cell": 11,
+      "crop": [
+        328,
+        258,
+        1112,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-legacy-round-2-source.png",
+      "sha256": "3dbb54b9b3e542ae3d878295f9a0d1f667321260a09b002d9dcbe7117badcc71",
+      "sheet": "sheet-10.jpg",
+      "cell": 12,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-legacy-round-2.png",
+      "sha256": "8ce2eebdee51351597633bf45aa9745c4163e88686feb2959d5d99edd24a8630",
+      "sheet": "sheet-10.jpg",
+      "cell": 13,
+      "crop": [
+        328,
+        258,
+        1112,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-missing-archive-source.png",
+      "sha256": "cf3c447ee1e12175421a1077ed61e20dfd8df08fd0dc767e94976bf7aea23279",
+      "sheet": "sheet-10.jpg",
+      "cell": 14,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-missing-deck-history.png",
+      "sha256": "62ffd21c0bced38dc67df3c0379c616158a3a267c164d3168c8a1290a33964b4",
+      "sheet": "sheet-10.jpg",
+      "cell": 15,
+      "crop": [
+        328,
+        356,
+        1112,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-resolved-question.png",
+      "sha256": "f168ea93605ea1f04851cf558508e36370f2ae46d24be808aad0118d668fe4b2",
+      "sheet": "sheet-10.jpg",
+      "cell": 16,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-spent-budget.png",
+      "sha256": "453606ce8cf628acd356640c311b5485163206243976308cb052bf1a130702a4",
+      "sheet": "sheet-10.jpg",
+      "cell": 17,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-1440-stages-missing.png",
+      "sha256": "e217b9c41bc5ac4e34452edf809c588609114d31182a5c4a019d95f91f1f5744",
+      "sheet": "sheet-10.jpg",
+      "cell": 18,
+      "crop": [
+        328,
+        356,
+        1112,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-archive-deck-history.png",
+      "sha256": "c407476cc0dd67d3c3eb0650763ae9ec1a21ed0efdc1a2635b75b307b53d08d3",
+      "sheet": "sheet-10.jpg",
+      "cell": 19,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-archive-deck.png",
+      "sha256": "c407476cc0dd67d3c3eb0650763ae9ec1a21ed0efdc1a2635b75b307b53d08d3",
+      "sheet": "sheet-10.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-current-compact.png",
+      "sha256": "5299e18a57c735111d0f76841aeafd6a5efb7279a8984a977da7116d441aa834",
+      "sheet": "sheet-11.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        209,
+        316,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-current-search.png",
+      "sha256": "35ab203a53a20fe23172985a816cd6ea5b4ad80e0063a477292fd9e49e3d977b",
+      "sheet": "sheet-11.jpg",
+      "cell": 2,
+      "crop": [
+        4,
+        172,
+        316,
+        549
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-direct-deck.png",
+      "sha256": "b24544c64265fdec562ed6730761489314b21d77ab08f53d2537561ef58ced90",
+      "sheet": "sheet-11.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        176,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-fresh-review-after-fix.png",
+      "sha256": "a642ef669117a2f2c4b8f45be00e0dc879c24e522a3cb63b6bcb9ebb79145381",
+      "sheet": "sheet-11.jpg",
+      "cell": 4,
+      "crop": [
+        4,
+        89,
+        316,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-legacy-round-1-source.png",
+      "sha256": "374b1579fb166f978a9caaa14cae457b980415b1580618354d6575859969b38c",
+      "sheet": "sheet-11.jpg",
+      "cell": 5,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-legacy-round-1.png",
+      "sha256": "f0865e8ac4837d67f2170d4b195e56a608e3347a9682a87dda935aa189d1ff4c",
+      "sheet": "sheet-11.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        200,
+        320,
+        644
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-legacy-round-2-source.png",
+      "sha256": "d1d4b15fe961d453aaddcb8430af3b74d0f8d0fbe17023de0a0e4ec132e30491",
+      "sheet": "sheet-11.jpg",
+      "cell": 7,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-legacy-round-2.png",
+      "sha256": "bf3ffe78ea49cd6bf2870e7593c692cf59d5ea1f76ac4cfcc1a1f139535fad7c",
+      "sheet": "sheet-11.jpg",
+      "cell": 8,
+      "crop": [
+        0,
+        200,
+        320,
+        644
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-missing-archive-source.png",
+      "sha256": "374b1579fb166f978a9caaa14cae457b980415b1580618354d6575859969b38c",
+      "sheet": "sheet-11.jpg",
+      "cell": 9,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-missing-deck-history.png",
+      "sha256": "f16a033a2cc7ccf0098bf703beb01a3b5c4623aedf9b78896cfd59fffa51e371",
+      "sheet": "sheet-11.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        308,
+        320,
+        536
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-phone-creation-last.png",
+      "sha256": "aaa75a34ce34abab2fe32f0b0254fd59902898acbdaea496045e972000035014",
+      "sheet": "sheet-11.jpg",
+      "cell": 11,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-phone-creation.png",
+      "sha256": "aaa75a34ce34abab2fe32f0b0254fd59902898acbdaea496045e972000035014",
+      "sheet": "sheet-11.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-resolved-question.png",
+      "sha256": "b814cea4e4bf74e84261e5c5ee5c018b1d949a4c6512010690d41b8184f0b4af",
+      "sheet": "sheet-11.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        89,
+        320,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-spent-budget.png",
+      "sha256": "b61c2d965da4b8f5cc2c686b21597b80008f1aaa96d16692930a81862146f183",
+      "sheet": "sheet-11.jpg",
+      "cell": 14,
+      "crop": [
+        4,
+        172,
+        316,
+        645
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-320-stages-missing.png",
+      "sha256": "6384a51c16b50aa4ec9d7131dc841acea1919a94ad7237638b825f81c9437550",
+      "sheet": "sheet-11.jpg",
+      "cell": 15,
+      "crop": [
+        0,
+        308,
+        320,
+        536
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-archive-deck-history.png",
+      "sha256": "825d3ab7a76b2854829bbe854fcd5abb774b52c1bc98362b3e9026cf01b0995d",
+      "sheet": "sheet-11.jpg",
+      "cell": 16,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-archive-deck.png",
+      "sha256": "825d3ab7a76b2854829bbe854fcd5abb774b52c1bc98362b3e9026cf01b0995d",
+      "sheet": "sheet-11.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-current-compact.png",
+      "sha256": "c2c21d1c707d7cd0d2ba0507b0dc914f177d14d8f2dacc7a3f41f031c6d0194c",
+      "sheet": "sheet-11.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        209,
+        386,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-current-search.png",
+      "sha256": "0a25d7b52936c541cca5aa501f6a6ec8f4ef00c5317b694617eb2395261edf95",
+      "sheet": "sheet-11.jpg",
+      "cell": 19,
+      "crop": [
+        4,
+        172,
+        386,
+        533
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-direct-deck.png",
+      "sha256": "692b9d819ba87784c9b8f651c75f22621a073f09c1e70da3296244797264cfb1",
+      "sheet": "sheet-11.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        176,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-fresh-review-after-fix.png",
+      "sha256": "bf32ce6e36e67f5ac14163084e265d8e467bb468f9a23ef4e425386d70fb1e97",
+      "sheet": "sheet-12.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        89,
+        386,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-legacy-round-1-source.png",
+      "sha256": "45258897ab0eb008468c520ff04f906ee1a3944a641f8e4a6f9d2ae61ae8c397",
+      "sheet": "sheet-12.jpg",
+      "cell": 2,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-legacy-round-1.png",
+      "sha256": "949b0505286cca1204fd782fb30cc7591091b694e67eedb9721e58625936abe3",
+      "sheet": "sheet-12.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-legacy-round-2-source.png",
+      "sha256": "3f284ea5f2bf4280bd935deb70edb982052001b1cf141c8fcf64ae7c2322fea8",
+      "sheet": "sheet-12.jpg",
+      "cell": 4,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-legacy-round-2.png",
+      "sha256": "28b2b8bb0b515b92070ed1a5a7f98b984023000fe427c96ebeb22e49ccc59386",
+      "sheet": "sheet-12.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-missing-archive-source.png",
+      "sha256": "45258897ab0eb008468c520ff04f906ee1a3944a641f8e4a6f9d2ae61ae8c397",
+      "sheet": "sheet-12.jpg",
+      "cell": 6,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-missing-deck-history.png",
+      "sha256": "17fd47596ae7d6dabaad448d2842d14997a1282ad5b8223f8136b0b936849af9",
+      "sheet": "sheet-12.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-phone-creation-last.png",
+      "sha256": "cb8ea911034c3e7af3712a74f274419a0e9fefbe996b6c16df03836d0330175b",
+      "sheet": "sheet-12.jpg",
+      "cell": 8,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-phone-creation.png",
+      "sha256": "cb8ea911034c3e7af3712a74f274419a0e9fefbe996b6c16df03836d0330175b",
+      "sheet": "sheet-12.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-resolved-question.png",
+      "sha256": "83e50ebfda01d7d3fab9d656655be254638573511a2fcbc9f4abd6e6714f58c6",
+      "sheet": "sheet-12.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        89,
+        390,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-spent-budget.png",
+      "sha256": "82ea9ca6434946ac9aecb41f255f2a5bb2a4fa3b80dabd0c9516e8e3d0a9ab35",
+      "sheet": "sheet-12.jpg",
+      "cell": 11,
+      "crop": [
+        4,
+        172,
+        386,
+        612
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-390-stages-missing.png",
+      "sha256": "0a6347372390904e131cad931fcb4e3c8f94d20e470d0296468b81aa44e201c7",
+      "sheet": "sheet-12.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-archive-deck-history.png",
+      "sha256": "594bc6e3c3d7ee388c8f3719936f83758ac39f6e341ec3b754a0e903062055bb",
+      "sheet": "sheet-12.jpg",
+      "cell": 13,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-archive-deck.png",
+      "sha256": "594bc6e3c3d7ee388c8f3719936f83758ac39f6e341ec3b754a0e903062055bb",
+      "sheet": "sheet-12.jpg",
+      "cell": 14,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-current-compact.png",
+      "sha256": "bf90353be6b01ae09a06014ef89c7aa6607706cf7c97a3e1f4ef3d12f7bcd9c2",
+      "sheet": "sheet-12.jpg",
+      "cell": 15,
+      "crop": [
+        4,
+        161,
+        636,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-current-search.png",
+      "sha256": "2cfeb5b6cfc6d7aa4c261f56852e333383835ab2a31ceb21054963479fa8c739",
+      "sheet": "sheet-12.jpg",
+      "cell": 16,
+      "crop": [
+        4,
+        89,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-direct-deck.png",
+      "sha256": "cb18b1b0188243e9edd3d11ba4d60d2d1706996a3fdd2108f0519c0fca82912c",
+      "sheet": "sheet-12.jpg",
+      "cell": 17,
+      "crop": [
+        12,
+        24,
+        628,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-fresh-review-after-fix.png",
+      "sha256": "64cfad32c145119f98b7562ba5929a3aa946dbd431eb574fbe3e8a77ac11ee68",
+      "sheet": "sheet-12.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-legacy-round-1-source.png",
+      "sha256": "782eb62ce82eb4e410a3b3ef3c3276172c4eaf10984d122a8406d642fdb76585",
+      "sheet": "sheet-12.jpg",
+      "cell": 19,
+      "crop": [
+        4,
+        4,
+        636,
+        312
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-legacy-round-1.png",
+      "sha256": "fdb278dd5145e3b5b031400f69c2a831fc1f41155b81af96515f05b94865a2d4",
+      "sheet": "sheet-12.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-legacy-round-2-source.png",
+      "sha256": "4d1d120b2139782af1ab2475340098d5bf556f9dcf156133567a5e27f550d44f",
+      "sheet": "sheet-13.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        20,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-legacy-round-2.png",
+      "sha256": "72b7368a43737700934ec2c742261be033038b7df495b1e637f1fbc694f684c8",
+      "sheet": "sheet-13.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-missing-archive-source.png",
+      "sha256": "a46657898e5ec3f4e9e5034479702b3256d57de7bd98db2e8d13dd018949d312",
+      "sheet": "sheet-13.jpg",
+      "cell": 3,
+      "crop": [
+        4,
+        70,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-missing-deck-history.png",
+      "sha256": "598f7d7b76f8b5de8ded382b53c8cf191bb5b159899305f4829562a237b75cee",
+      "sheet": "sheet-13.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-phone-creation-last.png",
+      "sha256": "defcca6cd8074f191cda73a6ae25bdc685d2500b691b1448cef2903557b9d0f5",
+      "sheet": "sheet-13.jpg",
+      "cell": 5,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-phone-creation.png",
+      "sha256": "2a23de2eb77f4c08842c56e1071efef00e06c5572ca4cf97df2dd0b7f4f4a15c",
+      "sheet": "sheet-13.jpg",
+      "cell": 6,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-resolved-question.png",
+      "sha256": "6002bbe3893977d056a5e0c2d486b39efded6bb29cafb38d55315bf33fa705a6",
+      "sheet": "sheet-13.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        89,
+        640,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-spent-budget.png",
+      "sha256": "40a59e678acf67f6ffb475520be46321bf75a1852bfe40564e583201dc770593",
+      "sheet": "sheet-13.jpg",
+      "cell": 8,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-dark-640-stages-missing.png",
+      "sha256": "acc72d4a86b168130babd03af0d599f59ff1202da880e0a8388ffa184b8cb332",
+      "sheet": "sheet-13.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-archive-deck-history.png",
+      "sha256": "622949049c81e3d9d98fb7e19214d940bfc1675762427635f8562464e207f996",
+      "sheet": "sheet-13.jpg",
+      "cell": 10,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-archive-deck.png",
+      "sha256": "4214729f926f6de0dcaa8ca30d2304ec49cfeaa8433ae3070339640446858d61",
+      "sheet": "sheet-13.jpg",
+      "cell": 11,
+      "crop": [
+        324,
+        0,
+        941,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-current-compact.png",
+      "sha256": "74a771d4b89467bdd7177d237c1be99dd210aea79794a9a54fb5bf0e21c221e1",
+      "sheet": "sheet-13.jpg",
+      "cell": 12,
+      "crop": [
+        974,
+        498,
+        1234,
+        883
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-current-search.png",
+      "sha256": "7cc67c2b31233234058eafc62ccafcb7ec6e28b18d28b8e280bdf68d5008a9a8",
+      "sheet": "sheet-13.jpg",
+      "cell": 13,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-direct-deck.png",
+      "sha256": "ccf1ca3fd5254909628c7bb1e1cedef03663f6582b2f1a6e11bce78b0b43b5cd",
+      "sheet": "sheet-13.jpg",
+      "cell": 14,
+      "crop": [
+        324,
+        232,
+        941,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-direct-viewer.png",
+      "sha256": "afcdcf55a3291c4ae323847dfeadfc96e385a6accdfcee03503b6dfc06567e8b",
+      "sheet": "sheet-13.jpg",
+      "cell": 15,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-fresh-review-after-fix.png",
+      "sha256": "b7746a281cfacf696ed064fcbc7f034b9404faff9978aa53a9c69ebda6597910",
+      "sheet": "sheet-13.jpg",
+      "cell": 16,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-legacy-round-1-source.png",
+      "sha256": "bf243b3cfdb81ff66952b0b668519562dd26807e0cb886e691f0d8f9e00bd3dc",
+      "sheet": "sheet-13.jpg",
+      "cell": 17,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-legacy-round-1.png",
+      "sha256": "dcccd1201169b23576b4fa6b688d75e979d3726b319a96ada7b4f8cf1ce9d6f1",
+      "sheet": "sheet-13.jpg",
+      "cell": 18,
+      "crop": [
+        248,
+        258,
+        1032,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-legacy-round-2-source.png",
+      "sha256": "2874c1b70aa3c31d08a55689e3806d343f9e3da36c2f3937e931dc8b43a28ba6",
+      "sheet": "sheet-13.jpg",
+      "cell": 19,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-legacy-round-2.png",
+      "sha256": "7cc7e1e4d435bcf762b23864c09a6486325f2ab05a2618f9bf91142c3f5d94c8",
+      "sheet": "sheet-13.jpg",
+      "cell": 20,
+      "crop": [
+        248,
+        258,
+        1032,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-missing-archive-source.png",
+      "sha256": "57a2e49a210397ea27d07742cde89d5295ae38e29ffb1e47584f564761a68028",
+      "sheet": "sheet-14.jpg",
+      "cell": 1,
+      "crop": [
+        17,
+        126,
+        417,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-missing-deck-history.png",
+      "sha256": "a00a02435a1c886b45feecb93cb36ef1e3cebcecaca26afde07edb696709fa40",
+      "sheet": "sheet-14.jpg",
+      "cell": 2,
+      "crop": [
+        248,
+        356,
+        1032,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-resolved-question.png",
+      "sha256": "f8d43ccbedf07e11cc1934920252e24d53ebf18e7abe6f388b2ef1e100503d9f",
+      "sheet": "sheet-14.jpg",
+      "cell": 3,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-spent-budget.png",
+      "sha256": "49b55234f0a38b8adaecfaf53ee3a20d4a15e7ec875a0655c40c6a3368a73088",
+      "sheet": "sheet-14.jpg",
+      "cell": 4,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1280-stages-missing.png",
+      "sha256": "3f908fdb547be3c72944025623bd1881f9d75b8bb3363db2a7d1c09ef84ea060",
+      "sheet": "sheet-14.jpg",
+      "cell": 5,
+      "crop": [
+        248,
+        356,
+        1032,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-archive-deck-history.png",
+      "sha256": "63cd2f5cf57719992f5d773bf6a6b2caf81b67eaf04a40a1143b8c9c19ea0269",
+      "sheet": "sheet-14.jpg",
+      "cell": 6,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-archive-deck.png",
+      "sha256": "dd70623501a89b647e1167bd4f0776f60b752ea7e0879f48ad3b67cf67c3ae13",
+      "sheet": "sheet-14.jpg",
+      "cell": 7,
+      "crop": [
+        404,
+        0,
+        1021,
+        676
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-current-compact.png",
+      "sha256": "7fbead66846934ac7acf237a221d3e3e8c2f133a2704e74fe7d45dd3a209e6c0",
+      "sheet": "sheet-14.jpg",
+      "cell": 8,
+      "crop": [
+        1134,
+        442,
+        1394,
+        827
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-current-search.png",
+      "sha256": "612875a23a36693a8a971a0b9afb8c86f8d1f8c0bb06bd24a4c14015a0b4317f",
+      "sheet": "sheet-14.jpg",
+      "cell": 9,
+      "crop": [
+        561,
+        414,
+        1021,
+        876
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-direct-deck.png",
+      "sha256": "9968d4d807701dfb0f42b6847112e0937cc01ef42a8bb310a1dcddbf6e8a0080",
+      "sheet": "sheet-14.jpg",
+      "cell": 10,
+      "crop": [
+        404,
+        232,
+        1021,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-direct-viewer.png",
+      "sha256": "7af86f7f20ea024717a030435cd3bcd0907610a2f46a07af725adc98cb1a9f16",
+      "sheet": "sheet-14.jpg",
+      "cell": 11,
+      "crop": [
+        269,
+        682,
+        539,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-fresh-review-after-fix.png",
+      "sha256": "3268c18ca25c986b9209e4b48c11507c4f361b3ee9d2bfcf85993f4c979a7e34",
+      "sheet": "sheet-14.jpg",
+      "cell": 12,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-legacy-round-1-source.png",
+      "sha256": "6b24fbc5f761e8f9a9f9aad92547c269be119667a7779851aa381461196846f9",
+      "sheet": "sheet-14.jpg",
+      "cell": 13,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-legacy-round-1.png",
+      "sha256": "df6d4655b062b0f19e3b270d577845a77e3a6ac25284bd3f813ed9a43abdfea6",
+      "sheet": "sheet-14.jpg",
+      "cell": 14,
+      "crop": [
+        328,
+        258,
+        1112,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-legacy-round-2-source.png",
+      "sha256": "e134f2173c257a96a1e83ce42736ed146d31e9751f3596c5be500433ea40ec07",
+      "sheet": "sheet-14.jpg",
+      "cell": 15,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-legacy-round-2.png",
+      "sha256": "dbbf90f86b79195e433f489012020c46c9aa0d1b7b64aca105f0f3eb4d3fcf1b",
+      "sheet": "sheet-14.jpg",
+      "cell": 16,
+      "crop": [
+        328,
+        258,
+        1112,
+        642
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-missing-archive-source.png",
+      "sha256": "ee152321d3c8414245162a6eaa487f8f00b4b8cf6663972db305130011339777",
+      "sheet": "sheet-14.jpg",
+      "cell": 17,
+      "crop": [
+        17,
+        116,
+        465,
+        873
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-missing-deck-history.png",
+      "sha256": "8059c1662691737cda53c976df504d0776faaf6455dcffaa3ac6f567bde35e62",
+      "sheet": "sheet-14.jpg",
+      "cell": 18,
+      "crop": [
+        328,
+        356,
+        1112,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-resolved-question.png",
+      "sha256": "1db8194dce7251634945d6b40f299407bb8d98f6f050dd3c355093a379011a7e",
+      "sheet": "sheet-14.jpg",
+      "cell": 19,
+      "crop": [
+        561,
+        370,
+        1021,
+        656
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-spent-budget.png",
+      "sha256": "0e3877667207e049d5fdb9b6b20fe4d3f715811ec4f9ac7e6692fb0b205b6f2f",
+      "sheet": "sheet-14.jpg",
+      "cell": 20,
+      "crop": [
+        561,
+        289,
+        1021,
+        759
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-1440-stages-missing.png",
+      "sha256": "51fb1560a732585f507fa46ec89e724fbab6b6d157abeca61ea2d17c1f4a908d",
+      "sheet": "sheet-15.jpg",
+      "cell": 1,
+      "crop": [
+        328,
+        356,
+        1112,
+        544
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-archive-deck-history.png",
+      "sha256": "5b5a7552e69eacb0a2280d13f0371fd702b8c3a22f2dfd18355567ad1ac5d37e",
+      "sheet": "sheet-15.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-archive-deck.png",
+      "sha256": "5b5a7552e69eacb0a2280d13f0371fd702b8c3a22f2dfd18355567ad1ac5d37e",
+      "sheet": "sheet-15.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        0,
+        320,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-current-compact.png",
+      "sha256": "ec5b08df59a9b57728e6d31286c229f28dfba7378f1beb0ebdbc55d25ee5e289",
+      "sheet": "sheet-15.jpg",
+      "cell": 4,
+      "crop": [
+        4,
+        209,
+        316,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-current-search.png",
+      "sha256": "ee7ab82147c4c5de2c568a2ad579fdc3fefa405a0cea8c6f7884b43e4afbd8e1",
+      "sheet": "sheet-15.jpg",
+      "cell": 5,
+      "crop": [
+        4,
+        172,
+        316,
+        549
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-direct-deck.png",
+      "sha256": "e0e76fd9458f53483efe850e992b879bf69947c8ed9d770f999f244031a946f5",
+      "sheet": "sheet-15.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        176,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-fresh-review-after-fix.png",
+      "sha256": "9454fcfcbea2f8784dec56a8192742cb81134c0b5ac5879ee805b35939a967c0",
+      "sheet": "sheet-15.jpg",
+      "cell": 7,
+      "crop": [
+        4,
+        89,
+        316,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-legacy-round-1-source.png",
+      "sha256": "cb2936de74df8be0b90fdaabd729a574eed61b7f8a52e2a1672dd64953a7cc90",
+      "sheet": "sheet-15.jpg",
+      "cell": 8,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-legacy-round-1.png",
+      "sha256": "65180b5e669c346e4fd4dd86e2b8076db3f0db2fbe4c7f08b310d30f753b8032",
+      "sheet": "sheet-15.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        200,
+        320,
+        644
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-legacy-round-2-source.png",
+      "sha256": "62760404007905464cd603831b42b1fe017e6d9e366d1bd40ddea36afde9c510",
+      "sheet": "sheet-15.jpg",
+      "cell": 10,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-legacy-round-2.png",
+      "sha256": "e2893bbe77d508a38493c282b1b6ac6d9bf28279019349d91a74088d5e33f808",
+      "sheet": "sheet-15.jpg",
+      "cell": 11,
+      "crop": [
+        0,
+        200,
+        320,
+        644
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-missing-archive-source.png",
+      "sha256": "cb2936de74df8be0b90fdaabd729a574eed61b7f8a52e2a1672dd64953a7cc90",
+      "sheet": "sheet-15.jpg",
+      "cell": 12,
+      "crop": [
+        4,
+        544,
+        316,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-missing-deck-history.png",
+      "sha256": "e4762ad581fb814b236271f70b0378a519f5b7eb56b59facca0e8f3ea0fbaf41",
+      "sheet": "sheet-15.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        308,
+        320,
+        536
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-phone-creation-last.png",
+      "sha256": "579647302480ce557a373a0413816cdd09387a176a696a21c91b400177876970",
+      "sheet": "sheet-15.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-phone-creation.png",
+      "sha256": "579647302480ce557a373a0413816cdd09387a176a696a21c91b400177876970",
+      "sheet": "sheet-15.jpg",
+      "cell": 15,
+      "crop": [
+        0,
+        375,
+        320,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-resolved-question.png",
+      "sha256": "7493ad0e6ccbf9a587cf50ef7d22e8965ccc93050ed865f04e9aa7a216a50a68",
+      "sheet": "sheet-15.jpg",
+      "cell": 16,
+      "crop": [
+        0,
+        89,
+        320,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-spent-budget.png",
+      "sha256": "d2f12dd6d6e9280c87f22367a605959d38e58b36aee958ba4730cb5d4298b5f4",
+      "sheet": "sheet-15.jpg",
+      "cell": 17,
+      "crop": [
+        4,
+        172,
+        316,
+        645
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-320-stages-missing.png",
+      "sha256": "fc505ae458ac7e69c71fe7fea1e2b5d02f94774c378fa684cef929f6b910a7c5",
+      "sheet": "sheet-15.jpg",
+      "cell": 18,
+      "crop": [
+        0,
+        308,
+        320,
+        536
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-archive-deck-history.png",
+      "sha256": "5b2cd4a191e28c92552d209ff14d32ae9bf780e36b81adb1ac7f6911abac14b6",
+      "sheet": "sheet-15.jpg",
+      "cell": 19,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-archive-deck.png",
+      "sha256": "5b2cd4a191e28c92552d209ff14d32ae9bf780e36b81adb1ac7f6911abac14b6",
+      "sheet": "sheet-15.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        0,
+        390,
+        676
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-current-compact.png",
+      "sha256": "94a5506d58bff89908087f56391bdd01fdab8536e0ccc53e32d231e055efd18a",
+      "sheet": "sheet-16.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        209,
+        386,
+        395
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-current-search.png",
+      "sha256": "b289bc5f13599131271ec2e03ff5ea10c15599c7048ffa73c7f36f0b0a3c8fd5",
+      "sheet": "sheet-16.jpg",
+      "cell": 2,
+      "crop": [
+        4,
+        172,
+        386,
+        533
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-direct-deck.png",
+      "sha256": "e8310ea877189f83d1bb307ddd0596ddabcd2b5430f5457e896e5c28d5fca5af",
+      "sheet": "sheet-16.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        176,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-fresh-review-after-fix.png",
+      "sha256": "1a4a91bbdafe457588ae7327d6673d13cd21f72e24386546973bda57034c1dec",
+      "sheet": "sheet-16.jpg",
+      "cell": 4,
+      "crop": [
+        4,
+        89,
+        386,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-legacy-round-1-source.png",
+      "sha256": "7909bdae4138e8cc5a983de18fb6a09d98472f132065994bb94b36ce689ca7c1",
+      "sheet": "sheet-16.jpg",
+      "cell": 5,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-legacy-round-1.png",
+      "sha256": "43b19865a297f17feeeaeaa9c2ff6cab0742d4c69ba487e76cf0c5111d9a6739",
+      "sheet": "sheet-16.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-legacy-round-2-source.png",
+      "sha256": "b668237d8a7eb5b9dd92c73bcb9333dc6c9bb879a2fa3ee327635eda404a732e",
+      "sheet": "sheet-16.jpg",
+      "cell": 7,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-legacy-round-2.png",
+      "sha256": "f38419ad89423a00436acf0d1d703b1d85c6d77600ada7eb69c6ec63352418e0",
+      "sheet": "sheet-16.jpg",
+      "cell": 8,
+      "crop": [
+        0,
+        210,
+        390,
+        634
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-missing-archive-source.png",
+      "sha256": "7909bdae4138e8cc5a983de18fb6a09d98472f132065994bb94b36ce689ca7c1",
+      "sheet": "sheet-16.jpg",
+      "cell": 9,
+      "crop": [
+        4,
+        544,
+        386,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-missing-deck-history.png",
+      "sha256": "6d9f4f940ff349498f56e13a0e62581b0bbcdd55777bcb82f606b500808d676e",
+      "sheet": "sheet-16.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-phone-creation-last.png",
+      "sha256": "f41e32a4b9a790aa86b2530dd22450e1cf28a515b7947eea061896ff19fed2d7",
+      "sheet": "sheet-16.jpg",
+      "cell": 11,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-phone-creation.png",
+      "sha256": "f41e32a4b9a790aa86b2530dd22450e1cf28a515b7947eea061896ff19fed2d7",
+      "sheet": "sheet-16.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        375,
+        390,
+        844
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-resolved-question.png",
+      "sha256": "7007745aa0d46f8a97dab67ab510d2c3c966e52171180a2cec55fd43a0195e67",
+      "sheet": "sheet-16.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        89,
+        390,
+        795
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-spent-budget.png",
+      "sha256": "7b877a41364cc6cba18d4c126e6ac6a611fd9459e1c4e2eb9052ae6351037e02",
+      "sheet": "sheet-16.jpg",
+      "cell": 14,
+      "crop": [
+        4,
+        172,
+        386,
+        612
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-390-stages-missing.png",
+      "sha256": "c0fa9986c81bf232495468989a6e7bea90c1b4b0af5497f0ec28fdf3c9f80920",
+      "sheet": "sheet-16.jpg",
+      "cell": 15,
+      "crop": [
+        0,
+        318,
+        390,
+        526
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-archive-deck-history.png",
+      "sha256": "758a1bc7e539b36c06f30c4aedabce416fdf8bf5670900bdfd2eddbd179be858",
+      "sheet": "sheet-16.jpg",
+      "cell": 16,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-archive-deck.png",
+      "sha256": "758a1bc7e539b36c06f30c4aedabce416fdf8bf5670900bdfd2eddbd179be858",
+      "sheet": "sheet-16.jpg",
+      "cell": 17,
+      "crop": [
+        12,
+        0,
+        628,
+        304
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-current-compact.png",
+      "sha256": "21ee1a30995127132dbd27b11cb5d72a3be2ed9d75fec88d51c6a75781573a00",
+      "sheet": "sheet-16.jpg",
+      "cell": 18,
+      "crop": [
+        4,
+        161,
+        636,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-current-search.png",
+      "sha256": "e2c1bce95fbd4097b8ff789bb5d47809ab3cbd42ede75e817b000dfc8f22083e",
+      "sheet": "sheet-16.jpg",
+      "cell": 19,
+      "crop": [
+        4,
+        89,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-direct-deck.png",
+      "sha256": "b58e68a954ffcec7b394886c2e93360d7676859003a4894a87c20a72a8ea9964",
+      "sheet": "sheet-16.jpg",
+      "cell": 20,
+      "crop": [
+        12,
+        24,
+        628,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-fresh-review-after-fix.png",
+      "sha256": "e1d6fd411e93faca366ff12f9532ce0d4b6fa4152d16613d0ef4d5ac5f0e385f",
+      "sheet": "sheet-17.jpg",
+      "cell": 1,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-legacy-round-1-source.png",
+      "sha256": "af5170cabf08f316770e8e562db833c1095ec3db135959e4ba3fe00f89c51628",
+      "sheet": "sheet-17.jpg",
+      "cell": 2,
+      "crop": [
+        4,
+        4,
+        636,
+        312
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-legacy-round-1.png",
+      "sha256": "eb1038ef3e09e7e7fb4df942fde74cf89451ee7e8127922b1015f274a5bb55ec",
+      "sheet": "sheet-17.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-legacy-round-2-source.png",
+      "sha256": "134d65cfa2a5f2a0d2aeb0b756bfc0f62c80a8b9c732f437e58b8a5ae9670b76",
+      "sheet": "sheet-17.jpg",
+      "cell": 4,
+      "crop": [
+        4,
+        20,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-legacy-round-2.png",
+      "sha256": "d17297484c14678d20aa6b49e83cd57c3c4389077df6f28584ec826179a78523",
+      "sheet": "sheet-17.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-missing-archive-source.png",
+      "sha256": "3baa2172e1560e04f4c5827db32be41b0f466de0590c7da59b81416b8240b655",
+      "sheet": "sheet-17.jpg",
+      "cell": 6,
+      "crop": [
+        4,
+        70,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-missing-deck-history.png",
+      "sha256": "805543a502e804d538978868292735f502ab7abe21648f36917789cbaa3d1a39",
+      "sheet": "sheet-17.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-phone-creation-last.png",
+      "sha256": "83a4c31947942cca01592fafa5cd967a6ce7dc0d4e5b5a1bc28f14316e624f06",
+      "sheet": "sheet-17.jpg",
+      "cell": 8,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-phone-creation.png",
+      "sha256": "a71e9c9f1c01e214708b9a1703588e3d4312e660d40b2ad23a831a061dd14393",
+      "sheet": "sheet-17.jpg",
+      "cell": 9,
+      "crop": [
+        82,
+        0,
+        558,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-resolved-question.png",
+      "sha256": "8a621b68737e67298b6fd85955047cd036bfa885b6a267dcf6da77bef1bf3592",
+      "sheet": "sheet-17.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        89,
+        640,
+        271
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-spent-budget.png",
+      "sha256": "261e958983f9e71c82ad5421e1316b8d5fd3e3ea119fa1097b1329b068149a76",
+      "sheet": "sheet-17.jpg",
+      "cell": 11,
+      "crop": [
+        4,
+        0,
+        636,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history-integration/uk-light-640-stages-missing.png",
+      "sha256": "63b57e76a46bec3834b14749a33dce72443e5185411c43d59f4af13251a4768c",
+      "sheet": "sheet-17.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        66,
+        640,
+        254
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/en-dark-1280.png",
+      "sha256": "b8a865ccd220eb2cf29f5f15bad374fe08fa4caeb73d5cf620e2e848b9dda3f1",
+      "sheet": "sheet-17.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/en-dark-1440.png",
+      "sha256": "af9f6fa6b17670cbd1d92f90ab3693739eb326533b58dcd7cebaafa82ae6e854",
+      "sheet": "sheet-17.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/en-dark-320.png",
+      "sha256": "e9161ee719bc1b70e7a55d1aa2e255e9aa7664cf4091225eef5320c680a486ef",
+      "sheet": "sheet-17.jpg",
+      "cell": 15,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/en-dark-390.png",
+      "sha256": "fee4c51127fc49308ef498a7bfad7a4c902291e2cb6d7df95cd1fab1ee2b8517",
+      "sheet": "sheet-17.jpg",
+      "cell": 16,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/en-dark-640.png",
+      "sha256": "8845175229360fb5135db2759d91495f5cb27991aab1aeb208e82016c1d7f3c1",
+      "sheet": "sheet-17.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/en-light-1280.png",
+      "sha256": "a9c3de829012ab1e058a4747c784eb02f3b4dd3e2a6d47a5eb978c5ae805034a",
+      "sheet": "sheet-17.jpg",
+      "cell": 18,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/en-light-1440.png",
+      "sha256": "3aafdfb6c990d59caef42be00a001e623c0e42a7383900792c5ebcff5e08d0c5",
+      "sheet": "sheet-17.jpg",
+      "cell": 19,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/en-light-320.png",
+      "sha256": "6916dc8bdcbcc35050b28249620c0279248a5f99776e55bebbd2e3768f5acb00",
+      "sheet": "sheet-17.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/en-light-390.png",
+      "sha256": "0fc9a3e60884d25a42c784ff67c6106431ad18640768f19172887da99db8d576",
+      "sheet": "sheet-18.jpg",
+      "cell": 1,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/en-light-640.png",
+      "sha256": "a7bbb66621ef3ecc20db9d2c0a9a540d60615098e4de728cdda6304a85cf9e8e",
+      "sheet": "sheet-18.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-en-dark-1280.png",
+      "sha256": "97045a0aae3cb8d7464755ba406ad9897746072d65c476af1f763782a24821b5",
+      "sheet": "sheet-18.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-en-dark-1440.png",
+      "sha256": "33b49259df69a682dbfdae2303d8f42699116fec48afbdf9d8a40ff9b1b915ff",
+      "sheet": "sheet-18.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-en-dark-320.png",
+      "sha256": "eb45f684207349e13baf5753a1b57e042c5f1be0724589e12d530b3957b743a2",
+      "sheet": "sheet-18.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-en-dark-390.png",
+      "sha256": "29772bf31ba067b3da8469d4323b290997d1b27ab7744260223204f601ce21ad",
+      "sheet": "sheet-18.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-en-dark-640.png",
+      "sha256": "ceca7e51b129339ddb4dff60f07e0a880be894df2ccc61bb065f92687c7e8256",
+      "sheet": "sheet-18.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-en-light-1280.png",
+      "sha256": "2e81beb13102e51934d00ea955a03ce1d9eaf483b4b9a2004de48a34a279e5c3",
+      "sheet": "sheet-18.jpg",
+      "cell": 8,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-en-light-1440.png",
+      "sha256": "362e978c334f27cb370c517670e977ee5765c9bb3d5ee0a55ba9b482c990fb90",
+      "sheet": "sheet-18.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-en-light-320.png",
+      "sha256": "8f430eed4fbabce86b8fbfaec1c606e64478d2af3c82452bc9c52c488b6ee857",
+      "sheet": "sheet-18.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-en-light-390.png",
+      "sha256": "06a8fa5f714ac4183d4da4a7e880529354046371c2760dc7e47dc4da9b39c87e",
+      "sheet": "sheet-18.jpg",
+      "cell": 11,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-en-light-640.png",
+      "sha256": "f4fef297d9a025ca17fbef177a1dbd41d468dd153f4694d25610771331355809",
+      "sheet": "sheet-18.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-uk-dark-1280.png",
+      "sha256": "a7f93cdc98f10c9e392f097156d757d08d7072c6f69d137f0e79e25b7e58a63c",
+      "sheet": "sheet-18.jpg",
+      "cell": 13,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-uk-dark-1440.png",
+      "sha256": "ce8e910afb04a489a40e119dc0c3c7d0a7c0fcfdb99255688cab2372b73e4569",
+      "sheet": "sheet-18.jpg",
+      "cell": 14,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-uk-dark-320.png",
+      "sha256": "d12c21876e236fe8b79ab916b2279c3d0237b0b9d3db9bb7f54d15849faf06b7",
+      "sheet": "sheet-18.jpg",
+      "cell": 15,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-uk-dark-390.png",
+      "sha256": "42d5d9a3d514bab889fce9f25f96c715ca5394afd33fb452f7fd05781dbaf4bf",
+      "sheet": "sheet-18.jpg",
+      "cell": 16,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-uk-dark-640.png",
+      "sha256": "e7ee89978e6105edb186fe3f37f0d3243bbe3475fe8ed1e3f604b63acf60d295",
+      "sheet": "sheet-18.jpg",
+      "cell": 17,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-uk-light-1280.png",
+      "sha256": "6bf0e4b5305537788ae92bf8054a77fd896c761f13ba093ffe6cdc4aec7cbd68",
+      "sheet": "sheet-18.jpg",
+      "cell": 18,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-uk-light-1440.png",
+      "sha256": "f99f03a0a2d2f2cbc5bbd3921031715a3885cc31c9019d4f5407fb4a6db6f5c0",
+      "sheet": "sheet-18.jpg",
+      "cell": 19,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/last-uk-light-320.png",
+      "sha256": "a83e2f44eddfe0b2d760218e590a87fcc4104f4713b8c5b554a0b88e3c46e7d5",
+      "sheet": "sheet-18.jpg",
+      "cell": 20,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-uk-light-390.png",
+      "sha256": "381340d02ee93e588643036d4f4895e325c1d509ee6efcfac261dea0ba17489b",
+      "sheet": "sheet-19.jpg",
+      "cell": 1,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/last-uk-light-640.png",
+      "sha256": "bdca8d0badddcd7e162da46673f28d68fdd266a1fc0678c7c7fb1d6947ed4676",
+      "sheet": "sheet-19.jpg",
+      "cell": 2,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/uk-dark-1280.png",
+      "sha256": "33ad66a5fe34c7487bec3e21a4d3bc5a496259d33566b3d99c194609073f1ec7",
+      "sheet": "sheet-19.jpg",
+      "cell": 3,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/uk-dark-1440.png",
+      "sha256": "66f1ada23af25d4b5b51393735d338adde5b055820e740fe01ffe3cd0a8207d2",
+      "sheet": "sheet-19.jpg",
+      "cell": 4,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/uk-dark-320.png",
+      "sha256": "92de65783b1ed01c10169feca8c5f3e843b956cc9aacf10459518c045947beb4",
+      "sheet": "sheet-19.jpg",
+      "cell": 5,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/uk-dark-390.png",
+      "sha256": "a334e3db67454c25e9eabeff82920f65ed69bb222d216ab9f5afb9a3657e9e55",
+      "sheet": "sheet-19.jpg",
+      "cell": 6,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/uk-dark-640.png",
+      "sha256": "0a135ac2021090cb416f96dc2a943056d7c0418e47a2d1d3d72202166b834691",
+      "sheet": "sheet-19.jpg",
+      "cell": 7,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/uk-light-1280.png",
+      "sha256": "e90c0aa125f12761682e52c52ad4600e64e1f016738133dac933daf01a3efef1",
+      "sheet": "sheet-19.jpg",
+      "cell": 8,
+      "crop": [
+        0,
+        0,
+        1280,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/uk-light-1440.png",
+      "sha256": "8b58b6062b71c09f85176d67af12ffc656872f9413a940fa99b5e08cfacbbb6c",
+      "sheet": "sheet-19.jpg",
+      "cell": 9,
+      "crop": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "splitPortrait": false
+    },
+    {
+      "frame": "review-history/uk-light-320.png",
+      "sha256": "e3228adec647711664c148487231d0886c86466e163d645e1501107fbe1335f9",
+      "sheet": "sheet-19.jpg",
+      "cell": 10,
+      "crop": [
+        0,
+        0,
+        320,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/uk-light-390.png",
+      "sha256": "b632f924cdb58cf2ad20705e30bd169687a9c6f5f74721ed31bcc89d77544d2d",
+      "sheet": "sheet-19.jpg",
+      "cell": 11,
+      "crop": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "splitPortrait": true
+    },
+    {
+      "frame": "review-history/uk-light-640.png",
+      "sha256": "df9b5614efc83ab8f016c5250368180a3c1a2781374573fdd20f204a5e291ed1",
+      "sheet": "sheet-19.jpg",
+      "cell": 12,
+      "crop": [
+        0,
+        0,
+        640,
+        320
+      ],
+      "splitPortrait": false
+    }
+  ]
+}

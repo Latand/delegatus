@@ -1,4 +1,4 @@
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { SchemeLayout } from "./layout";
 import type { TaskBand } from "./taskBands";

@@ -36,6 +36,31 @@ The CLI reads the listening port from `-p` or `--port`. It does not read
 `DELEGATUS_PORT` or `LLV_PORT`. The selected port is passed to its control
 clients as `LLV_VIEWER_PORT`.
 
+### Stopping everything
+
+Agent hosts start detached, so that a running agent survives a restart of
+Delegatus. Ctrl-C therefore leaves them running. `delegatus stop --all` stops
+this install's launcher, which stops the web app and the runtime host. Then
+it stops every agent host the agent registry records, together with the
+processes under each host. **Stop Delegatus** in the app menu (⋯; on a phone,
+under Settings) asks first and then runs the same stop. On a team install
+only the owner sees it. Its report goes to `stop-all.log` in the state
+folder, because the page stops answering soon after.
+
+A process is stopped only when the record Delegatus wrote at its start still
+matches it: the same pid, start time and boot. A web app or runtime host must
+also carry this install's runtime-host socket in its own environment. A
+record from before the computer last started names nothing, since a crash
+can leave one behind. Nothing is chosen by name, pattern or port. The report
+lists what was stopped and which recorded processes were already gone. It
+also lists processes that were left running because they could not be
+proven to be the ones Delegatus started. The command works on Linux and
+macOS. On other platforms it stops nothing, says so, and lists the recorded
+agent hosts. It exits `1` when a process it proved to be Delegatus's is
+still running, a record could not be read, or a record could not be checked
+from where the command runs: a sandbox with its own process namespace, or a
+system whose boot cannot be read.
+
 ## Files
 
 Delegatus keeps everything in `~/.config/delegatus/`, or under
@@ -97,6 +122,11 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 
 - `DELEGATUS_LANG` — `en` or `uk`: the language of CLI messages.
 - `DELEGATUS_DEBUG` — `1` prints startup diagnostics in the terminal.
+  An install from the package bounds its event-loop diagnostics: each process
+  writes `[viewer loop-gap]` reports up to 64 KiB per hour, and a
+  `[performance summary]` a minute after start and then every 15 minutes,
+  counting the reports it held back. `DELEGATUS_DEBUG=1` writes every line. A
+  git checkout, such as a service run from a clone, always writes every line.
 - `VIEWER_PROC_BACKEND` — `linux`, `portable` or `windows`: forces the process-discovery backend.
 
 **Voice**

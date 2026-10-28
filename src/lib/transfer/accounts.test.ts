@@ -9,12 +9,13 @@ import { activeCodexAccountId, createManagedCodexAccount, listCodexAccounts, set
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "@/lib/accounts/accountsStore";
 import { accountProjectBindings, allowedAccountIdsForProject, bindAccountToProject } from "@/lib/accounts/projectBindings";
 import { createManagedCopilotAccount } from "@/lib/accounts/copilot";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import * as copilotModels from "@/lib/agent/copilotModels";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import {
-  accountExporter, accountReportRows, accountsReady, copilotCatalogReader, identityHash, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, transferLimitsReader,
-  unavailableAccountId, verifyImportedAccount, verifyImportedAccounts, type IdentityReader, type ImportedAccountRow, type LimitsEvidence, type TransferEngine,
+  accountCommitRows, accountExporter, accountReportRows, accountsReady, copilotCatalogReader, identityHash, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, transferLimitsReader,
+  unavailableAccountId, validAccountRecord, verifyImportedAccount, verifyImportedAccounts, type IdentityReader, type ImportedAccountRow, type LimitsEvidence, type TransferEngine,
 } from "./accounts";
 import { decodeBundle, encodeBundle } from "./bundle";
 import { exportTransferBundle } from "./exporter";
@@ -119,6 +120,89 @@ describe("accounts in the bundle", () => {
       `accounts|binding:claude:${sourceIds.work}:${REPOSITORY}`, `accounts|binding:codex:${sourceIds.team}:${REPOSITORY}`,
     ]);
   });
+});
+
+describe("fallback bindings in transfers", () => {
+  for (const engine of ["claude", "codex"] as const) {
+    test(`${engine} export/import round-trip keeps fallback priority after account remapping`, async () => {
+      const from = await target(`fallback-source-${engine}`);
+      const bytes = await within(from, async () => {
+        if (engine === "claude") {
+          createManagedClaudeAccount("Primary", undefined, { id: "source-primary" });
+          createManagedClaudeAccount("Reserve", undefined, { id: "source-reserve" });
+        } else {
+          createManagedCodexAccount("Primary", { id: "source-primary" });
+          createManagedCodexAccount("Reserve", { id: "source-reserve" });
+        }
+        expect(bindAccountToProject(engine, "source-primary", REPOSITORY, () => NOW).ok).toBe(true);
+        expect(bindAccountToProject(engine, "source-reserve", REPOSITORY, () => NOW, true).ok).toBe(true);
+        return (await exportTransferBundle({ now: new Date(NOW), exportId: `fallback-${engine}`, product: "test", env: {}, sections: ["accounts"], accounts: accountExporter(`fallback-${engine}`, { identity: async () => null }) })).bytes;
+      });
+      const decoded = await decodeBundle(bytes);
+      expect(decoded.records.find(row => row.k === `accounts|binding:${engine}:source-reserve:${REPOSITORY}`)?.v)
+        .toMatchObject({ fallback: true });
+      expect(decoded.records.find(row => row.k === `accounts|binding:${engine}:source-primary:${REPOSITORY}`)?.v)
+        .toMatchObject({ fallback: false });
+      const here = await target(`fallback-target-${engine}`);
+      const plan = await within(here, () => previewTransferImport(bytes));
+      await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+      await within(here, () => {
+        const rows = importedAccountRows();
+        const primary = rows.find(row => row.sourceId === "source-primary")!.targetId!;
+        const reserve = rows.find(row => row.sourceId === "source-reserve")!.targetId!;
+        expect(primary).not.toBe("source-primary");
+        expect(reserve).not.toBe("source-reserve");
+        expect(accountProjectBindings().find(row => row.accountId === reserve)).toMatchObject({ fallback: true });
+        expect(selectProjectAccount({ engine, project: REPOSITORY, accounts: [{ id: reserve, authPresent: true }, { id: primary, authPresent: true }],
+          observations: [], bindings: accountProjectBindings(), preferredId: reserve, now: Date.parse(NOW) }))
+          .toEqual({ kind: "available", accountId: primary });
+      });
+    }, 60_000);
+
+    for (const fallback of [true, false, undefined]) {
+      test(`${engine} incoming fallback=${fallback} survives remapping with legacy default false`, async () => {
+        const here = await target(`incoming-${engine}-${fallback}`);
+        const key = `binding:${engine}:source-reserve:${REPOSITORY}`;
+        const binding = { engine, accountId: "source-reserve", project: REPOSITORY, ...(fallback === undefined ? {} : { fallback }) };
+        expect(validAccountRecord(key, binding)).toBe(true);
+        const result = await within(here, () => accountCommitRows("import-fallback", "export-fallback", [
+          { key: `account:${engine}:source-reserve`, value: { engine, id: "source-reserve", label: "Reserve", kind: "managed", active: false, identity: null } },
+          { key, value: binding },
+        ], [{ engine, sourceId: "source-reserve", label: "Reserve", kind: "managed", sourceActive: false, bindings: [REPOSITORY], action: "create", plannedId: "remapped-reserve" }],
+        { now: NOW, canonical: () => "project-remapped" }));
+        expect(result.bindings).toEqual([{ engine, accountId: "remapped-reserve", project: "project-remapped", createdAt: NOW, fallback: fallback === true }]);
+        if (fallback === undefined) {
+          const bytes = encodeBundle({ exportId: `legacy-fallback-${engine}`, createdAt: NOW, product: "test", projects: [], accounts: [], environment: [], notices: [],
+            sections: [{ name: "accounts", schema: 1, summary: {}, records: [
+              { k: `accounts|account:${engine}:source-reserve`, v: { engine, id: "source-reserve", label: "Reserve", kind: "managed", active: false, identity: null } },
+              { k: `accounts|${key}`, v: binding },
+            ] }] });
+          const plan = await within(here, () => previewTransferImport(bytes));
+          await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+          expect(await within(here, () => accountProjectBindings())).toEqual([
+            expect.objectContaining({ engine, project: REPOSITORY, fallback: false }),
+          ]);
+        }
+      });
+    }
+
+    test(`${engine} import rejects malformed fallback values before writing bindings`, async () => {
+      const here = await target(`malformed-fallback-${engine}`);
+      const invalid = [null, "true", "false", 0, 1, {}, []];
+      const records = invalid.map((fallback, index) => {
+        const accountId = `reserve-${index}`;
+        const binding = { engine, accountId, project: REPOSITORY, fallback };
+        expect(validAccountRecord(`binding:${engine}:${accountId}:${REPOSITORY}`, binding)).toBe(false);
+        return { k: `accounts|binding:${engine}:${accountId}:${REPOSITORY}`, v: binding };
+      });
+      const bytes = encodeBundle({ exportId: `invalid-fallback-${engine}`, createdAt: NOW, product: "test", projects: [], accounts: [], environment: [], notices: [],
+        sections: [{ name: "accounts", schema: 1, summary: {}, records }] });
+      const plan = await within(here, () => previewTransferImport(bytes));
+      expect(plan.sections[0]).toMatchObject({ skipped: invalid.length, skippedReasons: { "invalid-record": invalid.length } });
+      await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+      expect(await within(here, () => accountProjectBindings())).toEqual([]);
+    }, 60_000);
+  }
 });
 
 describe("accounts on the new install", () => {

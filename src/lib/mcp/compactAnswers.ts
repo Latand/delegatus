@@ -10,6 +10,7 @@
  * `deployment_status` without `compact` for a deployment, `agent_activity`
  * without `compact` for a liveness row.
  */
+import { createHash } from "node:crypto";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
@@ -18,6 +19,7 @@ import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { clampChars, clampLine } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
+import { attemptAccountPin, currentRuntimeSeat } from "@/lib/pipelines/runtimeSwitch";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
 import { launchRuntimeLabel, variantForParams } from "@/lib/roles/paramConfig";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -160,6 +162,14 @@ export function stageReportAcknowledgement(report: PipelineStageReport) {
 
 export class StageReadError extends Error {}
 
+/** Stored text only: UTF-16 length and SHA-256 of its UTF-8 bytes. Missing
+ * legacy attempt definitions remain unknown rather than borrowing today's prompt. */
+function promptMetadata(prompt: string | undefined) {
+  return typeof prompt === "string"
+    ? { length: prompt.length, sha256: createHash("sha256").update(prompt).digest("hex") }
+    : null;
+}
+
 function attemptFor(pipeline: Pipeline, stageId: string, attempt: number | undefined): PipelineStageAttempt | null {
   if (attempt === undefined) return latestOperationalStageAttempt(pipeline, stageId);
   const attempts = (pipeline.runs ?? []).find((run) => run.stageId === stageId)?.attempts ?? [];
@@ -189,6 +199,17 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
      its report is already the authoritative completion record. */
   const reportedVerdict = selected?.report?.verdict;
   const verdict = selected?.verdict ?? reportedVerdict;
+  const runtimeSwitch = selected?.runtimeSwitches?.at(-1);
+  // Handoff reservation persists successor identities before replacing the
+  // source role. A failed/parked switch can retain that reservation, too.
+  const reservedHandoff = runtimeSwitch?.mode === "handoff"
+    && runtimeSwitch.phase !== "committed" && runtimeSwitch.phase !== "rolled-back"
+    && !!runtimeSwitch.launch?.launchId && runtimeSwitch.launch.launchId === selected?.launchId;
+  const hasRuntimeEvidence = selected && (selected.launchId || selected.conversationId || selected.agentPath
+    // Legacy launched records can predate both binding and launch identities.
+    || (!selected.definition && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
+  const result = selected?.report && "result" in selected.report && typeof selected.report.result === "string"
+    ? selected.report.result : null;
   return {
     pipelineId: pipeline.id,
     ...pipelineCheckFields(pipeline),
@@ -201,18 +222,39 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       engine: role?.engine ?? stage.engine ?? null,
       model: role?.model ?? stage.model ?? null,
       effort: role?.effort ?? stage.effort ?? null,
+      configured: {
+        account: stage.account ?? null,
+        serviceTier: role?.serviceTier ?? stage.serviceTier ?? null,
+        serviceTierSource: role?.serviceTierSource ?? null,
+        preferredServiceTier: role?.preferredServiceTier ?? stage.preferredServiceTier ?? null,
+      },
+      roleParams: stage.role?.params ?? null,
+      access: role?.access ?? stage.access ?? null,
+      promptMetadata: promptMetadata(stage.prompt),
       next: stage.next,
       onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds, onExhausted: stage.onFail.onExhausted ?? "advance" } : null,
       attempts: attempts.length,
       stageDigest: stageDigests([stage])[stage.id] ?? null,
     },
     attempt: selected ? {
-      runtimeSwitch: selected.runtimeSwitches?.at(-1) ?? null,
+      runtimeSwitch: runtimeSwitch ?? null,
+      /* Role copying, definition binding and start booking precede dispatch.
+         A launch or conversation identity witnesses the persisted runtime,
+         including switches; a requested switch target does not. */
+      runtime: selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
+        ...currentRuntimeSeat(selected),
+        serviceTierSource: selected.effectiveRole.serviceTierSource ?? null,
+      } : null,
+      accountPin: attemptAccountPin(stage, selected),
+      roleParams: selected.definition?.role?.params ?? null,
+      access: selected.effectiveRole?.access ?? null,
+      promptMetadata: promptMetadata(selected.definition?.prompt),
       n: selected.n,
       state: selected.state,
       verdict: verdict?.status ?? null,
       findings: verdict?.findings ?? [],
       summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
+      result: result !== null && result.length > 160 ? clampChars(result, 159) : result,
       decisionRequested: selected.decisionRequested === true,
       /* Findings handed to the fix stage after the budget was spent and never
          re-reviewed (#1868). */
@@ -289,6 +331,7 @@ export function compactLiveness(snapshot: AgentLivenessSnapshot) {
   return {
     observedAt: snapshot.observedAt,
     count: snapshot.count,
+    ...(snapshot.unresolvedProjectCount ? { unresolvedProjectCount: snapshot.unresolvedProjectCount } : {}),
     stalledCount: snapshot.stalledCount,
     stalledConfirmedCount: snapshot.stalledConfirmedCount,
     conversations: snapshot.conversations.map(compactLivenessRow),

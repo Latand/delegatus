@@ -32,7 +32,7 @@ import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
 import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
@@ -71,6 +71,27 @@ export function runtimeHostStartIdentity(pid) {
   if (process.platform === "darwin") return darwinKernelIdentity(pid);
   const identity = readStartIdentity(pid);
   return process.platform === "win32" ? identity : identity === null ? null : `${pid}:${identity}`;
+}
+
+/** The boot and pid namespace a recorded pid belongs to, in the format
+    src/lib/processIdentity.ts records for agent hosts. Linux start ticks
+    count from boot, so a pid and start identity prove nothing without it. */
+export function currentBootEpoch(platform = process.platform, run = spawnSync) {
+  if (platform === "linux") {
+    try {
+      const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      const namespace = readlinkSync("/proc/self/ns/pid");
+      return bootId && namespace ? `linux:${bootId}:pidns:${namespace}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (platform === "darwin") {
+    const result = run("sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 2_000 });
+    const match = typeof result.stdout === "string" ? /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout) : null;
+    return match ? `darwin:${match[1]}:${match[2]}` : null;
+  }
+  return null;
 }
 
 export function readStartIdentity(pid, platform = process.platform, run = spawnSync) {
@@ -173,9 +194,10 @@ function emptyProcess() {
  * @param {{ checkout: string | null, releasesDir: string, releasePointer: string, requestFile: string, port: number, socket: string }} base
  */
 export function createLauncherRecord(file, base, clock = () => Date.now()) {
+  const bootEpoch = currentBootEpoch();
   const record = {
     version: RECORD_VERSION,
-    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1,
+    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), ...(bootEpoch ? { bootEpoch } : {}), autoAdmission: 1,
       ...(process.platform !== "win32" && typeof process.execve === "function" ? { relaunch: 1 } : {}),
       revision: null, requestId: null, state: "starting", error: null },
     ...base,

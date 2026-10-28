@@ -1190,6 +1190,24 @@ function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   return h.lane.lastPassedCommit;
 }
 
+test("a passed read-only stage with no node_modules publishes and advances", async () => {
+  const h = fixture();
+  try {
+    const head = missingDependencyFixture(h);
+    const gateRan = path.join(h.root, "publication-gate-ran");
+    fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\ntest -d node_modules/publication-fixture-dependency\ntouch '${gateRan}'\n`, { mode: 0o700 });
+    savePipelines([h.lane]);
+
+    expect(fs.existsSync(path.join(h.repo, "node_modules"))).toBe(false);
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, h.ports)).error).toBeUndefined();
+    await h.tick();
+
+    expect(fs.existsSync(gateRan)).toBe(true);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});
+
 for (const [privacyFails, partial] of [[false, false], [true, false], [false, true]]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails}, partial installation: ${partial})`, async () => {
   const h = fixture();
   try {
@@ -1340,6 +1358,8 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
 async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+    const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+    registerPipelineTick(async () => {});
     const fs = await import("node:fs");
     const crashLog = ${JSON.stringify(crashLog ?? null)};
     const fixtureExec = ${publicationFixtureExec.toString()};
@@ -1835,6 +1855,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     const restart = async () => {
       const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
       const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(engine)});
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
         const ports = { ...defaultPipelinePorts(), exec: ${publicationFixtureExec.toString()},
           now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
@@ -1890,6 +1912,8 @@ test("permanent capacity deadlines stop after three retries across controller re
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
       const script = `import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(engine)};
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
         const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
         for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;

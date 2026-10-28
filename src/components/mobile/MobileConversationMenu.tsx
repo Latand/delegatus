@@ -15,7 +15,7 @@ import { AttachTerminalDialog } from "../AttachTerminalDialog";
 import { canHandoff } from "../HandoffHandle";
 import { useAgentControlActions } from "../AgentControlStrip";
 import { useProcessKill } from "../TaskHeader";
-import { effortTitle, engineBadge, fileModelLabel } from "../utils";
+import { conversationModelLabel, effortTitle, engineBadge } from "../utils";
 import { MobileMeter } from "./MobileMeter";
 import { MobileSheet, MobileSheetFold, MobileSheetRow } from "./MobileSheet";
 import { showReceipt } from "./MobileReceipt";
@@ -177,7 +177,7 @@ export function MobileConversationMenu({
           <span className="shrink-0">{bits.phrase}</span>
           <span aria-hidden className="text-muted">·</span>
           <span className="min-w-0 truncate" title={effortTitle(file)}>
-            {file.model ? (file.effort ? t("mobile2.chat.identity", { model: fileModelLabel(file)!, effort: file.effort }) : fileModelLabel(file)) : badge.label}
+            {conversationModelLabel(file) ? (file.effort ? t("mobile2.chat.identity", { model: conversationModelLabel(file)!, effort: file.effort }) : conversationModelLabel(file)) : badge.label}
           </span>
           {ctxLeft === null ? null : <MobileMeter left={ctxLeft} label={t("mobile2.meter.left", { left: ctxLeft })} className="ml-auto w-16 shrink-0" />}
         </div>

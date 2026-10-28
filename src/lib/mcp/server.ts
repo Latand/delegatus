@@ -1,3 +1,4 @@
+import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -661,6 +662,8 @@ export interface McpRequestBindingInput {
   /** Relay admission's server-derived text and author, captured before dispatch
       so recovery verifies the actual durable payload after rotation/restart. */
   sendPayload?: { text: string; origin: MessageOrigin };
+  /** Sender outbox CAS fence carried only by a safe same-key retry. */
+  seatMessageFence?: string;
 }
 
 /** The identity persisted with a recoverable mutation's claim, before its
@@ -676,6 +679,8 @@ export interface McpRequestBinding extends McpRequestBindingInput {
   /** Local bindings use only process custody; this grants no caller authority. */
   localDispatch?: true;
   claimGeneration?: string;
+  /** Original arguments beneath a seat retry's nonce-bound storage digest. */
+  seatMessageDigest?: string;
   claimedAt: string;
 }
 
@@ -708,8 +713,8 @@ export interface McpReceiptStore {
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
   /** Drop an unsettled claim so its `clientRequestId` can be used again
       (#1766). Only a claim this call still holds — same digest, no result
-      recorded — is released; anything already settled is left exactly as it
-      is. Optional so a minimal store keeps working: without it an unadmitted
+      recorded — is released; settled claims remain durable. Fenced seat
+      retries are replaced atomically by claim. Optional so a minimal store keeps working: without it an unadmitted
       refusal is settled as before rather than silently stranding a claim. */
   release?(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean | Promise<boolean>;
 }
@@ -725,16 +730,16 @@ export interface McpRecoveryReceiptStore extends McpReceiptStore {
   lookup(key: string): McpReceiptRecord | null | Promise<McpReceiptRecord | null>;
   /** `claimed` → `dispatching`. False means the attempt was closed by someone
       else first, and the caller must not dispatch. */
-  markDispatching(key: string, digest: string): boolean | Promise<boolean>;
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): boolean | Promise<boolean>;
   /** Fill an absent orchestrator recipient once, under the original claim owner. */
   bindCreatedTarget?(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean | Promise<boolean>;
   /** `claimed` → `not-executed`, writing the terminal result. False means the
       row is no longer merely claimed (it was dispatched, or already closed). */
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean | Promise<boolean>;
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): boolean | Promise<boolean>;
   /** Writes the result only if none is recorded yet, and returns whatever the
       row holds afterwards — the first terminal answer always wins. Recovery
       may save stronger terminal evidence alongside an ordinary acceptance. */
-  settle(key: string, digest: string, result: McpToolResult, stage?: "settled" | "not-executed", recovery?: boolean): McpToolResult | Promise<McpToolResult>;
+  settle(key: string, digest: string, result: McpToolResult, stage?: "settled" | "not-executed", recovery?: boolean, expectedBinding?: McpRequestBinding): McpToolResult | Promise<McpToolResult>;
 }
 
 export function supportsMcpRecovery(store: McpReceiptStore): store is McpRecoveryReceiptStore {
@@ -745,8 +750,26 @@ export function supportsMcpRecovery(store: McpReceiptStore): store is McpRecover
     && typeof candidate.settle === "function";
 }
 
-/** A claim whose tool was already dispatched is never released: absence would
-    then be read as "nothing ran", which is exactly what it is not (#1766). */
+/** Only an atomic downstream negative fence licenses a same-key seat retry. */
+function retryableSeatFence(result: McpToolResult | null | undefined): boolean {
+  return result?.ok === false && result.toolName === "send_message_to_orchestrator"
+    && result.details?.evidence === "seat-message-admission-fence"
+    && result.details?.nextAction === "retry-same-key";
+}
+
+/** A new attempt replaces a fenced receipt under the same writer lock. Its
+ * identity remains durable across a crash before the next dispatch marker. */
+function reclaimFencedSeatClaim(receipt: Receipt | McpReceiptRecord | undefined, binding: McpRequestBinding | undefined, digest: string): boolean {
+  const held = receipt?.binding;
+  return !!receipt && !!held && !!binding && receipt.stage === "not-executed"
+    && retryableSeatFence(receipt.recoveryResult ?? receipt.result)
+    && held.toolName === "send_message_to_orchestrator" && binding.toolName === held.toolName
+    && binding.clientRequestId === held.clientRequestId && sameCaller(held.caller, binding.caller, held.toolName)
+    && !!held.target.identity?.startsWith("machine:") && JSON.stringify(binding.target) === JSON.stringify(held.target)
+    && binding.downstreamKey === held.downstreamKey && binding.seatMessageDigest === digest
+    && !!binding.seatMessageFence && binding.seatMessageFence !== held.seatMessageFence;
+}
+
 function dispatchedReceipt(receipt: Receipt): boolean {
   return receipt.stage === "dispatching";
 }
@@ -759,9 +782,30 @@ function reclaimLocalClaim(receipt: Pick<McpReceiptRecord, "binding" | "stage" |
     && processIdentityProvenDead(receipt.binding.owner);
 }
 
+/** All older writers already compare this field before changing a receipt.
+ * Rotating it fences their late answers too; current readers compare args. */
+function receiptStoreDigest(digest: string, binding?: McpRequestBinding): string {
+  if (binding?.seatMessageDigest === undefined) return digest;
+  if (binding.toolName !== "send_message_to_orchestrator" || !binding.seatMessageFence || !/^[a-f0-9-]{36}$/.test(binding.seatMessageFence)
+    || !/^[a-f0-9]{64}$/.test(binding.seatMessageDigest)) throw new Error("invalid seat retry digest binding");
+  return crypto.createHash("sha256").update(`seat-retry\0${digest}\0${binding.seatMessageFence}`).digest("hex");
+}
+
+function logicalReceiptDigest(receipt: Pick<Receipt, "digest" | "binding">): string {
+  const digest = receipt.binding?.seatMessageDigest;
+  if (digest === undefined) return receipt.digest;
+  if (receiptStoreDigest(digest, receipt.binding) !== receipt.digest) throw new Error("invalid seat retry receipt digest");
+  return digest;
+}
+
+function claimReceiptDigest(digest: string, binding?: McpRequestBinding): string {
+  if (binding?.seatMessageDigest !== undefined && binding.seatMessageDigest !== digest) throw new Error("seat retry arguments contradict the binding");
+  return receiptStoreDigest(digest, binding);
+}
+
 function recordOf(receipt: Receipt): McpReceiptRecord {
   return {
-    digest: receipt.digest,
+    digest: logicalReceiptDigest(receipt),
     result: receipt.result ?? null,
     ...(receipt.recoveryResult ? { recoveryResult: receipt.recoveryResult } : {}),
     binding: receipt.binding ?? null,
@@ -773,7 +817,7 @@ function terminalReceiptResult(result: McpToolResult | null | undefined): result
   return Boolean(result && (result.ok
     ? result.outcome === "settled" || result.settled === true
       || (result.toolName === "spawn_agent" && result.state === "settled")
-    : result.details?.outcome === "settled" || result.details?.outcome === "not-executed"));
+    : result.details?.outcome === "settled" || result.details?.outcome === "not-executed" || result.details?.outcome === "history-expired"));
 }
 
 function receiptSettlement(
@@ -799,12 +843,12 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     beforeClaim?.();
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest === digest && reclaimLocalClaim(receipt, binding)) {
-      this.receipts.set(key, { digest, ...(binding ? { binding, stage: "claimed" } : {}) });
+    if (!receipt || logicalReceiptDigest(receipt) === digest && (reclaimLocalClaim(receipt, binding) || reclaimFencedSeatClaim(receipt, binding, digest))) {
+      this.receipts.set(key, { digest: claimReceiptDigest(digest, binding), ...(binding ? { binding, stage: "claimed" } : {}) });
       return { kind: "fresh" };
     }
     const record = recordOf(receipt);
-    if (receipt.digest !== digest) return { kind: "conflict", record };
+    if (record.digest !== digest) return { kind: "conflict", record };
     return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
   }
 
@@ -816,8 +860,8 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
 
   release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.result
-      || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, unadmittedBinding) || receipt.result || receipt.recoveryResult
+      || (unadmittedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
       || (dispatchedReceipt(receipt)
       && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
     this.receipts.delete(key);
@@ -829,9 +873,10 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return receipt ? recordOf(receipt) : null;
   }
 
-  markDispatching(key: string, digest: string): boolean {
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result) return false;
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding) || receipt.stage !== "claimed" || receipt.result) return false;
+    if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) return false;
     this.receipts.set(key, { ...receipt, stage: "dispatching" });
     return true;
   }
@@ -844,16 +889,18 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return true;
   }
 
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result) return false;
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding) || receipt.stage !== "claimed" || receipt.result) return false;
+    if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) return false;
     this.receipts.set(key, { ...receipt, result, stage: "not-executed" });
     return true;
   }
 
-  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false): McpToolResult {
+  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false, expectedBinding?: McpRequestBinding): McpToolResult {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
+    if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding)) throw new Error("MCP receipt ownership changed");
+    if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) throw new Error("MCP receipt attempt changed");
     const settled = receiptSettlement(receipt, result, stage, recovery);
     this.receipts.set(key, settled.receipt);
     return settled.result;
@@ -988,6 +1035,10 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)
     || (owner.bootEpoch !== undefined && !nullableString(owner.bootEpoch))) return false;
   if (value.localDispatch !== undefined && value.localDispatch !== true) return false;
+  if (value.seatMessageFence !== undefined && (typeof value.seatMessageFence !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.seatMessageFence)
+    || value.toolName !== "send_message_to_orchestrator" || !target.identity?.startsWith("machine:"))) return false;
+  if (value.seatMessageDigest !== undefined && (typeof value.seatMessageDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.seatMessageDigest)
+    || !value.seatMessageFence || value.toolName !== "send_message_to_orchestrator")) return false;
   if (value.claimGeneration !== undefined && (typeof value.claimGeneration !== "string" || !value.claimGeneration)) return false;
   return true;
 }
@@ -1664,13 +1715,13 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
       beforeClaim?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (receipt && !(receipt.digest === digest && reclaimLocalClaim(receipt, binding))) {
+      if (receipt && !(logicalReceiptDigest(receipt) === digest && (reclaimLocalClaim(receipt, binding) || reclaimFencedSeatClaim(receipt, binding, digest)))) {
         const record = recordOf(receipt);
-        if (receipt.digest !== digest) return { kind: "conflict", record };
+        if (record.digest !== digest) return { kind: "conflict", record };
         return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
       }
       const target = retention === "durable" ? state.mutationReceipts : state.readReceipts;
-      target[key] = { digest, ...(binding ? { binding, stage: "claimed" as const } : {}) };
+      target[key] = { digest: claimReceiptDigest(digest, binding), ...(binding ? { binding, stage: "claimed" as const } : {}) };
       const keys = Object.keys(state.readReceipts);
       for (const expired of keys.slice(0, Math.max(0, keys.length - FILE_RECEIPT_CAP))) delete state.readReceipts[expired];
       writeReceiptFile(this.filePath, state);
@@ -1700,8 +1751,8 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest || receipt.result
-        || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+      if (!receipt || receipt.digest !== receiptStoreDigest(digest, unadmittedBinding) || receipt.result || receipt.recoveryResult
+        || (unadmittedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
         || (dispatchedReceipt(receipt)
         && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
       delete state.mutationReceipts[key];
@@ -1737,25 +1788,28 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
-  markDispatching(key: string, digest: string): Promise<boolean> {
-    return this.transition(key, digest, (receipt) =>
-      receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, stage: "dispatching" } : null);
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): Promise<boolean> {
+    return this.transition(key, receiptStoreDigest(digest, expectedBinding), (receipt) =>
+      receipt && receipt.stage === "claimed" && !receipt.result
+        && (!expectedBinding || JSON.stringify(receipt.binding) === JSON.stringify(expectedBinding)) ? { ...receipt, stage: "dispatching" } : null);
   }
 
   bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): Promise<boolean> {
     return this.transition(key, digest, (receipt) => withCreatedTarget(receipt, binding, identity));
   }
 
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): Promise<boolean> {
-    return this.transition(key, digest, (receipt) =>
-      receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, result, stage: "not-executed" } : null);
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): Promise<boolean> {
+    return this.transition(key, receiptStoreDigest(digest, expectedBinding), (receipt) =>
+      receipt && receipt.stage === "claimed" && !receipt.result
+        && (!expectedBinding || JSON.stringify(receipt.binding) === JSON.stringify(expectedBinding)) ? { ...receipt, result, stage: "not-executed" } : null);
   }
 
-  async settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false): Promise<McpToolResult> {
+  async settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false, expectedBinding?: McpRequestBinding): Promise<McpToolResult> {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
+      if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding)) throw new Error("MCP receipt ownership changed");
+      if (expectedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(expectedBinding)) throw new Error("MCP receipt attempt changed");
       const settled = receiptSettlement(receipt, result, stage, recovery);
       if (settled.receipt !== receipt) {
         delete state.readReceipts[key];
@@ -1905,19 +1959,18 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       const now = this.now();
       this.pruneBoundedReceipts(now);
       const receipt = this.selectRow(key);
-      if (receipt && binding?.localDispatch === true && receipt.digest === digest
-        && receipt.stage === "claimed" && receipt.result_json === null
-        && reclaimLocalClaim(this.recordOfRow(key, receipt), binding)) {
+      if (receipt && binding && this.recordOfRow(key, receipt).digest === digest
+        && (reclaimLocalClaim(this.recordOfRow(key, receipt), binding) || reclaimFencedSeatClaim(this.recordOfRow(key, receipt), binding, digest))) {
         const bindingJson = JSON.stringify(binding);
-        this.db.query("UPDATE mcp_receipts SET binding_json = ?, claimed_at = ?, storage_bytes = ? WHERE receipt_key = ?")
-          .run(bindingJson, now, this.storageBytes(key, digest, null, bindingJson), key);
+        this.db.query("UPDATE mcp_receipts SET digest = ?, binding_json = ?, claimed_at = ?, storage_bytes = ?, result_json = NULL, recovery_result_json = NULL, stage = 'claimed' WHERE receipt_key = ?")
+          .run(claimReceiptDigest(digest, binding), bindingJson, now, this.storageBytes(key, digest, null, bindingJson), key);
         this.db.exec("COMMIT");
         return { kind: "fresh" };
       }
       if (receipt) {
         this.db.exec("COMMIT");
         const record = this.recordOfRow(key, receipt);
-        if (receipt.digest !== digest) return { kind: "conflict", record };
+        if (record.digest !== digest) return { kind: "conflict", record };
         if (receipt.result_json === null) {
           return { kind: "pending", unfinishedAgeMs: Math.max(0, now - receipt.claimed_at), record };
         }
@@ -1928,7 +1981,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       this.db.query<unknown, [string, string, ReceiptRetention, number, number, string | null, string | null]>(`
         INSERT INTO mcp_receipts(receipt_key, digest, retention, result_json, storage_bytes, claimed_at, binding_json, stage)
         VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
-      `).run(key, digest, retention, storageBytes, now, bindingJson, binding ? "claimed" : null);
+      `).run(key, claimReceiptDigest(digest, binding), retention, storageBytes, now, bindingJson, binding ? "claimed" : null);
       this.pruneBoundedReceipts(now);
       this.db.exec("COMMIT");
       return { kind: "fresh" };
@@ -1971,9 +2024,9 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
         FROM mcp_receipts
         WHERE receipt_key = ?
       `).get(key);
-      const releasable = Boolean(receipt) && receipt!.digest === digest
+      const releasable = Boolean(receipt) && receipt!.digest === receiptStoreDigest(digest, unadmittedBinding)
         && receipt!.result_json === null && receipt!.recovery_result_json === null
-        && (unadmittedBinding?.localDispatch !== true || receipt!.binding_json === JSON.stringify(unadmittedBinding))
+        && (!unadmittedBinding || receipt!.binding_json === JSON.stringify(unadmittedBinding))
         && (receipt!.stage !== "dispatching" || (!!unadmittedBinding && receipt!.binding_json === JSON.stringify(unadmittedBinding)));
       if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
       this.db.exec("COMMIT");
@@ -1989,12 +2042,13 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     return receipt ? this.recordOfRow(key, receipt) : null;
   }
 
-  markDispatching(key: string, digest: string): boolean {
-    return this.db.query<unknown, [string, string]>(`
-      UPDATE mcp_receipts
-      SET stage = 'dispatching'
+  markDispatching(key: string, digest: string, expectedBinding?: McpRequestBinding): boolean {
+    const bindingJson = expectedBinding ? JSON.stringify(expectedBinding) : null;
+    return this.db.query<unknown, [string, string, string | null, string | null]>(`
+      UPDATE mcp_receipts SET stage = 'dispatching'
       WHERE receipt_key = ? AND digest = ? AND stage = 'claimed' AND result_json IS NULL
-    `).run(key, digest).changes === 1;
+        AND (? IS NULL OR binding_json = ?)
+    `).run(key, receiptStoreDigest(digest, expectedBinding), bindingJson, bindingJson).changes === 1;
   }
 
   bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean {
@@ -2019,12 +2073,13 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
+  fenceUndispatched(key: string, digest: string, result: McpToolResult, expectedBinding?: McpRequestBinding): boolean {
     const resultJson = JSON.stringify(result);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const receipt = this.selectRow(key);
-      if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result_json !== null) {
+      if (!receipt || receipt.digest !== receiptStoreDigest(digest, expectedBinding) || receipt.stage !== "claimed" || receipt.result_json !== null
+        || (expectedBinding && receipt.binding_json !== JSON.stringify(expectedBinding))) {
         this.db.exec("COMMIT");
         return false;
       }
@@ -2041,12 +2096,13 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false): McpToolResult {
+  settle(key: string, digest: string, result: McpToolResult, stage: "settled" | "not-executed" = "settled", recovery = false, expectedBinding?: McpRequestBinding): McpToolResult {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const row = this.selectRow(key);
-      if (!row || row.digest !== digest) throw new Error("MCP receipt ownership changed");
+      if (!row || row.digest !== receiptStoreDigest(digest, expectedBinding)) throw new Error("MCP receipt ownership changed");
       const record = this.recordOfRow(key, row);
+      if (expectedBinding && JSON.stringify(record.binding) !== JSON.stringify(expectedBinding)) throw new Error("MCP receipt attempt changed");
       const receipt: Receipt = {
         digest, ...(record.result ? { result: record.result } : {}),
         ...(record.recoveryResult ? { recoveryResult: record.recoveryResult } : {}),
@@ -2095,7 +2151,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     const recoveryResult = receipt.recovery_result_json === null ? null : this.parseResult(key, receipt.recovery_result_json);
     if (recoveryResult && !terminalReceiptResult(recoveryResult)) throw new Error("invalid MCP terminal recovery result");
     return {
-      digest: receipt.digest,
+      digest: logicalReceiptDigest({ digest: receipt.digest, binding: binding ?? undefined }),
       ...(recoveryResult ? { recoveryResult } : {}),
       result: receipt.result_json === null ? null : this.parseResult(key, receipt.result_json),
       binding,
@@ -2485,14 +2541,16 @@ export interface McpToolServiceOptions {
 }
 
 /** The closed outcome vocabulary of original-key recovery (#1490). */
-export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-executed" | "unknown";
+export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-executed" | "history-expired" | "unknown";
 
 /** What a caller may do next, stated on the answer rather than implied by
     `retryable`. `original-key-lookup` is the ONLY permitted action on an
     unknown or open outcome: never a new key, never an automatic resend. */
-export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request";
+export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request" | "manual-check";
 
 export interface McpRecoveryEvidence {
+  /** A downstream admission CAS fenced this exact attempt before any effect. */
+  seatMessageFenced?: true;
   outcome: McpRecoveryOutcome;
   /** Provenance of this answer: which durable record or journal supplied it,
       or `none` when nothing was found. */
@@ -2522,9 +2580,9 @@ export interface McpRecoverableTool {
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
   /** Synchronous native session fence before claim, dispatch or disclosure. */
   currentCaller?(): McpRequestCaller;
-  /** Read-only: what the downstream durable records say about this binding.
+  /** Read downstream evidence, optionally fencing an unadmitted attempt.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
-  recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
+  recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs; fenceAdmission?: boolean }): Promise<McpRecoveryEvidence>;
 }
 
 /**
@@ -2608,6 +2666,7 @@ function stringIds(details: McpToolPayload): Record<string, string> {
 }
 
 function nextActionFor(outcome: McpRecoveryOutcome): McpRecoveryNextAction {
+  if (outcome === "history-expired") return "manual-check";
   if (outcome === "settled") return "follow-disposition";
   if (outcome === "not-executed") return "new-request-permitted";
   return "original-key-lookup";
@@ -2643,6 +2702,9 @@ function recoveryAnswer(
       replayed,
       shared,
     );
+  }
+  if (evidence.outcome === "history-expired") {
+    return failure(toolName, requestId, "history_expired", evidence.reason ?? "Check delivery manually before sending again.", false, replayed, shared);
   }
   if (evidence.outcome === "not-executed") {
     return failure(
@@ -2760,7 +2822,9 @@ export function createMcpToolService(
         });
         return result;
       };
-      try { effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context)); }
+      // Activity resolves project scope after recovering verified host identities;
+      // the generic directory can still be missing a newly launched project.
+      try { if (typedTool !== "agent_activity") effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context)); }
       catch (error) {
         const rawDetails = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
         const details = isRecord(rawDetails) ? rawDetails : {};
@@ -2945,8 +3009,8 @@ export function createMcpToolService(
         };
         /* Downstream evidence that has failed to be read is unknown too, with
            the cause on the answer, and never a thrown error. */
-        const readEvidence = (bound: McpRequestBinding, legacy: boolean): Promise<McpRecoveryEvidence> =>
-          tool.recover(bound, { legacy, context, args: digestArgs }).catch((cause: unknown): McpRecoveryEvidence => ({
+        const readEvidence = (bound: McpRequestBinding, legacy: boolean, fenceAdmission = true): Promise<McpRecoveryEvidence> =>
+          tool.recover(bound, { legacy, context, args: digestArgs, ...(fenceAdmission ? {} : { fenceAdmission: false }) }).catch((cause: unknown): McpRecoveryEvidence => ({
             outcome: "unknown",
             evidence: "none",
             reason: cause instanceof Error ? cause.message : String(cause),
@@ -2969,6 +3033,7 @@ export function createMcpToolService(
           evidence: McpRecoveryEvidence,
           replayed: boolean,
           original?: McpToolResult | null,
+          evidenceBinding: McpRequestBinding = binding,
         ): Promise<McpToolResult> => {
           const refusal = sessionRefusal(); if (refusal) return refusal;
           // Read again after the evidence lookup: another process may have
@@ -2997,7 +3062,12 @@ export function createMcpToolService(
             replayed: true,
           };
           const answer = recoveryAnswer(typedTool, requestId, evidence, replayed, previous);
-          if (evidence.outcome !== "settled" && evidence.outcome !== "not-executed") return answer;
+          if (evidence.seatMessageFenced && (!current?.binding
+            || JSON.stringify(current.binding) !== JSON.stringify(evidenceBinding))) {
+            return recoveryAnswer(typedTool, requestId, { outcome: "unknown", evidence: "mcp-receipt",
+              reason: "The fenced attempt's receipt changed; look up the original key again.", ids: {} }, replayed);
+          }
+          if (evidence.outcome !== "settled" && evidence.outcome !== "not-executed" && evidence.outcome !== "history-expired") return answer;
           let stored: McpToolResult;
           try {
             stored = await store.settle(
@@ -3006,6 +3076,7 @@ export function createMcpToolService(
               answer,
               evidence.outcome === "not-executed" ? "not-executed" : "settled",
               true,
+              evidenceBinding.target.identity?.startsWith("machine:") ? evidenceBinding : undefined,
             );
           } catch {
             // A failed write can race a successful terminal recovery.
@@ -3013,6 +3084,9 @@ export function createMcpToolService(
               const current = await readableStoredResult();
               if (terminalResult(current)) return { ...current, replayed: true };
             } catch { /* The independently read evidence remains available. */ }
+            if (evidence.seatMessageFenced) return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt", reason: "The fenced attempt could not be saved; look up the original key again.", ids: {},
+            }, replayed);
             return answer;
           }
           return stored === answer ? answer : { ...stored, replayed: true };
@@ -3054,13 +3128,22 @@ export function createMcpToolService(
           // Older relay bindings omitted gateway authorship. Their cached
           // results may name another author's send and cannot license replay.
           if (typedTool === "send_message_to_orchestrator" && !recorded.sendPayload) return notPermitted();
-          if (record.recoveryResult && record.stage === "not-executed") {
+          if (record.recoveryResult && (record.stage === "not-executed"
+            || (!record.recoveryResult.ok && record.recoveryResult.details?.outcome === "history-expired"))) {
             outcome = "replay";
             return { ...record.recoveryResult, replayed: true };
           }
-          if (record.result && (!recoveryOnly || record.stage === "not-executed")) {
+          // A remote acceptance may outlive its pruned delivery history.
+          // Revalidate it so ordinary same-key replays also close on expiry.
+          const remoteAcceptance = typedTool === "send_message_to_orchestrator"
+            && recorded.target.identity?.startsWith("machine:") && record.result?.ok && !terminalResult(record.result);
+          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance) {
             outcome = "replay";
             return { ...record.result, replayed: true };
+          }
+          if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")) {
+            // The sender's fence also closes a stalled pre-dispatch owner.
+            return answerFromEvidence(await readEvidence(recorded, false), true, record.result, recorded);
           }
           if (record.stage === "claimed") {
             /* Claimed and never marked dispatching. While its owner lives the
@@ -3102,10 +3185,15 @@ export function createMcpToolService(
               ids: {},
             }, true);
           }
-          const evidence = await readEvidence(recorded, false);
+          const admitted = recorded.target.identity?.startsWith("machine:") && record.result?.ok === true && typeof record.result.operationId === "string";
+          const evidence = await readEvidence(recorded, false, !admitted);
           outcome = evidence.outcome === "unknown" ? "failure" : "replay";
-          return answerFromEvidence(evidence, true, record.result);
+          return answerFromEvidence(evidence, true, record.result, recorded);
         };
+        const retryCandidate = (record: McpReceiptRecord): boolean => !recoveryOnly && record.digest === digest
+          && !!record.binding && sameCaller(record.binding.caller, binding.caller, typedTool)
+          && record.binding.toolName === "send_message_to_orchestrator" && !!record.binding.target.identity?.startsWith("machine:")
+          && !!record.binding.target.project && record.stage === "not-executed" && retryableSeatFence(record.recoveryResult ?? record.result);
         const claimStartedAt = performance.now();
         if (tool.bindForRecovery) {
           let record: McpReceiptRecord | null;
@@ -3114,15 +3202,17 @@ export function createMcpToolService(
           } catch (cause) {
             return unreadableReceipt(cause, false);
           }
-          if (record) return recoverRecord(record);
+          if (record && !retryCandidate(record)) return recoverRecord(record);
           // An absent lookup is no admission verdict: the original may still
           // arrive. Resolve current names only when this call can admit work.
           if (!recoveryOnly) {
             try {
-              const fresh = await tool.bind(digestArgs);
+              const retry = record?.binding;
+              const fresh = await tool.bind(retry ? { ...digestArgs, machine: retry.target.identity!.slice(8), project: retry.target.project } : digestArgs);
               if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
               if (invocationProof && fresh.caller.nativeProof !== invocationProof) return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage({ reason: "session-changed", retryable: false }), false, false);
-              binding = { ...binding, ...fresh };
+              binding = { ...binding, ...fresh, ...(retry ? { downstreamKey: retry.downstreamKey } : {}),
+                ...(fresh.seatMessageFence ? { seatMessageDigest: digest } : {}) };
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
@@ -3140,7 +3230,7 @@ export function createMcpToolService(
             return unreadableReceipt(cause, false);
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
-          if (record) return recoverRecord(record);
+          if (record && !retryCandidate(record)) return recoverRecord(record);
           try {
             await tool.authorizeClaim?.(digestArgs, binding);
           } catch (error) {
@@ -3194,14 +3284,19 @@ export function createMcpToolService(
         }
         const beforeDispatch = sessionRefusal();
         if (beforeDispatch) {
-          try { await store.fenceUndispatched(key, digest, beforeDispatch); } catch { /* No dispatch; the live session is still refused. */ }
+          try {
+            if (binding.target.identity?.startsWith("machine:")) await store.fenceUndispatched(key, digest, beforeDispatch, binding);
+            else await store.fenceUndispatched(key, digest, beforeDispatch);
+          } catch { /* No dispatch; the live session is still refused. */ }
           return beforeDispatch;
         }
         /* The fence before the one dispatch. Failing here means another
            process closed the attempt between the claim and now. */
         let dispatching: boolean;
         try {
-          dispatching = await store.markDispatching(key, digest);
+          dispatching = binding.target.identity?.startsWith("machine:")
+            ? await store.markDispatching(key, digest, binding)
+            : await store.markDispatching(key, digest);
         } catch (cause) {
           /* The claim is this process's and stays `claimed`: nothing was
              dispatched, and once this process is gone the row closes as
@@ -3311,6 +3406,8 @@ export function createMcpToolService(
             digest,
             settled,
             settled.ok || settled.details?.outcome === "settled" ? "settled" : "not-executed",
+            false,
+            binding.target.identity?.startsWith("machine:") ? binding : undefined,
           );
         } catch {
           /* The answer is real whether or not the row took it: the row stays
@@ -3646,6 +3743,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
   "Recovery under the ORIGINAL `clientRequestId` (#1490): the claim is bound server-side to the calling conversation, its project, the canonical target and the exact downstream key BEFORE the one dispatch, and the request is sent exactly once — never re-POSTed after it may have reached Delegatus.",
   "Repeat the same call with the same arguments (with or without `recoveryOnly: true`) to learn what became of it. A fresh ordinary call claims and dispatches once; an existing claim is answered by READING the durable downstream record, never by dispatching again; `recoveryOnly: true` never claims an absent key or starts any work. Changed arguments under an existing key are an `idempotency_conflict`; another caller or project is refused without disclosure, and a caller whose identity the server cannot establish is refused (`caller_unidentified`) before anything is claimed or dispatched.",
   "The answer's `outcome` is closed: `accepted` (durably admitted, with its actual ids), `in-flight` (executing), `settled` (terminal, with the actual state and resend guidance), `not-executed` (the server proves dispatch never began and the attempt is permanently closed), or `unknown` (timeout, interrupted claim, an unreadable receipt record, unreadable or ambiguous evidence, or absence while execution is still possible). `nextAction` says what is permitted: on `unknown`, `accepted` and `in-flight` ONLY another lookup under the same key — `retryable` never means a new key may be used, and nothing is ever redelivered automatically. `message_receipt(operationId)` remains available for an accepted send.",
+  "A remote seat relay whose sender outbox row is absent stays unknown for up to 30 seconds from its claim. Recovery then atomically fences that admission and returns not-executed with state not-delivered, hop mcp-to-outbox, resend safe and nextAction retry-same-key. Recovery-only calls retain that answer. The next ordinary call with identical arguments and the original clientRequestId may retry; the old attempt stays fenced and all admitted copies share one peer message id.",
   "For a direct `send_message`, a refused TCP connection is retried within the call only when the kernel proves no request was sent. If every attempt is refused, the unadmitted claim is released: the answer gives `outcome: not-executed`, `evidence: not-admitted` and `nextAction: retry-same-key`, and the caller may repeat the identical call under its original key. This exception never applies after a timeout, reset, proxy error or unreadable answer, when the request may have reached Delegatus.",
 ].join(" ");
 
@@ -3673,7 +3771,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
-    "Create a durable board task.",
+    "Create a durable board task. Give every promise a future dueAt. Pass dueTz with dueAt when creating the task. A promise within an existing outcome is an open step on that task, whose dueAt must be no later than the earliest open promise.",
     "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
@@ -3685,6 +3783,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
+    "Give an undated open task a dueAt when you touch it. Reschedule with a future dueAt and dueReason (1 to 200 characters) when moving a passed date later; this records a slip. Moves before the date passes or to an earlier instant count nothing. Only the operator may clear a date. Keep the task due no later than its earliest open promise.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
     "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
@@ -3698,7 +3797,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
     "`finishesTask` marks this pipeline as the one that finishes its tasks (#2187): true for every linked task, or a list of ids from taskIds (others are dropped and named in `finishesTaskDropped`). With the project's merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started pipeline on the task to end. Default off; set it only when this lane's PR delivers the whole task.",
-    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). `maxRounds` defaults to 3; more requires an explicit value. What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings. After that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. A fail loop from another gate permits a fresh handoff; the round count remains cumulative. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
+    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). `maxRounds` defaults to 3; more requires an explicit value. What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings. After that fix, a nonterminal gate follows its pass edge. A terminal gate (next:null) re-checks the fix once: a pass completes, a fail parks with budget-spent findings. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. A fail loop from another gate permits a fresh handoff; the round count remains cumulative. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
     "A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage, and the fix stage's next is the reviewer, so every round gets a fresh reviewer on the new head. The fixer is builder mode=apply-fixes: it fixes every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It never returns fail for its own discovery: it fixes it or lists an outside-spec observation under Notes. It returns fail only when blocked, setting blocked:true and blockedReason. A self-fail with a new committed head, without blocked:true, proceeds to review with the fixer's findings as notes for the reviewer; a fail with no new head still parks with its reason. New `review-loop` definitions refuse with STAGE_KIND_RETIRED. Stored legacy definitions remain readable and support explicit conversion preview before start.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
@@ -3709,7 +3808,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. New review-loop definitions, including add-stage, refuse with STAGE_KIND_RETIRED. Preview and explicitly convert a stored legacy definition before starting it. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, a nonterminal gate follows its pass edge. A terminal gate (next:null) re-checks the fix once: a pass completes, a fail parks with budget-spent findings. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. New review-loop definitions, including add-stage, refuse with STAGE_KIND_RETIRED. Preview and explicitly convert a stored legacy definition before starting it. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
@@ -3749,7 +3848,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_flow: "Read one archived flow by durable id. Flows are retired; the reply grants no execution or current-head approval.",
   flow_action: "Deprecated: flows are retired. New operations refuse with FLOW_RETIRED; use pipeline run stages with review/fix edges. Replay an already accepted clientRequestId to read its original receipt without execution.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
-  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
+  conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
@@ -3804,7 +3903,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
   account_project_binding: [
-    "List, add and remove the bindings that decide which accounts a project's work may run on. `action` is list (the default), add or remove; add and remove need `engine`, `accountId` and `project`.",
+    "List and change the bindings that decide which accounts a project's work may run on. `action` is list (the default), add, remove or set-fallback; mutations need `engine`, `accountId` and `project`. Add accepts `fallback:true`; set-fallback requires a boolean `fallback` and an existing binding. Fallback accounts are selected only after primary allowed accounts lose capacity. Named pins retain their choice.",
     "Every answer is a READ of the record. A list answers the whole binding table. An add or a remove answers the row it changed — `engine`, `accountId`, `project`, `changed`, and `bound` re-read from the store after the write — with that project's allowed accounts for that engine; a mutation the re-read does not show is refused rather than reported ok.",
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
@@ -3829,11 +3928,12 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `nextChosen` (the account the reset-aware selector would choose for unpinned work in the caller's project, when available), `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`; the next choice is computed before narrowing. A read of the durable observations the accounts panel shows; it never asks a provider.",
   issue_report: [
-    "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
+    "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. The seat prepares a scrubbed draft through the dedicated issue-reporter without asking for preparation consent, then asks once before publication to approve the exact text. Nothing is filed without the digest of a preview the operator approved.",
     "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
     "action preview takes title, body and your privacyJudgment (assessment, removed, harmlessHints with reasons, uncertainties), stores the exact text with that judgment and remaining hints, and answers its digest. Known-name source failures appear as hintWarnings and leave the agent to review the text. Any identified session may preview.",
     "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText in the operator's interface language that marks where the published text starts and ends and lists them after it. To an orchestrator seat it also answers approvalForm: {issueReport}. Put previewText in the existing chat as it is, then pass issueReport to publish_prototype_review without taskId; the server composes the exact consent form. The operator decides last and may approve a text that has hints.",
     "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the newest approval form of this preview the seat asked after reading it back, and publishes when a person (the operator or a team member) chose its approving option (`issue_report_approval_required` with `reason` no_form, not_answered or not_an_approval otherwise, and nothing is sent). A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision never approves. An amended answer counts as it now stands. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approval form. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
+    ISSUE_REPORT_RESPONSE_RULE,
     "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
   ].join(" "),
   telegram_bot_chats: [
@@ -3926,8 +4026,8 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
   .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
 
 const pipelineStageSchema = z.object({
-  runtime: z.literal("codex-cloud").optional()
-    .describe("Run reviewer/verifier in Codex Cloud on the published lane branch. Requires engine codex, an explicit model, a capable current-cloud transport and the project's codexCloudEnvironmentId setting. Omitted keeps local execution. Builder/fix stages are not supported."),
+  runtime: z.enum(["local", "codex-cloud"]).optional()
+    .describe("Stage execution location. Omitted inherits the project default. Cloud runs Codex reviewer, verifier and builder/fix stages on the published lane branch; confirmed Cloud unavailability falls back locally once."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
@@ -3944,7 +4044,7 @@ const pipelineStageSchema = z.object({
     maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional()
       .describe(`How many times this stage reviews before its budget is spent (default ${DEFAULT_FAIL_EDGE_ROUNDS}). More than 3 requires an explicit value.`),
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional()
-      .describe("What a fail on the last round does. advance (default): the fail target fixes the last findings. After that fix, the gate follows THIS stage's pass edge or completes when next:null, with no further review. A fix loop from another gate permits a new handoff through a previously spent gate; rounds remain cumulative. stop-after-fix: after the last fix the lane waits in needs_review if the head changed; use it when the operator asked to look before merge. park: stop before the last fix (one more review after maxRounds fail loops). Nothing merges on its own."),
+      .describe("What a fail on the last round does. advance (default): the fail target fixes the last findings. After that fix, a nonterminal gate follows THIS stage's pass edge. A terminal gate (next:null) re-checks the fix once: a pass completes, a fail parks with budget-spent findings. A fix loop from another gate permits a new handoff through a previously spent gate; rounds remain cumulative. stop-after-fix: after the last fix the lane waits in needs_review if the head changed; use it when the operator asked to look before merge. park: stop before the last fix (one more review after maxRounds fail loops). Nothing merges on its own."),
   }).nullable().optional()
     .describe("Fail successor for a run stage. Retained legacy review-loop stages have no fail edge and cannot execute."),
   role: z.object({
@@ -4176,8 +4276,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     appendLine: z.string().min(1).optional()
       .describe("Append one line to the stored details. Edits apply in the order replaceLine, removeLine, appendLine, atomically against the details stored at the write and under the details limit; not combined with details."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
-    placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned retains existing pos when omitted; unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
-    pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
+    placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned requires pos {x, y} when no position is stored; otherwise pos may be omitted and the stored position is kept. Unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
+    pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional().describe("Required for a first pin when no position is stored; omit to keep an existing position when pinning."),
     dueAt: z.string().nullable().optional(),
     dueTz: z.string().nullable().optional(),
     dueReason: z.string().optional().describe("Reason for moving a passed due date to a later instant: 1 to 200 characters. Validated against the current task before admission."),
@@ -4248,6 +4348,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional().describe("set-edge fail edge: action when its review budget is spent."),
     role: pipelineStageSchema.shape.role.nullable().describe("override-stage: role reference, or null to clear it."),
     applyNow: z.boolean().optional().describe("override-stage: interrupt the running run stage and continue the SAME attempt on the new runtime."),
+    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local or codex-cloud, applied to the next attempt."),
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
@@ -4482,6 +4583,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   conversation_action: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
     conversationId: z.string().optional()
       .describe("Durable Delegatus conversation id. Archive and unarchive actions expand it to every registered generation path."),
     transcriptPath: z.string().optional()
@@ -4489,7 +4591,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     selectedContext: selectedContextSchema,
     targets: z.array(conversationArchiveTargetSchema).min(1).max(100).optional()
       .describe("Archive/unarchive list form. Cannot be combined with the single-target fields."),
-    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "archive", "unarchive"]),
+    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "speed", "archive", "unarchive"]),
     key: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "Tab", "Enter", "Escape"]).optional(),
     decision: z.enum(["allow", "deny"]).optional()
       .describe("permission only: allow once or deny the structured host's pending tool permission request."),
@@ -4693,6 +4795,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   create_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier."),
     project: z.string().min(1).describe("Known project key, display name or repository name this orchestrator will own. Case and surrounding whitespace are ignored."),
     conversationId: z.string().regex(/^conversation_/).optional().describe("Existing registered conversation to adopt. Delegatus validates its project, cwd, transcript, lifecycle, and operator authority before seating it."),
     mandate: z.string().optional().describe("Edited mandate text; defaults to the approved versioned orchestrator prompt."),
@@ -4716,6 +4820,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   rotate_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional().describe("Codex catalog tier id; default selects Standard."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier."),
     project: z.string().min(1).describe("Known project key, display name or repository name whose orchestrator seat rotates to a fresh successor. Case and surrounding whitespace are ignored."),
     mandate: z.string().optional().describe("Successor mandate. Omitted: the incumbent's own mandate when it is based on the current default version or is bespoke; the current built-in default when the incumbent's is based on an older version (get_orchestrator reports both versions)."),
     keepIncumbentMandate: z.boolean().optional().describe("Carry the incumbent's mandate forward even when it is based on an older default version. Ignored when mandate is given."),
@@ -4728,14 +4834,15 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
-    action: z.enum(["list", "add", "remove"]).optional()
-      .describe("list (default) reads the whole record; add and remove change it and answer with the changed row read back."),
+    fallback: z.boolean().optional().describe("Use this binding only when primary allowed accounts have no capacity. Required for set-fallback; optional on add."),
+    action: z.enum(["list", "add", "remove", "set-fallback"]).optional()
+      .describe("list reads the record; add, remove and set-fallback change a binding and return its stored state."),
     engine: z.enum(["claude", "codex"]).optional()
-      .describe("Engine the account belongs to. Required to add or remove."),
+      .describe("Engine the account belongs to. Required for mutations."),
     accountId: z.string().trim().min(1).optional()
-      .describe("Account to allow on, or stop allowing on, the project. Required to add or remove."),
+      .describe("Account to allow on, or stop allowing on, the project. Required for mutations."),
     project: z.string().trim().min(1).optional()
-      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
+      .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()
@@ -4751,8 +4858,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
     curation: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
       .describe("Role memory curator: independent per-project timer, enabled by default, minimum gap 1–168 hours, default 6; null restores 6. Every trigger respects this gap. Needs no reason."),
-    maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
-      .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
+    maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional(), window: z.object({ timeZone: z.string(), weekdays: z.array(z.number()), startHour: z.number(), endHour: z.number() }).nullable().optional() }).optional()
+      .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason. Optional window: IANA timeZone, ISO weekdays 1–7, startHour inclusive and endHour exclusive (0–24, same day); null removes it. Missed windows skip and overdue intervals coalesce into one run."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().trim().min(1).optional()

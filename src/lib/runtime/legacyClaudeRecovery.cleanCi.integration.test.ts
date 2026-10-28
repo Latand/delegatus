@@ -512,3 +512,25 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("the recovery fixture acknowledges MCP discovery before accepting a user turn", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-discovery-fixture-"));
+  const deliveryLog = path.join(directory, "deliveries.jsonl");
+  const fixture = spawnClaudeRecoveryFixture("fixture-session", deliveryLog);
+  const responses: string[] = [];
+  fixture.stdout.on("data", chunk => responses.push(String(chunk)));
+  try {
+    fixture.stdin.write(JSON.stringify({ type: "control_request", request_id: "initialize-fixture", request: { subtype: "initialize" } }) + "\n");
+    fixture.stdin.write(JSON.stringify({ type: "control_request", request_id: "catalog-fixture", request: { subtype: "mcp_status" } }) + "\n");
+    const lines = () => responses.join("").split("\n").filter(Boolean);
+    await waitFor(() => lines().length >= 2, "the fixture did not answer both discovery requests");
+    expect(lines().map(line => JSON.parse(line))).toEqual([
+      { type: "control_response", response: { subtype: "success", request_id: "initialize-fixture", response: {} } },
+      { type: "control_response", response: { subtype: "success", request_id: "catalog-fixture", response: { mcpServers: [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }] } } },
+    ]);
+    expect(fs.existsSync(deliveryLog)).toBe(false);
+  } finally {
+    fixture.kill();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

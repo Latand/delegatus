@@ -1,0 +1,2222 @@
+{
+  "before": {
+    "luna-desktop-1440-en-light": {
+      "text": "6.1-Sol · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-1440-en-dark": {
+      "text": "6.1-Sol · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-1440-uk-light": {
+      "text": "6.1-Sol · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-1440-uk-dark": {
+      "text": "6.1-Sol · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-phone-390-en-light": {
+      "text": "6.1-Sol · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "luna-phone-390-en-dark": {
+      "text": "6.1-Sol · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "luna-phone-390-uk-light": {
+      "text": "6.1-Sol · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "luna-phone-390-uk-dark": {
+      "text": "6.1-Sol · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-desktop-1440-en-light": {
+      "text": "6.1-Sol · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unknown-desktop-1440-en-dark": {
+      "text": "6.1-Sol · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unknown-desktop-1440-uk-light": {
+      "text": "6.1-Sol · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unknown-desktop-1440-uk-dark": {
+      "text": "6.1-Sol · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unknown-phone-390-en-light": {
+      "text": "6.1-Sol · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-phone-390-en-dark": {
+      "text": "6.1-Sol · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-phone-390-uk-light": {
+      "text": "6.1-Sol · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-phone-390-uk-dark": {
+      "text": "6.1-Sol · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-desktop-1440-en-light": {
+      "text": "6.1-Sol · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unlisted-desktop-1440-en-dark": {
+      "text": "6.1-Sol · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unlisted-desktop-1440-uk-light": {
+      "text": "6.1-Sol · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unlisted-desktop-1440-uk-dark": {
+      "text": "6.1-Sol · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "unlisted-phone-390-en-light": {
+      "text": "6.1-Sol · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-phone-390-en-dark": {
+      "text": "6.1-Sol · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-phone-390-uk-light": {
+      "text": "6.1-Sol · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-phone-390-uk-dark": {
+      "text": "6.1-Sol · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6.1-Sol · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-desktop-1440-en-light": {
+      "text": "Opus 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-1440-en-dark": {
+      "text": "Opus 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-1440-uk-light": {
+      "text": "Opus 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-1440-uk-dark": {
+      "text": "Opus 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-phone-390-en-light": {
+      "text": "Opus 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-phone-390-en-dark": {
+      "text": "Opus 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-phone-390-uk-light": {
+      "text": "Opus 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-phone-390-uk-dark": {
+      "text": "Opus 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-desktop-1440-en-light": {
+      "text": "Opus 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "claude-unreported-desktop-1440-en-dark": {
+      "text": "Opus 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "claude-unreported-desktop-1440-uk-light": {
+      "text": "Opus 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "claude-unreported-desktop-1440-uk-dark": {
+      "text": "Opus 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "claude-unreported-phone-390-en-light": {
+      "text": "Opus 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-phone-390-en-dark": {
+      "text": "Opus 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-phone-390-uk-light": {
+      "text": "Opus 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-phone-390-uk-dark": {
+      "text": "Opus 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-desktop-1440-en-light": {
+      "text": "Opus 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "opus-old-desktop-1440-en-dark": {
+      "text": "Opus 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "opus-old-desktop-1440-uk-light": {
+      "text": "Opus 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "opus-old-desktop-1440-uk-dark": {
+      "text": "Opus 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "opus-old-phone-390-en-light": {
+      "text": "Opus 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-phone-390-en-dark": {
+      "text": "Opus 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-phone-390-uk-light": {
+      "text": "Opus 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-phone-390-uk-dark": {
+      "text": "Opus 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    }
+  },
+  "after": {
+    "luna-desktop-1440-en-light": {
+      "text": "6-Luna · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6-Luna, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-1440-en-dark": {
+      "text": "6-Luna · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6-Luna, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-1440-uk-light": {
+      "text": "6-Luna · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6-Luna, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-1440-uk-dark": {
+      "text": "6-Luna · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6-Luna, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-900-en-light": {
+      "text": "6-Luna · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6-Luna, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-900-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-900-en-dark": {
+      "text": "6-Luna · High",
+      "label": "Model and reasoning — applies to your next message — GPT-6-Luna, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-900-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-900-uk-light": {
+      "text": "6-Luna · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6-Luna, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-900-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-desktop-900-uk-dark": {
+      "text": "6-Luna · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6-Luna, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-desktop-900-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "luna-phone-390-en-light": {
+      "text": "6-Luna · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6-Luna, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6-Luna · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "luna-phone-390-en-dark": {
+      "text": "6-Luna · high",
+      "label": "Model and reasoning — applies to your next message — GPT-6-Luna, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: 6-Luna · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "luna-phone-390-uk-light": {
+      "text": "6-Luna · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6-Luna, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6-Luna · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "luna-phone-390-uk-dark": {
+      "text": "6-Luna · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — GPT-6-Luna, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "luna-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: 6-Luna · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-desktop-1440-en-light": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-en-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-1440-en-dark": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-en-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-1440-uk-light": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-uk-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-1440-uk-dark": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-1440-uk-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-900-en-light": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-900-en-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-900-en-dark": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-900-en-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-900-uk-light": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-900-uk-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-desktop-900-uk-dark": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-desktop-900-uk-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unknown-phone-390-en-light": {
+      "text": "Model · high",
+      "label": "Model and reasoning — applies to your next message — Model, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-en-light-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-phone-390-en-dark": {
+      "text": "Model · high",
+      "label": "Model and reasoning — applies to your next message — Model, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-en-dark-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-phone-390-uk-light": {
+      "text": "Модель · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-uk-light-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unknown-phone-390-uk-dark": {
+      "text": "Модель · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unknown-phone-390-uk-dark-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-desktop-1440-en-light": {
+      "text": "gpt-5.5 · High",
+      "label": "Model and reasoning — applies to your next message — gpt-5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-en-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-1440-en-dark": {
+      "text": "gpt-5.5 · High",
+      "label": "Model and reasoning — applies to your next message — gpt-5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-en-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-1440-uk-light": {
+      "text": "gpt-5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — gpt-5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-uk-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-1440-uk-dark": {
+      "text": "gpt-5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — gpt-5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-1440-uk-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-900-en-light": {
+      "text": "gpt-5.5 · High",
+      "label": "Model and reasoning — applies to your next message — gpt-5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-900-en-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-900-en-dark": {
+      "text": "gpt-5.5 · High",
+      "label": "Model and reasoning — applies to your next message — gpt-5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-900-en-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-900-uk-light": {
+      "text": "gpt-5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — gpt-5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-900-uk-light-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-desktop-900-uk-dark": {
+      "text": "gpt-5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — gpt-5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-desktop-900-uk-dark-open": {
+      "disabledTiers": 4,
+      "hold": {
+        "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "unlisted-phone-390-en-light": {
+      "text": "gpt-5.5 · high",
+      "label": "Model and reasoning — applies to your next message — gpt-5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-en-light-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: gpt-5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-phone-390-en-dark": {
+      "text": "gpt-5.5 · high",
+      "label": "Model and reasoning — applies to your next message — gpt-5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-en-dark-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: gpt-5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-phone-390-uk-light": {
+      "text": "gpt-5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — gpt-5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-uk-light-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: gpt-5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "unlisted-phone-390-uk-dark": {
+      "text": "gpt-5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — gpt-5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "unlisted-phone-390-uk-dark-open": {
+      "disabledTiers": 6,
+      "hold": {
+        "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: gpt-5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-desktop-1440-en-light": {
+      "text": "Sonnet 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Claude Sonnet 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-1440-en-dark": {
+      "text": "Sonnet 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Claude Sonnet 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-1440-uk-light": {
+      "text": "Sonnet 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Claude Sonnet 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-1440-uk-dark": {
+      "text": "Sonnet 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Claude Sonnet 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-900-en-light": {
+      "text": "Sonnet 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Claude Sonnet 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-900-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-900-en-dark": {
+      "text": "Sonnet 5.5 · High",
+      "label": "Model and reasoning — applies to your next message — Claude Sonnet 5.5, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-900-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-900-uk-light": {
+      "text": "Sonnet 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Claude Sonnet 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-900-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-desktop-900-uk-dark": {
+      "text": "Sonnet 5.5 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Claude Sonnet 5.5, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-desktop-900-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "sonnet-phone-390-en-light": {
+      "text": "Sonnet 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Claude Sonnet 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Sonnet 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-phone-390-en-dark": {
+      "text": "Sonnet 5.5 · high",
+      "label": "Model and reasoning — applies to your next message — Claude Sonnet 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Sonnet 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-phone-390-uk-light": {
+      "text": "Sonnet 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Claude Sonnet 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Sonnet 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "sonnet-phone-390-uk-dark": {
+      "text": "Sonnet 5.5 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Claude Sonnet 5.5, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "sonnet-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Sonnet 5.5 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-desktop-1440-en-light": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-en-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-1440-en-dark": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-en-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-1440-uk-light": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-uk-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-1440-uk-dark": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-1440-uk-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-900-en-light": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-900-en-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-900-en-dark": {
+      "text": "Model · High",
+      "label": "Model and reasoning — applies to your next message — Model, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-900-en-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-900-uk-light": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-900-uk-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-desktop-900-uk-dark": {
+      "text": "Модель · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-desktop-900-uk-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "claude-unreported-phone-390-en-light": {
+      "text": "Model · high",
+      "label": "Model and reasoning — applies to your next message — Model, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-en-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-phone-390-en-dark": {
+      "text": "Model · high",
+      "label": "Model and reasoning — applies to your next message — Model, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-en-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "No model reported yet — pick a model to change reasoning and speed",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-phone-390-uk-light": {
+      "text": "Модель · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-uk-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "claude-unreported-phone-390-uk-dark": {
+      "text": "Модель · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Модель, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "claude-unreported-phone-390-uk-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-desktop-1440-en-light": {
+      "text": "Opus 4.1 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 4.1, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-en-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-1440-en-dark": {
+      "text": "Opus 4.1 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 4.1, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-en-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-1440-uk-light": {
+      "text": "Opus 4.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 4.1, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-uk-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-1440-uk-dark": {
+      "text": "Opus 4.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 4.1, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-1440-uk-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-900-en-light": {
+      "text": "Opus 4.1 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 4.1, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-900-en-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-900-en-dark": {
+      "text": "Opus 4.1 · High",
+      "label": "Model and reasoning — applies to your next message — Opus 4.1, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-900-en-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-900-uk-light": {
+      "text": "Opus 4.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 4.1, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-900-uk-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-desktop-900-uk-dark": {
+      "text": "Opus 4.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 4.1, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-desktop-900-uk-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 3,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": null
+    },
+    "opus-old-phone-390-en-light": {
+      "text": "Opus 4.1 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 4.1, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-en-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: Opus 4.1 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-phone-390-en-dark": {
+      "text": "Opus 4.1 · high",
+      "label": "Model and reasoning — applies to your next message — Opus 4.1, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-en-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 is not in the model list — pick a model to change reasoning and speed",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Applies to your next message: Opus 4.1 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-phone-390-uk-light": {
+      "text": "Opus 4.1 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 4.1, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-uk-light-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 4.1 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "opus-old-phone-390-uk-dark": {
+      "text": "Opus 4.1 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Opus 4.1, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "opus-old-phone-390-uk-dark-open": {
+      "disabledTiers": 5,
+      "hold": {
+        "text": "Opus 4.1 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
+        "lines": 2,
+        "inView": true,
+        "clipped": false
+      },
+      "summary": {
+        "text": "Стосується наступного повідомлення: Opus 4.1 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable-desktop-1440-en-light": {
+      "text": "Fable · High",
+      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-1440-en-dark": {
+      "text": "Fable · High",
+      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-1440-uk-light": {
+      "text": "Fable · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-1440-uk-dark": {
+      "text": "Fable · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-900-en-light": {
+      "text": "Fable · High",
+      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-900-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-900-en-dark": {
+      "text": "Fable · High",
+      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-900-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-900-uk-light": {
+      "text": "Fable · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-900-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-desktop-900-uk-dark": {
+      "text": "Fable · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-desktop-900-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable-phone-390-en-light": {
+      "text": "Fable · high",
+      "label": "Model and reasoning — applies to your next message — Fable, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Fable · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable-phone-390-en-dark": {
+      "text": "Fable · high",
+      "label": "Model and reasoning — applies to your next message — Fable, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Fable · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable-phone-390-uk-light": {
+      "text": "Fable · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Fable · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable-phone-390-uk-dark": {
+      "text": "Fable · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Fable · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    }
+  }
+}

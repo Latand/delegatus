@@ -122,6 +122,14 @@ export function fileModelLabel(file: Pick<FileEntry, "engine" | "model">): strin
   return file.model ? modelDisplayName(file.engine, file.model) : null;
 }
 
+/** The model a conversation's header names: the observed one, else the one the
+    launch asked for, else null. A stage opened before its transcript reports a
+    model still names what it was launched on, never an engine default. */
+export function conversationModelLabel(file: Pick<FileEntry, "engine" | "model" | "launchModel">): string | null {
+  const model = file.model || file.launchModel;
+  return model ? modelDisplayName(file.engine, model) : null;
+}
+
 /** Identity color tinted by model family (Terra green, Sol amber, Fable deep orange…). */
 export function modelTint(file: FileEntry): ModelTint {
   return tintOf(modelBaseHex(file));

@@ -289,6 +289,20 @@ const pane = (host: HTMLElement, stageId: string) => sheet(host)?.querySelector<
 const same = (actual: unknown, expected: unknown) => expect(actual === expected && expected !== null && expected !== undefined).toBe(true);
 const readerIn = (element: Element | null): string | null => element?.querySelector<HTMLElement>("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
 
+test("a pipeline card's one menu keeps Priority with its move, appearance and pipeline pages (#2276)", async () => {
+  const { host } = mount(searchPipeline());
+  await tick();
+  click(laneMenu(host));
+
+  const groups = [...host.querySelectorAll<HTMLElement>(".menu [data-cm-segments]")]
+    .map((group) => group.getAttribute("aria-label"));
+  const pages = [...host.querySelectorAll<HTMLElement>(".menu [data-cm-section]")]
+    .map((page) => page.querySelector(".lbl")?.firstChild?.textContent);
+
+  expect(groups).toEqual(["Move to", "Priority"]);
+  expect(pages).toEqual(["Appearance", "Pipeline actions", "More"]);
+});
+
 test("the lane row's head opens Stages; the pipeline actions are a page of the card's one ⋯, each with the engine's own refusal (#2148)", async () => {
   const { host } = mount(searchPipeline());
   await tick();
@@ -308,6 +322,8 @@ test("the lane row's head opens Stages; the pipeline actions are a page of the c
   expect(host.querySelector(".menu [data-cm-back]")?.textContent).toBe("Pipeline actions");
   expect(menuLabels(host).slice(1)).toEqual([
     ["Expand stages", false, null],
+    /* docs/design/lane-diff-comments.md: the lane's one way into its review sheet. */
+    ["Review changes", false, null],
     ["Attach PR or issue to the pipeline…", false, null],
     ["Checks", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
@@ -430,6 +446,16 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   expect(implement.querySelector(".pane-sub")?.textContent).toBe("started by Verify · fail");
   expect([...implement.querySelectorAll(".attempts button")].map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["attempt 1 · passed", "false"], ["attempt 2 · passed", "true"]]);
   expect([...pane(host, "review")!.querySelectorAll(".rounds .rchip")].map((chip) => chip.textContent)).toEqual(["Round 1 · changes requested", "Round 2 · approved"]);
+  const opened: unknown[] = [];
+  const readHistory = (event: Event) => opened.push((event as CustomEvent).detail);
+  window.addEventListener("llv:review-history", readHistory);
+  try {
+    const chips = pane(host, "review")!.querySelectorAll<HTMLButtonElement>(".rounds button");
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) flushSync(() => chip.click());
+    expect(opened).toEqual([{ id: "flow-review", round: 1 }, { id: "flow-review", round: 2 }]);
+  } finally { window.removeEventListener("llv:review-history", readHistory); }
+
   expect(pane(host, "verify")!.querySelector(".pane-sub")?.textContent).toBe("started by Review · pass · on fail → Implement · 1/2");
   /* Each started pane holds its shown attempt's conversation as a reader. */
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify2));

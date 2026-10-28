@@ -20,7 +20,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
-import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, captureLaneReviewFrames, captureTaskTimelinePrototype } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
@@ -60,6 +60,20 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("lane diff comments", () => {
+  browserTest("the phone lists a lane's changed files and opens one read-only, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/lane-diff-comments/phone");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try {
+      const result = await captureLaneReviewFrames(browser, out, true);
+      expect(result.failures).toEqual([]);
+      expect(result.readings.length).toBe(2 * 2 * 2);
+    } finally { await browser.close(); }
+  }, 300_000);
+});
 
 describe("phone markdown links", () => {
   browserTest("readable labels wrap at words and unbroken targets fit the phone", async () => {
@@ -13480,5 +13494,201 @@ describe("new task default deadline", () => {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureTaskDueFrames(browser, server.base, out, true); }
     finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
+describe("the phone names the model the conversation runs on", () => {
+  /*
+   * The chat header's identity line and the conversation menu's identity line,
+   * over a Codex conversation launched on Luna that the transcript has not named
+   * yet, one nobody has named, one the transcript names differently from the
+   * launch, and a Fable conversation, at the phone widths, both languages, both
+   * schemes. `LLV_MODEL_FACE_SIDE=before` records the same case over a checkout
+   * that names the engine instead; the default records `after` and gates it.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… bun test \
+   *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "names the model"
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const CASES = {
+    luna: { shown: "gpt-6-luna", never: ["Sol", "Codex"] },
+    unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
+    observed: { shown: "gpt-6-astra", never: ["Sol", "gpt-6-luna"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+  } as const;
+  browserTest("the chat header and the menu show the observed or requested model, or the engine's name, never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face/phone-headers");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const base = served.base.replace(/\/$/, "");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const readings: Record<string, unknown> = {};
+    /* The line's deciding fact is the model (or the engine's name): that text range has to be whole, inside the line's own box and in view.
+       The reasoning tier after it may end in the ellipsis the line is built to draw, so `whole` records the full line and is not gated. */
+    const measure = ({ selector, shown }: { selector: string; shown: string }) => {
+      const element = document.querySelector(selector) as HTMLElement | null;
+      if (!element) return null;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      for (let next = walker.nextNode(); next; next = walker.nextNode()) if ((next.textContent ?? "").includes(shown)) { node = next as Text; break; }
+      const range = document.createRange();
+      if (node) { const at = node.textContent!.indexOf(shown); range.setStart(node, at); range.setEnd(node, at + shown.length); }
+      else range.selectNodeContents(element);
+      const drawn = range.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      return {
+        text: element.textContent?.trim() ?? "",
+        whole: element.scrollWidth <= element.clientWidth + 1,
+        modelWhole: drawn.left >= box.left - 0.5 && drawn.right <= box.right + 0.5,
+        inView: drawn.left >= 0 && drawn.right <= innerWidth && drawn.top >= 0 && drawn.bottom <= innerHeight,
+        overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      };
+    };
+    try {
+      for (const [name, expected] of Object.entries(CASES)) for (const viewport of [{ width: 390, height: 844 }, { width: 360, height: 780 }]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { page, context, pageErrors } = await openFixture(browser, `${base}/?runtime=structured&modelface=${name}#c=conversation_running`, viewport, scheme, lang, "reduce", true);
+        const key = `${name}-${viewport.width}-${lang}-${scheme}`;
+        try {
+          await page.locator("[data-mobile2-chat-model]").first().waitFor({ timeout: 20_000 });
+          await page.mouse.move(0, 0);
+          const header = await page.evaluate(measure, { selector: "[data-mobile2-chat-model]", shown: expected.shown });
+          await page.screenshot({ path: path.join(out, `${side}-${key}-header.png`) });
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-chat-identity]').waitFor();
+          const menu = await page.evaluate(measure, { selector: '[data-mobile2-sheet="menu"] [data-mobile2-chat-identity] .truncate', shown: expected.shown });
+          await page.screenshot({ path: path.join(out, `${side}-${key}-menu.png`) });
+          readings[key] = { header, menu };
+          expect(pageErrors).toEqual([]);
+          if (side === "after") {
+            for (const [part, reading] of [["header", header], ["menu", menu]] as const) {
+              expect({ key, part, present: reading !== null }).toEqual({ key, part, present: true });
+              /* The chat header ends its line in an ellipsis below the named 390 px (its floor is six characters), so 360 only records. */
+              const gatesModel = part === "menu" || viewport.width >= 390;
+              expect({ key, part, overflowX: reading!.overflowX, inView: reading!.inView, modelWhole: gatesModel ? reading!.modelWhole : true }).toEqual({ key, part, overflowX: 0, inView: true, modelWhole: true });
+              expect(reading!.text).toContain(expected.shown);
+              for (const never of expected.never) expect(reading!.text).not.toContain(never);
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/headers-phone.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 900_000);
+});
+
+/* docs/design/task-timeline/prototype-v2/: the task summary and timeline
+   prototype's three variants on the phone's task screen at 390 px, the summary
+   first under the title, in both languages and themes. */
+describe("task summary and timeline prototype v2", () => {
+  browserTest("three treatments of the summary block start on the first screen and fit the task screen whole", async () => {
+    const out = path.resolve(process.env.LLV_TIMELINE_OUT ?? ".artifacts/task-timeline-v2/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskTimelinePrototype(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("phone composer multiline growth", () => {
+  /* The orchestrator seat's phone composer at the widths between the iPhone 11 (414 x 896) and the small SE-class
+     phone, with the keyboard down and up. The keyboard shrinks only `visualViewport.height`, as on iOS Safari; the
+     visible heights are what that keyboard leaves on each phone, and `lines` is how many whole lines of a long draft
+     the field must show there. */
+  const PHONES = [
+    { width: 414, height: 896, keyboards: [{ visible: 380, lines: 5 }, { visible: 450, lines: 5 }] },
+    { width: 390, height: 844, keyboards: [{ visible: 360, lines: 4 }, { visible: 430, lines: 5 }] },
+    { width: 375, height: 667, keyboards: [{ visible: 300, lines: 3 }, { visible: 360, lines: 3 }] },
+  ];
+  browserTest("long drafts grow and keep actions above the visual viewport keyboard", async () => {
+    const out = process.env.LLV_PHONE_GROWTH_OUT ?? path.join(os.tmpdir(), "phone-composer-growth");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const setKeyboard = async (page: Page, visible: number | null) => {
+      await page.evaluate(height => {
+        const visual = window.visualViewport!;
+        if (height === null) delete (visual as unknown as { height?: number }).height;
+        else Object.defineProperty(visual, "height", { configurable: true, value: height });
+        visual.dispatchEvent(new Event("resize"));
+      }, visible);
+      await page.waitForTimeout(200);
+    };
+    /* Whole lines the field's content box shows, from the rendered field itself. */
+    const wholeLines = (field: ReturnType<Page["locator"]>) => field.evaluate(element => {
+      const style = getComputedStyle(element);
+      const content = element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      return { lines: content / parseFloat(style.lineHeight), height: element.getBoundingClientRect().height };
+    });
+    try {
+      for (const phone of PHONES) {
+        const viewport = { width: phone.width, height: phone.height };
+        for (const scheme of SCHEMES) for (const locale of ["en", "uk"] as const) {
+          const { page, context, pageErrors } = await openFixture(browser, `${server.base}?seatnoise=ii&runtime=structured#c=conversation_running`, viewport, scheme, locale, "reduce", true);
+          try {
+            const field = page.locator("[data-mobile2-composer] textarea");
+            await field.waitFor();
+            const tag = `${viewport.width}-${scheme}-${locale}`;
+            await field.fill("");
+            const unit = page.locator("[data-mobile2-composer]");
+            const empty = (await field.boundingBox())!.height;
+            const emptyUnit = (await unit.boundingBox())!.height;
+            await page.screenshot({ path: path.join(out, `${tag}-before.png`) });
+            const sendAndAttach = [page.locator("[data-mobile2-send]"), page.getByRole("button", { name: translate(locale, "composer.addAttachments"), exact: true })];
+            const expectActionsVisible = async (visibleHeight: number) => {
+              for (const control of sendAndAttach) {
+                expect(await control.isVisible()).toBe(true);
+                const box = (await control.boundingBox())!;
+                expect(box.y).toBeGreaterThanOrEqual(0);
+                expect(box.y + box.height).toBeLessThanOrEqual(visibleHeight + 1);
+              }
+              const box = (await page.locator("[data-mobile2-tools-actions]").boundingBox())!;
+              expect(box.x).toBeGreaterThanOrEqual(0);
+              expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+              expect(box.y + box.height).toBeLessThanOrEqual(visibleHeight + 1);
+            };
+            /* A short three-line draft shows whole, keyboard down and up, without scrolling inside the field. */
+            await field.fill("Please check the failing lane,\nread its last review,\nand tell me what blocks the merge.");
+            for (const visible of [null, ...phone.keyboards.map(keyboard => keyboard.visible)]) {
+              await setKeyboard(page, visible);
+              expect(await field.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+              await expectActionsVisible(visible ?? viewport.height);
+            }
+            await setKeyboard(page, null);
+            await field.fill(Array.from({ length: 30 }, (_, index) => `Line ${index + 1}: Review the result and explain the next step.`).join("\n"));
+            await page.waitForFunction(() => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-mobile2-composer] textarea");
+              return field && field.scrollHeight > field.clientHeight;
+            });
+            const grown = (await field.boundingBox())!.height;
+            expect(await field.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
+            await page.screenshot({ path: path.join(out, `${tag}-after.png`) });
+            expect(grown).toBeGreaterThan(empty + 44);
+            expect((await unit.boundingBox())!.height).toBeGreaterThan(emptyUnit + 44);
+            expect(grown).toBeLessThanOrEqual(viewport.height * .4 + 2);
+            await expectActionsVisible(viewport.height);
+            for (const keyboard of phone.keyboards) {
+              await setKeyboard(page, keyboard.visible);
+              const shown = await wholeLines(field);
+              expect(shown.lines).toBeGreaterThanOrEqual(keyboard.lines);
+              /* The field stops at a whole line, so the edge never cuts the top line of the draft. */
+              expect(Math.abs(shown.lines - Math.round(shown.lines))).toBeLessThan(.05);
+              expect(shown.height).toBeLessThanOrEqual(grown + 1);
+              await page.screenshot({ path: path.join(out, `${tag}-keyboard-${keyboard.visible}.png`) });
+              await expectActionsVisible(keyboard.visible);
+            }
+            await setKeyboard(page, null);
+            await page.waitForFunction(height => {
+              const field = document.querySelector("[data-mobile2-composer] textarea");
+              return field && Math.abs(field.getBoundingClientRect().height - height) < 1;
+            }, grown);
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
   }, 300_000);
 });

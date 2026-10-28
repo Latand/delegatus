@@ -1,6 +1,7 @@
 import { BOARD_SURFACE, bandHistoryAvailable, bandContainsTarget, stageSurface } from "./boardPresentation";
 import { conversationIdentity } from "@/lib/accounts/identity";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
+import { isDirectGroup } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { COLLAPSED_DECK_CHIP_H, deckDisclosureTerminal } from "@/components/flows/reviewDeckDisclosure";
@@ -375,6 +376,14 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
       admitDrafts(band);
     }
     if (root !== node.file.path) admit(bandOfKey.get(root)!, node.file.path);
+  }
+
+  /* Independent review decks have no executable container halo. Keep them in
+     their subject's primary band, including taskless subjects and mirrors. */
+  for (const deck of base.decks) {
+    if (!isDirectGroup(deck.flow)) continue;
+    const owner = bandOfKey.get(deck.flow.implementerPath);
+    if (owner) admit(owner, deck.key);
   }
 
   /* 4. Drafts without a task: a global «+ Agent» is a new task in the making. */

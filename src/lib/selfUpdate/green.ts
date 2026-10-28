@@ -68,6 +68,20 @@ export class GreenReader {
     if (next) throw new Error("GitHub returned too many check runs");
     return all;
   }
+  private async workflowRuns(url: string): Promise<unknown[]> {
+    const all: unknown[] = [];
+    let next: string | null = url;
+    for (let pages = 0; next && pages < 10; pages++) {
+      if (!next.startsWith("https://api.github.com/")) throw new Error("GitHub pagination left its host");
+      const page = await this.page(next);
+      const runs = (page.body as { workflow_runs?: unknown })?.workflow_runs;
+      if (!Array.isArray(runs)) throw new Error("GitHub returned invalid workflow runs");
+      all.push(...runs);
+      next = page.next;
+    }
+    if (next) throw new Error("GitHub returned too many pages");
+    return all;
+  }
   private async requiredChecks(repository: string, branch: string, fresh: boolean): Promise<RequiredCheck[]> {
     const key = `${repository}:${branch}`;
     const cached = this.required.get(key);
@@ -118,12 +132,36 @@ export class GreenReader {
       const commit = (await this.page(`${api}/commits/${head}`)).body as { commit?: { tree?: { sha?: string } } };
       const headTree = commit?.commit?.tree?.sha;
       if (!headTree) throw new Error("GitHub returned no head tree");
-      if (headTree !== await this.ports.treeOf(checkout, target)) return finish({ state: "untested-tree" });
+      const exactTarget = headTree !== await this.ports.treeOf(checkout, target);
+      // Delegatus runs its runtime gate on main as well as PRs. Only that
+      // app-bound required gate can certify a different, post-merge tree.
+      if (exactTarget && !["latand/delegatus", "latand/live-log-viewer-next"].includes(repository.toLowerCase())) return { state: "untested-tree" };
+      const evidence = exactTarget ? target : head;
       const [runs, statuses, required] = await Promise.all([
-        this.checkRuns(`${api}/commits/${head}/check-runs?per_page=100`),
-        this.list(`${api}/commits/${head}/statuses?per_page=100`),
+        this.checkRuns(`${api}/commits/${evidence}/check-runs?per_page=100`),
+        this.list(`${api}/commits/${evidence}/statuses?per_page=100`),
         this.requiredChecks(repository, branch, fresh),
       ]);
+      if (exactTarget) {
+        const gate = required.find(check => check.name === "runtime-gate" && check.appId === 15368);
+        if (!gate) return { state: "untested-tree" };
+        const workflows = await this.workflowRuns(`${api}/actions/runs?head_sha=${target}&event=push&per_page=100`);
+        const matching = workflows.filter(value => {
+          const run = value as { path?: string; head_sha?: string; event?: string };
+          return run.path === ".github/workflows/bun-runtime.yml" && run.head_sha === target && run.event === "push";
+        }) as { id?: number; created_at?: string; status?: string; conclusion?: string; check_suite_id?: number }[];
+        matching.sort((a, b) => (Date.parse(b.created_at ?? "") || 0) - (Date.parse(a.created_at ?? "") || 0) || (b.id ?? 0) - (a.id ?? 0));
+        const workflow = matching[0];
+        if (!workflow || workflow.status !== "completed" || workflow.conclusion !== "success" || !Number.isSafeInteger(workflow.check_suite_id)) {
+          return { state: workflow?.status === "completed" && workflow.conclusion === "failure" ? "red" : "pending", detail: "runtime-gate" };
+        }
+        const gates = runs.filter(run => {
+          const item = run as { name?: unknown; app?: { id?: unknown }; check_suite?: { id?: number }; status?: string; conclusion?: string };
+          return item.name === gate.name && item.app?.id === gate.appId && item.check_suite?.id === workflow.check_suite_id
+            && item.status === "completed" && item.conclusion === "success";
+        });
+        if (!gates.length) return { state: "pending", detail: "runtime-gate" };
+      }
       const runGroups = new Map<number | null, Record<string, unknown>[]>();
       for (const run of runs) {
         const item = run as Record<string, unknown>;

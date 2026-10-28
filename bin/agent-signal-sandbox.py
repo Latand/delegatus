@@ -13,13 +13,14 @@ import sys
 import tempfile
 import time
 import uuid
+import datetime
 
 POLICY = 1
 # The Viewer passes its own budgets; a terminal launch has no Viewer waiting.
 READINESS = int(os.environ.get("LLV_SIGNAL_READINESS_MS") or 10_000) / 1000
 ACK = int(os.environ.get("LLV_SIGNAL_ACK_MS") or 15_000) / 1000
 LAUNCH_ENV = ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC",
-              "LLV_SIGNAL_IGNORE_NATIVE_STDIO", "LLV_SIGNAL_KEEP_NATIVE_STDERR", "LLV_SIGNAL_READINESS_MS", "LLV_SIGNAL_ACK_MS")
+              "LLV_SIGNAL_IGNORE_NATIVE_STDIO", "LLV_SIGNAL_KEEP_NATIVE_STDERR", "LLV_SIGNAL_READINESS_MS", "LLV_SIGNAL_ACK_MS", "LLV_HOST_EXIT_RECEIPTS")
 
 
 class Unavailable(Exception):
@@ -39,6 +40,53 @@ def atomic(file, value):
     target.write_text(json.dumps(value))
     target.chmod(0o600)
     target.replace(file)
+
+
+def persist_exit(directory, status):
+    """The process which waited writes the raw native status before translating it."""
+    binding = directory / "host-exit.json"
+    if not binding.exists():
+        return
+    bound = json.loads(read(binding))
+    if bound.get("discard"):
+        return
+    target = Path(bound["file"])
+    native_signal = None
+    if os.WIFSIGNALED(status):
+        number = os.WTERMSIG(status)
+        try:
+            native_signal = signal.Signals(number).name
+        except ValueError:
+            native_signal = str(number)
+    value = {"code": os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,
+             "signal": native_signal,
+             "at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + "." + uuid.uuid4().hex)
+    try:
+        with open(temporary, "x") as output:
+            os.chmod(temporary, 0o600)
+            json.dump(value, output)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            pass
+        fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        target.with_name(target.name[:-len(".exit.json")] + ".writer.json").unlink(missing_ok=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def wait_native(pid, directory):
+    _, status = os.waitpid(pid, 0)
+    persist_exit(directory, status)
+    return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
 
 
 def start(pid):
@@ -85,6 +133,14 @@ def wait_file(file, child=None, end=None):
 
 
 def inner(directory, command):
+    if os.environ.get("LLV_HOST_EXIT_RECEIPTS") == "1":
+        pid = os.fork()
+        if pid != 0:
+            # Ignore terminal group signals here; the native child receives
+            # them itself. The outside monitor owns namespace escalation.
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, signal.SIG_IGN)
+            return wait_native(pid, directory)
     hostproc = directory / "proc"
     status = dict(line.split(":", 1) for line in read("/proc/self/status").splitlines() if ":" in line)
     ready = {
@@ -111,6 +167,13 @@ def inner(directory, command):
 
 
 def execute(command):
+    # Only the final engine changes priority, after every resident waiter forks.
+    score = os.environ.pop("LLV_SIGNAL_OOM_SCORE", None)
+    if score is not None:
+        try:
+            Path("/proc/self/oom_score_adj").write_text(str(int(score)))
+        except (OSError, ValueError):
+            print("Delegatus: workload OOM score unavailable; continuing with inherited score", file=sys.stderr, flush=True)
     # Socket engines outlive their Viewer and inherit no Viewer pipes. A caller
     # that bounds stderr itself keeps it, so a startup failure shows its cause.
     if os.environ.get("LLV_SIGNAL_IGNORE_NATIVE_STDIO") == "1":
@@ -375,6 +438,11 @@ def namespace(options, command, owned_group, root, directory):
             if stopping and time.monotonic() - stopping >= 2:
                 send(init, signal.SIGKILL)
             time.sleep(0.02)
+        # Killing namespace init also kills its native waiter. The kernel
+        # ends the remaining namespace members with SIGKILL in that case.
+        binding = directory / "host-exit.json"
+        if binding.exists() and child.returncode in (137, -signal.SIGKILL):
+            persist_exit(directory, signal.SIGKILL)
         return child.returncode if child.returncode >= 0 else 128 - child.returncode
     except Exception as error:
         if published:
@@ -407,7 +475,7 @@ def main():
     if not command:
         raise RuntimeError("engine command is missing")
     if options.inner:
-        inner(Path(options.inner), command)
+        return inner(Path(options.inner), command)
     if options.entered:
         # The waiting launcher runs the engine itself unless this mark exists.
         os.close(os.open(options.entered, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))

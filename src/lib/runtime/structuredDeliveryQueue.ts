@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { composeBatch, type InboxMember } from "./inboxBatch";
 import type { SeatRecipientVerdict } from "@/lib/orchestrator/seatChannel";
@@ -11,6 +12,7 @@ import { withConversationActuation, type ActuationLease } from "@/lib/deliveryAc
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
+import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
@@ -60,6 +62,7 @@ export interface StructuredDeliveryQueuePort {
   conversationRetired?(conversationId: string): string | null;
   /** Re-read the idle revision after claiming an automatic continuation. */
   idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
+  seatQuotaDispatchGuard?(operationId: string, conversationId: string, project: string): Promise<() => void>;
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
   /** Hold a fresh autonomous turn while original accepted work settles. */
@@ -2402,7 +2405,25 @@ export class StructuredDeliveryQueue {
           ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
       };
       let sent: { receipt: DeliveryReceipt } | { error: unknown };
+      let quotaGuard: (() => void) | undefined;
+      if (effect.origin?.role === SEAT_QUOTA_RECOVERY_ROLE) {
+        try {
+          if (!effect.onlyIfIdle || !effect.origin.project || !this.port.seatQuotaDispatchGuard) {
+            throw new StructuredSendRefusedError("seat quota dispatch authority unavailable");
+          }
+          quotaGuard = await this.checking(lane, effect, "revalidating seat quota recovery",
+            () => this.port.seatQuotaDispatchGuard!(effect.operationId, effect.conversationId, effect.origin!.project!));
+        } catch (error) {
+          // Preparation has not called the host. Unreadable authority is a
+          // deferred check, with the same key and no uncertain native effect.
+          const refusal = error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError
+            ? error : new StructuredDispatchDeferredError(failureReason(error));
+          await this.settleSendOutcome(effect, host, { error: refusal }, settlement);
+          continue;
+        }
+      }
       const authorize = () => {
+        quotaGuard?.();
         const seat = this.port.seatRecipient?.(effect.conversationId);
         if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
         if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
@@ -3412,7 +3433,7 @@ export class StructuredDeliveryQueue {
       }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
+          if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
             if (effect.onlyIfIdle) {
               await transition("failed", { reason: "idle-retirement-deferred" });
               return { blocked: false, terminated: false };
@@ -3433,7 +3454,7 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
+        if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
