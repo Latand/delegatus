@@ -15174,7 +15174,7 @@ export async function patchPipeline(
       const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
-      if (resumesPass) renewPullRequestInspection(current, attempt, ports.now());
+      if (resumesPass && attempt?.pullRequestInspection) renewPullRequestInspection(current, attempt, ports.now());
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
         if (current.publicationAdmission?.state === "pending" && current.publicationAdmission.sha !== acceptedSha) return { error: "another publication admission is pending", status: 409 };
@@ -15880,7 +15880,7 @@ export async function patchPipeline(
         }
         // A person grants one new push. Per-head automatic retry history stays durable.
         delete attempt.publicationRetry;
-        renewPullRequestInspection(pipeline, attempt, ports.now());
+        if (attempt.pullRequestInspection) renewPullRequestInspection(pipeline, attempt, ports.now());
         attempt.state = "passed";
         pipeline.state = "running";
         pipeline.pausedState = null;
