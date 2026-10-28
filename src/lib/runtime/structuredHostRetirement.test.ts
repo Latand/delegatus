@@ -295,9 +295,11 @@ test("unknown process liveness refuses and cannot reconcile a gone row", async (
   expect(probe.report.refused).toMatchObject([{ clause: "process-identity", undetermined: true, reason: "kernel unavailable" }]);
 });
 
-test("a cursor write failure alarms before reconciliation or termination", async () => {
+for (const alive of [true, false]) test(`a cursor write failure alarms before ${alive ? "termination" : "gone reconciliation"}`, async () => {
   let acted = false;
   await expect(sweep({ writeCursor: () => { throw new Error("cursor disk unavailable"); },
+    pidAlive: () => determined(alive),
+    reconcileGone: async () => { acted = true; return true; },
     terminate: async () => { acted = true; throw new Error("unreachable"); } })).rejects.toThrow("cursor disk unavailable");
   expect(acted).toBe(false);
 });

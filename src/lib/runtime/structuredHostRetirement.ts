@@ -614,8 +614,9 @@ export interface StructuredHostRetirementReport {
     afterKey: string | null;
     wrapped: boolean;
     candidates: number;
+    /** Candidates still owed a turn past the continuation checkpoint. */
     unvisited: number;
-    /** Registry age for candidates outside this page; never kill authority. */
+    /** Registry age beyond the checkpoint; never kill authority. */
     oldestUnvisited: { key: string; updatedAt: string } | null;
   };
   gone?: { key: string; conversationId: string | null; process: ProcessIdentity }[];
@@ -1319,43 +1320,25 @@ export async function runStructuredHostRetirementSweep(
   const start = next < 0 ? 0 : next;
   const count = Math.min(all.length, RESOURCE_STRUCTURED_HOST_LIMIT);
   const candidates = Array.from({ length: count }, (_, index) => all[(start + index) % all.length]!);
-  const visited = new Set(candidates.map(entry => sessionKeyId(entry.key)));
-  const unvisited = all.filter(entry => !visited.has(sessionKeyId(entry.key)));
-  const oldest = unvisited.reduce<typeof unvisited[number] | null>((oldest, entry) =>
-    oldest === null || entry.updatedAt < oldest.updatedAt ? entry : oldest, null);
-  const afterKey = candidates.length ? sessionKeyId(candidates.at(-1)!.key) : null;
-  report.progress = { beforeKey, afterKey, wrapped: beforeKey !== null && (next < 0 || start + count > all.length),
-    candidates: all.length, unvisited: unvisited.length,
-    oldestUnvisited: oldest ? { key: sessionKeyId(oldest.key), updatedAt: oldest.updatedAt } : null };
-  const planned = retirementInputs({ ...sources, snapshot: () => file }, startedAtMs, [...visited]);
+  const planned = retirementInputs({ ...sources, snapshot: () => file }, startedAtMs, candidates.map(entry => sessionKeyId(entry.key)));
   report.evaluated = candidates.length;
 
-  // Persist before the first admission/termination await. A failed cursor write
-  // aborts visibly rather than silently restarting the same prefix forever.
-  (dependencies.writeCursor ?? ((afterKey) => {
-    const cursor = { version: 1, afterKey };
-    parseRetirementCursor(cursor);
-    atomicWrite(CURSOR_FILE(), cursor);
-  }))(afterKey);
-
   const qualified: StructuredHostRetirementSubject[] = [];
-  for (const entry of candidates) {
+  const goneCandidates: typeof candidates = [];
+  let continuationCount = candidates.length;
+  for (const [index, entry] of candidates.entries()) {
     const publication = publicationState();
-    if (publication !== "ready") { report.standDown = publication; break; }
+    if (publication !== "ready") {
+      report.standDown = publication;
+      continuationCount = Math.min(continuationCount, index);
+      break;
+    }
     const process = entry.structuredHost!.process!;
     const alive = pidAlive(process.pid);
     if (alive.determined && !alive.value) {
       // No flush or idle verdict can bring a vanished process back. This path
       // clears only its fenced registry custody and never calls a terminator.
-      const key = sessionKeyId(entry.key);
-      const conversationId = planned.conversationsBySession.get(key)?.id ?? null;
-      try {
-        if (await reconcileGone(entry)) report.gone!.push({ key, conversationId, process });
-        else report.failed.push({ key, conversationId,
-          error: "gone host reconciliation refused changed custody or retained processes", remaining: [] });
-      } catch (error) {
-        report.failed.push({ key, conversationId, error: safeReason(error), remaining: [] });
-      }
+      goneCandidates.push(entry);
       continue;
     }
     const subject = retirementSubject(entry, planned, readers);
@@ -1370,9 +1353,44 @@ export async function runStructuredHostRetirementSweep(
     }
     if (qualified.length >= batch) {
       report.deferred += 1;
+      // These hosts qualified but were never admitted to an attempt. Keep the
+      // checkpoint before the first one, even if the admitted batch all refuses.
+      continuationCount = Math.min(continuationCount, index);
       continue;
     }
     qualified.push(subject);
+  }
+
+  const visited = new Set(candidates.slice(0, continuationCount).map(entry => sessionKeyId(entry.key)));
+  const unvisited = all.filter(entry => !visited.has(sessionKeyId(entry.key)));
+  const oldest = unvisited.reduce<typeof unvisited[number] | null>((oldest, entry) =>
+    oldest === null || entry.updatedAt < oldest.updatedAt ? entry : oldest, null);
+  const afterKey = continuationCount ? sessionKeyId(candidates[continuationCount - 1]!.key) : all.length ? beforeKey : null;
+  report.progress = { beforeKey, afterKey, wrapped: beforeKey !== null && (next < 0 || start + continuationCount > all.length),
+    candidates: all.length, unvisited: unvisited.length,
+    oldestUnvisited: oldest ? { key: sessionKeyId(oldest.key), updatedAt: oldest.updatedAt } : null };
+
+  // Persist the attempted-work boundary before the first admission/termination
+  // await. A failed write aborts visibly; restart resumes before deferred work.
+  (dependencies.writeCursor ?? ((afterKey) => {
+    const cursor = { version: 1, afterKey };
+    parseRetirementCursor(cursor);
+    atomicWrite(CURSOR_FILE(), cursor);
+  }))(afterKey);
+
+  for (const entry of goneCandidates) {
+    const publication = publicationState();
+    if (publication !== "ready") { report.standDown = publication; break; }
+    const process = entry.structuredHost!.process!;
+    const key = sessionKeyId(entry.key);
+    const conversationId = planned.conversationsBySession.get(key)?.id ?? null;
+    try {
+      if (await reconcileGone(entry)) report.gone!.push({ key, conversationId, process });
+      else report.failed.push({ key, conversationId,
+        error: "gone host reconciliation refused changed custody or retained processes", remaining: [] });
+    } catch (error) {
+      report.failed.push({ key, conversationId, error: safeReason(error), remaining: [] });
+    }
   }
 
   let parents: Map<number, number> | null = null;

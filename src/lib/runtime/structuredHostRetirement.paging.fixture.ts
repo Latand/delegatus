@@ -14,19 +14,25 @@ const session = (index: number) => ["00000000", "0000", "0000", "0000", String(i
 const filename = statePath("fixture-registry.json");
 const scenario = process.argv[2]!;
 const gone = scenario.startsWith("gone");
+const batchScenario = scenario.startsWith("batch-");
+const paging = scenario === "paging" || batchScenario;
+const refuses = (index: number) => scenario === "batch-wrap" || index <= 8 || index >= 513 && index <= 520;
 if (!fs.existsSync(filename)) {
   const entries: Record<string, unknown> = {};
   const conversations: Record<string, unknown> = {};
-  const count = scenario === "paging" ? 524 : 6;
-  for (let index = 1; index <= count; index++) {
+  const count = scenario === "batch-progress" ? 1024 : scenario === "batch-wrap" ? 32 : scenario === "paging" ? 524 : 6;
+  const indices = Array.from({ length: count }, (_, index) => index + 1);
+  // Registration order must not hide a sorted-page starvation regression.
+  if (batchScenario) indices.sort((a, b) => Number(refuses(a)) - Number(refuses(b)) || a - b);
+  for (const index of indices) {
     const id = session(index);
     const key = `codex:${id}`;
     const pathname = path.join(path.dirname(filename), `${id}.jsonl`);
     const columns = codexHostColumns({
       status: "idle", sessionKey: key, endpoint: "stdio:fixture", pid: 2_000_000_000 + index,
       processStartIdentity: `fixture:${index}`, eventCursor: gone || index <= 520 && scenario === "paging" ? 10 : 12,
-      protocolVersion: null, activeTurnRef: index === 2 && scenario !== "paging" ? "busy-turn" : null,
-      pendingAttention: [], activeFlags: index === 4 && scenario !== "paging" ? ["protected"] : [], account: null,
+      protocolVersion: null, activeTurnRef: index === 2 && !paging ? "busy-turn" : null,
+      pendingAttention: [], activeFlags: index === 4 && !paging ? ["protected"] : [], account: null,
     }, 1);
     // Production host builder supplies all columns; fix its kernel-domain fact.
     columns.process!.bootEpoch = "fixture-boot";
@@ -46,6 +52,7 @@ if (!fs.existsSync(filename)) {
 const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", now: () => NOW });
 setAgentRegistryForTests(registry);
 const terminated: string[] = [];
+const attempted: string[] = [];
 let publication: "ready" | "unbound" = "ready";
 let revived = false;
 if (gone && scenario !== "gone") {
@@ -71,13 +78,17 @@ if (gone && scenario !== "gone") {
 const dependencies: StructuredHostRetirementDependencies = {
   publicationState: () => publication, handoffRows: () => determined([]),
   durableEventTail: () => determined(12), realtimeBound: () => determined(false),
-  orchestratorSeatConversations: () => determined(new Set(scenario === "paging" ? [] : ["conversation_fixture_3"])),
+  orchestratorSeatConversations: () => determined(new Set(paging ? [] : ["conversation_fixture_3"])),
   revokedSeatConversations: () => determined(new Set()),
   transcriptStat: () => determined({ mtimeMs: NOW - 24 * 3_600_000 }),
   processIdentity: pid => determined(`fixture:${pid - 2_000_000_000}`), bootEpoch: () => determined("fixture-boot"),
   processMemory: pids => new Map([...pids].map(pid => [pid, { rssBytes: 100, swapBytes: 20 }])),
   ppidMap: () => new Map(), owned: () => true, now: () => NOW,
   terminate: async ref => {
+    attempted.push(ref.sessionId!);
+    if (batchScenario && refuses(Number(ref.sessionId!.split("-").at(-1)))) {
+      return { ok: false, status: 409, error: "fixture termination refused", remaining: [ref.pid], survivors: [] };
+    }
     terminated.push(ref.sessionId!);
     registry.terminateStructuredHost({ engine: ref.engine, sessionId: ref.sessionId! },
       { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch });
@@ -95,7 +106,7 @@ const status = projectRetirementStatus({ project: "fixture-project" }, {
     return { conversation: file.conversations[id] ?? null, entry: file.entries[key] ?? null };
   },
 });
-console.log(JSON.stringify({ report, terminated,
+console.log(JSON.stringify({ report, terminated, attempted,
   status: status.status,
   remaining: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process).map(entry => sessionKeyId(entry.key)) }));
 registry.close();
