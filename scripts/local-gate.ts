@@ -49,6 +49,12 @@ const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
 
 export const NATIVE_GROUP = "native Codex";
 
+/** The cold full-project check needs headroom for generated Next validators. */
+export function viewerBuildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1",
+    LLV_GATE_MEM: env.LLV_GATE_MEM ?? "14G" };
+}
+
 /** Pure planning: discovery and process execution happen outside this function. */
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
   const files = changedFiles.filter(file => env.existing.has(file));
@@ -925,7 +931,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       }
       if (step.selection) command.push(step.selection);
       if (step.selection === "--shared-only") env.LLV_GATE_COMPARE_BASE = base;
-      if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
+      if (step.name === "Viewer build") Object.assign(env, viewerBuildEnvironment(env));
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {
         if (command.length < 3) throw new Error("refusing an empty test list");

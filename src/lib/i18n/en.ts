@@ -1197,6 +1197,12 @@ export const en = {
   "composer.speedStandard": "Standard",
   "composer.speedTierNamed": "{tier} tier",
   "composer.speedFastTier": "Fast — priority tier",
+  "composer.speedFastShort": "Fast",
+  "composer.speedUltraTier": "Ultra — Ultrafast tier",
+  "composer.speedUltraAbsent": "{account} doesn't offer Ultrafast for {model} (offers: {offers})",
+  "composer.speedUltraAbsentNone": "{account} doesn't offer Ultrafast for {model}",
+  "composer.speedUltraUnknown": "Can't read {account}'s model catalog to check Ultrafast",
+  "composer.speedUltraNeedsModel": "Ultrafast needs a chosen model",
   "composer.backTo": "Back",
   "composer.nextMessageUses": "Next message: {model} · {effort}",
   "composer.nextMessageUsesNoModel": "Next message: {effort}",
@@ -1453,6 +1459,7 @@ export const en = {
   "draft.speedAria": "Codex speed mode",
   "draft.speedTitle": "fast = priority tier (1.5x speed, higher usage)",
   "draft.speedDefault": "speed: default",
+  "draft.speedInherited": "speed: inherited",
   "draft.imagesOnly": "(images)",
   "draft.launched": "agent launched in tmux {target} — waiting for the conversation to appear here…",
   "draft.launchedStructured": "agent launched — waiting for the conversation to appear here…",
@@ -1475,6 +1482,7 @@ export const en = {
   "draft.rolePromptToggle": "Role prompt (EN)",
   "draft.speedFast": "fast",
   "draft.speedStandard": "standard",
+  "draft.speedUltra": "ultrafast",
 
   // Reasoning tier display names (submitted values stay the CLI tokens)
   "effortTier.none": "none",
