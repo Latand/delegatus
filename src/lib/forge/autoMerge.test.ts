@@ -422,6 +422,90 @@ describe("GitHub read failure recovery through production ports", () => {
     expect(h.writes).toEqual([]);
   });
 
+  test.each([
+    ["HTTP 429", 429], ["HTTP 500", 500], ["HTTP 503", 503], ["network", "network"], ["missing credential", "missing credential"],
+  ] as const)("App installation %s retains paced reads and the App identity", async (_name, cause) => {
+    const { githubRunner } = await import("../monitor/githubEvidence");
+    const directory = fs.mkdtempSync(path.join(sandbox, "app-verification-"));
+    const recovered = path.join(directory, "recovered");
+    const attempts = path.join(directory, "attempts");
+    const helper = path.join(directory, "forge-app-token.mjs");
+    fs.writeFileSync(path.join(directory, "bun"), '#!/bin/sh\nexec "$FIXTURE_BUN" "$FIXTURE_HELPER"\n', { mode: 0o700 });
+    // A real helper failure crosses the child stderr boundary; no request can
+    // reach GitHub or the credential store. Success issues an invented token.
+    fs.writeFileSync(helper, `
+      import fs from "node:fs";
+      import { generateKeyPairSync } from "node:crypto";
+      import { mintInstallationToken } from ${JSON.stringify(new URL("../../../bin/forge-app-token.mjs", import.meta.url).href)};
+      fs.appendFileSync(${JSON.stringify(attempts)}, "attempt\\n");
+      if (fs.existsSync(${JSON.stringify(recovered)})) {
+        console.log(JSON.stringify({ token: "fixture", expiresAt: null }));
+      } else {
+        const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+        try {
+          await mintInstallationToken("${REPO}", {
+            now: () => ${T0},
+            readCredential: async () => ${cause === "missing credential" ? "null" : "JSON.stringify({ id: 7, installation_id: 42, pem })"},
+            request: async () => { ${cause === "network" ? 'throw new Error("connection reset")' : `return { status: ${typeof cause === "number" ? cause : 503}, body: null }`}; },
+          });
+          throw new Error("fixture unexpectedly minted a token");
+        } catch (error) {
+          process.stderr.write(error.message);
+          process.exitCode = 1;
+        }
+      }
+    `);
+    try {
+      const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+      let cliReads = 0;
+      const asApp = forgeAppWriter(directory, 30_000, {
+        source: { ...process.env, HOME: directory, PATH: `${directory}${path.delimiter}${process.env.PATH ?? ""}`,
+          FIXTURE_BUN: process.execPath, FIXTURE_HELPER: helper, GH_TOKEN: "inherited", GITHUB_TOKEN: "inherited" },
+        exec: async (args, env) => {
+          expect(env.GH_TOKEN).toBe("fixture");
+          expect(env.GITHUB_TOKEN).toBeUndefined();
+          return args[0] === "pr" && args[1] === "merge" ? h.ports.write(args, REPO) : h.ports.run(args);
+        },
+      });
+      const run = githubRunner(directory, 30_000, {
+        declared: () => true, asApp,
+        exec: async () => { cliReads++; throw new Error("forbidden fallback"); },
+      });
+      const ports = productionAutoMergePorts({ ...h.ports, run, write: forgeWriter(run, asApp, () => true) });
+      const permanent = cause === "missing credential";
+      for (let failure = 1; failure <= (permanent ? 3 : 4); failure++) {
+        await sweepAutoMerge(ports);
+        const delay = permanent ? MERGE_POLL_MS : 60_000 * 2 ** (failure - 1);
+        expect(structuredClone(h.merge("L1"))).toMatchObject({
+          readFailures: failure, state: permanent && failure === 3 ? "blocked" : "queued",
+          reason: expect.stringContaining(permanent ? "GitHub App read refused:" : cause === 429 ? "GitHub read rate limited:" : "GitHub read temporarily unavailable:"),
+          nextReadAt: permanent && failure === 3 ? null : iso(h.now() + delay),
+        });
+        expect(h.writes).toEqual([]);
+        expect(cliReads).toBe(0);
+        if (permanent && failure === 3) break;
+        h.advance(delay - 1);
+        await sweepAutoMerge(ports);
+        expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(failure);
+        h.advance(1);
+      }
+      if (permanent) return;
+      fs.writeFileSync(recovered, "ready");
+      await sweepAutoMerge(ports);
+      expect(h.merge("L1")?.readFailures).toBe(0);
+      h.advance(MERGE_SETTLE_MS);
+      await sweepAutoMerge(ports);
+      await sweepAutoMerge(ports);
+      expect(h.merge("L1")).toMatchObject({ state: "merged", by: "auto-merge", readFailures: 0 });
+      expect(h.writes).toHaveLength(1);
+      expect(h.merges()[0]).toContain("--match-head-commit");
+      expect(h.merges()[0]).toContain(HEAD_A);
+      expect(cliReads).toBe(0);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("a queued follower keeps its read diagnostic while backoff is pending", async () => {
     const h = harness({ lanes: [lane("L1"), lane("L2")], prs: [openPr(11, { checks: [pending("ci")] }), openPr(12)] });
     const run = h.ports.run;

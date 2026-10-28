@@ -1,5 +1,25 @@
 import { expect, test } from "bun:test";
 import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { ForgeAppWriteRefused } from "./appWrite";
+import { refusalMessage } from "../../../bin/forge-app-token.mjs";
+
+test.each([
+  ["GitHub answered HTTP 429 while verifying the App installation", "rate limited", true],
+  ["GitHub answered HTTP 500 while verifying the App installation", "temporarily unavailable", true],
+  ["GitHub answered HTTP 503 while verifying the App installation", "temporarily unavailable", true],
+  ["GitHub could not be reached to verify the App installation", "temporarily unavailable", true],
+  ["GitHub answered HTTP 401 while verifying the App installation", "authentication failed", false],
+  ["GitHub answered HTTP 403 while verifying the App installation", "authentication failed", false],
+  ["GitHub answered HTTP 404 while verifying the App installation", "not found", false],
+] as const)("App verification: %s", (cause, category, transient) => {
+  const error = new ForgeAppWriteRefused(refusalMessage("acme/timeout", cause));
+  expect(githubReadFailure(error)).toEqual({ reason: `GitHub read ${category}: ${cause}`, transient });
+});
+
+test.each(["timeout", "rate-limit", "connection", "HTTP503"])("unavailable App credentials for %s stay permanent", name => {
+  const error = new ForgeAppWriteRefused(refusalMessage(`acme/${name}`, "no GitHub App credential is available for it"));
+  expect(githubReadFailure(error)).toMatchObject({ reason: expect.stringContaining("GitHub App read refused:"), transient: false });
+});
 
 test.each([
   [Object.assign(new Error("request ended"), { code: "ETIMEDOUT" }), "timed out", true],

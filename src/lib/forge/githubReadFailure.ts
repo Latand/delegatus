@@ -6,16 +6,22 @@ export function githubReadFailure(error: unknown): { reason: string; transient: 
   const detail = error as { stderr?: unknown; message?: unknown; code?: unknown; killed?: unknown; signal?: unknown; timeoutMs?: unknown } | null;
   const stderr = typeof detail?.stderr === "string" ? detail.stderr : "";
   const message = typeof detail?.message === "string" ? detail.message : typeof error === "string" ? error : "";
+  // The helper wraps installation HTTP/network failures in the same refusal
+  // as unavailable credentials. Classify only its verification cause, keeping
+  // repository names and the credential guidance out of the diagnostic.
+  const installationFailure = error instanceof ForgeAppWriteRefused
+    ? /^Delegatus refused this GitHub write(?: to [^:\s]+)?: (GitHub answered HTTP \d{3} while verifying the App installation|GitHub could not be reached to verify the App installation)\. /.exec(message)?.[1]
+    : undefined;
   // execFile's message repeats argv before stderr. Only diagnostics classify
   // the failure; neither a command wrapper nor a URL path supplies evidence.
-  const diagnostics = (stderr || message).split(/\r?\n/)
+  const diagnostics = (installationFailure || stderr || message).split(/\r?\n/)
     .filter(part => !/^Command failed\b/i.test(part.trim()))
     .map(part => part.replace(/^gh:\s*/, "").trim()).filter(Boolean);
   const raw = diagnostics.join("\n").replace(/https?:\/\/[^\s)]+/gi, "");
   const line = diagnostics[0] ?? "no diagnostic returned";
   const status = /\bHTTP(?:\/\d+(?:\.\d+)?)?[ :]+(\d{3})\b/i.exec(raw)?.[1];
   const reason = (label: string) => redactBounded(`${label}: ${line}`, 400);
-  if (error instanceof ForgeAppWriteRefused) return { reason: reason("GitHub App read refused"), transient: false };
+  if (error instanceof ForgeAppWriteRefused && !installationFailure) return { reason: reason("GitHub App read refused"), transient: false };
   if (status === "404" || (!status && /could not resolve to a (?:repository|pullrequest)\b/i.test(raw))) return { reason: reason("GitHub read not found"), transient: false };
   if (detail?.code === "ETIMEDOUT" || (detail?.killed === true && (detail.signal === "SIGTERM" || detail.signal === "SIGKILL"))
     || (!status && /timed?\s*out|timeout|deadline exceeded/i.test(raw))) {
@@ -32,7 +38,7 @@ export function githubReadFailure(error: unknown): { reason: string; transient: 
   if (error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw)) {
     return { reason: reason("GitHub read invalid response"), transient: false };
   }
-  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host/i.test(`${detail?.code ?? ""}\n${raw}`)) {
+  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
     return { reason: reason("GitHub read temporarily unavailable"), transient: true };
   }
   const code = typeof detail?.code === "number" ? ` (exit ${detail.code})` : "";
