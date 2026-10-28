@@ -70,7 +70,7 @@ async function fixture(handler: (req: http.IncomingMessage, res: http.ServerResp
 }
 const options = () => ({ signal: new AbortController().signal, deadlineAt: Date.parse("2099-01-01T00:00:00Z"), authorize: () => {} });
 
-function historyRequest(trigger: number, parent: number | null, mediaIndexes: number[], size = 5) {
+function historyRequest(trigger: number, parent: number | null, mediaIndexes: readonly number[], size = 5) {
   const r = request([]);
   r.input.requester = requestSchema.parse(contextRequest).input.requester;
   const template = r.input.conversation[0]!;
@@ -89,6 +89,8 @@ test.each([
   { trigger: 39, parent: 29, mediaIndexes: [27, 28, 29], kept: [29] },
   { trigger: 39, parent: 22, mediaIndexes: [21, 22, 23], kept: [22] },
 ])("history media layout %j proceeds through parsing, download and agent prompt", async ({ trigger, parent, mediaIndexes, kept }) => {
+  const keptIndexes = new Set<number>(kept);
+  const dropped = mediaIndexes.filter(index => !keptIndexes.has(index));
   const sharp = (await import("sharp")).default;
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
   const raw = historyRequest(trigger, parent, mediaIndexes, bytes.length);
@@ -111,7 +113,7 @@ test.each([
     const prompt = answerPrompt(parsed);
     const history = JSON.parse(prompt.split("<conversation>\n")[1]!.split("\n</conversation>")[0]!);
     expect(history).toEqual(parsed.input.conversation);
-    for (const index of mediaIndexes.filter(index => !kept.includes(index))) {
+    for (const index of dropped) {
       expect(history[index]).not.toHaveProperty("media");
       expect(prompt).not.toContain(`media_${index}`);
     }
@@ -120,7 +122,7 @@ test.each([
       expect(result.files.map(file => file.ref)).toEqual(refs);
       expect(downloads).toEqual(refs);
     } finally { await result.dispose(); }
-    expect(diagnostic.mock.calls).toEqual(mediaIndexes.filter(index => !kept.includes(index)).map(entryIndex => [
+    expect(diagnostic.mock.calls).toEqual(dropped.map(entryIndex => [
       "External relay history media dropped", JSON.stringify({ request: raw.request_id, entryIndex, count: 1 }),
     ]));
     // Recovery and downstream validation see an already-normalized projection.
