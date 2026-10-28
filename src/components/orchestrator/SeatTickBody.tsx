@@ -581,8 +581,19 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const preview = record ? previewSeatTickInstructions(record.settings, edit, PREVIEW_AUTHOR, "") : null;
   const stored = preview?.ok ? preview.lines : instructionLines;
   const instructionLength = stored.map(line => line.text).join("\n").length;
-  const fieldLength = stored.filter(line => !isSeatNote(line)).map(line => line.text).join("\n").length;
   const keptNotes = stored.filter(isSeatNote);
+  /* Over the limit the notes figure is the sum of the counts on their rows;
+     the field takes the rest, line breaks included, so the two add up to the
+     counter. */
+  const notesLength = keptNotes.reduce((sum, line) => sum + line.text.length, 0);
+  const fieldLength = instructionLength - notesLength;
+  const overLimit = instructionLength > 500;
+  const hint = [
+    t("seatTick.reasonHint"),
+    stored.some(hasUnknownAuthor) ? t("seatTick.reasonHintUnknown") : null,
+    notes.length > 0 ? t("seatTick.reasonHintNotes") : null,
+    t("seatTick.reasonHintSchedule"),
+  ].filter(Boolean).join(" ");
   const counted = instructionLength >= 450;
   const phone = surface === "mobile";
   const reasonRef = useRef<HTMLTextAreaElement>(null);
@@ -727,14 +738,18 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         <label className="flex min-w-0 flex-col gap-1">
           <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
             <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
+            {/* Over the limit the phone gives the counter its own line under
+                the label, at label size: Save refuses until it is fixed. */}
             {counted ? (
               <span
                 data-seat-tick-character-count={instructionLength}
                 aria-live="polite"
-                className={`text-caption leading-4 ${instructionLength > 500 ? "text-danger" : "text-muted"}`}
+                className={overLimit
+                  ? `${phone ? "w-full text-label" : "text-caption"} leading-4 text-danger`
+                  : "text-caption leading-4 text-muted"}
               >
                 {t("seatTick.instructionsCharacterCount", { count: instructionLength })}
-                {instructionLength > 500 ? (
+                {overLimit ? (
                   <span data-seat-tick-over-limit> · {t("seatTick.instructionsOverLimit", { over: instructionLength - 500 })}</span>
                 ) : null}
               </span>
@@ -750,14 +765,14 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
             className={`min-h-0 w-full resize-none overflow-hidden rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           />
-          {instructionLength > 500 ? (
-            <span data-seat-tick-over-limit-split className="text-caption leading-4 text-danger">
+          {overLimit ? (
+            <span data-seat-tick-over-limit-split className={`${phone ? "text-label" : "text-caption"} leading-4 text-danger`}>
               {keptNotes.length
-                ? t("seatTick.instructionsOverLimitSplit", { field: fieldLength, notes: instructionLength - fieldLength })
+                ? t("seatTick.instructionsOverLimitSplit", { field: fieldLength, notes: notesLength })
                 : t("seatTick.instructionsOverLimitField")}
             </span>
           ) : null}
-          <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
+          <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{hint}</span>
         </label>
 
         {notes.length > 0 ? (
@@ -765,18 +780,16 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             <p className="text-ui text-primary">{t("seatTick.instruction.notesHead")}</p>
             <ul data-seat-tick-instruction-lines className="flex min-w-0 flex-col gap-2 text-ui">
               {notes.map(({ line, index, removed }) => {
-                const author = line.author?.kind === "manager" && line.author.seatEpoch !== null
-                  ? t("seatTick.instruction.seat", { epoch: line.author.seatEpoch })
-                  : t("seatTick.instruction.agent");
+                const author = t(line.author?.kind === "manager" ? "seatTick.instruction.seat" : "seatTick.instruction.agent");
                 return (
                   <li key={index} data-seat-tick-instruction-line data-seat-tick-note-removed={removed ? "" : undefined} className="flex min-w-0 items-start gap-2">
                     {/* The author line sits level with the button's label. */}
                     <div className={`flex min-w-0 flex-1 flex-col gap-0.5 ${phone ? "pt-3.5" : "pt-1.5"}`}>
-                      <p className="min-w-0 break-words text-caption leading-4 text-muted">
+                      <p data-seat-tick-note-meta className="min-w-0 break-words text-caption leading-4 text-muted">
                         <span>{author}</span>
                         {"\u00A0· "}
-                        {line.at ? <time dateTime={line.at}>{new Date(line.at).toLocaleString(locale)}</time> : t("seatTick.instruction.dateUnknown")}
-                        {counted ? <>{"\u00A0· "}<span data-seat-tick-note-characters>{t("seatTick.instruction.characters", { count: line.text.length })}</span></> : null}
+                        {line.at ? <time dateTime={line.at}>{seatTickLocalTime(line.at, now, locale) ?? line.at}</time> : t("seatTick.instruction.dateUnknown")}
+                        {counted ? <>{"\u00A0· "}<span data-seat-tick-note-characters className="whitespace-nowrap">{t("seatTick.instruction.characters", { count: line.text.length })}</span></> : null}
                       </p>
                       <p className={`whitespace-pre-wrap break-words ${removed ? "text-muted line-through" : "text-primary"}`}>{line.text}</p>
                       {removed ? <p data-seat-tick-note-removed-label className="text-caption leading-4 text-muted">{t("seatTick.instruction.removed")}</p> : null}

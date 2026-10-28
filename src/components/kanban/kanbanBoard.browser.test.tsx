@@ -20269,7 +20269,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
-  browserTest("seat tick instructions: the field, the counter and the seat notes in every state at 1440, 768 and 390, en and uk, light and dark", async () => {
+  browserTest("seat tick instructions: the field, the counter and the notes in every state at 1440, 768 and 390, en and uk, light and dark", async () => {
     /* Two records, each built by the production module the way it arises: an
        older 495-character line with no author (the field then claims it), and
        an operator line beside a seat note and an agent note. Frames and
@@ -20400,7 +20400,19 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           pinned: pinned.length,
           counter: document.querySelector("[data-seat-tick-character-count]")?.textContent ?? null,
           split: document.querySelector("[data-seat-tick-over-limit-split]")?.textContent ?? null,
+          hint: document.querySelector("[data-seat-tick-instructions-hint]")?.textContent ?? null,
           notes: rows.map(row => row.textContent),
+          /* Drawn lines of each note's author and date line. */
+          metaLines: rows.map(row => { const meta = row.querySelector("[data-seat-tick-note-meta]")!; return Math.round(meta.getBoundingClientRect().height / parseFloat(getComputedStyle(meta).lineHeight)); }),
+          /* The over-limit lines: their size, and whether the counter sits on
+             its own line under the field's label. */
+          overLimit: (() => {
+            const counter = document.querySelector("[data-seat-tick-character-count]");
+            const split = document.querySelector("[data-seat-tick-over-limit-split]");
+            if (!counter || !split) return null;
+            const label = field.closest("label")!.querySelector("span")!.getBoundingClientRect();
+            return { counterPx: parseFloat(getComputedStyle(counter).fontSize), splitPx: parseFloat(getComputedStyle(split).fontSize), underLabel: counter.getBoundingClientRect().top >= label.bottom - 0.5 };
+          })(),
         };
       });
       expect(reading.field.scrollHeight, `${label} the whole field is visible`).toBeLessThanOrEqual(reading.field.clientHeight + 1);
@@ -20408,6 +20420,13 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(reading.pageOverflow, `${label} page width`).toBeLessThanOrEqual(0);
       expect(reading.overlaps, `${label} overlaps`).toEqual([]);
       if (label.startsWith("390-")) expect(reading.buttons.every(button => button.width >= 44 && button.height >= 44), `${label} phone targets`).toBe(true);
+      if (label.startsWith("1440-")) expect(reading.metaLines.every(lines => lines === 1), `${label} note meta on one line`).toBe(true);
+      for (const note of reading.notes) expect(note ?? "", `${label} no seat epoch or seconds`).not.toMatch(/epoch|епоха|\d:\d\d:\d\d/i);
+      if (label.startsWith("390-") && reading.overLimit) {
+        expect(reading.overLimit.counterPx, `${label} over-limit counter size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.splitPx, `${label} over-limit split size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.underLabel, `${label} the counter reads first under the label`).toBe(true);
+      }
       await page.locator("[data-seat-tick-reason]").evaluate(node => node.closest("label")!.scrollIntoView({ block: "start" }));
       await page.screenshot({ path: path.join(out, `${label}.png`) });
       if (await page.locator("[data-seat-tick-instruction-lines]").count()) {
@@ -20448,6 +20467,23 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
         const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
         const initial = records(lang);
         const counter = (count: number) => lang === "en" ? `${count} / 500 characters, all lines` : `${count} / 500 символів у всіх рядках`;
+        /* The hint names the older lines and the notes only where they are. */
+        const hint = (unknown: boolean, notes: boolean) => (lang === "en"
+          ? ["The agent receives these instructions on every wake.", unknown && "The field includes older lines with no recorded author.", notes && "The notes below can be removed. The 500-character limit counts the field and the notes together.", "A\u00A0schedule change needs instructions. Schedule resets and expiry keep them."]
+          : ["Агент отримує ці вказівки на кожне пробудження.", unknown && "У\u00A0полі є й\u00A0старіші рядки без записаного автора.", notes && "Нотатки нижче можна прибрати. Ліміт 500 символів рахує поле й\u00A0нотатки разом.", "Для зміни розкладу потрібні вказівки. Скидання розкладу та завершення строку дії зберігають їх."]
+        ).filter(Boolean).join(" ");
+
+        /* No instructions stored: the hint names no notes and no older lines. */
+        stored = { ...structuredClone(initial.legacy), reason: null };
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            await openPanel(page);
+            expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+            expect((await measure(page, `${name}-empty`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
 
         /* The operator's report: an older line with no author, 495 characters, and «читай» typed under it. */
         stored = structuredClone(initial.legacy);
@@ -20459,7 +20495,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             expect(await field.inputValue(), `${name} the field shows the line with no author`).toBe(initial.legacy.reason!);
             expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(0);
             expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(495));
-            await measure(page, `${name}-legacy-near`);
+            expect((await measure(page, `${name}-legacy-near`)).hint).toBe(hint(true, false));
             await field.fill(`${initial.legacy.reason}\nчитай`);
             expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(`${counter(501)} · ${lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1"}`);
             expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en" ? "All of it is the text in the field\u00A0— shorten it." : "Усе це\u00A0— текст у\u00A0полі; скоротіть його.");
@@ -20472,7 +20508,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             expect(stored.reason).toBe(shortened);
             expect(stored.instructionLines).toEqual(shortened.split("\n").map(text => ({ text, author: operator, at: savedAt })));
             expect(sent.at(-1)).toEqual({ project: "atlas", reason: shortened, clearUnknownInstructions: true });
-            await measure(page, `${name}-legacy-saved`);
+            expect((await measure(page, `${name}-legacy-saved`)).hint).toBe(hint(false, false));
             expect(pageErrors).toEqual([]);
             readings.push({ label: `${name}-legacy`, surface });
           } finally { await context.close(); }
@@ -20491,14 +20527,16 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             expect(await rows.count()).toBe(2);
             expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(472));
             expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "150\u00A0chars" : "150\u00A0симв.");
-            expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Оркестратор, епоха 7");
-            expect(await rows.nth(1).textContent()).toContain(lang === "en" ? "Agent session" : "Сесія агента");
-            await measure(page, `${name}-notes-near`);
+            expect(await rows.nth(0).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Orchestrator" : "Оркестратор");
+            expect(await rows.nth(1).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Agent session" : "Сесія агента");
+            expect(await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.previousElementSibling?.textContent)).toBe(lang === "en" ? "Notes from the orchestrator and agents" : "Нотатки оркестратора й\u00A0агентів");
+            expect((await measure(page, `${name}-notes-near`)).hint).toBe(hint(false, true));
             await field.fill(`${own!.text}${words[lang].more}`);
             const over = 472 + words[lang].more.length;
+            /* The notes figure is the rows' 150 + 60; the field takes the rest of the counter. */
             expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en"
-              ? `Field: ${260 + words[lang].more.length}\u00A0· seat notes below: 212. Shorten the field or remove a\u00A0note.`
-              : `Поле\u00A0— ${260 + words[lang].more.length}\u00A0· нотатки оркестратора нижче\u00A0— 212. Скоротіть поле або приберіть нотатку.`);
+              ? `Field: ${over - 210}\u00A0· notes below: 210. Shorten the field or remove a\u00A0note.`
+              : `Поле\u00A0— ${over - 210}\u00A0· нотатки нижче\u00A0— 210. Скоротіть поле або приберіть нотатку.`);
             expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over));
             await measure(page, `${name}-notes-over`);
             await rows.nth(1).locator('[data-seat-tick-remove-note="remove"]').click();

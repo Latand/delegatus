@@ -1270,18 +1270,26 @@ test("the field holds the operator's and unattributed lines; seat notes are list
   expect(reason().value).toBe("Legacy note.\nOperator instruction.");
   const entries = () => [...body().querySelectorAll("[data-seat-tick-instruction-line]")];
   expect(entries()).toHaveLength(2);
-  expect(entries()[0]!.textContent).toContain("Seat epoch 7");
+  expect(body().textContent).toContain("Notes from the orchestrator and agents");
+  /* The author by role, the date to the minute; no seat epoch, no seconds. */
+  const written = new Date("2026-10-01T12:00:00.000Z").toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  expect(entries()[0]!.querySelector("[data-seat-tick-note-meta]")?.textContent).toBe(`Orchestrator\u00A0· ${written}`);
   expect(entries()[0]!.textContent).toContain("Seat note.");
-  expect(entries()[1]!.textContent).toContain("Agent session");
+  expect(entries()[1]!.querySelector("[data-seat-tick-note-meta]")?.textContent).toBe(`Agent session\u00A0· ${written}`);
   expect(entries()[0]!.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00.000Z");
+  const hint = () => body().querySelector("[data-seat-tick-instructions-hint]")?.textContent;
+  expect(hint()).toBe("The agent receives these instructions on every wake. The field includes older lines with no recorded author. The notes below can be removed. The 500-character limit counts the field and the notes together. A\u00A0schedule change needs instructions. Schedule resets and expiry keep them.");
 
   /* The counter is what Save would store: the field plus both notes. */
   const notes = "Seat note.\nAgent note.".length + 1;
   type(reason(), `Legacy note.\n${"x".repeat(500 - notes - "Legacy note.\n".length + 1)}`);
   const count = () => body().querySelector("[data-seat-tick-character-count]")?.getAttribute("data-seat-tick-character-count");
   expect(count()).toBe("501");
-  expect(body().querySelector("[data-seat-tick-over-limit-split]")?.textContent).toBe(`Field: ${reason().value.length}\u00A0· seat notes below: ${501 - reason().value.length}. Shorten the field or remove a\u00A0note.`);
+  /* The notes figure is the sum of the rows' counts (10 + 11); the field
+     takes the rest of the counter, line breaks included. */
+  expect(body().querySelector("[data-seat-tick-over-limit-split]")?.textContent).toBe(`Field: ${501 - 21}\u00A0· notes below: 21. Shorten the field or remove a\u00A0note.`);
   expect(entries()[0]!.querySelector("[data-seat-tick-note-characters]")?.textContent).toBe("10\u00A0chars");
+  expect(entries()[1]!.querySelector("[data-seat-tick-note-characters]")?.textContent).toBe("11\u00A0chars");
 
   /* Remove marks the note and drops it from the count; Undo puts it back and sends nothing. */
   press(entries()[1]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
@@ -1309,6 +1317,16 @@ test("the field holds the operator's and unattributed lines; seat notes are list
   expect(entries()).toHaveLength(0);
   expect(reason().value).toBe("Legacy note.\nEdited instruction.");
   expect(save()).toBeNull();
+  /* No notes listed: the hint names none. The unattributed line stays. */
+  expect(hint()).toBe("The agent receives these instructions on every wake. The field includes older lines with no recorded author. A\u00A0schedule change needs instructions. Schedule resets and expiry keep them.");
+});
+
+test("with only the operator's own lines the hint names no notes and no older lines", async () => {
+  getAnswer = configured();
+  const { root } = await mount();
+  await open(root);
+  expect(body().querySelectorAll("[data-seat-tick-instruction-line]")).toHaveLength(0);
+  expect(body().querySelector("[data-seat-tick-instructions-hint]")?.textContent).toBe("The agent receives these instructions on every wake. A\u00A0schedule change needs instructions. Schedule resets and expiry keep them.");
 });
 
 test("a removal refused because the seat rewrote its note stores nothing, keeps the field's edit and says so", async () => {
@@ -1338,7 +1356,7 @@ test("a removal refused because the seat rewrote its note stores nothing, keeps 
   await settle(root, 8);
   expect(puts()).toHaveLength(1);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, reason: "a release afternoon, edited", removeSeatNotes: [{ index: 1, text: "Seat note.", at: "2026-10-01T12:00:00.000Z" }] });
-  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toBe("The seat notes changed while the panel was open. Nothing was stored\u00A0— check the notes and save again.");
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toBe("The notes from the orchestrator and agents changed while the panel was open. Nothing was stored\u00A0— check the notes and save again.");
   expect(moved.instructionLines!.map(line => line.text)).toEqual(["a release afternoon", "Seat note, revised."]);
   expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon, edited");
 });
