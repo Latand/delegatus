@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { conversationAuthority, reserveChainConversation, reserveChainConversationAsync, releaseConversation, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
 import { sampleRequest, contextRequest } from "./request.fixture";
-import { externalRelayFile, newTargetSettings, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay } from "./store";
+import { externalRelayFile, newTargetSettings, readRunLedger, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay, type RunRecord } from "./store";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-conversations-"));
 process.env.LLV_STATE_DIR = root;
@@ -14,6 +14,38 @@ const target = { ...newTargetSettings({ target_id: "t", name: "Target", answered
 const relay = { id: "r", targets: [target] } as PairedRelay;
 const request = (id = "root", parent: string | null = null): ExternalRelayRequest => requestSchema.parse({ ...contextRequest, request_id: id, chat: { key: "fixture-chat-chain" }, input: { ...contextRequest.input,
   respond_to: id, conversation: [{ ...contextRequest.input.conversation[0]!, id, reply_to: parent }] } });
+
+for (const asyncSweep of [false, true]) for (const state of ["pending", "confirmed", "delivery", "quarantined"] as const)
+test(`${asyncSweep ? "async" : "sync"} chain sweep separates ${state} custody from execution`, async () => {
+  const record = reserveChainConversation(relay, target, request(), "owner-tier")!;
+  const turn: NonNullable<RunRecord["ownerTurn"]> = { clientAttemptId: "relay-owner-root", ...(state !== "delivery" ? { cancel: "kill" as const } : {}), admissionComplete: true,
+    ...(state === "confirmed" ? { confirmed: true } : {}),
+    ...(state === "quarantined" ? { quarantinedAt: "2026-10-28T12:00:00Z" } : {}) };
+  reserveRun({ requestId: "root", relayId: relay.id, targetId: target.id, leaseId: "fixture", childPid: null, childIdentity: null,
+    ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: record.createdAt, ownerTurn: turn,
+    ...(state === "delivery" ? { capacityReleased: true as const } : {}) });
+  try {
+    if (asyncSweep) await sweepConversationsAsync([relay], Date.parse(record.createdAt), Date.now() + 5000);
+    else sweepConversations([relay], readRunLedger().runs, Date.parse(record.createdAt));
+    expect(readConversations().find(row => row.id === record.id)).toMatchObject({
+      state: state === "pending" ? "running" : state === "quarantined" ? "broken" : "idle",
+      runningRequestId: state === "pending" ? "root" : null });
+    expect(reserveChainConversation(relay, target, request("next", "root"), "owner-tier") === null).toBe(state === "pending");
+    expect(readRunLedger().runs.find(row => row.requestId === "root")?.ownerTurn).toEqual(turn);
+  } finally { dropRun("root"); }
+});
+
+test("late cleanup and attribution cannot overwrite a successor's chain reservation", async () => {
+  const { releaseConversationAsync } = await import("./conversations");
+  const first = reserveChainConversation(relay, target, request(), "owner-tier")!;
+  releaseConversation(first.id, { state: "broken" });
+  const next = reserveChainConversation(relay, target, request("next", "root"), "owner-tier")!;
+  expect(next.id).toBe(first.id);
+  for (const patch of [{ state: "broken" as const }, { state: "running" as const, runningRequestId: "root", conversationId: "conversation_old" }]) {
+    await releaseConversationAsync(first.id, patch, Date.now() + 5000, "root");
+    expect(readConversations().find(row => row.id === next.id)).toMatchObject({ state: "running", runningRequestId: "next", conversationId: null });
+  }
+});
 test("a requester and their authority scope every chain", () => {
   expect(conversationAuthority()).toBeNull();
   expect(conversationAuthority(contextRequest.input.requester)).toBe("admin");

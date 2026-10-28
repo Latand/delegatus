@@ -58,7 +58,8 @@ import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoun
 import { progressForEvent } from "./progress";
 import { createRelaySteps } from "./progressSteps";
 import { readRelayStepObservation } from "./stepObservation";
-import { noteRelayProgress } from "./activity";
+import { noteRelayProgress, relayInflightRequests as inflight, relayUnrecordedAcceptances as unrecordedAcceptances } from "./activity";
+export { relayRequestInFlight } from "./activity";
 import { answerRecorder, countMemberAnswers, readAnswerRecord } from "./answers";
 import {
   answerProfileFor,
@@ -84,13 +85,8 @@ import {
 
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayActive?: Map<string, number>;
-  __llvExternalRelayInflight?: Set<string>;
-  __llvExternalRelayUnrecordedAcceptances?: Set<string>;
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
-const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
-const unrecordedAcceptances = globalRelay.__llvExternalRelayUnrecordedAcceptances ??= new Set<string>();
-export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId) || unrecordedAcceptances.has(requestId);
 /** Marks a retained run as delivered. Until the mark is durable this process
  * keeps delivery ownership, so orphan recovery cannot complete it again. */
 async function recordAcceptedCompletion(requestId: string): Promise<void> {
@@ -530,7 +526,7 @@ export async function runClaimedRequest(
     if (!recorded || capacityReleased || ownerRunPending()) return;
     const held = readRunLedger().runs.find(row => row.requestId === requestId);
     if (held && ownerStopPending(held)) return;
-    await changeRunAsync(requestId, row => {
+    if (!held?.capacityReleased) await changeRunAsync(requestId, row => {
       if (ownerRunPending() || ownerStopPending(row)) return row;
       return { ...row, capacityReleased: true };
     }, Date.now() + 5000);
@@ -729,7 +725,7 @@ export async function runClaimedRequest(
     let admissionDecline: ExternalRelayCompletion | null = null;
     let wakeHold: (() => void) | null = null;
     const releaseAdmission = async () => {
-      if (conversation) { await releaseConversationAsync(conversation.id, {}, Date.now() + 5000); conversation = null; }
+      if (conversation) { await releaseConversationAsync(conversation.id, {}, Date.now() + 5000, requestId); conversation = null; }
       if (recorded) { await dropRunAsync(requestId, Date.now() + 5000); free(relay, target); recorded = false; }
     };
     const admit = async (): Promise<boolean> => {
@@ -899,7 +895,7 @@ export async function runClaimedRequest(
         }
         if (conversation && owner && rounds === 1 && conversation.conversationId && turn) {
           await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
-            pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, Date.now() + 5000);
+            pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, Date.now() + 5000, requestId);
         }
         const agentPrompt = (conversation ? persistentPrompt : roundPrompt) + (inbound?.prompt ? "\n" + inbound.prompt : "");
         const roundDirectory = loop ? path.join(runDir, `round-${rounds}`) : runDir;
@@ -937,7 +933,7 @@ export async function runClaimedRequest(
               if (cursor) turn = { prompt: "", ...cursor };
               const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
                 ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
-              await releaseConversationAsync(conversation.id, patch, Date.now() + 5000);
+              await releaseConversationAsync(conversation.id, patch, Date.now() + 5000, requestId);
               if (cursor) Object.assign(conversation, patch);
             }
             ownerTools?.bindConversation(conversationId);
@@ -1011,7 +1007,22 @@ export async function runClaimedRequest(
           },
         }) : localRun();
         run = pendingRun instanceof Promise ? await pendingRun : pendingRun;
-        void run.done.then(() => { runFinished = true; }, () => { runFinished = true; });
+        const settledRun = () => {
+          runFinished = true;
+          // Settled stop custody releases execution independently of the
+          // failure reply and its delivery acknowledgement.
+          if (owner) {
+            try {
+              const custody = readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn;
+              if (custody?.quarantinedAt || custody?.confirmed) {
+                void releaseCapacity?.().catch(() => console.error("Owner relay settled capacity release pending"));
+                if (conversation && custody.quarantinedAt) void releaseConversationAsync(conversation.id, { state: "broken" }, Date.now() + 5000, requestId)
+                  .catch(() => console.error("Owner relay quarantined chain release pending"));
+              }
+            } catch { console.error("Owner relay settled capacity custody unreadable"); }
+          }
+        };
+        void run.done.then(settledRun, settledRun);
       } catch (error) {
         if (error instanceof EphemeralProfileError)
           return await finish(declined(leaseId, "profile_error"));
@@ -1063,7 +1074,7 @@ export async function runClaimedRequest(
         if (error.reason === "unavailable") {
           if (conversation.conversationId) ownerTools?.unbindConversation(conversation.conversationId);
           Object.assign(conversation, { conversationId: null, seen: [], staticDigest: null });
-          await releaseConversationAsync(conversation.id, { conversationId: null, seen: [], staticDigest: null, state: "running", runningRequestId: requestId }, Date.now() + 5000);
+          await releaseConversationAsync(conversation.id, { conversationId: null, seen: [], staticDigest: null, state: "running", runningRequestId: requestId }, Date.now() + 5000, requestId);
           await changeRunAsync(requestId, current => ({ ...current, conversationId: undefined,
             ownerTurn: { ...current.ownerTurn!, continuation: undefined, admissionComplete: false } }), Date.now() + 5000);
         } else {
@@ -1244,8 +1255,9 @@ export async function runClaimedRequest(
       let releasePin = true;
       if (conversation && owner) {
         try {
-          const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-          releasePin = !ownerRunPending() && !(custody?.cancel && !custody.confirmed);
+          const held = readRunLedger().runs.find(r => r.requestId === requestId);
+          releasePin = !ownerRunPending() && !(held && ownerStopPending(held));
+          if (held?.ownerTurn?.quarantinedAt) conversationBroken = true;
         } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
       }
       if (conversation && releasePin) {
@@ -1253,7 +1265,7 @@ export async function runClaimedRequest(
         await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
           ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
             lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-            lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
+            lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000, requestId);
       }
       for (const timer of identityTimers) clearTimeout(timer);
       // The only way out without a completion is a lost lease.

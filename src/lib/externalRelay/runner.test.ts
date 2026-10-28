@@ -3315,6 +3315,7 @@ for (const worker of [false, true]) test(`owner runner exception with a refused 
   paired.targets[0]!.fallback = "none";
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
+  setRelaySwitch("chain_conversations", true);
   const requestId = `owner_exception_bound_${worker}`;
   const conversationId = `conversation_exception_bound_${worker}`;
   const write = relayStore.changeRunAsync;
@@ -3713,13 +3714,17 @@ test("owner launch custody retained by a live admission owner is no proof of no 
   }
 });
 
-for (const worker of [false, true]) test(`a live owner run whose stop never confirms stays pending past its bound and answers at the request bound (worker=${worker})`, async () => {
+for (const worker of [false, true]) test(`a live owner run whose stop never confirms quarantines at its bound and settles once (worker=${worker})`, async () => {
   const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
   const completions: unknown[] = [];
-  const service = await startTestRelay((req, body) => {
+  let completionArrived!: () => void, releaseCompletion!: () => void;
+  const completionReady = new Promise<void>(resolve => { completionArrived = resolve; });
+  const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });
+  const service = await startTestRelay(async (req, body) => {
     if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
       req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
     );
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) { completionArrived(); await completionGate; }
     return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
@@ -3728,23 +3733,20 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
   paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
   const requestId = `live_stop_bound_${worker}`;
   let stops = 0, skew = 0, finished = false, recover = false;
-  let reached!: () => void, pastBound!: () => void;
+  let reached!: () => void;
   const refused = new Promise<void>(r => { reached = r; });
-  const retried = new Promise<void>(r => { pastBound = r; });
-  let stopsAtRelease = Infinity;
   const logging = spyOn(console, "error").mockImplementation(() => {});
   const ports: import("./ownerRun").OwnerRunPorts = {
     launch: async () => ({ status: 202, body: { conversationId: `conversation_live_stop_bound_${worker}` } }),
     observe: async () => ({ state: "running" }), stopRetryMs: 1, pollMs: 1, now: () => Date.now() + skew,
     stop: async () => {
       if (++stops === 3) reached();
-      if (stops > stopsAtRelease + 3) pastBound();
       if (!recover) throw Error("owner relay conversation control refused");
     },
   };
   let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
   try {
-    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, chat: { key: `bounded-stop-${worker}` }, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, timeoutMs: 20, ownerPorts: ports });
     void done.then(() => { finished = true; });
     await refused;
@@ -3752,34 +3754,39 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
     expect(finished).toBe(false); expect(advertisedSlots(paired)[0]!.free).toBe(0);
     skew = OWNER_STOP_PENDING_LIMIT_MS + 1;
     while (!readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released) await Bun.sleep(1);
-    stopsAtRelease = stops;
-    // Elapsed time releases the slot only: control keeps retrying and the
-    // execution promise stays pending.
-    await retried;
     expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({
       ownerTurn: { cancel: "interrupt", released: { reason: "stop_unconfirmed" }, diagnostic: { source: "hard-cap" } } });
     expect(readRunLedger().runs.find(r => r.requestId === requestId)!.ownerTurn!.confirmed).toBeUndefined();
-    expect(completions).toEqual([]);
-    // The requester still hears back at the request bound.
-    expect(await done).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
+    await completionReady;
+    expect(finished).toBe(false);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    releaseCompletion();
+    expect(await done).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.any(String) } });
+    expect(finished).toBe(true);
     expect(completions).toHaveLength(1);
     expect(advertisedSlots(paired)[0]!.free).toBe(1);
     const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
     expect(held).toMatchObject({ completionAccepted: true, ownerTurn: { released: { reason: "stop_unconfirmed" } } });
     expect(held.ownerTurn!.confirmed).toBeUndefined();
-    // The sweep keeps controlling the unconfirmed stop without a second completion.
+    const chains = await import("./conversations");
+    expect(chains.readConversations().find(row => row.chatKey === `bounded-stop-${worker}`)).toMatchObject({ state: "broken", runningRequestId: null });
+    // Quarantine settles the execution promise and retains the unconfirmed
+    // cutoff. No later sweep retries control or completes the request again.
     const before = stops;
     await sweepExternalRelayOrphans(ports);
-    expect(stops).toBeGreaterThan(before);
-    recover = true;
-    while (!readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.confirmed) await Bun.sleep(1);
-    await sweepExternalRelayOrphans(ports);
-    // The confirmed record is retained as cleanup only; no sweep completes it again.
-    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true, ownerTurn: { confirmed: true } });
+    expect(stops).toBe(before);
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true, ownerTurn: { quarantinedAt: expect.any(String) } });
     await sweepExternalRelayOrphans(ports);
     expect(completions).toHaveLength(1);
+    const next = await runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: `${requestId}-next`, chat: { key: `bounded-stop-${worker}` },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker,
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: `conversation_next_${worker}`, initialMessage: "delivered" } }),
+        observe: async () => ({ state: "ended", finalText: "Ready" }), stop: async () => { throw Error("unexpected stop"); } } });
+    expect(next).toMatchObject({ outcome: "answered", answer: { text: "Ready" } });
+    expect(stops).toBe(before);
   } finally {
-    recover = true; await done; logging.mockRestore(); dropRun(requestId); await service.close();
+    releaseCompletion(); recover = true; await done; logging.mockRestore(); dropRun(requestId); await service.close();
   }
 }, 15000);
 
@@ -3797,6 +3804,7 @@ for (const age of ["within", "past"] as const) test(`owner stop that stays uncon
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   const now = Date.parse("2026-10-22T16:00:00Z");
+  const clock = spyOn(Date, "now").mockReturnValue(now);
   const cancelledAt = new Date(now - OWNER_STOP_PENDING_LIMIT_MS + (age === "past" ? -1 : 60_000)).toISOString();
   const requestId = `unconfirmed-${age}`;
   const journal: unknown[][] = [];
@@ -3824,24 +3832,19 @@ for (const age of ["within", "past"] as const) test(`owner stop that stays uncon
       expect(advertisedSlots(paired)[0]!.free).toBe(1);
       expect(row).toMatchObject({ ownerTurn: { cancel: "kill", diagnostic: { message: "fixture launch failed" },
         released: { reason: "stop_unconfirmed", at: new Date(now).toISOString() } } });
-      // An unconfirmed release keeps agent tools revoked and is no confirmed
-      // stop: execution stays pending and every sweep retries control.
-      expect(row?.capacityReleased).toBeUndefined(); expect(row?.ownerTurn?.confirmed).toBeUndefined();
-      expect(JSON.stringify(journal)).toContain("stop_unconfirmed");
-      expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
+      expect(row?.capacityReleased).toBe(true); expect(row?.ownerTurn?.confirmed).toBeUndefined();
+      expect(row?.ownerTurn?.quarantinedAt).toBe(new Date(now).toISOString());
+      expect(JSON.stringify(journal)).toContain("ALARM:");
+      expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_quarantined");
       await sweepExternalRelayOrphans(ports);
-      expect(stops).toBe(6); expect(completions).toEqual([]);
+      expect(stops).toBe(3); expect(completions).toEqual([]);
       expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released?.at).toBe(new Date(now).toISOString());
       recover = true;
       await sweepExternalRelayOrphans(ports);
-      expect(stops).toBe(7);
-      expect(completions).toEqual([expect.objectContaining({ outcome: "failed", reason: "install_restarted" })]);
-      expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true, ownerTurn: { confirmed: true } });
-      await sweepExternalRelayOrphans(ports);
-      expect(stops).toBe(7); expect(completions).toHaveLength(1);
+      expect(stops).toBe(3); expect(completions).toEqual([]);
     }
   } finally {
-    logging.mockRestore(); dropRun(requestId); await service.close();
+    logging.mockRestore(); clock.mockRestore(); dropRun(requestId); await service.close();
   }
 });
 

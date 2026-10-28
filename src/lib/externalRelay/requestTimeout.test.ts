@@ -13,7 +13,7 @@ process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 for (const kind of ["inline", "worker"] as const)
-  for (const scenario of ["status", "rich_status", "raw_output", "attachment", "button", "rich_format", "extra_payload", "normal_reply", "paused", "disabled", "owner_disabled", "missing", "foreign", "revoked_retry"] as const)
+  for (const scenario of ["status", "rich_status", "quarantine_failure", "quarantine_raw", "quarantine_no_diagnostic", "quarantine_paused", "quarantine_foreign", "raw_output", "attachment", "button", "rich_format", "extra_payload", "normal_reply", "paused", "disabled", "owner_disabled", "missing", "foreign", "revoked_retry"] as const)
     test(`${kind} deadline status authority: ${scenario}`, async () => {
       const posts: unknown[] = [];
       const service = await startTestRelay((req, body) => {
@@ -38,7 +38,9 @@ for (const kind of ["inline", "worker"] as const)
       updateRelayStore(store => ({ ...store, relays: [paired] }));
       reserveRun({ requestId, relayId: paired.id, targetId: "target_1", leaseId: "status_lease", ownerPid: process.pid,
         ownerIdentity: null, childPid: null, childIdentity: null, runDir: root, startedAt: "2026-10-22T12:00:00Z",
-        ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, cancel: "interrupt", confirmed: false } }, 1);
+        ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, cancel: "interrupt", confirmed: false,
+          ...(scenario.startsWith("quarantine_") ? { quarantinedAt: "2026-10-22T12:10:00Z",
+            ...(scenario !== "quarantine_no_diagnostic" ? { diagnostic: { source: "launch" as const, message: "Launch failed" } } : {}) } : {}) } }, 1);
       const transport = kind === "inline"
         ? new InlineRelayLeaseTransport(paired, requestId, "target_1", "status_lease", 10_000, () => {}, null)
         : new RelayLeaseTransport(paired, requestId, "target_1", "status_lease", 10_000, () => {});
@@ -46,11 +48,11 @@ for (const kind of ["inline", "worker"] as const)
         await transport.ready;
         // Change authority after the transport has started: every delivery
         // must read current settings, including in the separately owned helper.
-        if (scenario === "paused") updateRelayStore(store => ({ ...store, relays: [{ ...paired, paused: true }] }));
+        if ((scenario === "paused" || scenario === "quarantine_paused")) updateRelayStore(store => ({ ...store, relays: [{ ...paired, paused: true }] }));
         if (scenario === "disabled") updateRelayStore(store => ({ ...store, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, enabled: false }] }] }));
         if (scenario === "owner_disabled") updateRelayStore(store => ({ ...store, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
         if (scenario === "missing") dropRun(requestId);
-        if (scenario === "foreign") updateRelayStore(store => ({ ...store, relays: [{ ...paired, id: "foreign_relay" }] }));
+        if ((scenario === "foreign" || scenario === "quarantine_foreign")) updateRelayStore(store => ({ ...store, relays: [{ ...paired, id: "foreign_relay" }] }));
         expect(ownerRelayAuthorized(paired.id, "target_1", requestId)).toBe(false);
         expect(await ownerRelayAuthorizedAsync(paired.id, "target_1", requestId)).toBe(false);
         const body: ExternalRelayCompletion = { lease_id: "status_lease", outcome: "answered", duration_ms: 600_000,
@@ -60,11 +62,11 @@ for (const kind of ["inline", "worker"] as const)
             ...(scenario === "button" ? { buttons: [[{ text: "Late action", url: "https://example.org/action" }]] } : {}),
             ...(scenario === "attachment" ? { attachments: [{ attachment_id: "pending_file", kind: "document" as const, caption: "Late file" }] } : {}) } };
         if (scenario === "extra_payload") Object.assign(body, { unexpected: "Late payload" });
-        const result = await transport.complete(body, Date.now() + (scenario === "revoked_retry" ? 5000 : 0), 20, scenario === "normal_reply" ? true : "status");
-        expect(result).toMatchObject(scenario === "status" || scenario === "rich_status" ? { delivery: "accepted", body }
+        const result = await transport.complete(body, Date.now() + (scenario === "revoked_retry" ? 5000 : 0), 20, scenario.startsWith("quarantine_") && scenario !== "quarantine_raw" ? "failure" : scenario === "normal_reply" || scenario === "quarantine_raw" ? true : "status");
+        expect(result).toMatchObject(scenario === "status" || scenario === "rich_status" || scenario === "quarantine_failure" ? { delivery: "accepted", body }
           : { body: { outcome: "failed", reason: "cancelled" } });
         expect(posts).toHaveLength(scenario === "revoked_retry" ? 2 : 1);
-        expect(posts.at(-1)).toMatchObject(scenario === "status" || scenario === "rich_status" ? { outcome: "answered" }
+        expect(posts.at(-1)).toMatchObject(scenario === "status" || scenario === "rich_status" || scenario === "quarantine_failure" ? { outcome: "answered" }
           : { outcome: "failed", reason: "cancelled" });
         // A status exception must never restore the stopped turn's execution.
         expect(ownerRelayAuthorized(paired.id, "target_1", requestId)).toBe(false);

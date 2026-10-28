@@ -65,7 +65,7 @@ export function ownerRelayAuthorized(relayId: string, targetId: string, requestI
   return ownerRelayReplyAuthorized(relayId, targetId, requestId, "agent");
 }
 
-/** Only the runner's failure reply may follow a diagnosed, confirmed stop.
+/** Only the runner's failure reply may follow a diagnosed, settled stop.
  * Agent tools and queued sends keep using ownerRelayAuthorized. */
 export function ownerRelayFailureReplyAuthorized(relayId: string, targetId: string, requestId: string): boolean {
   return ownerRelayReplyAuthorized(relayId, targetId, requestId, "failure");
@@ -85,7 +85,7 @@ function ownerRelayReplyAuthorized(relayId: string, targetId: string, requestId:
     const target = relay?.targets.find(t => t.id === targetId);
     const run = ledger.runs.find(r => r.requestId === requestId && r.relayId === relayId && r.targetId === targetId);
     return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn
-      && (!run.ownerTurn.cancel || reply === "status" || reply === "failure" && run.ownerTurn.confirmed === true && !!run.ownerTurn.diagnostic)
+      && (!run.ownerTurn.cancel || reply === "status" || reply === "failure" && (run.ownerTurn.confirmed === true || !!run.ownerTurn.quarantinedAt) && !!run.ownerTurn.diagnostic)
       && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
   } catch { return false; }
 }

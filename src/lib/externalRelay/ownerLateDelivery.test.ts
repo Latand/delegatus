@@ -63,8 +63,12 @@ for (const [name, delivery] of [
   try {
     expect(await f.send()).toMatchObject({ delivery: "unconfirmed" });
     expect(f.pending()).toMatchObject({ body, status: "pending-delivery-context" });
+    expect(readRunLedger().runs.find(row => row.requestId === `context_${name}`)?.capacityReleased).toBe(true);
     expect(calls).toBe(0);
     expect(log.mock.calls.some(args => String(args[0]).includes("pending-delivery-context"))).toBe(true);
+    expect(await f.send()).toMatchObject({ delivery: "unconfirmed" });
+    expect(log.mock.calls).toHaveLength(1);
+    expect(calls).toBe(0);
     expect(requestSchema.parse({ ...contextRequest, owner_delivery: delivery }).owner_delivery).toBeUndefined();
   } finally { log.mockRestore(); await f.close(); }
 });

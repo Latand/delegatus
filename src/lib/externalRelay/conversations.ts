@@ -8,7 +8,8 @@ import { statePath } from "@/lib/configDir";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ExternalRelayRequester, ExternalRelayRequest } from "./protocol";
-import { externalRelayFile, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
+import { externalRelayFile, runHoldsConversation, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
+import { relayRequestInFlight } from "./activity";
 export type ConversationAuthority = "member" | "admin" | "owner" | "owner-tier";
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; requesterKey: string; authority: ConversationAuthority; anchors: string[]; conversationId: string | null;
@@ -396,10 +397,10 @@ export async function reserveChainConversationAsync(relay: PairedRelay, target: 
 export function releaseConversation(id: string, patch: Partial<RelayConversation> = {}) {
   change((rows) => { const record = rows.find((r) => r.id === id); if (record) Object.assign(record, { state: "idle", runningRequestId: null }, patch); });
 }
-export async function releaseConversationAsync(id: string, patch: Partial<RelayConversation>, until: number): Promise<void> {
+export async function releaseConversationAsync(id: string, patch: Partial<RelayConversation>, until: number, requestId?: string): Promise<void> {
   await changeAsync(rows => {
     const record = rows.find(r => r.id === id);
-    if (!record) return false;
+    if (!record || requestId !== undefined && record.runningRequestId !== requestId) return false;
     const before = JSON.stringify(record);
     Object.assign(record, { state: "idle", runningRequestId: null }, patch);
     return before !== JSON.stringify(record);
@@ -486,8 +487,9 @@ export async function sweepConversationsAsync(relays: PairedRelay[], now: number
       if (onlyRelayId && record.relayId !== onlyRelayId) continue;
       const relay = relays.find(item => item.id === record.relayId);
       const target = relay?.targets.find(item => item.id === record.targetId);
-      if (record.state === "running" && !runs.some(run => run.requestId === record.runningRequestId)) {
-        record.state = "idle"; record.runningRequestId = null; changed = true;
+      const run = runs.find(run => run.requestId === record.runningRequestId);
+      if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) {
+        record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null; changed = true;
       }
       if (record.state === "running") continue;
       const expired = record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine ||
@@ -501,7 +503,8 @@ function sweepAction(relays: PairedRelay[], runs: RunRecord[], now: number, remo
   return (rows: RelayConversation[]) => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const record = rows[i]!; if (onlyRelayId && record.relayId !== onlyRelayId) continue; const relay = relays.find((r) => r.id === record.relayId); const target = relay?.targets.find((t) => t.id === record.targetId);
-      if (record.state === "running" && !runs.some((r) => r.requestId === record.runningRequestId)) { record.state = "idle"; record.runningRequestId = null; }
+      const run = runs.find(run => run.requestId === record.runningRequestId);
+      if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) { record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null; }
       if (record.state === "running") continue;
       if (record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine || now - Date.parse(record.lastTurnAt) > 3 * 86400000 || sizes && transcriptBytes(record) > 32 * 1024 * 1024) {
         deleteConversationFiles(record); rows.splice(i, 1);
