@@ -443,6 +443,20 @@ export function seatTickWakeMessage(input: {
  * source retains the full details and the landing earns its ordinary credit. */
 export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage>[0]): { text: string; items: readonly SeatTickItem[] } {
   if (input.catchUp) {
+    // Even labels that compact to nothing cannot fit more identities than
+    // this. Bound each render before constructing its strings; later identities
+    // remain behind the durable page cursor.
+    let identityBytes = 0;
+    let count = 0;
+    for (const item of input.items) {
+      const bytes = Buffer.byteLength(`- ${item.kind[0]} ${item.id}\n`, "utf8");
+      if (count && identityBytes + bytes > MAX_STRUCTURED_TEXT_BYTES) break;
+      identityBytes += bytes;
+      count++;
+    }
+    if (count < input.items.length) input = { ...input, items: input.items.slice(0, count),
+      deferred: input.deferred + input.items.length - count,
+      reportLines: ["Catch-up continues on the next page. File the catch-up report after its final page arrives."] };
     // Preserve every agenda identity and source time while shrinking only
     // descriptive text. Count encoded bytes because catch-up labels may be
     // multilingual, and leave headroom for the structured envelope.
@@ -472,10 +486,20 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
     const items = dated.map(({ item, time }) => ({ ...item,
       manifestLine: `- ${item.kind[0]} ${item.id} ${timeBase !== null && Number.isFinite(time) ? `+${time - timeBase}ms` : "time-unavailable"}` }));
     const text = seatTickWakeMessage({ ...input, items, compactCatchUpManifest: true, compactCatchUpTimeBase: timeBaseText });
-    if (Buffer.byteLength(text, "utf8") > MAX_STRUCTURED_TEXT_BYTES) {
-      throw new Error("catch-up manifest exceeds structured transport budget");
+    if (Buffer.byteLength(text, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) return { text, items };
+    // Reserve space for the actual envelope and final-page instructions. A
+    // page is frozen by the caller before transport and earns only its lines.
+    let low = 0, high = items.length, pageText = "";
+    while (low < high) {
+      const count = Math.ceil((low + high) / 2);
+      const candidate = seatTickWakeMessage({ ...input, items: items.slice(0, count),
+        deferred: input.deferred + items.length - count, compactCatchUpManifest: true, compactCatchUpTimeBase: timeBaseText,
+        reportLines: ["Catch-up continues on the next page. File the catch-up report after its final page arrives."] });
+      if (Buffer.byteLength(candidate, "utf8") <= MAX_STRUCTURED_TEXT_BYTES - 2_000) { low = count; pageText = candidate; }
+      else high = count - 1;
     }
-    return { text, items };
+    if (!low) throw new Error("catch-up first item and context exceed structured transport budget");
+    return { text: pageText, items: items.slice(0, low) };
   }
   const text = seatTickWakeMessage(input);
   const first = input.items[0];

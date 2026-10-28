@@ -1,3 +1,4 @@
+import { seatTickDeliveryAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 
 import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
@@ -62,6 +63,7 @@ export interface SeatTickAttemptDiagnostic {
 }
 
 export interface SeatTickDiagnostics {
+  deliveryAlarm: SeatTickDeliveryAlarm | null;
   project: string;
   at: string;
   seat: { conversationId: string | null; seatEpoch: number } | null;
@@ -197,6 +199,7 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
     attempts,
     fence,
     fenceDetail: seatTickFenceDetail(fence),
+    deliveryAlarm: seatTickDeliveryAlarm(state, now),
     journal,
   };
 }

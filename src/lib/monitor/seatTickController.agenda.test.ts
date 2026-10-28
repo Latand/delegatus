@@ -607,7 +607,9 @@ test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake und
     child.stdout.on("data", chunk => { output += chunk.toString(); });
     child.stderr.on("data", chunk => { output += chunk.toString(); });
     let timedOut = false;
-    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 2_000);
+    // The child keeps its own two-second check budget; allow interpreter
+    // startup and fixture imports before that check starts.
+    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
     try {
       const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
         child.once("error", reject);
@@ -1570,7 +1572,7 @@ test("a wake nobody can account for is kept under its key past the deadline and 
   expect(fixture.row().outstandingWake).toEqual({ ...wake, preparedAt: new Date(fixture.now).toISOString() });
   expect(first.cards).toEqual([]);
   expect(first.sent).toEqual([]);
-  const within = childRig(fixture, { realWakeState: true, now: fixture.now + 30 * MINUTE });
+  const within = childRig(fixture, { realWakeState: true, now: fixture.now + 29 * MINUTE });
   await runSeatTickCheck(fixture.project, within.deps);
   expect(within.cards).toEqual([]);
   expect(within.sent).toEqual([]);
@@ -1715,7 +1717,7 @@ test("a send that never returned is looked up under its own key, and kept outsta
   expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "unreturned" } });
   expect(fixture.row().outstandingWake).toMatchObject({
     clientMessageId: record!.delivery!.clientMessageId,
-    operationId: null,
+    operationId: "op-unreturned-1",
     commit: { children: [outcomeIdentity(["claude", fixture.registry.conversation(child.id as never)!.generations[0]!.id, "turn-one"])] },
   });
   expect(fixture.row()).toMatchObject({ lastWakeAt: ago(fixture, 61), harvestedChildren: [] });

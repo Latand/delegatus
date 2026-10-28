@@ -55,6 +55,7 @@ test("the project is required", async () => {
 test("a fenced attempt is described whole — record, journal answer and exits — without ending the send or leaking the payload", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
   setAgentRegistryForTests(registry);
+  await registry.prepareRecoveryIndexes();
   const seat = registry.ensureConversation("claude", path.join(SANDBOX, "seat.jsonl"), null);
   /* A send the transport lost: reserved, claimed, never answered — resting
      in flight past its deadline, which only a check may end. */

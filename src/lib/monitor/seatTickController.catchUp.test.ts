@@ -131,6 +131,7 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastCheckAt: from, lastWakeAt: from,
     lastProposalAt: AT, unreachableSince: from, eventsThrough: 0, reportsOwed: [priorReport], accounting: undefined }, f.stateFile);
   setAgentRegistryForTests(f.registry);
+  await f.registry.prepareRecoveryIndexes();
   const hosted = hostedSeat(f);
   const rig = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now, events, pipelines: [lane],
     realWakeState: true, journal: { client: hosted.client },
@@ -160,9 +161,10 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   const queued = rig.deps.readState!(PROJECT).outstandingWake!;
   expect(queued.operationId).toBeTruthy();
   hosted.journal.transitionOperation(queued.operationId!, "delivered");
-  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(await rig.deps.sources!.wakeState(queued)).toMatchObject({ state: "landed" });
+  const credited = await runSeatTickCheck(PROJECT, rig.deps);
   const row = rig.deps.readState!(PROJECT);
-  expect(row.eventsThrough).toBe(500);
+  expect({ eventsThrough: row.eventsThrough, result: credited, journal: rig.journal.slice(-2) }).toMatchObject({ eventsThrough: 500 });
   expect(row.itemsShown).toHaveLength(501);
   expect(row.announcedLanes).toEqual([`${lane.id}:completed`]);
   expect(row.reportsOwed?.map(report => report.key)).toEqual([`catch-up:7:${from}`]);
@@ -170,7 +172,7 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   const later = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now + 61 * MINUTE,
     events, pipelines: [lane], realWakeState: true, journal: { client: hosted.client },
     deliverWith: realTransport(f, hosted.client) });
-  await runSeatTickCheck(f.project, later.deps);
+  await runSeatTickCheck(PROJECT, later.deps);
   expect(later.sent.every(message => !message.text.includes("manifest catch-up:7:")
     && !message.text.includes(lane.id) && !message.text.includes(events[0]!.pipelineId))).toBe(true);
 });
@@ -471,4 +473,62 @@ test("targeted production liveness keeps a live alternate owner of the seat tran
   expect(unrelatedEntryReads).toBeLessThanOrEqual(2);
   expect(f.row().unreachableSince ?? null).toBeNull();
   expect(rig.sent.every(message => !message.text.includes("Catch-up manifest"))).toBe(true);
+});
+
+test("oversized catch-up pages resume their durable cursor and owe a report only after the final landing", async () => {
+  const many = Array.from({ length: 600 }, (_, index) => ({ ...lanes[0]!,
+    id: `lane-${String(index).padStart(4, "0")}-${"x".repeat(60)}`,
+    movedAt: new Date(Date.parse(AT) + index * 1000).toISOString(),
+  }));
+  const first = recoveryRig({ pipelines: many });
+  const firstResult = await runSeatTickCheck(PROJECT, first.deps);
+  expect(firstResult?.verdict).toBe("wake");
+  expect(firstResult!.deferred).toBeGreaterThan(0);
+  expect(first.sent).toHaveLength(1);
+  expect(Buffer.byteLength(first.sent[0]!.text)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES - 2_000);
+  let row = first.deps.readState!(PROJECT);
+  expect(row.catchUpProgress?.after).toBeTruthy();
+  expect(row.unreachableSince).toBe(FROM);
+  expect(row.reportsOwed?.some(entry => entry.key.startsWith("catch-up:"))).toBe(false);
+  const file = `${row.accounting!.filename.slice(0, -7)}`;
+  const agendaText = (text: string) => text.split("\nItems:\n")[1]!.split("\nWhy you were woken:")[0]!;
+  const seen = new Set(many.filter(lane => agendaText(first.sent[0]!.text).includes(lane.id)).map(lane => lane.id));
+  expect(row.announcedLanes).toHaveLength(seen.size);
+  for (let page = 1; page < 10 && row.catchUpProgress; page++) {
+    // Every page is read by a fresh process, including the persisted cursor
+    // and snapshot that keep page identity stable across a release change.
+    const directory = path.dirname(file);
+    const script = path.join(directory, `page-${page}.test.ts`), resultFile = path.join(directory, `page-${page}.json`);
+    fs.writeFileSync(script, `import { test } from "bun:test";
+      const { harness, runSeatTickCheck, PROJECT } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickController.fixture.ts"))});
+      test("resume page", async () => {
+        const rig = harness({ stateFile: ${JSON.stringify(file)}, pipelines: ${JSON.stringify(many)}, now: ${NOW + page * 61 * MINUTE} });
+        rig.deps.sources.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+        await runSeatTickCheck(PROJECT, rig.deps);
+        await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ sent: rig.sent, row: rig.deps.readState(PROJECT) }));
+      });`);
+    const child = spawn(process.execPath, ["test", script], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    try { expect({ code: await exited, output }).toMatchObject({ code: 0 }); }
+    finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await exited; }
+    const next = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+    expect(next.sent).toHaveLength(1);
+    const text = next.sent[0]!.text;
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES - 2_000);
+    for (const lane of many.filter(lane => agendaText(text).includes(lane.id))) {
+      expect(seen.has(lane.id)).toBe(false);
+      seen.add(lane.id);
+    }
+    row = next.row;
+  }
+  expect(seen.size).toBe(600);
+  expect(row.catchUpProgress).toBeNull();
+  expect(row.unreachableSince).toBeNull();
+  expect(row.reportsOwed?.filter(entry => entry.key.startsWith("catch-up:"))).toEqual([
+    { key: `catch-up:7:${FROM}`, label: `catch-up ${FROM} through ${new Date(NOW).toISOString()}`, receivedAt: row.lastWakeAt! },
+  ]);
 });

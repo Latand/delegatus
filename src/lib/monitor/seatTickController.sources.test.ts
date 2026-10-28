@@ -213,3 +213,62 @@ test.skipIf(!!restartFile)("a restarted controller gives the slow source a fresh
     } finally { clearTimeout(timer); }
   }
 });
+
+test("a fast optional report admission refusal leaves a source gap and still delivers", async () => {
+  const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  rig.deps.sources!.recordRuleReports = () => { throw new StateLockDeferredError("state.lease.sqlite"); };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result?.verdict).toBe("wake");
+  expect(rig.sent).toHaveLength(1);
+  expect(result?.detail).toContain("recordRuleReports");
+});
+
+test.each(["refusal", "operation", "throw", "uncertain"] as const)("dispatch return survives the check deadline (%s)", async kind => {
+  const entered = deferred(), release = deferred();
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, deliverWith: async () => {
+    entered.resolve(); await release.promise;
+    if (kind === "throw") throw new Error("transport disconnected");
+    return kind === "uncertain" ? { ok: false, outcome: "failed", status: 503, error: "arrival unknown", actuation: "started", resend: "verify-first" }
+      : kind === "operation" ? { ok: true, outcome: "queued", operationId: "late-operation", target: null }
+      : { ok: false, outcome: "failed", status: 503, error: "refused before reservation", admission: "refused" };
+  } });
+  const time = clock();
+  Object.assign(rig.deps, { workBudgetMs: 800, workClock: time.now, workScheduler: time.scheduler });
+  const checking = runSeatTickCheck(PROJECT, rig.deps);
+  try {
+    await entered.promise;
+    time.advance(800);
+    expect((await checking)?.verdict).toBe("error");
+    release.resolve();
+    const timeout = performance.now() + 5_000;
+    while (rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state === "active") {
+      if (performance.now() >= timeout) throw new Error("return bookkeeping did not finish");
+      await Bun.sleep(1);
+    }
+    const wake = rig.deps.readState!(PROJECT).outstandingWake!;
+    expect(wake.dispatch?.state).toBe(kind === "refusal" ? "refused" : "returned");
+    expect(wake.operationId).toBe(kind === "operation" ? "late-operation" : null);
+    if (kind === "throw") expect(wake.dispatch?.reason).toContain("transport disconnected");
+    if (kind === "uncertain") expect(wake.dispatch?.uncertain).toBe(true);
+  } finally { release.resolve(); await checking; }
+});
+
+test("dispatch receipt bookkeeping retries an admission failure without losing the operation", async () => {
+  const { spyOn } = await import("bun:test");
+  const { SeatTickAccounting } = await import("./seatTickAccounting");
+  const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+  const original = SeatTickAccounting.prototype.returnedDispatch;
+  let calls = 0;
+  const save = spyOn(SeatTickAccounting.prototype, "returnedDispatch").mockImplementation(function (this: InstanceType<typeof SeatTickAccounting>, ...args: Parameters<typeof original>) {
+    if (++calls === 1) throw new StateLockDeferredError("state.lease.sqlite");
+    return Reflect.apply(original, this, args);
+  });
+  try {
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, delivery: { ok: true, outcome: "queued", operationId: "saved-operation", target: null } });
+    expect((await runSeatTickCheck(PROJECT, rig.deps))?.delivery?.outcome).toBe("queued");
+    expect(calls).toBeGreaterThan(1);
+    expect(rig.deps.readState!(PROJECT).outstandingWake).toMatchObject({ operationId: "saved-operation", dispatch: { state: "returned" } });
+    expect(rig.sent).toHaveLength(1);
+  } finally { save.mockRestore(); }
+});

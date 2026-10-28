@@ -183,6 +183,14 @@ test("an attempt is retirable on age only past its bound, unaccounted for, with 
   /* A transport call still out: retiring it puts a second wake beside a send
      that may be actuating. */
   expect(seatTickFenceRetirableOnAge({ ...spent, dispatch: { token: "t", state: "active" } }, "uncertain", NOW, interval)).toBe(false);
+  // A returned caller without a holder still needs destination proof; a
+  // legacy caller or explicit uncertain actuation keeps its original identity.
+  for (const dispatch of [
+    { token: "t", state: "returned" as const },
+    { token: "t", state: "returned" as const, legacy: true },
+    { token: "t", state: "returned" as const, uncertain: true },
+  ]) expect(seatTickFenceRetirableOnAge({ ...spent, dispatch }, "unknown", NOW, interval)).toBe(false);
+  expect(seatTickFenceRetirableOnAge({ ...spent, operationId: "holder", dispatch: { token: "t", state: "returned" } }, "unknown", NOW, interval)).toBe(true);
   /* And inside the bound nothing is retirable on age at all. */
   expect(seatTickFenceRetirableOnAge(wake(), "uncertain", NOW, 60 * MINUTE)).toBe(false);
 });

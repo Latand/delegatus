@@ -1,9 +1,10 @@
+import { createInterface } from "node:readline";
 import { postMergeSeatSignals } from "@/lib/forge/postMerge";
 import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively as forEachSharedRow } from "@/lib/cooperative";
-import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort } from "./seatTickWork";
+import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkSignal } from "./seatTickWork";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -261,7 +262,7 @@ export interface SeatTickWakeEvidence {
       to both layers either way (#1672). Absent when nothing was written. */
   recorded?: "delivered" | "lost" | "refused";
   /** A late canonical Claude echo, bound to the original operation and payload. */
-  confirmation?: "claude-ledger";
+  confirmation?: "claude-ledger" | "destination-transcript";
 }
 
 /** A holder's answer with the evidence it rests on. A bare
@@ -323,6 +324,8 @@ export interface WakeRecordTarget {
 
 export interface WakeRecordPorts {
   lookup: (binding: OriginalSendBinding) => Promise<OriginalSendEvidence>;
+  /** Complete destination history can settle a missing reservation. */
+  destination?: (wake: SeatTickOutstandingWake) => Promise<"landed" | "absent" | "unknown">;
   /** Ends an in-flight send of the tick's own, or reports it still in flight.
       Absent, the read is inert: an in-flight send is reported retained and
       nothing is ended — the shape a diagnostic read takes. */
@@ -383,7 +386,11 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
   };
   const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
   if (evidence.kind === "absent") {
-    if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
+    if (!wake.operationId) {
+      const destination = ports.destination ? await ports.destination(wake) : "absent";
+      return { state: destination === "landed" ? "landed" : destination,
+        evidence: { operationId: null, record: null, journal: "unasked", ...(destination === "landed" ? { confirmation: "destination-transcript" as const } : {}) } };
+    }
     const journal = await asked(wake.operationId);
     const state = typeof journal === "string" ? "unknown" : journalWakeState(journal);
     return { state, evidence: { operationId: wake.operationId, record: null, journal } };
@@ -400,7 +407,20 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
     if (!ports.settle) return { state: "retained", evidence: withRecord(current, "unasked") };
     const settled = await ports.settle(evidence.operationId);
     if (!settled) return { state: "unknown", evidence: withRecord(current, "unasked") };
-    if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
+    if (settled.state === "in-flight") {
+      if (!ports.settleFromJournal) return { state: "retained", evidence: withRecord(settled, "unasked") };
+      // A destination may have finished before the settlement timer. Its
+      // terminal journal receipt is already authoritative; waiting for the
+      // timer leaves a delivered wake holding the next check's slot.
+      const journal = await asked(evidence.operationId);
+      const proven = typeof journal === "string" ? "unknown" : journalWakeState(journal);
+      if (typeof journal !== "string" && (proven === "landed" || proven === "dropped")) {
+        const written = await ports.settleFromJournal?.({ conversationId: wake.conversationId,
+          operationId: evidence.operationId, deliveryId: evidence.deliveryId }, journal);
+        return { state: proven, evidence: withRecord(written ?? settled, journal) };
+      }
+      return { state: "retained", evidence: withRecord(settled, journal) };
+    }
     current = settled;
   }
   if (current.state === "delivered") {
@@ -590,8 +610,13 @@ export interface SeatTickSources {
  */
 export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
   return {
-    lookup: (binding) => resolveOriginalSend(binding),
+    lookup: async binding => {
+      const registry = agentRegistry();
+      if (options.end) await registry.prepareRecoveryIndexes(seatTickWorkSignal());
+      return resolveOriginalSend(binding, { registry });
+    },
     confirmed: confirmedClaudeWakeDelivery,
+    destination: destinationWakeState,
     ...(options.end ? { settle: (operationId: string) => resolveSendReceipt(operationId), settleFromJournal: (target, receipt) => settleRecordFromJournal(agentRegistry(), target, receipt) } : {}),
     journal: async (operationId) => {
       const client = runtimeHostClient();
@@ -599,6 +624,54 @@ export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
       return journalReceipt(operationId, client);
     },
   };
+}
+
+/** Inspect only this destination's registered generations, streaming under a
+ * byte bound. Unreadable, changing or oversized histories prove no absence.
+ * This runs only for a missing reservation, never on the normal tick path. */
+export async function destinationWakeState(wake: SeatTickOutstandingWake, registry = agentRegistry()): Promise<"landed" | "absent" | "unknown"> {
+  if (!wake.text) return "unknown";
+  const conversation = registry.conversation(wake.conversationId as ViewerConversationId);
+  if (!conversation || !["claude", "codex"].includes(conversation.engine) || !conversation.generations.length) return "unknown";
+  const identity = JSON.stringify(conversation.generations.map(row => [row.id, row.path]));
+  let remaining = 64 * 1024 * 1024;
+  for (const generation of conversation.generations) {
+    assertSeatTickWork();
+    let file: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+    try {
+      file = await fs.promises.open(generation.path, "r");
+      const before = await file.stat();
+      if (!before.isFile() || before.size > remaining) return "unknown";
+      remaining -= before.size;
+      if (before.size) {
+        const stream = file.createReadStream({ start: 0, end: before.size - 1, autoClose: false });
+        const lines = createInterface({ input: stream, crlfDelay: Infinity });
+        let invalid = false;
+        try {
+          for await (const line of lines) {
+            assertSeatTickWork();
+            if (!line.trim()) continue;
+            let row: Record<string, unknown>;
+            try { row = JSON.parse(line); } catch { invalid = true; break; }
+            if (!row || typeof row !== "object") { invalid = true; break; }
+            const message = (row.message ?? row.payload ?? row) as Record<string, unknown>;
+            const codexUser = row.type === "event_msg" && message?.type === "user_message";
+            if (row.type !== "user" && message?.role !== "user" && !codexUser) continue;
+            const content = codexUser ? message.message : message.content;
+            const parts = typeof content === "string" ? [content] : Array.isArray(content)
+              ? content.flatMap(part => part && typeof part === "object" && typeof part.text === "string" ? [part.text] : []) : [];
+            if (parts.join("\n").includes(wake.text)) return "landed";
+          }
+        } finally { lines.close(); stream.destroy(); }
+        if (invalid) return "unknown";
+      }
+      const after = await fs.promises.stat(generation.path);
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs) return "unknown";
+    } catch { return "unknown"; }
+    finally { await file?.close(); }
+  }
+  const current = registry.conversation(wake.conversationId as ViewerConversationId);
+  return current && JSON.stringify(current.generations.map(row => [row.id, row.path])) === identity ? "absent" : "unknown";
 }
 
 /**
@@ -2372,7 +2445,7 @@ async function childWork(
   const coldVisits: AccountingChild[] = [];
 
   /** One owner's next discovery page. */
-  const discover = (owner: AccountingOwner): boolean => {
+  const discover = async (owner: AccountingOwner): Promise<boolean> => {
     const page = seatChildren(owner.conversationId, owner.after, DISCOVERY_PAGE);
     if (!page) return false;
     const discoveries = [page];
@@ -2398,7 +2471,7 @@ async function childWork(
         position: child.input.status === "terminal" ? "head" : "tail",
       });
     }
-    accounting.discovery({ ...owner, after: page.evidenceGap ? owner.after : after, bootstrap }, discovered);
+    await seatTickMutation("discovery", () => accounting.discovery({ ...owner, after: page.evidenceGap ? owner.after : after, bootstrap }, discovered));
     if (bootstrap || discoveries.some((value) => value.evidenceGap || !value.complete)) gaps.add("discovery-incomplete");
     return true;
   };
@@ -2407,13 +2480,13 @@ async function childWork(
       read from its cursor within what is left of the check's budget, and its
       ticket re-queued. A settled child whose read the budget cut is an
       outcome owed and not yet known, and the check says so. */
-  const poll = (child: AccountingChild, page: SeatChildrenPage, projected: ProjectedChild | null): void => {
+  const poll = async (child: AccountingChild, page: SeatChildrenPage, projected: ProjectedChild | null): Promise<void> => {
     // Discovery predates the loop's yield. A newly hosted child must not get
     // a failure receipt or an unknown-turn completion from that old snapshot.
     if (projected && !projected.hosted && (projected.input.status === "unknown" || projected.input.transcript === "unresolvable")) {
       pages.delete(`${child.owner}/${child.rowKey}`);
       const fresh = seatChildren(child.owner, null, 1, [child.rowKey]);
-      if (!fresh) { accounting.promote(child); return; }
+      if (!fresh) { await seatTickMutation("promote", () => accounting.promote(child)); return; }
       page = fresh;
       projected = classify(page, child.rowKey);
     }
@@ -2422,7 +2495,7 @@ async function childWork(
     const previousGeneration = child.generationIndex;
     const edge = page.file.lineageEdges[child.rowKey];
     if (!projected || !edge || edge.parentConversationId !== child.owner || edge.evidence.launchId !== child.launchId) {
-      accounting.ingest({ ...child, input: { ...child.input, status: "unknown", outcome: null } }, null, []);
+      await seatTickMutation("ingest", () => accounting.ingest({ ...child, input: { ...child.input, status: "unknown", outcome: null } }, null, []));
       gaps.add("child-departed");
       return;
     }
@@ -2440,7 +2513,7 @@ async function childWork(
     if (!generation) {
       const abandoned = !projected.hosted && !!receipt;
       if (abandoned) child.input = { ...child.input, status: "terminal", outcome: "failed", terminalAt: receipt.createdAt };
-      accounting.ingest(child, null, [], failure || (abandoned ? "launch-unmaterialized" : false));
+      await seatTickMutation("ingest", () => accounting.ingest(child, null, [], failure || (abandoned ? "launch-unmaterialized" : false)));
       unplaced();
       return;
     }
@@ -2483,17 +2556,17 @@ async function childWork(
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
       && JSON.stringify(previousInput) === JSON.stringify(child.input)) coldVisits.push(child);
-    else accounting.ingest(child, source, read.outcomes, lost || abandonedActiveTurn ? "host-gone-no-transcript" : false, cut ? "head" : "tail");
+    else await seatTickMutation("ingest", () => accounting.ingest(child, source, read.outcomes, lost || abandonedActiveTurn ? "host-gone-no-transcript" : false, cut ? "head" : "tail"));
     if (cut && projected.turn !== "busy") gaps.add("ledger-pending");
   };
 
   let catchUpPending = false;
   try {
-    const active = accounting.owner(seat.conversationId, seat.seatEpoch);
-    if (accounting.discoverRevokedOwners(statePath("orchestrator-seats.json"), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project)) {
+    const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
+    if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(statePath("orchestrator-seats.json"), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
       gaps.add("discovery-incomplete");
     }
-    if (discover(active)) {
+    if (await discover(active)) {
       /* The active owner's ticket just moved to the tail, so the head of the
          owner queue is the predecessor whose turn it is — unless the active
          seat is the only owner there is. */
@@ -2501,9 +2574,9 @@ async function childWork(
       if (projectedRows <= 20 && ticket?.kind === "owner-poll") {
         const owner = accounting.get(ticket.target);
         if (!owner || owner.kind !== "owner") throw new Error("missing owner provenance");
-        const migrated = owner.pollKey ? owner : accounting.owner(owner.conversationId, owner.epoch);
-        if (migrated.pollKey !== ticket.key) accounting.drop(ticket);
-        else if (migrated.key !== active.key) discover(migrated);
+        const migrated = owner.pollKey ? owner : await seatTickMutation("owner", () => accounting.owner(owner.conversationId, owner.epoch));
+        if (migrated.pollKey !== ticket.key) await seatTickMutation("drop", () => accounting.drop(ticket));
+        else if (migrated.key !== active.key) await discover(migrated);
       }
     }
     const observedRunning = new Set<string>();
@@ -2521,8 +2594,8 @@ async function childWork(
          now. What the budget cannot reach goes to the head of the poll queue,
          and until it is read the check may not call the board quiet. */
       if (!projected || projected.input.status !== "running" || projected.turn === "idle" || projected.turn === "terminal") {
-        if (bytesLeft > 0) poll(child, page, projected);
-        else { accounting.promote(child); gaps.add("ledger-pending"); }
+        if (bytesLeft > 0) await poll(child, page, projected);
+        else { await seatTickMutation("promote", () => accounting.promote(child)); gaps.add("ledger-pending"); }
         if (!projected || projected.input.status !== "running") continue;
         /* Still hosted with a settled turn and nothing new in its ledger: a
            worker idling at its prompt, which is open work like any other. */
@@ -2536,9 +2609,9 @@ async function childWork(
       children.push(input);
       observedRunning.add(child.key);
     }
-    accounting.rotateRunning(running.slice(0, RUNNING_ROTATE));
+    await seatTickMutation("rotateRunning", () => accounting.rotateRunning(running.slice(0, RUNNING_ROTATE)));
     const catchUpPollThrough = catchingUp && !gaps.has("discovery-incomplete")
-      ? accounting.beginCatchUpPoll()
+      ? await seatTickMutation("beginCatchUpPoll", () => accounting.beginCatchUpPoll())
       : null;
     const pollTickets = accounting.pollPage(POLL_VISITS).filter(ticket => {
       if (!catchingUp || catchUpPollThrough === null) return true;
@@ -2555,14 +2628,15 @@ async function childWork(
       if (ticket.kind !== "poll") throw new Error("invalid poll ticket");
       let child = accounting.get(ticket.target);
       if (!child || child.kind !== "child") throw new Error("missing child provenance");
-      child = accounting.adoptPoll(child, ticket.key);
-      if (child.pollKey !== ticket.key) { accounting.drop(ticket); continue; }
+      const observedChild = child;
+      child = await seatTickMutation("adoptPoll", () => accounting.adoptPoll(observedChild, ticket.key));
+      if (child.pollKey !== ticket.key) { await seatTickMutation("drop", () => accounting.drop(ticket)); continue; }
       // Keep twenty uncached projections available for ready outcomes.
       if (projectedRows >= 40 && !pages.has(`${child.owner}/${child.rowKey}`)) break;
       const page = seatChildren(child.owner, null, 1, [child.rowKey]);
       if (!page) break;
       const projected = classify(page, child.rowKey);
-      poll(child, page, projected);
+      await poll(child, page, projected);
       // A cold child re-instructed since its last poll contributes immediately.
       if (child.input.status === "running" && !observedRunning.has(child.key)) {
         children.push(child.input);
@@ -2572,20 +2646,20 @@ async function childWork(
     // Cold visits count as covered by this pass too; rotate their ticket
     // before checking the frozen snapshot so an unchanged ledger does not
     // force an unnecessary extra catch-up check.
-    accounting.rotateCold(coldVisits);
+    await seatTickMutation("rotateCold", () => accounting.rotateCold(coldVisits));
     if (catchUpPollThrough !== null) {
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
       catchUpPending = !!pending;
       if (pending) gaps.add("ledger-pending");
-      else accounting.endCatchUpPoll();
+      else await seatTickMutation("endCatchUpPoll", () => accounting.endCatchUpPoll());
     }
     // Page the persisted ready queue, yielding between pages. The cutoff is
     // the snapshot gathered by this check; deliveries acknowledge its exact ids.
     const ready = async function* () {
       if (!catchingUp) {
-        yield* accounting.ready(20); return;
+        yield* await seatTickMutation("ready", () => accounting.ready(20)); return;
       }
       let after: string | undefined;
       const cutoff = accounting.row()!.sequence;
@@ -2615,7 +2689,7 @@ async function childWork(
       const page = seatChildren(child.owner, null, 1, [child.rowKey]);
       if (!page) break;
       const projected = classify(page, child.rowKey);
-      if (!projected || page.file.lineageEdges[child.rowKey]?.parentConversationId !== child.owner) { accounting.defer(outcome); gaps.add("child-departed"); continue; }
+      if (!projected || page.file.lineageEdges[child.rowKey]?.parentConversationId !== child.owner) { await seatTickMutation("defer", () => accounting.defer(outcome)); gaps.add("child-departed"); continue; }
       /* The harvest stamp travels with the outcome (#1749). The row is the
          child's, the outcome is one turn of one generation of it, and the
          decision needs both to tell a result nobody has taken from a fresh

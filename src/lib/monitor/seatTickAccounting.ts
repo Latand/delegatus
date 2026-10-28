@@ -93,6 +93,14 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
         const value = state[name];
         if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) return null;
       }
+      if (state.wakeDecidedSince !== undefined && state.wakeDecidedSince !== null
+        && (typeof state.wakeDecidedSince !== "string" || !Number.isFinite(Date.parse(state.wakeDecidedSince)))) return null;
+      if (state.catchUpProgress !== undefined && state.catchUpProgress !== null) {
+        const page = state.catchUpProgress;
+        if (!string(page.key) || !string(page.from) || !Number.isFinite(Date.parse(page.from))
+          || !string(page.through) || !Number.isFinite(Date.parse(page.through)) || !Array.isArray(page.covers) || !page.covers.every(string)
+          || page.after !== undefined && !string(page.after)) return null;
+      }
       if (state.eventsThrough !== null && !integer(state.eventsThrough)) return null;
       if (!Array.isArray(state.harvestedChildren) || state.harvestedChildren.length !== 0
         || !Array.isArray(state.lastWakeReasons) || !Array.isArray(state.stalledSeen)
@@ -143,7 +151,11 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || !string(wake.recovery.nextRetryAt) || !string(wake.recovery.deadlineAt)
           || !string(wake.recovery.reason) || wake.recovery.reason.length > 500)) return false;
         return wake.dispatch === undefined || (!!wake.dispatch && string(wake.dispatch.token)
-          && ["active", "refused", "returned"].includes(wake.dispatch.state));
+          && ["active", "refused", "returned"].includes(wake.dispatch.state)
+          && (wake.dispatch.deadlineAt === undefined || string(wake.dispatch.deadlineAt) && Number.isFinite(Date.parse(wake.dispatch.deadlineAt)))
+          && (wake.dispatch.reason === undefined || typeof wake.dispatch.reason === "string")
+          && (wake.dispatch.legacy === undefined || typeof wake.dispatch.legacy === "boolean")
+          && (wake.dispatch.uncertain === undefined || typeof wake.dispatch.uncertain === "boolean"));
       };
       const wake = state.outstandingWake;
       if (wake !== null && !validWake(wake)) return null;
@@ -651,38 +663,72 @@ export class SeatTickAccounting {
     });
   }
   /** A dispatch claims the exact attempt it read before entering any async
-      transport. No expiry: an interrupted caller may still reserve or actuate. */
-  beginDispatch(expected: SeatTickOutstandingWake): string | null {
+      transport. Reservation guards recheck the token after every await. */
+  beginDispatch(expected: SeatTickOutstandingWake, deadlineAt?: string): string | null {
     return this.mutate((tx, row) => {
       const wake = row.state.outstandingWake;
       if (!wake || wake.clientMessageId !== expected.clientMessageId || (wake.dispatch && wake.dispatch.state !== "refused")
         || wake.dispatch?.token !== expected.dispatch?.token) return null;
       const token = crypto.randomUUID();
-      row.state.outstandingWake = { ...wake, dispatch: { token, state: "active" } };
+      row.state.outstandingWake = { ...wake, dispatch: { token, state: "active", ...(wake.dispatch?.legacy ? { legacy: true } : {}), ...(deadlineAt ? { deadlineAt } : {}) } };
       return token;
     });
   }
-  /** Record transport's return. A throw keeps admission active and unresolved;
-      only a refusal with no handle contributes to a later absence proof. */
-  returnedDispatch(expectedKey: string, token: string, refused: boolean): void {
-    this.mutate((tx, row) => {
+  /** Record transport returns and exceptions independently of the evidence
+      deadline. The token binds late operation handles to their own attempt. */
+  returnedDispatch(expectedKey: string, token: string, refused: boolean, operationId?: string, reason?: string, uncertain = false): void {
+    this.collection.boundedPatch(2, tx => {
+      const row = tx.get(key("project", this.project));
+      if (!row || row.kind !== "project") throw new Error("accounting migration has not completed");
+      const returned = (wake: SeatTickOutstandingWake): SeatTickOutstandingWake => ({ ...wake,
+        ...(operationId ? { operationId } : {}),
+        dispatch: { ...wake.dispatch!, token, state: refused ? "refused" : "returned", ...(reason ? { reason } : {}),
+          ...(uncertain ? { uncertain: true } : {}) } });
       const wake = row.state.outstandingWake;
-      if (wake?.clientMessageId === expectedKey && wake.dispatch?.token === token && wake.dispatch.state === "active") {
-        row.state.outstandingWake = { ...wake, dispatch: { token, state: refused ? "refused" : "returned" } };
-        return;
+      if (wake?.clientMessageId === expectedKey && wake.dispatch?.token === token) {
+        row.state.outstandingWake = returned(wake);
+      } else {
+        const retired = row.state.retiredWakes ?? [];
+        const index = retired.findIndex(entry => entry.wake.clientMessageId === expectedKey && entry.wake.dispatch?.token === token);
+        if (index < 0) return;
+        const next = [...retired];
+        next[index] = { ...next[index]!, wake: returned(next[index]!.wake) };
+        row.state = { ...row.state, retiredWakes: next };
       }
-      /* The seat may have been superseded while this call was still out, which
-         moves the attempt to the retired slot (#1594). What the call returned
-         is a fact about the attempt, so it is recorded wherever the attempt now
-         is; dropping it would leave a retired entry claiming a transport call
-         is still in flight for as long as the row lives. */
-      const retired = row.state.retiredWakes ?? [];
-      const index = retired.findIndex((entry) => entry.wake.clientMessageId === expectedKey
-        && entry.wake.dispatch?.token === token && entry.wake.dispatch.state === "active");
-      if (index < 0) return;
-      const next = [...retired];
-      next[index] = { ...next[index]!, wake: { ...next[index]!.wake, dispatch: { token, state: refused ? "refused" : "returned" } } };
-      row.state = { ...row.state, retiredWakes: next };
+      row.revision++;
+      tx.put(row);
+    });
+  }
+
+  /** Revoke the exact caller before asking the destination again. Reservation
+   * guards read this token in the shared SQLite transaction. Legacy callers
+   * already checked their SeatTickWork deadline at that same boundary. */
+  fenceExpiredDispatch(expected: SeatTickOutstandingWake, at: string, legacyDeadline: number): boolean {
+    return this.mutate((_tx, row) => {
+      const wake = row.state.outstandingWake;
+      if (!wake || wake.clientMessageId !== expected.clientMessageId || wake.dispatch?.state !== "active"
+        || wake.dispatch.token !== expected.dispatch?.token) return false;
+      const deadline = wake.dispatch.deadlineAt ? Date.parse(wake.dispatch.deadlineAt) : legacyDeadline;
+      if (!Number.isFinite(deadline) || Date.parse(at) < deadline) return false;
+      row.state.outstandingWake = { ...wake, dispatch: { ...wake.dispatch, state: "returned", ...(!wake.dispatch.deadlineAt ? { legacy: true } : {}),
+        reason: [wake.dispatch.reason, "dispatch deadline elapsed; caller fenced before destination reconciliation"].filter(Boolean).join("; ").slice(0, 500) } };
+      return true;
+    });
+  }
+  dispatchAdmitted(clientMessageId: string, token: string): boolean {
+    const wake = this.row()?.state.outstandingWake;
+    return wake?.clientMessageId === clientMessageId && wake.dispatch?.token === token && wake.dispatch.state === "active";
+  }
+  /** Absence was read AFTER revoking the caller, so no old caller can reserve
+   * between that observation and this token-checked transition. */
+  confirmFencedAbsent(expected: SeatTickOutstandingWake): boolean {
+    return this.mutate((_tx, row) => {
+      const wake = row.state.outstandingWake;
+      if (!wake || wake.clientMessageId !== expected.clientMessageId || wake.operationId || wake.dispatch?.uncertain
+        || wake.dispatch?.state !== "returned" || wake.dispatch.token !== expected.dispatch?.token) return false;
+      row.state.outstandingWake = { ...wake, dispatch: { ...wake.dispatch, state: "refused",
+        reason: [wake.dispatch.reason, "destination holds no delivery after caller was fenced"].filter(Boolean).join("; ").slice(0, 500) } };
+      return true;
     });
   }
   cancelUndispatched(expected: SeatTickOutstandingWake): boolean {
@@ -778,10 +824,12 @@ export class SeatTickAccounting {
       instant a landing is stamped at, on `lastWakeAt`; `reachedAt` is when the
       delivery record says the wake reached the seat, which the report ledger
       stamps its owed outcomes with (docs/design/orchestrator-reports.md §5.1). */
-  settle(expectedKey: string, state: SeatTickProjectState, disposition: WakeDisposition, reachedAt?: string | null): boolean {
+  settle(expectedKey: string, state: SeatTickProjectState, disposition: WakeDisposition, reachedAt?: string | null, expected?: SeatTickOutstandingWake): boolean {
     return this.mutate((tx, row) => {
       const wake = row.state.outstandingWake;
       if (!wake || wake.clientMessageId !== expectedKey || (disposition === "unsent" && wake.dispatch?.state === "active")) return false;
+      if (expected && (wake.dispatch?.token !== expected.dispatch?.token || wake.dispatch?.state !== expected.dispatch?.state
+        || wake.operationId !== expected.operationId)) return false;
       if (disposition === "landed") for (const id of wake.commit.children) {
         const outcome = tx.get(key("outcome", this.project, id));
         if (!outcome) {

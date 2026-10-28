@@ -27,6 +27,7 @@ import {
   type SeatTickDeployInput,
   type SeatTickEventInput,
   type SeatTickEvidenceGap,
+  type SeatTickCatchUp,
   type SeatTickItem,
   type SeatTickOwnLaneInput,
   type SeatTickPipelineInput,
@@ -1577,6 +1578,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       return { verdict: { kind: "error", detail: "catch-up is collecting the remaining held child outcomes; the next check continues" },
         state, cards, reportedSourceGap, reportedChildrenGap };
     }
+    if (catchUp) offered = offered.filter(item => !catchUp.after || seatTickCatchUpItemCursor(item) > catchUp.after)
+      .sort((a, b) => seatTickCatchUpItemCursor(a) < seatTickCatchUpItemCursor(b) ? -1 : seatTickCatchUpItemCursor(a) > seatTickCatchUpItemCursor(b) ? 1 : 0);
     const items = catchUp ? offered.map(item => ({ ...item, finalMessageFrom: undefined,
       label: `${item.occurredAt ?? "time unavailable"}: ${item.label.replace(/\s+/g, " ")}` })) : offered.slice(0, input.policy.itemsPerWake);
     const lines = catchUp && input.reports?.bridgeReports
@@ -1673,7 +1676,12 @@ function withPullRequestFingerprint(fingerprint: string, source: string): string
   return targetParts && sourceParts ? `${targetParts.board}.${sourceParts.pullRequests}` : fingerprint;
 }
 
-export function seatTickCatchUp(input: Pick<SeatTickCheckInput, "state" | "now" | "settings" | "seat">) {
+export function seatTickCatchUpItemCursor(item: SeatTickItem): string {
+  return JSON.stringify([item.occurredAt ?? "", item.kind, item.id, item.itemVersion ?? ""]);
+}
+
+export function seatTickCatchUp(input: Pick<SeatTickCheckInput, "state" | "now" | "settings" | "seat">): SeatTickCatchUp | null {
+  if (input.state.catchUpProgress) return input.state.catchUpProgress;
   const from = input.state.unreachableSince ? input.state.unreachableBacklogSince ?? input.state.unreachableSince : null;
   if (!from || input.now - Date.parse(from) <= input.settings.wakeIntervalMs) return null;
   const through = new Date(input.now).toISOString();
@@ -2168,7 +2176,7 @@ export function seatTickWakeCommitPlan(
     .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
   /* The outcomes the report log is owed once this wake lands (§5.1). */
   const catchUp = verdict.catchUp && items.length === verdict.items.length ? verdict.catchUp : undefined;
-  const reportsOwed = context.bridgeReports ? catchUp
+  const reportsOwed = context.bridgeReports ? catchUp?.pending ? [] : catchUp
     ? [{ key: catchUp.key, label: `catch-up ${catchUp.from} through ${catchUp.through}` }]
     : seatTickOwedOutcomes(items) : [];
   /* The stalls the wake actually names, never the check's whole stall list:
@@ -2245,12 +2253,14 @@ export function seatTickWakeCommit(
     ? recordOwed(commit.catchUp ? (state.reportsOwed ?? []).filter(entry => !commit.catchUp!.covers.includes(entry.key)) : state.reportsOwed ?? [],
       state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
     : null;
-  const clearsOutage = !!commit.catchUp || !state.unreachableSince
+  const clearsOutage = (!!commit.catchUp && !commit.catchUp.pending) || !state.unreachableSince
     || (commit.wakeIntervalMs !== undefined && Date.parse(received) - Date.parse(state.unreachableBacklogSince ?? state.unreachableSince) <= commit.wakeIntervalMs);
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
      field leaves the record as it was. */
-  const note = { ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
+  const catchUpProgress = commit.catchUp?.pending ? { key: commit.catchUp.key, from: commit.catchUp.from,
+    through: commit.catchUp.through, covers: commit.catchUp.covers, after: commit.catchUp.after } : commit.catchUp ? null : state.catchUpProgress;
+  const note = { catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
     return {
       ...state,

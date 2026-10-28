@@ -585,3 +585,29 @@ test("agenda versions survive retained delivery and reopening, and unsent versio
     expect(new SeatTickAccounting(filename, "project").readState().itemsShown).toEqual(["task@version"]);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("expired dispatch fencing and late receipts compare tokens and preserve operation evidence", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-dispatch-tokens-"));
+  try {
+    const store = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    store.initialize(emptySeatTickState(), null);
+    const at = "2026-09-05T12:00:00.000Z";
+    const wake = { clientMessageId: "fenced-attempt", conversationId: CONVERSATION, seatEpoch: 1, operationId: null,
+      preparedAt: at, text: "frozen payload", commit: { proposal: false, reasons: [], fingerprint: "one", eventsThrough: 0, children: [] } };
+    store.prepare(store.readState(), wake);
+    const token = store.beginDispatch(wake, at)!;
+    const active = store.readState().outstandingWake!;
+    expect(store.fenceExpiredDispatch({ ...active, dispatch: { ...active.dispatch!, token: "foreign" } }, at, 0)).toBe(false);
+    expect(store.dispatchAdmitted(wake.clientMessageId, token)).toBe(true);
+    expect(store.fenceExpiredDispatch(active, at, 0)).toBe(true);
+    expect(store.dispatchAdmitted(wake.clientMessageId, token)).toBe(false);
+    expect(store.confirmFencedAbsent(store.readState().outstandingWake!)).toBe(true);
+    const next = store.beginDispatch(store.readState().outstandingWake!, at)!;
+    expect(store.settle(wake.clientMessageId, { ...store.readState(), lastWakeAt: at }, "landed", null, active)).toBe(false);
+    store.returnedDispatch(wake.clientMessageId, token, true, "old-operation");
+    expect(store.readState().outstandingWake?.operationId).toBeNull();
+    store.returnedDispatch(wake.clientMessageId, next, false, "current-operation");
+    const reopened = new SeatTickAccounting(store.filename, "project");
+    expect(reopened.readState().outstandingWake).toMatchObject({ operationId: "current-operation", dispatch: { token: next, state: "returned", deadlineAt: at } });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

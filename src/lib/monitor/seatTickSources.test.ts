@@ -2060,7 +2060,10 @@ test("a read with no settlement port is inert: an in-flight record is reported r
 
 test("an in-flight record is ended by the tick's own settlement, and classified by its answer (#1465)", async () => {
   const still = await classify(found(receipt({})), { settle: receipt({}) });
-  expect(still).toMatchObject({ state: "retained", calls: ["lookup", "settle"] });
+  expect(still).toMatchObject({ state: "retained", calls: ["lookup", "settle", "journal"] });
+  expect(await classify(found(receipt({})), { settle: receipt({}), runtime: "landed" }))
+    .toMatchObject({ state: "landed", calls: ["lookup", "settle", "journal", "record:op-wake-1"] });
+  expect((await classify(found(receipt({})), { settle: receipt({}), runtime: "dropped" })).state).toBe("dropped");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "delivered", resend: "not-needed" }) })).state).toBe("landed");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "failed", resend: "safe" }) })).state).toBe("dropped");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "failed", resend: "verify-first" }) })).state).toBe("uncertain");

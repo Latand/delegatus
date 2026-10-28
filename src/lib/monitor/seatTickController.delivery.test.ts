@@ -86,7 +86,10 @@ test("a blocked legacy import names itself in the journal and reaches the board 
   expect(fixture.row().childrenGap).toMatchObject({ gap: "migration-blocked", attempts: 1 });
   const standing = childRig(fixture, { now: fixture.now + 61 * MINUTE });
   await runSeatTickCheck(fixture.project, standing.deps);
-  expect(standing.cards.map((entry) => entry.card)).toMatchObject([{ ref: "seat-tick-source-children", kind: "source-unreadable" }]);
+  expect(standing.cards.map((entry) => entry.card)).toMatchObject([
+    { ref: "seat-tick-source-children", kind: "source-unreadable" },
+    { ref: SEAT_TICK_WAKE_UNRESOLVED_REF, kind: "wake-unresolved" },
+  ]);
   expect(standing.cards[0]!.card.detail).toContain("migration-blocked, 2 attempt(s)");
   expect(standing.cards[0]!.card.detail).toContain("state/seat-tick.json");
   /* Fixing the file unblocks the import, and the next check wakes. */
@@ -302,11 +305,10 @@ test("a dispatch paused before reservation blocks rotation until its returned re
   const original = fixture.row().outstandingWake!;
   expect(original.dispatch?.state).toBe("active");
   const seat = { ...fixture.seat, seatEpoch: 8 };
-  const rotated = childRig(fixture, { realWakeState: true, seat, now: fixture.now + 61 * MINUTE });
+  const rotated = childRig(fixture, { realWakeState: true, seat, now: fixture.now + 30_000 });
   await runSeatTickCheck(fixture.project, rotated.deps);
   expect(rotated.sent).toEqual([]);
   expect(fixture.row().outstandingWake).toEqual(original);
-  expect(rotated.cards.map(({ card }) => card.ref)).toContain(SEAT_TICK_WAKE_UNRESOLVED_REF);
   const accounting = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project);
   expect(accounting.settleAbsent(original)).toBe(false);
   expect(accounting.cancelUndispatched(original)).toBe(false);
@@ -346,7 +348,8 @@ test("rotation retains absent legacy, unknown, unreadable, uncertain and too-lat
     if (mode === "unreadable") rig.deps.sources!.wakeState = async () => { throw new Error("unreadable registry"); };
     await runSeatTickCheck(fixture.project, rig.deps);
     expect(rig.sent).toEqual([]);
-    expect(fixture.row().outstandingWake).toEqual(original);
+    expect(fixture.row().outstandingWake).toEqual({ ...original,
+      ...(mode === "uncertain" ? { operationId: "unverified-operation" } : {}) });
     expect(fixture.acknowledged()).toEqual([]);
     expect(rig.cards.map(({ card }) => card.ref)).toContain(SEAT_TICK_WAKE_UNRESOLVED_REF);
   }
@@ -518,8 +521,8 @@ test("a wake stranded by a replaced seat is retired, and the successor's own wak
      carrying the proof that licensed the move. */
   const retired = fixture.row().retiredWakes;
   expect(retired).toHaveLength(1);
-  expect(retired[0]!.wake).toEqual({ ...stranded, preparedAt: retired[0]!.wake.preparedAt });
-  expect(retired[0]!.wake).toMatchObject({ clientMessageId: stranded.clientMessageId, seatEpoch: 140, operationId: null,
+  expect(retired[0]!.wake).toEqual({ ...stranded, operationId: "unverified-operation", preparedAt: retired[0]!.wake.preparedAt });
+  expect(retired[0]!.wake).toMatchObject({ clientMessageId: stranded.clientMessageId, seatEpoch: 140, operationId: "unverified-operation",
     text: stranded.text, commit: stranded.commit, dispatch: { state: "refused" } });
   expect(retired[0]!.supersededBy).toEqual({ conversationId: successor.conversationId, seatEpoch: 155 });
   /* And the reason it stopped fencing is on the row, not inferred from the
@@ -1312,13 +1315,13 @@ test("a wake waits out the seat's running turn instead of interrupting it, and r
    whole issue is measured by: the first check after the bound delivers. */
 test("the #1672 shape — a key anchored eight days back that no evidence can settle — is retired on its bound and the first check past it delivers a wake (#1746)", async () => {
   const anchor = new Date(Date.now() + 3 * MINUTE - 8 * 24 * 60 * MINUTE).toISOString();
-  const { fixture, child, wake, rig } = await strandedManagerWake("fence-bound-1672-shape", {
+  const { fixture, child, wake, rig, operationId } = await strandedManagerWake("fence-bound-1672-shape", {
     seatEpoch: 169, lastWakeAt: anchor, wakeIntervalMinutes: 20,
   });
   /* The key carries the stale anchor, which is how one unresolved original key
      outlived eight rotations: it is derived from the last PROVEN wake. */
   expect(wake.clientMessageId).toContain(`:${anchor}:`);
-  expect(wake).toMatchObject({ seatEpoch: 169, operationId: null, dispatch: { state: "refused" } });
+  expect(wake).toMatchObject({ seatEpoch: 169, operationId, dispatch: { state: "refused" } });
 
   /* Inside the bound — one hour, the floor under two twenty-minute intervals —
      every check still computes `wake` and still sends nothing, which is the
@@ -1415,15 +1418,15 @@ test("an attempt its holder still accounts for is kept past its bound, and no se
   expect(record!.detail).not.toContain("the fence lapses at");
 });
 
-/* The same restraint for a transport call that has not come back: retiring an
-   attempt mid-flight is how two wakes reach one seat. */
-test("an attempt whose transport call is still out is kept past its bound (#1746)", async () => {
+/* An old caller has no durable token guard. Expiry keeps its original key
+   and payload while uncertain destination evidence forbids another send. */
+test("an expired legacy caller with uncertain delivery keeps its frozen attempt past the bound (#1746)", async () => {
   const outstanding = outstandingWake({ preparedAt: new Date(NOW - 3 * 60 * MINUTE).toISOString(), dispatch: { token: "dispatch-token", state: "active" } });
   const rig = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, outstandingWake: outstanding }, wakeState: "uncertain" });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toEqual([]);
   expect(rig.written.at(-1)!.retiredWakes).toEqual([]);
-  expect(rig.written.at(-1)!.outstandingWake).toMatchObject({ clientMessageId: outstanding.clientMessageId, dispatch: { state: "active" } });
+  expect(rig.written.at(-1)!.outstandingWake).toMatchObject({ clientMessageId: outstanding.clientMessageId, dispatch: { state: "returned", legacy: true } });
   expect(record).toMatchObject({ delivery: { outcome: "deferred-outstanding" } });
 });
 

@@ -442,3 +442,67 @@ test("the replayed day with no report filed: every owed key is asked for in each
   expect(day.maxOwed).toBeLessThanOrEqual(SEAT_TICK_REPORTS_OWED_LIMIT);
   expect(day.digestLines.length).toBeLessThanOrEqual(6);
 });
+
+test("production rule reporting waits off-loop for a shared writer and skips recorded reports", async () => {
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const { spawn } = await import("node:child_process");
+  const { recordSeatRuleReports } = await import("./seatTickReports");
+  const { readBridgeReportLog, readBridgeChannel } = await import("@/lib/bridge/store");
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { statePath } = await import("@/lib/configDir");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tick-reports-contention-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Run the board", clientRequestId: "report-seat", mode: "spawn", now: iso(T0) });
+    completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "report-seat", conversationId: SEAT_A, path: null, now: iso(T0), preparedAuthCredentialBaseline: null });
+    readBridgeReportLog(); readBridgeChannel();
+    const measurements: number[] = [];
+    const lanes = [];
+    for (let trial = 0; trial < 3; trial++) {
+      const lane = buildPipeline({ id: `report-lane-${trial}`, task: "Resolved lane", project: PROJECT, repoDir: root, stages: [], srcPath: null, srcConversationId: SEAT_A, now: iso(T0), state: "draft" });
+      lane.dismissedAt = iso(T0); lane.dismissedBy = { kind: "manager", conversationId: SEAT_A, role: "orchestrator" };
+      lanes.push(lane); savePipelines(lanes);
+      const child = spawn(process.execPath, ["-e", `
+        const { Database } = await import("bun:sqlite");
+        const db = new Database(process.argv.at(-1));
+        db.exec("BEGIN IMMEDIATE");
+        const watchdog = setTimeout(() => process.exit(2), 5_000);
+        process.stdin.once("data", () => { db.exec("ROLLBACK"); db.close(); clearTimeout(watchdog); process.stdin.destroy(); });
+        console.log("ready");
+      `, statePath("state.sqlite")], { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+      let stderr = ""; child.stderr.on("data", chunk => { stderr += chunk; });
+      const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+      const watchdog = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      let release: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          child.stdout.once("data", chunk => chunk.toString().includes("ready") ? resolve() : reject(new Error("lock peer did not acknowledge")));
+          child.once("exit", code => { if (code) reject(new Error(`lock peer exited ${code}: ${stderr}`)); });
+        });
+        const start = performance.now();
+        // The peer keeps the lock until this timer: even a delayed ready read
+        // cannot accidentally turn the contention case into an unlocked call.
+        release = setTimeout(() => child.stdin.end("release"), 40);
+        await recordSeatRuleReports(PROJECT, iso(T0), Date.now() + 1_000);
+        measurements.push(performance.now() - start);
+        expect(await exited).toBe(0);
+        expect(readBridgeReportLog().reports).toHaveLength(trial + 1);
+        await recordSeatRuleReports(PROJECT, iso(T0), Date.now() + 1_000);
+        expect(readBridgeReportLog().reports).toHaveLength(trial + 1);
+      } finally { clearTimeout(watchdog); clearTimeout(release); if (child.exitCode === null) child.kill("SIGKILL"); await exited; }
+    }
+    const { spyOn } = await import("bun:test");
+    const pipelineStore = await import("@/lib/pipelines/store");
+    const reads = spyOn(pipelineStore, "loadPipelinesForList");
+    try {
+      await recordSeatRuleReports(PROJECT, iso(T0), Date.now() + 1_000);
+      expect(reads).not.toHaveBeenCalled();
+    } finally { reads.mockRestore(); }
+    console.log(JSON.stringify({ case: "rule-reports-writer-contention", lockHoldMs: 40, waitBudgetMs: 1_000, elapsedMs: measurements }));
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
