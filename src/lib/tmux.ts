@@ -20,6 +20,7 @@ import {
 } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import type { DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { logEvent } from "@/lib/events";
 import { inboxImageExt, MAX_INBOX_IMAGE_BYTES } from "@/lib/imagePolicy";
 import { INBOX_DIR } from "@/lib/inbox";
@@ -46,8 +47,6 @@ import {
 export { READY_MARKERS, screenTail } from "@/lib/status";
 
 const TMUX = "tmux";
-const CANONICAL_EXTERNAL_SESSION = "agents";
-const LEGACY_TMUX_MIGRATION_MARKER = statePath("legacy-tmux-migration-complete");
 /* Outlives the 10 s /api/files poll so the pane map is not rebuilt every
    request; a post-kill rebuild passes fresh=true to bypass the memo. */
 const PANE_MAP_TTL_MS = 12_000;
@@ -108,87 +107,19 @@ interface RunResult {
   stderr: string;
 }
 
-export interface TmuxEndpointContractInput {
-  configuredTmpdir: string;
-  externalFlag: string | undefined;
-  migrationComplete: boolean;
-  uid: number;
-}
-
-export interface TmuxEndpointContract {
-  external: boolean;
-  tmuxTmpdir: string;
-  health: TmuxEndpointHealth;
-}
-
-export type TmuxEndpointHealth =
-  | { status: "healthy" }
-  | {
-      status: "degraded";
-      code: "migration-marker-endpoint-mismatch" | "external-endpoint-mismatch";
-      configuredTmpdir: string;
-      expectedTmpdir: string;
-      message: string;
-    };
+export type TmuxEndpointHealth = { status: "healthy" };
 
 interface ResolveTmuxAttachDeps {
   runTmux(args: string[], input?: Buffer | string, endpoint?: TmuxEndpointDescriptor): Promise<RunResult>;
   processIdentity(pid: number): string | null;
 }
 
-/** The service endpoint is intentionally an environment contract. During the
-    migration the old /tmp server remains reachable until this flag is enabled. */
-export function resolveTmuxEndpointContract(input: TmuxEndpointContractInput): TmuxEndpointContract {
-  const supervisorTmpdir = `/run/user/${input.uid}/agent-log-viewer`;
-  const external = input.externalFlag === "1";
-  if (input.migrationComplete && (!external || input.configuredTmpdir !== supervisorTmpdir)) {
-    return {
-      external,
-      tmuxTmpdir: input.configuredTmpdir,
-      health: {
-        status: "degraded",
-        code: "migration-marker-endpoint-mismatch",
-        configuredTmpdir: input.configuredTmpdir,
-        expectedTmpdir: supervisorTmpdir,
-        message: `A migration completion marker exists while the Viewer is using ${input.configuredTmpdir}. Legacy tmux delivery remains active; remove the stale marker or complete the supervisor migration.`,
-      },
-    };
-  }
-  if (external && input.configuredTmpdir !== supervisorTmpdir) {
-    return {
-      external,
-      tmuxTmpdir: input.configuredTmpdir,
-      health: {
-        status: "degraded",
-        code: "external-endpoint-mismatch",
-        configuredTmpdir: input.configuredTmpdir,
-        expectedTmpdir: supervisorTmpdir,
-        message: `External tmux mode is enabled with ${input.configuredTmpdir}. Set TMUX_TMPDIR=${supervisorTmpdir} and redeploy the Viewer.`,
-      },
-    };
-  }
-  return { external, tmuxTmpdir: input.configuredTmpdir, health: { status: "healthy" } };
-}
-
-function tmuxEndpointContract(): TmuxEndpointContract {
-  return resolveTmuxEndpointContract({
-    configuredTmpdir: process.env.TMUX_TMPDIR || "/tmp",
-    externalFlag: process.env.LLV_LEGACY_TMUX_EXTERNAL,
-    migrationComplete: fs.existsSync(LEGACY_TMUX_MIGRATION_MARKER),
-    uid: process.getuid?.() ?? 0,
-  });
-}
-
-export function externalTmuxMode(): boolean {
-  return tmuxEndpointContract().external;
-}
-
 export function tmuxEndpoint(): string {
-  return tmuxEndpointContract().tmuxTmpdir;
+  return process.env.TMUX_TMPDIR || "/tmp";
 }
 
 export function tmuxEndpointHealth(): TmuxEndpointHealth {
-  return tmuxEndpointContract().health;
+  return { status: "healthy" };
 }
 
 /** Builds the descriptor from values supplied by the host process. The small
@@ -746,6 +677,7 @@ export async function sendText(target: TmuxTarget, text: string, authorityGuard?
     if (!await verifyTmuxSpawnBinding(binding, endpoint)) {
       throw new Error("tmux server or pane identity changed during delivery");
     }
+    authorityGuard?.();
   };
   await withPaneLock(initial.paneId, async () => {
     authorityGuard?.();
@@ -996,14 +928,7 @@ export async function killPane(target: TmuxTarget): Promise<void> {
  * the freshest activity wins; a detached server falls back to the most recent
  * session; no server at all yields a fresh detached «agents» session.
  */
-export async function activeTmuxSession(endpoint = tmuxEndpointDescriptor()): Promise<string> {
-  if (externalTmuxMode()) {
-    const healthy = await runTmux(["has-session", "-t", CANONICAL_EXTERNAL_SESSION], undefined, endpoint).catch(() => null);
-    if (!healthy || healthy.code !== 0) {
-      throw new Error("external legacy tmux supervisor is unavailable; refusing to create a container-owned server");
-    }
-    return CANONICAL_EXTERNAL_SESSION;
-  }
+export async function activeTmuxSession(endpoint = tmuxEndpointDescriptor(), authorize?: DeliveryAdmissionGuard): Promise<string> {
   const clients = await runTmux(["list-clients", "-F", "#{client_activity} #{client_session}"], undefined, endpoint).catch(() => null);
   const pick = (stdout: string) => {
     let best: { at: number; name: string } | null = null;
@@ -1028,6 +953,7 @@ export async function activeTmuxSession(endpoint = tmuxEndpointDescriptor()): Pr
   /* A detached session created without a size falls back to 80x24 and
      reflows every agent TUI into an unreadable strip; a generous fixed size
      keeps captures and screen-scrape detection stable until a client attaches. */
+  authorize?.();
   const created = await runTmux(["new-session", "-d", "-x", "220", "-y", "50", "-s", "agents"], undefined, endpoint);
   if (created.code !== 0 && !/duplicate session/.test(created.stderr)) {
     throw new Error(created.stderr.trim() || "could not create tmux session");
@@ -1297,7 +1223,8 @@ export async function sendKeys(target: TmuxTarget, keys: string[]): Promise<void
  * the agent CLI — a pane that fell back to the shell would otherwise execute
  * the prompt text as a shell command.
  */
-async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, receipt: SpawnReceipt, workload: AgentWorkload | undefined): Promise<SpawnedPane> {
+async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, receipt: SpawnReceipt, workload: AgentWorkload | undefined,
+  authorize: DeliveryAdmissionGuard): Promise<SpawnedPane> {
   const endpoint = tmuxEndpointDescriptor();
   const existingPane = receipt.state === "pane-bound" || receipt.state === "host-verified"
     ? receipt.pane
@@ -1306,7 +1233,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   // Placement is decided before any window exists: work that cannot be
   // contained is refused here.
   const placement = planAgentCpu(workload ?? receiptWorkload(receipt));
-  const session = await activeTmuxSession(endpoint);
+  const session = await activeTmuxSession(endpoint, authorize);
   const server = await tmuxServerReference(endpoint);
   if (!server) throw new Error("tmux server identity is unavailable before spawn");
   const initialCapability = recoveringPane ? null : (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), receipt.launchId)));
@@ -1318,7 +1245,8 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
         windowName: spec.windowName,
         endpoint,
         server,
-      });
+      }, { runTmux: (args, input, endpoint) => { authorize(); return runTmux(args, input, endpoint); },
+        processIdentity: (pid) => procBackend.processIdentity(pid) });
   const target = binding.paneId;
   const display = binding.display ?? binding.paneId;
   const panePid = binding.panePid.pid;
@@ -1326,6 +1254,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     if (!await verifyTmuxSpawnBinding(binding, endpoint)) {
       throw new Error("tmux server or created pane changed before spawn actuation");
     }
+    authorize();
     return runTmux(args, undefined, endpoint);
   };
 
@@ -1429,11 +1358,12 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   const fencedPrompt = fenceViewerSpawnPrompt(spec.engine, text);
   if (fencedPrompt) {
     try {
+      authorize();
       try {
         memoryIndex().recordTerminalDelivery(`spawn:${receipt.launchId}`, receipt.conversationId, fencedPrompt,
           receipt.delegationDepth === 0 ? "operator" : "agent", spec.transcript ?? receipt.artifactPath);
       } catch { /* Optional memory cannot prevent the launch prompt. */ }
-      await sendText(target, fencedPrompt);
+      await sendText(target, fencedPrompt, authorize);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("pane is unavailable") || message.includes("pane identity changed during delivery")) {
@@ -1540,7 +1470,8 @@ export function legacyClaudeTmuxSpawnRefusal(
 /** Every visible legacy launch receives a durable receipt before tmux creates
     its window. Callers may later attach the engine-native transcript identity. */
 export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, existingReceipt?: SpawnReceipt,
-  options: { /** Defaults to the receipt conversation's pipeline or flow membership. */ workload?: AgentWorkload } = {}): Promise<SpawnedPane> {
+  options: { /** Defaults to the receipt conversation's pipeline or flow membership. */ workload?: AgentWorkload;
+    authorize?: DeliveryAdmissionGuard } = {}): Promise<SpawnedPane> {
   // Refuse invalid installation settings before allocating a receipt or pane.
   try {
     agentPublicationIdentityEnv(process.env);
@@ -1561,11 +1492,19 @@ export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, exist
     receipt = begun.receipt;
   }
   try {
+    const authorize = () => {
+      assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
+        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId,
+          receipt.supersedes?.conversationId])]);
+      options.authorize?.();
+    };
+    authorize();
     assertSpawnMemoryAvailable();
     const refusal = legacyClaudeTmuxSpawnRefusal(spec);
     if (refusal) throw new Error(refusal);
     const prepared = await prepareAgentPublicationSpec(spec);
-    return { ...(await spawnAgentWithPromptUnchecked(prepared, text, receipt, options.workload)), receipt };
+    authorize();
+    return { ...(await spawnAgentWithPromptUnchecked(prepared, text, receipt, options.workload, authorize)), receipt };
   } catch (error) {
     await agentRegistry().failSpawnOffLoop(receipt.launchId, error instanceof Error ? error.message : String(error));
     throw error;

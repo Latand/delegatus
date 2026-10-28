@@ -23,7 +23,7 @@ switch:
 
 | Level | Entries |
 |---|---|
-| At rest | three icon cells, variant 2's: **Активність / Activity**, **Команда / Team**, **Оновлення / Updates**; then variant 3's rows: **Відкрити на телефоні / Open on phone** with its QR button, **Налаштування / Settings** (memory's state under its name, a count and an arrow to the right), **Довідка й навчання / Help and learning** (a count and an arrow down), **Вийти · name / Sign out · name** for a signed-in member |
+| At rest | three icon cells, variant 2's: **Активність / Activity**, **Команда / Team**, **Оновлення / Updates**; then variant 3's rows: **Відкрити на телефоні / Open on phone** with its QR button, **Налаштування / Settings** (memory's state under its name, a count and an arrow to the right), **Довідка й навчання / Help and learning** (a count and an arrow down), **Зупинити Delegatus / Stop Delegatus** (its question and then its answer open under it; the owner's alone on a team install; on the phone it is the last row of Settings and asks on a page of its own), **Вийти · name / Sign out · name** for a signed-in member |
 | Settings, a page with a back row | language, notifications, **Спільна пам’ять / Shared memory** (its state), **Ключ OpenRouter / OpenRouter key** (Saved or Missing), **Ролі: рушій і модель / Roles: engine and model**, dictation, **Голосовий Delegatus / Voice Delegatus** (desktop only; opens the voice companion's dialog, #2519), linked installs, **Ретранслятор чатів / Chat relay**, **Анонімний пінг / Install ping** |
 | Shared memory, a page | the per-project switch (`ProjectSettingRow`, amber while on and blocked), what blocks memory with its action beside it («Ввести ключ / Enter the key» opens the key's field there), three numbers (added, checked, spent of the cap) with the month, and **Докладніше / Details** with the other five counters |
 | OpenRouter key, a page | what uses the key, its state, **Замінити / Replace** or the field at once when it is missing, or the line that says the environment sets it |
@@ -52,10 +52,14 @@ refuses, under a month already counted and with Details open, stays within
 360 px (355 px in uk).
 
 Every desktop state stays within 360 px except the Settings page, whose
-budget is 420 px: the machine worker-limit row and desktop-only «Голосовий Delegatus / Voice Delegatus»
-row (#2519) brings it to 379 px. The orchestrator chose on 2026-10-07 to keep
+budget is 560 px: the machine worker-limit row and desktop-only «Голосовий Delegatus / Voice Delegatus»
+row (#2519) brought it to 379 px. The orchestrator chose on 2026-10-07 to keep
 that row on the Settings page, an existing surface it fits, and to leave the
-menu's first level as it is; 420 px still opens whole in a 700 px window.
+menu's first level as it is. The installation's «Пам’ять Delegatus / Delegatus
+memory» row (`docs/design/memory-source-switch.md` §3.4) stands after Shared
+memory with its whole state line, which wraps in the 232 px panel: a project's
+Settings page measures 478 to 548 px across its states, the tallest in uk with
+a capped sync, and 560 px still opens whole in a 700 px window.
 
 By keyboard, a page opens with focus on its back row, back returns focus to
 the row that opened the page, and Escape closes the desktop menu onto ⋯.

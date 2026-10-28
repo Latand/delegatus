@@ -1,3 +1,4 @@
+import { hostExitProcess, observeHostExit, readHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { CLAUDE_CHILD_EXITED, claudeHostEndText, HOST_END_REASON_MAX_CHARS, type HostEndCause } from "./hostEndCause";
@@ -51,7 +52,7 @@ import {
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { assertViewerMcpTools } from "./viewerMcpLaunch";
-import { pendingPermissionFrom, pendingToolUseFrom, type PendingPermissionRequest } from "./permissionRequests";
+import { pendingPermissionFrom, pendingQuestionFrom, pendingToolUseFrom, type PendingPermissionRequest, type PendingQuestionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
@@ -684,6 +685,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private treeCaptured = false;
   private captureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly childStartIdentity: string | null;
+  private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
   private readonly deliveries: ClaudeDeliveryState[] = [];
@@ -754,6 +756,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.captureProcessTree = options.captureProcessTree ?? ((root) => captureProcessTree(root));
     this.terminationCaptureRetryMs = Math.max(0, options.terminationCaptureRetryMs ?? DEFAULT_TERMINATION_CAPTURE_RETRY_MS);
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
+    this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
+    this.memoryCell?.setExitProcess(this.exitProcess);
+    if (!signalDomain(child)) observeHostExit(child, this.exitProcess);
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     this.protocolVersion = auth.version ?? null;
@@ -784,6 +789,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     child.on("error", (error) => this.fail(new Error(`Claude child failed: ${safeError(error)}`)));
     // Exit arrives before inherited pipes close; reap OOM survivors immediately.
     child.on("exit", (code, signal) => {
+      if (signalDomain(child)) {
+        const native = readHostExit(this.exitProcess)?.exit;
+        code = native?.code ?? null;
+        signal = (native?.signal ?? null) as NodeJS.Signals | null;
+      }
       const kill = this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       if (kill?.fatal && !this.releasing && !this.released) {
         const reason = memoryKillText(kill);
@@ -795,6 +805,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.noteChildExit(code, signal);
     });
     child.on("close", (code, signal) => {
+      if (signalDomain(child)) {
+        const native = readHostExit(this.exitProcess)?.exit;
+        code = native?.code ?? null;
+        signal = (native?.signal ?? null) as NodeJS.Signals | null;
+      }
       this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       this.noteChildExit(code, signal);
       this.reaped = true;
@@ -972,7 +987,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return host;
     } catch (error) {
       try {
-        await host.release();
+        await withHostStopOrigin({ path: "claude-startup-cleanup", operationId: host.identity.sessionId }, () => host.release());
       } catch (cleanupError) {
         throw new StructuredHostAdoptionCleanupError(safeError(error), host, { cause: cleanupError });
       }
@@ -1355,6 +1370,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       endpoint: pid ? `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
+      ...(this.exitProcess ? { exitProcess: this.exitProcess } : {}),
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
@@ -1362,6 +1378,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
+      pendingQuestions: this.pendingQuestions(),
       ...this.pendingToolUses(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
       ...memoryField(this.memoryCell),
@@ -1409,6 +1426,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const requests: PendingPermissionRequest[] = [];
     for (const [id, attention] of this.attentions) {
       const request = pendingPermissionFrom(id, attention, this.attentionSince.get(id) ?? new Date().toISOString());
+      if (request) requests.push(request);
+    }
+    return requests;
+  }
+
+  private pendingQuestions(): PendingQuestionRequest[] {
+    const requests: PendingQuestionRequest[] = [];
+    for (const [id, attention] of this.attentions) {
+      const request = pendingQuestionFrom(id, attention, this.attentionSince.get(id) ?? new Date().toISOString());
       if (request) requests.push(request);
     }
     return requests;
@@ -1852,7 +1878,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     // The memory cell owns fatal OOM cleanup through its unit or verified tree.
     if (this.memoryCell?.fatalMemoryExit) return true;
     if (!this.releaseFenceHolds()) return false;
-    return signalAgentDomain(this.child, signal) ?? signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    const record = () => recordHostStop(this.exitProcess, signal, this.dead ? "claude-host-fault" : "claude-host-release");
+    const protectedSignal = signalAgentDomain(this.child, signal, record);
+    if (protectedSignal !== undefined) return protectedSignal;
+    const withdraw = record();
+    if (!this.releaseFenceHolds()) { withdraw?.(); return false; }
+    const signalled = signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    if (!signalled) withdraw?.();
+    return signalled;
   }
 
   /** Hands the child's process tree to the termination listener before the
@@ -1933,7 +1966,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.terminationStarted || this.reaped) return true;
     if (!this.releaseFenceHolds()) return false;
     this.clearCaptureRetry();
-    try { this.child.stdin.end(); } catch { /* already closed */ }
+    let withdrawEof: (() => void) | undefined;
+    if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
+      && !procBackend.processExited(nativeProcessId(this.child)!)) withdrawEof = recordHostStop(this.exitProcess, "EOF", "claude-host-release");
+    try { this.child.stdin.end(); } catch { withdrawEof?.(); }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;
     this.terminationTimer = setTimeout(() => {

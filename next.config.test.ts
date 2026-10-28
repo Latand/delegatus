@@ -3,12 +3,36 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
+import { getTypeScriptConfiguration } from "next/dist/lib/typescript/getTypeScriptConfiguration";
+import { getTypeScriptConfigurationCli } from "next/dist/lib/typescript/runTypeScriptCli";
 import ts from "typescript";
 
 import configureNext from "./next.config";
 
 const nextConfig = configureNext(PHASE_DEVELOPMENT_SERVER);
+
+test("development reads the config without relying on truncated showConfig stdout", async () => {
+  const probe = fs.mkdtempSync(path.join(tmpdir(), "dev-types-"));
+  try {
+    const configPath = path.join(probe, "tsconfig.json");
+    fs.writeFileSync(configPath, JSON.stringify({ compilerOptions: { strict: true }, files: ["entry.ts"] }));
+    fs.writeFileSync(path.join(probe, "entry.ts"), "export {};\n");
+    // The observed failure exits successfully with stdout cut inside a filename.
+    const truncated = '{"compilerOptions":{"strict":true},"files":["./src/compo';
+    const cli = path.join(probe, "tsc.cjs");
+    fs.writeFileSync(cli, `process.stdout.write(${JSON.stringify(truncated)});`);
+    await expect(getTypeScriptConfigurationCli({ baseDir: probe, tsConfigPath: configPath, tscPath: cli }))
+      .rejects.toThrow("Could not parse output from TypeScript's --showConfig.");
+    expect(nextConfig.experimental?.useTypeScriptCli).toBe(false);
+    const parsed = await getTypeScriptConfiguration(ts, configPath);
+    expect(parsed.options.strict).toBe(true);
+    expect(parsed.fileNames.map(file => path.relative(probe, file))).toEqual(["entry.ts"]);
+    expect(configureNext(PHASE_PRODUCTION_BUILD).experimental?.useTypeScriptCli).toBeUndefined();
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+});
 
 test("the production config gives Next's TypeScript child enough heap", () => {
   const probe = fs.mkdtempSync(path.join(tmpdir(), "build-heap-"));
@@ -27,18 +51,18 @@ test("the production config gives Next's TypeScript child enough heap", () => {
         console.log(JSON.stringify({ configPath: config.typescript.tsconfigPath, workers: config.experimental.cpus, ...JSON.parse(child.stdout) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `;
-    for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=8192"]) {
+    for (const fullTypes of [false, true]) for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=16384"]) {
       const result = spawnSync("node", ["-e", script, child], {
         cwd: import.meta.dir,
-        env: { ...process.env, NODE_OPTIONS: `${heap} --no-warnings` },
+        env: { ...process.env, NODE_OPTIONS: `${heap} --no-warnings`, LLV_GATE_FULL_TYPES: fullTypes ? process.cwd() : undefined },
         encoding: "utf8",
       });
       expect(result.status, result.stderr).toBe(0);
       const observed = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
-      expect(observed.configPath).toBe("tsconfig.production.json");
+      expect(observed.configPath).toBe(fullTypes ? "tsconfig.json" : "tsconfig.production.json");
       expect(observed.workers).toBe(2);
       expect(observed.warnings).toBe(true);
-      expect(observed.limit).toBeGreaterThanOrEqual((heap.includes("8192") ? 8192 : 6144) * 1024 * 1024);
+      expect(observed.limit).toBeGreaterThanOrEqual((heap.includes("16384") ? 16384 : 11264) * 1024 * 1024);
     }
   } finally {
     fs.rmSync(probe, { recursive: true, force: true });

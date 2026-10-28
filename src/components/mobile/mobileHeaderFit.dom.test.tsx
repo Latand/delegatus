@@ -1,3 +1,5 @@
+import { resetPendingOpensForTest } from "@/hooks/useBoardState";
+import { resetMobileNavForTests } from "./mobileNav";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -20,12 +22,9 @@ import type { BoardTask } from "@/lib/tasks/types";
  *   - the 94px scheme/list segmented pair no longer rides the row: both faces
  *     live in the «⋯» menu as radio options and still switch the board.
  *
- * Issue #1054 added global search to this row, so the props below are the
- * COMPLETE mobile control combination — every optional control present at once.
- * The budget is five 44px targets (board undo, once folded into «⋯», left
- * with #1801); a sixth target measured the
- * project name down to 25px (the mobile browser harness holds the pixel
- * floor).
+ * The shell now keeps three fixed controls: attention, search, and the menu.
+ * Projects open from the elastic title; creation and hidden tasks live in the
+ * menu. Test the current shell with every optional bar control present.
  */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
@@ -76,6 +75,8 @@ const OVERRIDES: Record<string, unknown> = {
      the store needs a real `{ board }` envelope back to fold the write in. */
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    if (url.startsWith("/api/operator/worker-limit")) return { ok: false, status: 503, json: async () => ({}) };
+    if (url === "/api/keys") return jsonResponse({ keys: [] });
     if (url.startsWith("/api/board")) {
       if (init?.method === "PATCH") {
         const body = JSON.parse(String(init.body)) as {
@@ -158,6 +159,7 @@ const dashboardProps = () => ({
   projectCwd: "/repo", onArchive: () => {}, onUnarchive: () => {},
   onMenu: () => {},
   onOpenSearch: () => { searchOpens += 1; },
+  mobileShell: { attentionCount: 3, arrival: null, renderSheet: () => null },
   attention: (
     <button type="button" className="inline-flex min-h-11 items-center px-3.5" aria-label={ATTENTION_LABEL}>3</button>
   ),
@@ -173,6 +175,9 @@ beforeEach(() => {
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
   dom.localStorage.clear();
+  dom.location.hash = "#p=" + encodeURIComponent(PROJECT);
+  resetMobileNavForTests();
+  resetPendingOpensForTest();
   /* A closed card in the device-local log: the header no longer offers undo for it (#1801). */
   dom.localStorage.setItem(
     `llvBoardHistory:${PROJECT}`,
@@ -190,93 +195,63 @@ function mount(wrap: (dashboard: React.ReactNode) => React.ReactNode = (dashboar
   return host as unknown as HTMLElement;
 }
 
-const header = (host: HTMLElement) => host.querySelector('[data-testid="mobile-project-header"]') as unknown as HTMLElement;
+const header = (host: HTMLElement) => host;
 const label = (el: Element) => el.getAttribute("aria-label") ?? el.textContent?.trim() ?? "";
 
-const shelfReady = (host: HTMLElement) => host.querySelector('[data-testid="mobile-shelf-trigger"]') !== null;
+const shelfReady = (host: HTMLElement) => host.querySelector("[data-phone-kanban]") !== null;
 
-test("the 390px header row keeps one elastic cell — the project name — and fixed 44px targets (#613)", async () => {
-  const host = mount();
-  /* Wait for the fully populated row — the shelf trigger is the last control to
-     appear, once the board arrangement settles. */
-  expect(await waitFor(() => shelfReady(host))).toBe(true);
-  const row = header(host);
-  expect(row).not.toBeNull();
-
-  /* The project name is the cell that gives way: capped, truncating, and NOT
-     shrink-0 — as shrink-0 it held 45vw and pushed the row past the viewport. */
-  const title = row.querySelector("h1") as unknown as HTMLElement;
+test("the phone board mounts the shell: one bar, the title cell as the switcher, three 44 px targets, and no five-target header", async () => {
+  const root = mount();
+  expect(await waitFor(() => shelfReady(root))).toBe(true);
+  expect(root.querySelector( '[data-testid="mobile-project-header"]')).toBeNull();
+  expect(root.querySelector( '[data-mobile2-screen="board"]')).not.toBeNull();
+  const bar = root.querySelector( "[data-mobile2-bar]")!;
+  const title = root.querySelector( "[data-mobile2-title]")!;
+  expect(title.textContent).toContain(PROJECT);
+  expect(title.getAttribute("data-mobile2-open")).toBe("projects");
+  expect(title.className).toContain("flex-1");
   expect(title.className).toContain("min-w-0");
-  expect(title.className).toContain("max-w-[45vw]");
-  expect(title.className).toContain("truncate");
   expect(title.className).not.toContain("shrink-0");
-
-  /* The attention badge holds its own width beside the name. */
-  const attention = row.querySelector(`[aria-label="${ATTENTION_LABEL}"]`) as unknown as HTMLElement;
-  expect(attention).not.toBeNull();
-  expect((attention.parentElement as unknown as HTMLElement).className).toContain("shrink-0");
-
-  /* Every direct control of the row is a fixed 44px (h-11) target. */
-  const triggers = Array.from(row.querySelectorAll("button")).filter((el) => label(el) !== ATTENTION_LABEL);
-  expect(triggers.length).toBeGreaterThanOrEqual(4);
-  for (const trigger of triggers) {
-    expect(`${trigger.className} `).toMatch(/(^|\s)(h-11|min-h-11)(\s|$)/);
-    expect(`${trigger.className} `).toMatch(/(^|\s)(w-11|min-w-11|w-full)(\s|$)/);
+  expect(title.querySelector(".truncate")).not.toBeNull();
+  const targets = Array.from(bar.querySelectorAll("button")).filter((el) => el !== (title as unknown as Element));
+  expect(targets.map(label)).toEqual([
+    translate("en", "mobile2.bar.attention", { count: 3 }),
+    translate("en", "mobile2.bar.search"),
+    translate("en", "mobile2.bar.more"),
+  ]);
+  for (const target of targets) {
+    expect(`${target.className} `).toMatch(/(^|\s)h-11(\s|$)/);
+    expect(target.className).toContain("shrink-0");
+    expect(target.className).toContain(target.getAttribute("data-mobile2-open") === "attention" ? "w-[52px]" : "w-11");
   }
-
-  /* The controls the operator relies on are all still in the row — five 44px
-     targets, no more: the fifth is global search (#1054), which the operator
-     asked for by name and which must be one tap from anywhere. */
-  const labels = triggers.map(label);
-  for (const key of ["dash.openProjects", "search.openMobile", "dash.hiddenShelf", "dash.createMenu", "dash.moreMenu"] as const) {
-    expect(labels.some((entry) => entry.startsWith(translate("en", key)))).toBe(true);
-  }
-  expect(triggers).toHaveLength(5);
-  /* Undo left the phone with the desktop header (#1801; kanban undo is #1856). */
-  expect(labels.some((entry) => entry.startsWith("Undo"))).toBe(false);
-
   /* The search target is wired to the shell's palette, not decoration. */
-  const searchButton = row.querySelector('[data-testid="dash-search"]') as unknown as HTMLButtonElement;
-  expect(searchButton).not.toBeNull();
-  flushSync(() => searchButton.click());
+  const search = root.querySelector( '[data-testid="dash-search"]')!;
+  expect(search.className).toContain("w-11");
+  flushSync(() => (search as HTMLElement).click());
   expect(searchOpens).toBe(1);
-
-  /* And the 94px segmented scheme/list pair is gone from the row. */
-  expect(labels).not.toContain(translate("en", "dash.viewScheme"));
-  expect(labels).not.toContain(translate("en", "dash.viewList"));
+  /* The old header's controls are gone from the row: no hamburger, no shelf
+     trigger, no create menu, no scheme/list pair. */
+  const labels = targets.map(label);
+  for (const key of ["dash.openProjects", "dash.hiddenShelf", "dash.createMenu", "dash.viewScheme", "dash.viewList"] as const) {
+    expect(labels).not.toContain(translate("en", key));
+  }
 });
 
-test("both board faces stay one tap away inside the «more» menu and still switch the board (#613)", async () => {
-  const host = mount();
-  expect(await waitFor(() => shelfReady(host))).toBe(true);
-  const row = header(host);
-
-  const more = Array.from(row.querySelectorAll("button")).find(
-    (el) => label(el) === translate("en", "dash.moreMenu"),
-  ) as unknown as HTMLButtonElement;
-  expect(more).not.toBeNull();
-  flushSync(() => more.click());
-  await settle();
-
-  const options = Array.from(row.querySelectorAll('[role="menuitemradio"]'));
-  expect(options.map(label)).toEqual([translate("en", "dash.viewSchemeMenu"), translate("en", "dash.viewListMenu")]);
-  /* The face currently shown is announced, not merely tinted. */
+test("both board faces stay one tap away inside the menu, announced as radio rows, and still switch the board", async () => {
+  const root = mount();
+  expect(await waitFor(() => shelfReady(root))).toBe(true);
+  await openMore(root);
+  const options = Array.from(root.querySelectorAll('[role="menuitemradio"]'));
+  const rowLabel = (el: Element) => el.querySelector(".truncate")?.textContent ?? "";
+  expect(options.map(rowLabel)).toEqual([translate("en", "mobile2.menu.board"), translate("en", "mobile2.menu.catalog")]);
   expect(options[0]!.getAttribute("aria-checked")).toBe("true");
   expect(options[1]!.getAttribute("aria-checked")).toBe("false");
-
-  /* The focused chat is the scheme face; picking the list swaps the board. */
-  expect(host.querySelector('[data-testid="mobile-chat-shell"]')).not.toBeNull();
-  flushSync(() => (options[1] as unknown as HTMLButtonElement).click());
+  flushSync(() => (options[1] as HTMLElement).click());
   await settle();
-  expect(await waitFor(() => host.querySelector('[data-testid="mobile-chat-shell"]') === null)).toBe(true);
-
-  /* Reopening the menu shows the list face checked — the switch is reversible. */
-  const moreAgain = Array.from(header(host).querySelectorAll("button")).find(
-    (el) => label(el) === translate("en", "dash.moreMenu"),
-  ) as unknown as HTMLButtonElement;
-  flushSync(() => moreAgain.click());
-  await settle();
-  const reopened = Array.from(header(host).querySelectorAll('[role="menuitemradio"]'));
+  expect(root.querySelector( '[data-mobile2-sheet="menu"]')).toBeNull();
+  expect(await waitFor(() => !shelfReady(root))).toBe(true);
+  await openMore(root);
+  const reopened = Array.from(root.querySelectorAll('[role="menuitemradio"]'));
   expect(reopened[1]!.getAttribute("aria-checked")).toBe("true");
 });
 
@@ -284,11 +259,11 @@ test("Undo and Redo are not «⋯» items, even with a close in the device-local
   const host = mount();
   expect(await waitFor(() => shelfReady(host))).toBe(true);
   const more = Array.from(header(host).querySelectorAll("button")).find(
-    (el) => label(el) === translate("en", "dash.moreMenu"),
+    (el) => el.getAttribute("data-mobile2-open") === "menu",
   ) as unknown as HTMLButtonElement;
   flushSync(() => more.click());
   await settle();
-  const items = Array.from(header(host).querySelectorAll('[role="menuitem"]')).map(label);
+  const items = Array.from(header(host).querySelectorAll("[data-mobile2-menu-row]")).map(label);
   expect(items.length).toBeGreaterThan(0);
   expect(items.some((entry) => /^(Undo|Redo)/.test(entry))).toBe(false);
 });
@@ -339,7 +314,7 @@ function wakeLockScene() {
 
 const openMore = async (host: HTMLElement) => {
   const more = Array.from(header(host).querySelectorAll("button")).find(
-    (el) => label(el) === translate("en", "dash.moreMenu"),
+    (el) => el.getAttribute("data-mobile2-open") === "menu",
   ) as unknown as HTMLButtonElement;
   flushSync(() => more.click());
   await settle();
@@ -377,18 +352,18 @@ test("«Keep screen awake» is on the «⋯» menu's Settings page and holds a r
   expect(dom.localStorage.getItem("llvKeepAwake")).toBe("1");
 });
 
-test("the wake-lock row never becomes a sixth 44px target on the header row (#712)", async () => {
+test("the wake-lock row takes no target in the three-control shell bar (#712)", async () => {
   const scene = wakeLockScene();
   const host = mount((dashboard) => <KeepAwakeProvider environment={scene.factory}>{dashboard}</KeepAwakeProvider>);
   expect(await waitFor(() => shelfReady(host))).toBe(true);
 
-  /* With the menu closed the row carries exactly the five budgeted targets and
-     the attention pill — the wake-lock switch is not among them, and nothing
+  /* With the menu closed the shell keeps its three budgeted targets —
+     the wake-lock switch is not among them, and nothing
      asked the platform for a lock just because the header rendered. */
-  const labels = Array.from(header(host).querySelectorAll("button")).map(label);
+  const labels = Array.from(host.querySelectorAll("[data-mobile2-bar] button")).map(label);
   expect(labels).not.toContain(translate("en", "keepAwake.enableAria"));
   expect(labels).not.toContain(translate("en", "keepAwake.disableAria"));
-  expect(header(host).querySelector('[role="switch"]')).toBeNull();
+  expect(host.querySelector('[data-mobile2-bar] [role="switch"]')).toBeNull();
   expect(scene.requests).toBe(0);
 });
 

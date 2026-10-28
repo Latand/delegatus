@@ -9,18 +9,22 @@ import { createPipelineFromRequest, tickPipelines, type PipelinePorts } from "./
 import { loadPipelines, savePipelines, withDeliveryPublicationDetail } from "./store";
 import { parseCpuQueueDetail } from "../runtime/cpuQueueText";
 import { registerPipelineTick } from "./controllerSignal";
+import { captureProcessIdentity } from "../processIdentity";
 
 registerPipelineTick(async () => {});
 afterAll(async () => { await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker(); });
 
-test.each([false, true])("stage activation uses task priority (%s), stable FIFO tickets and bounded admission", async prioritized => {
+test.each([false, true])("stage activation uses task priority (%s) independently of a slot-waiting command", async prioritized => {
   savePipelines([]);
   let now = Date.parse("2026-10-20T00:00:00.000Z");
   saveTasks(["one", "two"].map((id) => ({ id, project: "fixture", text: id, status: "inbox", placement: "unplaced", assignments: [], createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), ...(prioritized && id === "two" ? { priority: "high" } : {}) } as BoardTask)));
   const queue = new CpuAdmissionQueue(path.join(process.env.LLV_STATE_DIR!, `cpu-${prioritized}.sqlite`), () => now);
+  const commandOwner = captureProcessIdentity(process.pid);
+  expect(queue.check("command:waiting-for-slot", true, commandOwner, false)).toBeNull();
   const launches: string[] = [];
   const queuedKeys = new Set<string>();
   let draining = false;
+  let pressureAllows = false;
   const ports = {
     exec: (_command: string, args: string[], cwd: string) => ({ code: 0, stdout: args[0] === "branch" && args[1] === "--show-current" ? `${loadPipelines().find(p => p.worktreeDir === cwd)?.branch ?? "main"}\n` : args[0] === "status" ? "" : `${"a".repeat(40)}\n`, stderr: "" }),
     provisionExec: () => ({ code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" }),
@@ -35,7 +39,7 @@ test.each([false, true])("stage activation uses task priority (%s), stable FIFO 
     cpuAdmissionSuspend: (key: string) => queue.suspend(key),
     cpuPressureHold: (key: string, priority: CpuPrioritySource) => {
       queuedKeys.add(key);
-      const wait = queue.check(key, false, undefined, true, priority);
+      const wait = queue.check(key, pressureAllows, undefined, true, priority);
       return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;
     },
     spawnAgent: async (input: { clientAttemptId: string; title: string }, onReserved: (value: { launchId: string; conversationId: string }) => Promise<void>) => {
@@ -59,6 +63,8 @@ test.each([false, true])("stage activation uses task priority (%s), stable FIFO 
     const parsed = held.map(p => parseCpuQueueDetail(p.stateDetail));
     expect(parsed.map(wait => wait?.position)).toEqual(prioritized ? [2, 1] : [1, 2]);
     expect(parsed.map(wait => wait?.priority)).toEqual(prioritized ? ["normal", "high"] : ["normal", "normal"]);
+    expect(parsed.map(wait => wait?.heldBy)).toEqual(prioritized ? ["queue", "pressure"] : ["pressure", "queue"]);
+    expect(parsed.every(wait => wait?.minutes === 0)).toBe(true);
     const projected = withDeliveryPublicationDetail({ ...held[0]!, delivery: {
       target: { repository: "fixture", remote: "origin", branch: "refs/heads/main" },
       disposition: "owner", ownerId: "viewer", epoch: 1, publish: "enabled",
@@ -74,7 +80,8 @@ test.each([false, true])("stage activation uses task priority (%s), stable FIFO 
     expect(queue.check("command:update-check", true)).toBeNull();
     expect(launches).toHaveLength(0);
     draining = false;
-    now += CPU_QUEUE_MAX_WAIT_MS;
+    now += 5 * 60_000;
+    pressureAllows = true; // Before aging, the newer urgent stage keeps its preference.
     // The production reconciliation port releases all eligible tickets before
     // polling the first lane after a drain, regardless of controller order.
     queue.reconcile("stage:", queuedKeys);

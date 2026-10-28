@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, X, Zap } from "@/components/icons";
@@ -15,15 +15,17 @@ import {
   isQuietReconfigureFailure, onAccountChoiceRequest, pickApplying, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
 } from "@/lib/accounts/intendedAccount";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId } from "@/lib/agent/models";
+import { ENGINE_MODELS, listedModels, modelDisplayName } from "@/lib/agent/models";
 import type { AgentModelOption } from "@/lib/agent/models";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
+import { requestFilesRefresh } from "@/lib/filesEvents";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { RuntimeSettingsCapability } from "@/lib/runtime/contracts";
 import type { FileEntry, RateLimitState } from "@/lib/types";
 
 import { accountWeeklyLeft, WeeklyColumn, weeklyLeftAria, weeklyLeftHint, type WeeklyLeft } from "./accountWeekly";
 import type { StripSurface } from "./agentCapabilities";
+import { speedRefusalText, ULTRA_TIER, ultraRowOf, useCodexTierOffer, type UltraRow } from "./codexTierOffer";
 import { browserPipelinePorts } from "./kanban/pipelinePorts";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 import { stagePipelineId, stageRunOf, stageSwitchRequest, switchFailureText, switchOpen, switchRefusalText, type StageRun } from "./stageRuntimeSwitch";
@@ -33,6 +35,9 @@ import {
   adoptRuntimeProfile,
   defaults,
   effectiveProfile,
+  launchedModelId,
+  modelHoldMessage,
+  observedModelId,
   phaseKey,
   phaseOperationKey,
   phaseRollbackKey,
@@ -41,6 +46,7 @@ import {
   readProfile,
   readResumeDraft,
   storageKey,
+  unlistedModelName,
   writeProfile,
   dropStoredSelection,
   writeResumeProfile,
@@ -115,6 +121,22 @@ export function tierWord(t: TFunction, tier: string, phone: boolean): string {
   return phone ? tier : reasoningTierLabel(t, tier);
 }
 
+/** A speed row's choice: Standard, Fast (the priority tier) or Ultra (ultrafast). */
+export type SpeedTier = "default" | "priority" | typeof ULTRA_TIER;
+
+/** The speed a draft runs at: `fast` splits standard from the rest, and the tier
+    names which of the rest (a plain `fast` is priority). */
+export function speedTierOf(draft: RuntimeDraft): string {
+  if (!draft.fast) return "default";
+  const tier = draft.serviceTier ?? null;
+  return tier && tier !== "default" && tier !== "standard" ? tier : "priority";
+}
+
+/** The draft fields a speed choice sets: the tier is named only where `fast` cannot say it. */
+export function speedPatch(tier: SpeedTier): Pick<RuntimeDraft, "fast" | "serviceTier"> {
+  return { fast: tier !== "default", serviceTier: tier === ULTRA_TIER ? ULTRA_TIER : null };
+}
+
 function modelShortLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.shortLabel ?? modelId;
 }
@@ -150,6 +172,8 @@ export function RuntimePill({
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" ? file.engine : null;
+  /* Any pipeline's conversation changes speed through its stage, never the conversation's own speed action. */
+  const stageBound = Boolean(file.durableLineage?.memberships.some((item) => item.kind === "pipeline"));
   const pillSurface: PillSurface | null =
     surface === "structured" ? "structured"
     : surface === "resume" ? "resume"
@@ -164,6 +188,10 @@ export function RuntimePill({
   const liveDraftRef = useRef(liveDraft);
   const [applyState, setApplyState] = useState<ApplyState>("idle");
   const [error, setError] = useState("");
+  /* The refusal of a speed choice, which the phone's sheet says beside the speed rows. */
+  const [speedError, setSpeedError] = useState("");
+  /* The speed choice whose action has not answered yet, marked on its row in the phone's sheet. */
+  const [speedPending, setSpeedPending] = useState<SpeedTier | null>(null);
   const revisionRef = useRef(0);
   const operationRef = useRef<string | null>(null);
   const rollbackRef = useRef<BrowserProfileRollback | null>(null);
@@ -174,6 +202,9 @@ export function RuntimePill({
   const [version, setVersion] = useState(0);
 
   const [open, setOpen] = useState(false);
+  /* Read when a speed answer lands: a refusal with no panel open to say it goes to a toast. */
+  const openRef = useRef(open);
+  useEffect(() => { openRef.current = open; }, [open]);
   /* Where the popover goes when it opens, measured off the pill: it renders
      through a portal, because the composer's own box is bounded and scrolls its
      content (#1629) and an in-flow popover is clipped by exactly that. */
@@ -218,7 +249,7 @@ export function RuntimePill({
           ? [{ id: file.model, label: file.model, shortLabel: file.model, use: "general" as const }]
           : []),
       ]
-    : engine ? ENGINE_MODELS[engine] : [];
+    : engine ? listedModels(engine, file.model) : [];
   /* #1846: the account the operator picked for this conversation, shown the moment it is tapped. It stands
      until the runtime session projects the same choice, which every other page then reads too.
      The pick is shared with the page's other account surfaces, so the header and the card badge say it too. */
@@ -339,6 +370,8 @@ export function RuntimePill({
   const applyReconfigure = useCallback(async (draft: RuntimeDraft) => {
     const revision = revisionRef.current;
     setApplyState("saving");
+    /* What saves now is this change: a speed choice it superseded is no longer pending. */
+    setSpeedPending(null);
     setError("");
     try {
       const response = await fetch("/api/tmux", {
@@ -348,7 +381,8 @@ export function RuntimePill({
           action: "reconfigure",
           path: file.path,
           conversationId: runtimeConversationId,
-          ...draft,
+          model: draft.model,
+          effort: draft.effort,
           fast: engine === "codex" ? draft.fast : undefined,
         }),
       });
@@ -388,6 +422,7 @@ export function RuntimePill({
     if (!engine) return false;
     const revision = revisionRef.current;
     setApplyState("saving");
+    setSpeedPending(null);
     setError("");
     const displayedTier = !speedChanged && engine === "codex" && file.serviceTier && draft.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
     const answer = await browserPipelinePorts.patch(run.pipeline.id, stageSwitchRequest(run, engine, draft, accountId, displayedTier));
@@ -406,6 +441,57 @@ export function RuntimePill({
     setApplyState(switchOpen(stageRunOf(file, answer.pipeline)?.attempt.runtimeSwitches?.at(-1)) ? "idle" : "applied");
     return true;
   }, [engine, file, t]);
+
+  /* A Codex conversation's speed is a thread setting changed in place: no host
+     restarts and no turn is cut. The rows show the choice at once; a refusal
+     returns the face to what the conversation runs and says why. Applied means
+     the tier the next poll reads back. The answer says whether the choice took,
+     or whether a later choice superseded it. */
+  const applySpeed = useCallback(async (tier: SpeedTier, patch: Partial<RuntimeDraft>): Promise<"applied" | "refused" | "superseded"> => {
+    revisionRef.current += 1;
+    const revision = revisionRef.current;
+    const next = { ...liveDraftRef.current, ...patch };
+    liveDraftRef.current = next;
+    setLiveDraft(next);
+    setApplyState("saving");
+    setError("");
+    setSpeedError("");
+    setSpeedPending(tier);
+    const conversationId = file.conversationId ?? runtimeConversationId;
+    let failure: string | null = null;
+    try {
+      const response = await fetch("/api/conversation-host", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: file.path,
+          ...(conversationId ? { conversationId } : {}),
+          action: "speed",
+          serviceTier: tier,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; code?: string };
+      /* An unavailable tier is said as the Ultra row's own reason says it, in the operator's language. */
+      if (!response.ok || body.ok !== true) failure = speedRefusalText(t, body, (slug) => engine ? modelLabel(engine, slug) : slug) ?? t("runtimeConfig.failed");
+    } catch (cause) {
+      failure = cause instanceof Error ? cause.message : t("runtimeConfig.failed");
+    }
+    if (revision !== revisionRef.current) return "superseded";
+    setSpeedPending(null);
+    if (failure) {
+      liveDraftRef.current = defaults(file);
+      setLiveDraft(liveDraftRef.current);
+      setError(failure);
+      setSpeedError(failure);
+      setApplyState("error");
+      /* The speed rows say it while they are open; closed, it must still be read. */
+      if (!openRef.current) pushTaskToast("err", failure);
+      return "refused";
+    }
+    setApplyState("applied");
+    requestFilesRefresh();
+    return "applied";
+  }, [engine, file, runtimeConversationId, t]);
 
   /* The switch this page watched settle. One that was already over when the
      page opened is only shown, never announced again. */
@@ -514,8 +600,8 @@ export function RuntimePill({
      (ported verbatim from the retired AgentRuntimeControls lifecycle). */
   useEffect(() => {
     if (pillSurface !== "live-root" || applyState !== "confirming") return;
-    const observedModel = engine === "claude" ? claudeCatalogModelId(file.launchModel ?? file.model) : file.model;
-    const modelMatches = observedModel === liveDraft.model;
+    /* A pinned release the transcript names and the alias the launch asked for are one model. */
+    const modelMatches = observedModelId(file) === liveDraft.model || launchedModelId(file) === liveDraft.model;
     const effortMatches = file.effort === liveDraft.effort;
     const speedMatches = engine === "claude" || file.fast === liveDraft.fast;
     if (!modelMatches || !effortMatches || !speedMatches) return;
@@ -539,6 +625,7 @@ export function RuntimePill({
   /* The pill's one error: its own failed change, else a stage switch that did not take. */
   const shownError = applyState === "error" && error ? error : !applying ? stageFailure : null;
   const failed = applyState === "error" || Boolean(shownError);
+  const shownSpeedError = speedError && shownError === speedError ? speedError : null;
 
   // ---- the effective face (single source of truth) --------------------------
   const face: RuntimeDraft = useMemo(() => {
@@ -557,22 +644,38 @@ export function RuntimePill({
 
   const efforts = useMemo(() => effortScaleForModel(face.model), [effortScaleForModel, face.model]);
   const speedShown = engine === "codex";
+  const faceSpeed = speedTierOf(face);
+  /* Ultra is a thread setting a structured Codex conversation changes in place (a
+     running stage through its switch); it is offered where the account's own
+     catalog lists it for the model, read only while the speed rows are open. */
+  const ultraShown = speedShown && pillSurface === "structured" && (Boolean(stageRoute) || !stageBound);
+  const ultraOffer = useCodexTierOffer({
+    account: runsOnAccount,
+    model: face.model,
+    enabled: ultraShown && open && (isMobile || panel === "speed"),
+  });
+  const ultraRow: UltraRow | null = ultraShown && engine ? ultraRowOf(t, ultraOffer, modelLabel(engine, face.model), faceSpeed === ULTRA_TIER) : null;
 
   // Structured reconfigure restarts at an idle boundary, so every launch-level
   // setting remains available while a turn is running. Per-turn capabilities
   // still describe message-scoped overrides elsewhere in the composer.
   void runtimeSettings;
-  const effortLocked = false;
+  /* A reconfigure names a catalogue model (the server refuses one without), so a
+     conversation whose model is not known holds the edits that would send one
+     until a model is picked. A stage switch and a resume send no model. */
+  const modelUnknown = !face.model && !stageRoute && pillSurface !== "resume";
+  const effortLocked = modelUnknown;
   const modelLocked = false;
-  const speedLocked = false;
-  const lockReason = t("composer.settingsNextResume");
+  const speedLocked = modelUnknown;
+  /* A face with no model holds the edits even when the file has since listed one, so the line always says why. */
+  const modelHold = modelUnknown ? modelHoldMessage(t, file) ?? t("runtimeConfig.modelUnknown") : null;
+  const lockReason = modelHold ?? t("composer.settingsNextResume");
 
   const announceCommit = useCallback((next: RuntimeDraft) => {
-    setAnnounce(t("composer.nextMessageUses", {
-      model: engine ? modelLabel(engine, next.model) : next.model,
-      effort: reasoningTierLabel(t, next.effort),
-    }));
-  }, [engine, t]);
+    const model = next.model ? (engine ? modelLabel(engine, next.model) : next.model) : unlistedModelName(file);
+    const effort = reasoningTierLabel(t, next.effort);
+    setAnnounce(model ? t("composer.nextMessageUses", { model, effort }) : t("composer.nextMessageUsesNoModel", { effort }));
+  }, [engine, file, t]);
 
   const commit = useCallback((patch: Partial<RuntimeDraft>) => {
     if (!engine) return;
@@ -651,6 +754,11 @@ export function RuntimePill({
    */
   const pickAccount = useCallback(async (accountId: string) => {
     if (!engine || accountId === nextAccount || (switchApplying && accountId === runsOnAccount)) return;
+    /* The move is a reconfigure, and a reconfigure names a model. */
+    if (!stageRoute && !liveDraftRef.current.model) {
+      pushTaskToast("err", modelHoldMessage(t, file, "move") ?? t("runtimeConfig.moveModelUnknown"));
+      return;
+    }
     const previous = readPickedAccount(cardId);
     setPickedAccount(cardId, accountId);
     if (stageRoute) {
@@ -745,34 +853,48 @@ export function RuntimePill({
     commit({ model: id });
     if (!isMobile) closePopover();
   };
-  const selectFast = (fast: boolean) => {
+  const selectSpeed = (tier: SpeedTier) => {
     if (speedLocked) return;
-    if (face.fast === fast) return closePopover();
-    commit({ fast });
+    if (faceSpeed === tier) return closePopover();
+    if (tier === ULTRA_TIER && !ultraRow?.enabled) return;
+    if (pillSurface === "structured" && !stageBound) {
+      /* The speed rows stay open until the action answers, so a refusal is said
+         beside them; a choice that took closes them as any other pick does. */
+      void applySpeed(tier, speedPatch(tier)).then((result) => {
+        if (result === "applied" && !isMobile && openRef.current) closePopover();
+      });
+      return;
+    }
+    commit(speedPatch(tier));
     if (!isMobile) closePopover();
   };
 
   if (!engine || !pillSurface) return null;
 
-  const faceModelShort = modelShortLabel(engine, face.model);
+  const unlistedName = unlistedModelName(file);
+  /* No model known: the chip says so with the group's own name, never a model nobody ran. */
+  const faceModelShort = face.model ? modelShortLabel(engine, face.model) : unlistedName || t("composer.modelGroup");
+  const faceModelLong = face.model ? modelLabel(engine, face.model) : unlistedName || t("composer.modelGroup");
   const faceTier = tierWord(t, face.effort, isMobile);
-  const serviceTier = engine === "codex" && file.serviceTier && face.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
+  /* A tier is named once the conversation reports one or a choice set one; a
+     plain fast flag stays «Fast». */
+  const serviceTier = engine === "codex" && (face.serviceTier || faceSpeed === ULTRA_TIER) && faceSpeed !== "default" ? faceSpeed : null;
   const namedTier = serviceTier ? serviceTier.charAt(0).toUpperCase() + serviceTier.slice(1) : null;
   const speedDetail = serviceTier === "priority" ? t("composer.speedFastTier")
-    : serviceTier && !["default", "standard"].includes(serviceTier) ? t("composer.speedTierNamed", { tier: namedTier! })
+    : serviceTier ? t("composer.speedTierNamed", { tier: namedTier! })
     : face.fast ? t("composer.speedFastTier") : t("composer.speedStandard");
-  const tierSuffix = namedTier && !["default", "standard"].includes(serviceTier!) ? ` · ${namedTier}` : "";
+  const tierSuffix = namedTier ? ` · ${namedTier}` : "";
   const accessibleLabel = stageRoute
     ? `${t("mobile2.composer.stageSheetTitle")} — ${t("mobile2.composer.stageNow")}`
     : t("composer.runtimePill");
-  const faceLabel = `${accessibleLabel} — ${modelLabel(engine, face.model)}, ${faceTier}${tierSuffix}`;
+  const faceLabel = `${accessibleLabel} — ${faceModelLong}, ${faceTier}${tierSuffix}`;
   /* At the account's limit the chip stops offering a reasoning tier the next
      message cannot use and names the wall instead (mobile v2 §4.2, §4.4); its
      sheet leads with the accounts that can take the message. */
   const limitedAccount = isMobile ? file.rateLimit?.accountId ?? null : null;
   const chipText = limitedAccount
     ? t("mobile2.composer.chipAtLimit", { model: faceModelShort, account: limitedAccount })
-    : `${faceModelShort} · ${faceTier}`;
+    : `${faceModelShort} · ${faceTier}${tierSuffix}`;
 
   return (
     <span className="relative inline-flex min-w-0" onPointerDown={(event) => event.stopPropagation()}>
@@ -812,6 +934,7 @@ export function RuntimePill({
           accountChoice={accountChoice}
           error={shownError}
           face={face}
+          modelName={unlistedName}
           efforts={efforts}
           speedShown={speedShown}
           speedDetail={speedDetail}
@@ -821,9 +944,12 @@ export function RuntimePill({
           modelLocked={modelLocked}
           speedLocked={speedLocked}
           lockReason={lockReason}
+          hold={modelHold}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
-          onSelectFast={selectFast}
+          onSelectSpeed={selectSpeed}
+          ultra={ultraRow}
+          speedError={shownSpeedError}
           onClose={closePopover}
         />
       ) : null}
@@ -837,9 +963,11 @@ export function RuntimePill({
           account={runsOnAccount}
           nameOf={nameOf}
           accountChoice={accountChoice}
-          error={shownError}
+          error={shownSpeedError ? null : shownError}
+          speedError={shownSpeedError}
           owner={pillRef.current?.ownerDocument ?? document}
           face={face}
+          modelName={unlistedName}
           efforts={efforts}
           speedShown={speedShown}
           speedDetail={speedDetail}
@@ -847,10 +975,14 @@ export function RuntimePill({
           modelLocked={modelLocked}
           speedLocked={speedLocked}
           lockReason={lockReason}
+          hold={modelHold}
           limit={file.rateLimit ?? null}
+          tierName={namedTier}
+          speedPending={applyState === "saving" ? speedPending : null}
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
-          onSelectFast={selectFast}
+          onSelectSpeed={selectSpeed}
+          ultra={ultraRow}
           onClose={closePopover}
         />
       ) : null}
@@ -1063,6 +1195,9 @@ interface PanelProps {
   /** A change that did not take; the account line says it until the next choice. */
   error?: string | null;
   face: RuntimeDraft;
+  /** What the model row and the sheet's summary call the running model when `face.model` names none: the
+      model a transcript reports that the catalogue does not list. Empty when no model is known. */
+  modelName?: string | null;
   efforts: readonly string[];
   speedShown: boolean;
   speedDetail: string;
@@ -1070,16 +1205,22 @@ interface PanelProps {
   modelLocked: boolean;
   speedLocked: boolean;
   lockReason: string;
+  /** Visible words for why reasoning and speed are held (no model, or one the pickers cannot send); absent when nothing is held. */
+  hold?: string | null;
   onSelectEffort: (tier: string) => void;
   onSelectModel: (id: string) => void;
-  onSelectFast: (fast: boolean) => void;
+  onSelectSpeed: (tier: SpeedTier) => void;
+  /** The Ultra speed row, on a surface that offers it; absent, the rows are Standard and Fast. */
+  ultra?: UltraRow | null;
+  /** A speed choice that did not take, said beside the speed rows. */
+  speedError?: string | null;
   onClose: () => void;
 }
 
 export function RuntimePopover({
-  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
-  effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
+  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, face, modelName = null, efforts, speedShown, speedDetail, panel, setPanel,
+  effortLocked, modelLocked, speedLocked, lockReason, hold = null,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, speedError = null, onClose, at, owner,
 }: PanelProps & {
   panel: Panel;
   setPanel: (p: Panel) => void;
@@ -1097,13 +1238,13 @@ export function RuntimePopover({
 
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
-    t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart, now,
-  }), [accountStart, now, t, engine, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
+    t, engine, modelOptions, face, modelName, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+    onSelectEffort, onSelectModel, onSelectSpeed, ultra, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart, now,
+  }), [accountStart, now, t, engine, face, modelName, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+    onSelectEffort, onSelectModel, onSelectSpeed, ultra, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
-    () => rows.map((row, index) => (row.enabled ? index : -1)).filter((index) => index >= 0),
+    () => rows.map((row, index) => (row.enabled || row.unavailable ? index : -1)).filter((index) => index >= 0),
     [rows],
   );
 
@@ -1154,7 +1295,12 @@ export function RuntimePopover({
       case "ArrowLeft": if (panel !== "root") { event.preventDefault(); setPanel("root"); } break;
       case "Escape": event.preventDefault(); onClose(); break;
       case "Enter":
-      case " ": event.preventDefault(); rows[activeIndex]?.activate(); break;
+      case " ": {
+        event.preventDefault();
+        const row = rows[activeIndex];
+        if (row?.enabled) row.activate();
+        break;
+      }
       // WAI-APG menu: Tab closes and lets focus move on (the handler refocuses
       // the pill, so the un-prevented default advances past it).
       case "Tab": onClose(); break;
@@ -1189,6 +1335,7 @@ export function RuntimePopover({
               {error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
           ) : null}
+          {hold ? <p className="px-2 pb-1 text-label text-muted" data-runtime-hold>{hold}</p> : null}
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
               <MenuRow key={row.key} row={row} active={rows.indexOf(row) === activeIndex} refFor={(el) => { rowRefs.current[rows.indexOf(row)] = el; }} />
@@ -1205,6 +1352,7 @@ export function RuntimePopover({
           {rows.map((row, index) => (
             <MenuRow key={row.key} row={row} active={index === activeIndex} refFor={(el) => { rowRefs.current[index] = el; }} />
           ))}
+          {panel === "speed" && speedError ? <p className="break-words px-2 pb-1 pt-1 text-label leading-snug text-danger" data-runtime-speed-error>{speedError}</p> : null}
         </div>
       )}
     </div>,
@@ -1234,7 +1382,11 @@ interface Row {
   detailAction?: boolean;
   checked: boolean;
   enabled: boolean;
+  /** A choice the account cannot take, kept in the arrow-key order so its note is announced; activating it does nothing. */
+  unavailable?: boolean;
   reason?: string;
+  /** Why the row cannot be chosen, as a visible line under it rather than a tooltip. */
+  note?: string;
   submenu?: "model" | "speed" | "account";
   role: "menuitemradio" | "menuitem";
   /** An account row's weekly limit left, drawn as the footer draws it; absent without a weekly reading. */
@@ -1268,8 +1420,8 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 }
 
 function buildRows({
-  t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart, now,
+  t, engine, modelOptions, face, modelName, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart, now,
 }: Omit<PanelProps, "onClose" | "account" | "accessibleLabel"> & {
   panel: Panel;
   onOpenPanel: (panel: Panel) => void;
@@ -1341,10 +1493,18 @@ function buildRows({
     ];
   }
   if (panel === "speed") {
+    const tier = speedTierOf(face);
+    const lock = { enabled: !speedLocked, reason: speedLocked ? lockReason : undefined };
     return [
       back(t("composer.speedGroup")),
-      { key: "standard", kind: "speed", label: t("composer.speedStandard"), checked: !face.fast, enabled: !speedLocked, reason: speedLocked ? lockReason : undefined, role: "menuitemradio", activate: () => onSelectFast(false) },
-      { key: "fast", kind: "speed", label: t("composer.speedFastTier"), checked: face.fast, enabled: !speedLocked, reason: speedLocked ? lockReason : undefined, role: "menuitemradio", activate: () => onSelectFast(true) },
+      { key: "standard", kind: "speed", label: t("composer.speedStandard"), checked: tier === "default", ...lock, role: "menuitemradio", activate: () => onSelectSpeed("default") },
+      { key: "fast", kind: "speed", label: t("composer.speedFastTier"), checked: tier !== "default" && !(ultra && tier === ULTRA_TIER), ...lock, role: "menuitemradio", activate: () => onSelectSpeed("priority") },
+      ...(ultra ? [{
+        key: ULTRA_TIER, kind: "speed" as const, label: t("composer.speedUltraTier"), checked: tier === ULTRA_TIER,
+        enabled: lock.enabled && ultra.enabled, unavailable: lock.enabled && !ultra.enabled,
+        reason: lock.reason, note: lock.reason ? undefined : ultra.reason ?? undefined,
+        role: "menuitemradio" as const, activate: () => onSelectSpeed(ULTRA_TIER),
+      }] : []),
     ];
   }
   const tiers = efforts.map((tier): Row => ({
@@ -1360,7 +1520,7 @@ function buildRows({
   const submenus: Row[] = [
     {
       key: "model", kind: "submenu", label: t("composer.modelGroup"),
-      detail: modelOptions.find((m) => m.id === face.model)?.shortLabel ?? face.model,
+      detail: face.model ? modelOptions.find((m) => m.id === face.model)?.shortLabel ?? face.model : modelName ?? "",
       checked: false, enabled: true, submenu: "model", role: "menuitem", activate: () => onOpenPanel("model"),
     },
   ];
@@ -1392,6 +1552,7 @@ function MenuRow({
   refFor: (el: HTMLButtonElement | null) => void;
 }) {
   const accessibleName = row.reason ? `${row.label} — ${row.reason}` : row.label;
+  const noteId = useId();
   if (row.kind === "back") {
     return (
       <button
@@ -1411,6 +1572,7 @@ function MenuRow({
   }
   const isSubmenu = row.kind === "submenu";
   return (
+    <>
     <button
       ref={refFor}
       type="button"
@@ -1418,14 +1580,15 @@ function MenuRow({
       aria-checked={row.role === "menuitemradio" ? row.checked : undefined}
       aria-haspopup={isSubmenu ? "menu" : undefined}
       aria-disabled={!row.enabled || undefined}
-      disabled={!row.enabled}
+      disabled={!row.enabled && !row.unavailable}
       tabIndex={active ? 0 : -1}
       aria-label={row.reason ? accessibleName : row.ariaLabel}
+      aria-describedby={row.note ? noteId : undefined}
       title={row.reason ?? row.hint}
-      onClick={row.activate}
+      onClick={row.enabled ? row.activate : undefined}
       data-runtime-row={row.kind}
       data-runtime-value={row.key}
-      className={`flex min-h-[28px] w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`flex min-h-[28px] w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ${
         row.checked ? "text-primary" : "text-secondary"
       }`}
     >
@@ -1437,6 +1600,9 @@ function MenuRow({
       {isSubmenu ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : null}
       {row.kind === "account" ? <WeeklyColumn weekly={row.weekly} shown={Boolean(row.weeklyColumn)} /> : null}
     </button>
+    {/* Outside the button, so the reason keeps full contrast while the row is dimmed. */}
+    {row.note ? <span id={noteId} role="none" className="block px-2 pb-1 text-caption leading-snug text-muted" data-runtime-row-note>{row.note}</span> : null}
+    </>
   );
 }
 
@@ -1448,20 +1614,36 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 export function RuntimeSheet({
-  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
-  effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
-  onSelectEffort, onSelectModel, onSelectFast, onClose,
+  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, modelName = null, efforts, speedShown, speedDetail,
+  effortLocked, modelLocked, speedLocked, lockReason, hold = null, limit = null, heading = null, tierName = null, speedPending = null,
+  onSelectEffort, onSelectModel, onSelectSpeed, ultra = null, speedError = null, onClose,
 }: PanelProps & {
   limit?: RateLimitState | null;
+  /** A non-standard tier the conversation runs at, named in the summary as the desktop face names it. */
+  tierName?: string | null;
+  /** A speed choice whose action is still answering: its row says so until it does. */
+  speedPending?: SpeedTier | null;
   owner: Document;
   /** What the sheet is called and what its rows apply to, where that is not a conversation's next message:
       a new agent's composer names the agent it is about to start. */
   heading?: { title: string; summary: string } | null;
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
+  const speedErrorRef = useRef<HTMLParagraphElement>(null);
   const immediate = Boolean(accountChoice?.immediate);
+  const speed = speedTierOf(face);
+  /* The sheet covers the face and its «switch pending»: the row that was tapped says it instead. */
+  const pendingWords = t("runtimeConfig.pending");
 
   useOverlayEscape(onClose);
+
+  /* A refusal lands under the last Speed row, which the operator scrolled to
+     in order to tap it, so its lines grow below the sheet's bottom edge:
+     bring the whole reason into view when it appears, with the section's and
+     the sheet's bottom padding below it (scroll-mb-5). */
+  useEffect(() => {
+    if (speedError) speedErrorRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [speedError]);
 
   useEffect(() => {
     sheetRef.current?.focus();
@@ -1497,8 +1679,10 @@ export function RuntimeSheet({
       >
         {/* The grab bar and the header stay put while the groups scroll under
             them: a Codex sheet (Model, Reasoning, Speed) or a fourth account
-            pushed the title and the way out off the top of the scroller. */}
-        <div className="sticky top-0 z-[1] -mx-3 -mt-3 bg-card px-3 pt-3" data-runtime-sheet-header>
+            pushed the title and the way out off the top of the scroller. It
+            sticks over the scroller's top padding too, or a scrolled row shows
+            through that band above it. */}
+        <div className="sticky -top-3 z-[1] -mx-3 -mt-3 bg-card px-3 pt-3" data-runtime-sheet-header>
           <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
           <div className="mb-2 flex items-start gap-2">
             <div className="min-w-0 flex-1">
@@ -1511,7 +1695,9 @@ export function RuntimeSheet({
                 {/* A running stage has no next message to wait for: the tap stops its turn. */}
                 {heading?.summary ?? (immediate
                   ? t("mobile2.composer.stageNow")
-                  : t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) }))}
+                  : (face.model || modelName)
+                    ? t("mobile2.composer.nextMessage", { model: face.model ? modelShortLabel(engine, face.model) : modelName!, effort: `${tierWord(t, face.effort, true)}${tierName ? ` · ${tierName}` : ""}` })
+                    : t("mobile2.composer.nextMessageNoModel", { effort: `${tierWord(t, face.effort, true)}${tierName ? ` · ${tierName}` : ""}` }))}
               </p>
             </div>
             {/* A phone has no Escape and the backdrop is a guess, so the way out
@@ -1539,6 +1725,8 @@ export function RuntimeSheet({
             </SheetSection>
           </div>
         ) : null}
+
+        {hold ? <p className="mb-2 px-1 text-label text-muted" data-runtime-hold>{hold}</p> : null}
 
         <SheetSection label={t("composer.modelGroup")}>
           {modelOptions.map((model) => (
@@ -1568,8 +1756,29 @@ export function RuntimeSheet({
 
         {speedShown ? (
           <SheetSection label={t("composer.speedGroup")}>
-            <SheetRow label={t("composer.speedStandard")} checked={!face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(false)} />
-            <SheetRow label={speedDetail === t("composer.speedStandard") ? t("composer.speedFastTier") : speedDetail} checked={face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(true)} />
+            <SheetRow label={t("composer.speedStandard")} checked={speed === "default"} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} pending={speedPending === "default" ? pendingWords : undefined} onSelect={() => onSelectSpeed("default")} />
+            <SheetRow
+              label={speedDetail === t("composer.speedStandard") || (ultra && speed === ULTRA_TIER) ? t("composer.speedFastTier") : speedDetail}
+              checked={speed !== "default" && !(ultra && speed === ULTRA_TIER)}
+              disabled={speedLocked}
+              reason={speedLocked ? lockReason : undefined}
+              pending={speedPending === "priority" ? pendingWords : undefined}
+              onSelect={() => onSelectSpeed("priority")}
+            />
+            {ultra ? (
+              <SheetRow
+                label={t("composer.speedUltraTier")}
+                checked={speed === ULTRA_TIER}
+                disabled={speedLocked}
+                unavailable={!speedLocked && !ultra.enabled}
+                reason={speedLocked ? lockReason : undefined}
+                note={speedLocked ? undefined : ultra.reason ?? undefined}
+                pending={speedPending === ULTRA_TIER ? pendingWords : undefined}
+                value={ULTRA_TIER}
+                onSelect={() => onSelectSpeed(ULTRA_TIER)}
+              />
+            ) : null}
+            {speedError ? <p ref={speedErrorRef} className="break-words scroll-mb-5 px-2 pt-1 text-label leading-snug text-danger" data-runtime-speed-error>{speedError}</p> : null}
           </SheetSection>
         ) : null}
       </div>
@@ -1768,31 +1977,53 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
 }
 
 function SheetRow({
-  label, checked, disabled = false, reason, onSelect,
+  label, checked, disabled = false, unavailable = false, reason, note, pending, value, onSelect,
 }: {
   label: string;
   checked: boolean;
   disabled?: boolean;
+  /** A choice the account cannot take: still reached by Tab so its note is read, and choosing it does nothing. */
+  unavailable?: boolean;
   reason?: string;
+  /** Why the row cannot be chosen, as visible text under it: a phone has no tooltip. */
+  note?: string;
+  /** The words a choice still being applied carries, beside a spinner in place of its check. */
+  pending?: string;
+  value?: string;
   onSelect: () => void;
 }) {
+  const noteId = useId();
   return (
+    <>
     <button
       type="button"
       role="radio"
       aria-checked={checked}
-      aria-disabled={disabled || undefined}
+      aria-disabled={disabled || unavailable || undefined}
       disabled={disabled}
       aria-label={reason ? `${label} — ${reason}` : undefined}
+      aria-describedby={note ? noteId : undefined}
+      aria-busy={pending ? true : undefined}
       title={reason}
-      onClick={onSelect}
+      onClick={unavailable ? undefined : onSelect}
       data-runtime-sheet-row
-      className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 ${
+      data-runtime-sheet-value={value}
+      className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 aria-disabled:opacity-50 ${
         checked ? "text-primary" : "text-secondary"
       }`}
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {checked ? <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : null}
+      {pending ? (
+        <>
+          {/* A word break in the row's name; a flex row draws no space for it. */}
+          {" "}
+          <span className="shrink-0 text-label font-semibold text-accent" data-runtime-sheet-pending>{pending}</span>
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden />
+        </>
+      ) : checked ? <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : null}
     </button>
+    {/* Outside the button, so the reason keeps full contrast while the row is dimmed. */}
+    {note ? <span id={noteId} role="none" className="-mt-1 block px-2 pb-1.5 text-label leading-snug text-muted" data-runtime-row-note>{note}</span> : null}
+    </>
   );
 }

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
+import path from "node:path";
 import { installPipelineControllerIndex } from "./pipelineControllerIndex";
 import { isOperatorOwnedDirectory } from "@/lib/stateOwnership";
 
@@ -33,5 +34,24 @@ test("an MCP reader leaves a missing controller index to its owner without losin
     expect(db.query("SELECT row_key FROM pipeline_controller_work WHERE kind='running'").all()).toEqual([]);
     process.env.LLV_STATE_OWNER = "mcp";
     expect(() => installPipelineControllerIndex(db, directory)).not.toThrow();
+  } finally { db.close(); }
+});
+
+test("an MCP reader does not finish a partially installed controller index", () => {
+  // Keep the synthetic operator root outside temporary review checkouts.
+  // Only the classifier receives this path; the database stays in memory.
+  process.env.XDG_CONFIG_HOME = path.join(path.parse(process.cwd()).root, "state-owner-fixture", "config");
+  process.env.LLV_STATE_OWNER = "mcp";
+  const directory = path.join(process.env.XDG_CONFIG_HOME, "agent-log-viewer", "state");
+  expect(isOperatorOwnedDirectory(directory)).toBe(true);
+  const db = new Database(":memory:");
+  try {
+    db.exec("CREATE TABLE state_rows(collection TEXT, row_key TEXT, value_json TEXT, row_order INTEGER)");
+    db.exec("CREATE TABLE pipeline_controller_work(kind TEXT, row_key TEXT, row_order INTEGER, PRIMARY KEY(kind, row_key))");
+
+    installPipelineControllerIndex(db, directory);
+
+    expect(db.query("SELECT name FROM sqlite_master WHERE name LIKE 'pipeline_controller_work%' ORDER BY name").all())
+      .toEqual([{ name: "pipeline_controller_work" }]);
   } finally { db.close(); }
 });

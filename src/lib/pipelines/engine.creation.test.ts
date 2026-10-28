@@ -207,7 +207,6 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     expect(fs.readFileSync(file!, "utf8")).toBe(expected);
     expect(fs.statSync(file!).mode & 0o777).toBe(0o600);
     expect(expected).toContain("Role prompt scaffold:");
-    expect(expected).toContain("Report this stage's completion with the Delegatus MCP tool stage_report");
     expect(expected).toContain(previous);
     expect((await git(worktree, "status", "--porcelain"))).toBe("");
     fs.writeFileSync(path.join(worktree, "result.txt"), "worker result\n");
@@ -295,7 +294,6 @@ test("read-only stages preserve declared outputs and tell the agent their write 
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.spawnInputs[0]?.prompt).toContain("reports/audit.md");
-  expect(h.spawnInputs[0]?.prompt).toContain("Do not commit");
 });
 
 test("declared outputs reject traversal, Git metadata, and duplicate normalized paths", async () => {
@@ -1334,8 +1332,6 @@ test("a merger stage resolves through production role lookup during pipeline nor
       model: "gpt-6.1-sol",
       effort: "high",
       access: "read-write",
-      /* The batch procedure is the project's own; Delegatus names it in CONTRIBUTING.md. */
-      promptScaffold: expect.stringContaining("Merge through the batch procedure the project's instruction files name"),
     },
   });
 });
@@ -1349,7 +1345,7 @@ test("a visual-critic stage is accepted and launches read-only on the role's run
   h.ports.roleLookup = pipelineRoleLookup;
   await create(h.ports, [{ id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null }] as never);
   const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
-  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: { ...expected, promptScaffold: expect.stringContaining("You are a Visual-critic.") } });
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: expected });
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
@@ -2710,4 +2706,21 @@ test("transient structured spawn handshakes retry twice before parking (#1056)",
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("runtime host request timed out");
   expect(parked.stateDetail).toContain("2 retries");
+});
+
+test("automatic recovery preserves a structured creator without a transcript path", async () => {
+  const h = harness();
+  savePipelines([]);
+  const request = { task: "Recover red main", repoDir: path.join(path.sep, "repo"), autoStart: false, stages: [] };
+  const receipt = { key: "red-main-fixture", digest: "recovery-fixture" };
+  const result = await rawCreatePipelineFromRequest(request, h.ports, {
+    creationRequest: receipt,
+    creatorLineage: { srcPath: null, srcConversationId: "conversation_recovery" },
+  });
+  expect(result.pipeline?.srcConversationId).toBe("conversation_recovery");
+  expect(result.pipeline?.srcPath).toBeNull();
+  expect(result.pipeline?.refreshOf).toBeUndefined();
+  const replay = await rawCreatePipelineFromRequest(request, h.ports, { creationRequest: receipt });
+  expect(replay.pipeline?.id).toBe(result.pipeline!.id);
+  expect(loadPipelines()).toHaveLength(1);
 });

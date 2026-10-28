@@ -3,6 +3,14 @@ import { describe, expect, test } from "bun:test";
 import { reconfigurationFromBody } from "./reconfigure";
 
 describe("reconfigurationFromBody", () => {
+  test("Terra 6.1 can be selected at its observed top tier without changing saved older values", () => {
+    for (const model of ["gpt-6.1-terra", "gpt-5.6-terra"]) {
+      expect(reconfigurationFromBody("codex", { model, effort: "ultra", fast: false })).toEqual({
+        value: { model, effort: "ultra", fast: false },
+      });
+    }
+    expect(reconfigurationFromBody("codex", { model: "gpt-6.2-terra", effort: "ultra", fast: false }).error).toBeDefined();
+  });
   test("accepts a known codex model with its extended effort scale and speed", () => {
     expect(reconfigurationFromBody("codex", { model: "gpt-5.6-sol", effort: "ultra", fast: true, accountId: "work" })).toEqual({
       value: { model: "gpt-5.6-sol", effort: "ultra", fast: true, accountId: "work" },

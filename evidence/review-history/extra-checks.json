@@ -1,0 +1,81 @@
+{
+  "baseline": "134a29c6",
+  "sourceDigests": {
+    "src/components/flows/RoundDeck.tsx": "baa339e578f667f5b2baf96d52cc91eee8e45d8f215dceaea58a465f5b221001",
+    "src/components/flows/reviewDeckDisclosure.ts": "6142d4ff6735d9b41f4fb088b39a2a0677972400d0aa3d048e5ed975d71cfa61"
+  },
+  "checks": [
+    {
+      "check": "whole-file-round-deck-head-1",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.dom.test.tsx"
+      ],
+      "sample": "head",
+      "exitCode": 0,
+      "failures": []
+    },
+    {
+      "check": "whole-file-round-deck-head-2",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.dom.test.tsx"
+      ],
+      "sample": "head",
+      "exitCode": 0,
+      "failures": []
+    },
+    {
+      "check": "whole-file-round-deck-head-3",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.dom.test.tsx"
+      ],
+      "sample": "head",
+      "exitCode": 0,
+      "failures": []
+    },
+    {
+      "check": "whole-file-round-deck-base-1",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.dom.test.tsx"
+      ],
+      "sample": "base",
+      "exitCode": 0,
+      "failures": []
+    },
+    {
+      "check": "whole-file-round-deck-base-2",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.dom.test.tsx"
+      ],
+      "sample": "base",
+      "exitCode": 0,
+      "failures": []
+    },
+    {
+      "check": "whole-file-round-deck-base-3",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.dom.test.tsx"
+      ],
+      "sample": "base",
+      "exitCode": 0,
+      "failures": []
+    }
+  ]
+}

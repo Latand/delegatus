@@ -1,4 +1,5 @@
-import { SeatTickWork, seatTickWorkDetail, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
+import { SeatTickWork, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
+import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import type { DeadlineScheduler } from "@/lib/deadline";
 import type { SeatTickInstructionLine } from "./seatTickInstructions";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -1333,8 +1334,30 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     dependencies.workClock, dependencies.workScheduler);
   dependencies.workStarted?.(work);
   const append = dependencies.appendRecord ?? appendSeatTickRecord;
+  const sourcePorts = dependencies.sources ?? defaultSeatTickSources();
+  let snapshotRetried = false;
+  const sources = new Proxy(sourcePorts, { get: (target, key, receiver) => {
+    if (key === "liveness") return (...args: Parameters<SeatTickSources["liveness"]>) =>
+      work.source("liveness", () => target.liveness(...args), []);
+    if (key === "workerAsks" && target.workerAsks) return (project: string) =>
+      work.source("workerAsks", () => target.workerAsks!(project), []);
+    if (key === "recordRuleReports" && target.recordRuleReports) return (project: string, at: string) =>
+      work.source("recordRuleReports", () => target.recordRuleReports!(project, at), undefined);
+    if (key === "prepareRead" && target.prepareRead) return async () => {
+      for (;;) {
+        try { await target.prepareRead!(); return; }
+        catch (error) {
+          if (snapshotRetried || !(error instanceof StateSnapshotChangedError)) throw error;
+          snapshotRetried = true;
+          console.error(`[seat tick] preparation snapshot changed; retrying: ${work.detail()}`);
+          await yieldToRuntime();
+        }
+      }
+    };
+    return Reflect.get(target, key, receiver);
+  } });
   const scoped = work.ports({ ...dependencies, policy,
-    sources: dependencies.sources ?? defaultSeatTickSources(),
+    sources,
     readState: dependencies.readState ?? readSeatTickState,
     writeState: dependencies.writeState ?? writeSeatTickState,
     ensureCard: dependencies.ensureCard ?? ensureSeatTickCard,
@@ -1459,6 +1482,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       /* A settled child's final message rides on its line (#1881), read from
          its transcript's tail now that the wake is going out. */
       items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
+      seatOwnedLanes: verdict.seatOwnedLanes,
       deferred: verdict.deferred,
       /* Said once, as counts (#1749, #1783): the children this check declined
          to list because their outcomes are a retired seat's, not this one's,
@@ -1471,6 +1495,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
          raise (#1298), so the seat acts on the rest knowing what is missing
          from it. */
       gaps: verdict.gaps,
+      sourceBudgetNote: seatTickSkippedSources(),
       operatorInstructions: input.settings.reason,
       instructionLines: input.settings.instructionLines,
       monitorPrompt: input.settings.monitorPrompt,
@@ -1480,6 +1505,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     })
     : { items: [], text: seatTickProposalMessage({
       project: input.project,
+      sourceBudgetNote: seatTickSkippedSources(),
       workers: input.workers,
       snapshotAt,
       issues,
@@ -1738,6 +1764,17 @@ async function check(
      runs between them so one check is never one long block (#1987). The
      phases already read fresh state, as they do after any real I/O. */
   await yieldToRuntime();
+
+  // Provisional-seat reconciliation and source preparation have settled.
+  // Quota continuations own their original request. Ordinary agenda wakes
+  // must not race them or turn a provider failure into a different request.
+  if (sources.recoverQuota && await sources.recoverQuota(canonical)) {
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
+      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
+      deferred: 0, eventsThrough: 0, delivery: null, detail: "seat quota recovery retains the unanswered request" };
+    appendRecord(record);
+    return record;
+  }
 
   /* Then, before anything else is READ, let alone decided: settle the wake
      this project left outstanding. It comes before the rest because both of
@@ -2170,7 +2207,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, admissionDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, admissionDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails, seatTickSkippedSources()].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;

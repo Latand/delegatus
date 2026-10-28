@@ -21,7 +21,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(systemd: boolean) {
   const root = mkdtempSync(join(tmpdir(), "slot-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   if (systemd) {
     writeFileSync(join(root, "systemctl"), "#!/bin/bash\nexit 0\n"); chmodSync(join(root, "systemctl"), 0o755);
     writeFileSync(join(root, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$SLOT_LOG"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$SLOT_BUN" "$SLOT_SERVICE_STUB" "$4"\n'); chmodSync(join(root, "systemd-run"), 0o755);
@@ -39,11 +39,13 @@ test.skipIf(process.platform !== "linux")("a Linux gate without systemd uses the
   expect(run.status).toBe(37); expect(run.stderr).toContain("portable cleanup on linux is best effort");
 });
 test("memory service forwards args, status and bounded tree termination", () => {
-  const f = fixture(true); expect(f.run("exit 23").status).toBe(23);
+  const f = fixture(true);
+  delete f.env.NODE_OPTIONS; delete f.env.LLV_GATE_MEM;
+  expect(f.run("exit 23").status).toBe(23);
   const args = readFileSync(join(f.root, "log"), "utf8");
-  expect(args).toContain("MemoryMax=8G"); expect(args).toContain("KillMode=control-group"); expect(args).toContain("TimeoutStopSec=2s");
+  expect(args).toContain("MemoryMax=14G"); expect(args).toContain("KillMode=control-group"); expect(args).toContain("TimeoutStopSec=2s");
   expect(args).toContain("CPUWeight=10"); expect(args).toContain("IOWeight=10");
-  expect(f.run('echo "$NODE_OPTIONS"').stdout).toContain("--max-old-space-size=6144");
+  expect(f.run('echo "$NODE_OPTIONS"').stdout).toContain("--max-old-space-size=11264");
 });
 test("another command waits for the same legacy-compatible slot", async () => {
   const f = fixture(true);
@@ -68,7 +70,7 @@ function fakeCgroup(root: string, group: string, controls: { scope?: string; sli
 /** A Linux fixture whose systemd records what the gate asked for. */
 function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?: { scope?: string; slice?: string } }) {
   const root = mkdtempSync(join(tmpdir(), "slot-cpu-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["date", "mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   writeFileSync(join(root, "getconf"), "#!/bin/bash\necho 24\n"); chmodSync(join(root, "getconf"), 0o755);
   if (options.manager) {
     writeFileSync(join(root, "systemctl"), `#!/bin/bash\nprintf "%s\\n" "$*" >> "$SYSTEMCTL_LOG"\n${options.refuseQuota ? '[[ "$2" == set-property ]] && exit 1\n' : ""}exit 0\n`);
@@ -94,10 +96,11 @@ function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?:
 }
 test.skipIf(process.platform !== "linux")("a gate runs in the work slice with the shared quotas and keeps its memory cap", () => {
   const f = cpuFixture({ manager: true });
+  delete f.env.LLV_GATE_MEM;
   expect(f.run().status).toBe(0);
   const args = readFileSync(join(f.root, "log"), "utf8").trim().split("\n");
   expect(args).toContain("--slice=delegatus-agents-work.slice");
-  for (const property of ["MemoryMax=8G", "CPUWeight=10", "IOWeight=10", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args[args.indexOf(property) - 1]).toBe("-p");
+  for (const property of ["MemoryMax=14G", "CPUWeight=10", "IOWeight=10", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args[args.indexOf(property) - 1]).toBe("-p");
   expect(readFileSync(join(f.root, "systemctl.log"), "utf8")).toContain("--user set-property --runtime delegatus-agents-work.slice CPUWeight=100 CPUQuota=1800% CPUQuotaPeriodSec=20ms");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 });

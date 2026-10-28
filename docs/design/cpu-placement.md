@@ -46,8 +46,8 @@ pipeline scopes there are.
 | Account-migration successors (Codex and Claude) | `publishCodexSuccessorHost` and `publishClaudeSuccessorHost` in `src/lib/accounts/migration/provider.ts`, through `structuredHostCell` | by the conversation's membership, as above | as above |
 | Headless runs: flow reviewers, the external relay agent, the handoff digest | `launchDetached` in `src/lib/agent/headless.ts` | `delegatus-agents-work.slice/delegatus-agent-headless-<id>.scope` | weight 100, 300% |
 | Every command an agent runs: tools, MCP servers, subagents, test runs, detached and orphaned children | descendants of the host process | the host's scope (cgroup membership survives reparenting) | the host's |
-| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=8G` |
-| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=8G` |
+| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=14G` |
+| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=14G` |
 | Workflow setup (`bun install` in the built-in template, any command a template names) | `startSetup` in `src/lib/workflows/provision.ts` | `delegatus-agents-work.slice/delegatus-work-workflow-setup-<id>.scope` | weight 100, 300% |
 | Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
 | Package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-package-<id>.scope` | weight 100, 300% |
@@ -135,10 +135,15 @@ gate does.
 
 ## CPU-pressure admission
 
-Pipeline stage starts and heavy commands share one durable priority queue
-(`src/lib/runtime/cpuAdmission.ts`, `scripts/cpu-admission.ts`). Tickets sort
-high, normal, low, then by their original insertion sequence within that level.
-A lane uses the highest priority among its linked board tasks;
+Pipeline stage starts and heavy commands share one durable priority queue file
+(`src/lib/runtime/cpuAdmission.ts`, `scripts/cpu-admission.ts`) and wait in
+two lanes inside it: ownerless start tickets (stages, workflows) and owned
+command tickets (gate-slot checks, publication installs, release steps). A
+ticket's position counts only tickets of its own lane. Within a lane tickets
+sort by effective class, then by their original insertion sequence. The
+effective class starts at the task priority (high, normal, low) and rises one
+level for every ten minutes the ticket has waited ("Bounded turn for old work"
+below). A lane uses the highest priority among its linked board tasks;
 unlinked work is normal. Each admission refreshes waiting bindings with indexed
 lookups of those task rows' priority fields. Priority changes retain the ticket's
 sequence and age. Stage agents, publication installs, commit hooks and push gates
@@ -146,14 +151,16 @@ carry the installation's task binding across sandboxed child environments.
 The binding and priority persist alongside the ticket for restart recovery.
 After gate admission, the test preload drops that binding before fixtures run,
 so their priority reads stay inside their own state roots.
-Starvation handling and per-stage urgency remain follow-ups.
+Per-stage urgency remains a follow-up.
 
 Stage and workflow admission retains its ten-minute fairness bound. A local
 heavy check requires a permissive measured sample at readiness and again when
 it claims a free slot, even after ten minutes and after its helper restarts.
 Its ticket records that rule (`low_pressure`). A ticket past its own bound that
-does not need low pressure passes such tickets, so a check held by pressure
-never holds a stage beyond the stage's bound. Checks keep FIFO among themselves.
+does not need low pressure passes such tickets in its lane, so a check held by
+pressure never holds a publication install beyond the install's bound. A stage
+never waits on a check at all, because the two sit in different lanes. Checks
+keep FIFO within their effective class.
 The gate samples PSI asynchronously; if PSI is unreadable or malformed, it
 requires the one-minute load divided by online CPUs to be below 0.75. If both
 metrics are unavailable, it waits. `DELEGATUS_CPU_PRESSURE=off` explicitly
@@ -173,8 +180,9 @@ described above.
 The stage/workflow pressure sensor holds at `some avg10` of 30% and releases
 after ten seconds below 20%; its failed sample permits the head. Heavy checks
 use the stricter measurement policy above. CPU quotas still bound admitted work.
-The displayed time is a worst-case bound from the durable queue clock, including
-spacing; a permissive sample does not make that bound jump when pressure rises.
+The displayed time is the time already waited, measured from the ticket's
+durable `since`; no estimate of the remaining wait is shown, because neither
+the slots nor the pressure promise one.
 
 SQLite writer transactions preserve queue order, original wait timestamps and
 the last admission across Viewer restarts and across processes. Stage tickets
@@ -239,20 +247,24 @@ ticket and the reason. An owner the kernel shows alive keeps its place however
 long it stays silent. Passing a ticket over changes only the order: a start
 still needs its slot lock and the spacing.
 
-When the head is past its ten-minute bound and nothing has been admitted for
-a minute since, the wait no longer promises minutes: the state detail reads
+When the head of a ticket's lane is past its ten-minute bound and nothing has
+been admitted on the machine for a minute since, the wait no longer promises minutes: the state detail reads
 `Waiting for the CPU queue · 7th · stalled for 62 min · high priority`, the card says the
 queue is stalled, and gate-slot prints the same line.
 
 A stage waits before its spawn reservation and wakes every five seconds. Its
-state detail and board card name the queue position and remaining whole minutes:
-`Waiting for the CPU queue · 2nd · up to 7 min · high priority`, or
-`Чекає черги CPU · 2-й · до 7 хв · Високий`. A waiting card suppresses the generic working
-caption. A launched stage continues reconciliation without asking for admission.
+state detail and board card name the queue position, what holds it, and the
+whole minutes already waited:
+`Waiting for the CPU queue · 2nd · waited 7 min · high priority`, or
+`Waiting for the CPU queue · 1st · held by CPU pressure · waited 4 min · high priority`
+(the card: `Чекає черги CPU · 2-й · чекає 7 хв · Високий`). A waiting card
+suppresses the generic working caption. A launched stage continues
+reconciliation without asking for admission.
 
 Heavy checks retain their ticket until a slot is locked and their admission is
-committed, so a younger check at the same priority cannot overtake one waiting for a slot. Waiting
-uses no heavy slot. The owned runner's execution deadline starts after admission.
+committed, so a younger check in the same effective class cannot overtake one
+waiting for a slot. Waiting uses no heavy slot, and a check waiting for a slot
+holds back only other commands, never a stage start. The owned runner's execution deadline starts after admission.
 On Linux, nested work continues its parent's existing admission only while the
 kernel proves the owner's start identity, lock inode and exclusive descriptor
 lock. The owned runner carries that proof through service handoff. This keeps
@@ -278,6 +290,417 @@ observation never consult admission. `DELEGATUS_CPU_PRESSURE=off` bypasses the p
 `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` tune the
 thresholds. Tune them from measurements: while this change was built, the
 incident machine read 14–24% with dozens of agents and no incident.
+
+## Bounded turn for old work, independent stage starts, truthful waits
+
+Originating requirement (operator, 2026-10-11, seat chat; paraphrased from
+Russian, because the verbatim chat text stays out of public files): some tasks
+look as if they are in progress, but they stopped working long ago. The
+accepted outcome of that requirement is bounded CPU admission with visible
+progress. It was reopened on 2026-10-25 after a read-only audit reproduced
+long waits on the current code.
+
+### What the audit found, and what it did not
+
+The audit observed the shared queue for six minutes on 2026-10-25. Its figures
+are sanitized aggregates; the raw census stays outside the repository.
+
+- Every owner was alive and verifiable, so the dead-owner and
+  unverifiable-owner fixes (#3325) did not apply.
+- All six heavy slots were held by working checks. CPU pressure (`some avg10`
+  10.5–14.8) stayed below the 30% hold threshold.
+- The queue kept moving, but every freed slot went to a high ticket. The oldest
+  normal ticket, a stage start, waited 90 → 95 minutes. The oldest high ticket
+  waited at most 7.0 minutes in any snapshot.
+- Stage starts, which need no slot, sat behind command tickets that were at the
+  head waiting for a slot.
+- Card and gate text said `up to 11 min` during a 50-minute wait. The number is
+  the pressure bound at the head; it does not estimate the queue.
+
+The audit's fake-clock seam drives `CpuAdmissionQueue` on a private file. It
+was rerun for this design on the pipeline base `dcf07a26` (identical in these
+files to `origin/main` `6b84d8ad`). It still shows both defects: (a) a normal
+ticket queued first is never admitted in 120 simulated minutes, with one high
+arrival and one admission per minute; (b) a high stage ticket reads
+`position: 2` behind a high command whose readiness check (`consume=false`)
+answered "ready" but that has no slot. The builder reruns the same seam on the
+final head and on this base and records both outputs in the private evidence
+folder.
+
+Three causes, three changes:
+
+1. Strict priority has no age bound → **the effective class rises with age**.
+2. Stages and slot-waiting commands share one order → **two lanes in the same file**.
+3. The only number shown is a bound nobody enforces → **show the waited time and the cause**.
+
+The 6-slot limit, the PSI thresholds, the worker limits, the spacing and the
+pressure policies stay exactly as they are.
+
+### 1. The age rule
+
+```text
+T = CPU_QUEUE_MAX_WAIT_MS            (10 minutes, the queue's existing fairness bound)
+rank(t)  = 0 high, 1 normal, 2 low   (refreshed from the board on every check, as today)
+aging(t) = 1 after this ticket's owner checks with V3; 0 for legacy owners
+class(t) = max(0, rank(t) − aging(t) · ⌊max(0, now − since(t)) / T⌋)
+order within a lane = (class, fifo_seq)
+```
+
+An aging-aware ticket's effective class rises by one level for every full `T`
+it has waited. Normal reaches high after 10 minutes. Low reaches normal after 10 and
+high after 20. Inside a class the order stays the durable insertion sequence
+(`fifo_seq`), so an aged ticket lines up behind every ticket that was queued
+before it and ahead of every ticket queued after it.
+
+**Guarantee.** Among aging-aware callers, let X be a ticket with rank `r` that
+entered lane L at `t0`, with its rank staying at `r` or a smaller number during the interval.
+From `t0 + r·T` on, every ticket counted ahead of X in L was queued before X.
+New arrivals of any priority land behind X, and so do priority raises of
+younger tickets. X's position therefore never grows from arrivals after
+`t0 + r·T`. X is admitted no later than the (k+1)-th admission in L after that
+instant among callers using the same pressure policy, where k is the number
+of earlier tickets of L still waiting then. The existing escape for a bounded
+publication command can pass low-pressure-only checks; those bypass admissions
+do not count toward a heavy check's admission bound. This holds as long as X
+keeps checking (stages every 5 s, gate helpers every 2 s)
+and L's own admission conditions hold that many times:
+
+- Start lane: the CPU-pressure gate allows a start, or the head is past its own
+  10-minute bound (the existing stage rule, unchanged), plus spacing.
+- Command lane: a slot is free, and measured pressure is low at readiness and
+  at claim, plus spacing.
+
+There is no wall-clock promise for heavy checks. Occupied slots or a
+nonpermissive measured pressure sample can hold them indefinitely, and the
+waiting text names that cause (§3). The start lane retains its existing escape
+at the head's ten-minute bound, with spacing and worker limits still applying.
+
+**Before aging, urgent work keeps its preference.** A high ticket that arrives
+while X is still younger than `r·T` is ordered ahead of X. So for one full
+`T` per level, a new urgent ticket keeps exactly the preference #3129 gave it.
+Board priority changes still take effect at the next check: raising X to high
+makes its class 0 at once, and lowering an aged ticket recomputes its class
+from the new rank and the same age. A priority decrease can postpone reaching
+class 0, but every ticket reaches it by `2T` whatever its task rank becomes.
+
+**Why 10 minutes.** It is the bound the queue already promises stages
+(`CPU_QUEUE_MAX_WAIT_MS`, also the stall reference), so one number keeps one
+meaning and no setting is added. In the audit, high work was admitted within
+7.0 minutes at most, under its own load, so a 10-minute step keeps high's
+preference in the observed regime and caps the extra wait of normal work at
+one step plus the earlier queue. A smaller step, such as 2–5 minutes, would
+erase high's preference under ordinary load. A larger one, such as 30 minutes,
+would leave the observed 90-minute waits at 30 minutes plus the queue. Aging
+by level reuses the accepted priority mechanism. Simpler alternatives fail:
+counter-based schemes (every n-th admission reserved for lower levels) need new
+durable state that older clients cannot see, and pure deadline sorting
+(`since + rank·T`) could reorder tickets of one level when the clock steps
+back. `class` keeps FIFO on `fifo_seq` exactly.
+
+Age is measured from `since`, which only the first insert of a key writes
+(`INSERT OR IGNORE`). A priority change, a fence's suspension, a pass-over and
+a restart all keep it. A cancelled ticket that queues again gets a new `since`.
+A stage retry is a new attempt key. So no ticket inherits another's age. A
+stage suspended by a fence (update drain, memory wait) keeps aging while it is
+held, as it keeps its order today. When it returns it may be ahead of younger
+tickets, but never ahead of older ones: it is one of the "earlier tickets"
+the guarantee already counts.
+
+### 2. Two lanes in one file
+
+`lane(t) = start` when `owner IS NULL` (stage and workflow keys), otherwise
+`command`. The rule needs nothing new on disk. Every release since the queue
+existed writes stage and workflow tickets without an owner, and every command
+ticket with its owner's identity. It is already the distinction the queue uses
+for polls, pass-overs and `stage_admissions`.
+
+- A ticket's `position`, its `head` (for stall detection) and the low-pressure
+  passing rule count only tickets of its own lane.
+- The spacing row (`admission.last`) stays shared. No two admissions of any
+  lane or any release are closer than 2 s, so a stage start and a check claim
+  still never land together. Stall detection keeps reading that same row; the
+  stalled text reads "nothing started" for the machine.
+- Pressure is checked per caller, as today. A stage start uses the stage
+  sensor and its 10-minute rule. A gate check uses the strict measured policy at
+  readiness and claim. Separating the lanes skips neither.
+- Slots stay kernel locks. A gate command runs only after `flock -n` on a slot
+  descriptor and a committed `--claim`. The queue never grants a slot, so the
+  6-slot limit holds whatever order any version computes.
+
+Effect on the audit's case: a stage behind a high command that is waiting for a
+slot now starts once the stage's own pressure check and spacing allow. Checks
+behave as before: they wait for a slot, and FIFO holds within their effective
+class.
+
+Publication installs and release steps (`waitForCpuPressure`) keep owned
+`command:` keys, so they stay in the command lane. They can wait behind a check
+that is waiting for a slot, but never longer than their own 10-minute bound,
+because the existing passing rule lets them pass `low_pressure` tickets. That
+is the behaviour they have today; moving them is deferred.
+
+An operator-visible consequence of the existing rule follows. The start lane's
+head, once past its own 10-minute bound, starts even under pressure. Before
+this change that rule was often masked, because high commands sat ahead of
+stages. After it, the stages that have waited longer than 10 minutes start one
+at a time, at most one admission per spacing interval and one per
+pipeline-controller tick. The rule itself, and the PSI thresholds, are fenced
+and unchanged; a test pins it (§6).
+
+### 3. Waiting text
+
+`CpuQueueWait` loses `remainingMs`. It gains `waitedMs = now − since` and
+`heldBy`:
+
+- `"queue"`: position > 1, or the head is waiting out the spacing.
+- `"pressure"`: the head, with spacing clear, refused by the caller's pressure check.
+
+`priority` (the task rank; the aged class is never shown) and `stalledMs` stay.
+`remainingMs` has two consumers, `cpuQueueDetail` and the frozen
+`cpuAdmission.prePoll.fixture.ts`. The fixture declares its own local return
+type and stops importing `CpuQueueWait`.
+
+Stage and workflow state detail (wire text; English, parsed by the board):
+
+```text
+Waiting for the CPU queue · 3rd · waited 12 min · normal priority
+Waiting for the CPU queue · 1st · held by CPU pressure · waited 4 min · normal priority
+Waiting for the CPU queue · 7th · stalled for 62 min · high priority          (unchanged)
+```
+
+Minutes are whole and rounded down, so 0 is shown as 0. The prefix is
+unchanged, so `CPU_PRESSURE_DETAIL_PREFIXES`, `isCpuPressureDetail` and the
+optional ` · Viewer publication: …` suffix keep working. `parseCpuQueueDetail`
+returns `{ position, minutes, heldBy, stalled?, priority? }`. The old
+`up to N min` form is not parsed: every waiting stage rewrites its detail at
+its next 5-second tick after the deploy.
+
+Card captions (`src/lib/i18n/en.ts`, `uk.ts`, chosen in
+`src/components/kanban/PipelineSection.tsx`):
+
+| key | en | uk |
+|---|---|---|
+| `kanban.progress.cpuQueue` (changed) | `Waiting for the CPU queue · {ordinal} · waited {minutes} min · {priority}` | `Чекає черги CPU · {position}-й · чекає {minutes} хв · {priority}` |
+| `kanban.progress.cpuPressure` (new) | `Held by CPU pressure · {ordinal} in the CPU queue · waited {minutes} min · {priority}` | `Стримує навантаження CPU · {position}-й у черзі CPU · чекає {minutes} хв · {priority}` |
+| `kanban.progress.cpuQueueStalled` | unchanged | unchanged |
+
+Gate-slot stderr (`scripts/cpu-admission.ts`). A line is printed only when its
+text changes, as today, so at most once a minute:
+
+```text
+gate-slot: Waiting for the CPU queue · 3rd · waited 12 min · normal priority
+gate-slot: <pressure reason from GateCpuPressure> · 1st in CPU queue · waited 4 min
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 8 min
+```
+
+The slot case is the one where the queue answers "ready" (`null`) and so
+carries no `since`. `gate-slot.sh` records `queued_at=$(date +%s)` once, before
+its admission loop, and passes it as a fourth argument to `--wait`. A helper
+called without it counts from its own start. The shell and the helper always
+come from the same checkout, so the argument needs no compatibility handling.
+
+### 4. Mixed versions on one file
+
+Three code versions write the machine queue today:
+
+- **V1**, the deployed release. It serves stage checks, and stage agents use
+  its gate-slot by absolute path. It orders by `(priority, seq)` over all
+  tickets and knows nothing of `low_pressure`.
+- **V2**, current main. It runs in merger checkouts and in lane worktrees on
+  recent bases. It orders the same way and adds the `low_pressure` passing
+  rule.
+- **V3**, this design.
+
+V1 and V2 keep running until the normal deploy, and until every lane
+worktree's hooks come from a base containing V3.
+
+**V3 adds one capability column.** `tickets.aging INTEGER NOT NULL DEFAULT 0`
+is added under the constructor's existing writer transaction. Old rows and
+inserts from old helpers leave it 0. Only the ticket's own V3 check stamps it 1,
+inside the same transaction that computes and claims its turn. Opening a file,
+refreshing another ticket's priority and the shared poll triggers never opt
+another owner into aging. A cold row retains its age and FIFO; its first check
+from an upgraded owner enables aging immediately. Cancellation deletes the
+marker with the ticket, so a reused key starts with the inserting client's
+capability.
+
+`priority` keeps holding the task rank. V3 never writes an aged class into it:
+V1 and V2 refresh that rank from the board on every check. V3 keeps maintaining
+the legacy `seq` view (`tickets_fifo`, `orderLegacyTicketsByPriority`) unchanged.
+It computes `class` and `lane` inside its own queries. Unmarked rows use their
+stored task rank, so a V3 caller never waits behind a legacy row solely because
+of age the legacy checker cannot act on. Without this capability, an old normal
+and a new high can each put the other first after ten minutes and deadlock.
+
+What holds with all three versions at once:
+
+- **Slot count.** At most `LLV_GATE_SLOTS` commands hold slots. The kernel lock
+  enforces it, and no version can claim without its descriptor.
+- **Spacing.** Every version reads and writes `admission.last` inside an
+  IMMEDIATE transaction, so admissions stay ≥ 2 s apart.
+- **One owner per ticket.** Keys are unchanged. V3 never rewrites an old row's
+  owner, key, `since` or `fifo_seq`.
+
+What does not hold yet during the transition is fairness. A V1 or V2 checker
+still orders by task rank. It can claim ahead of a V3 ticket that has aged into
+its class, and a V1 Viewer still holds stages behind commands. Both versions
+have only these powers today, and they end as their processes are replaced.
+When an aged V3 ticket and a V2 ticket both see themselves at the head of the
+command lane, the free slot goes to whichever takes the `flock` first. The
+spacing then separates the two claims.
+
+**Overlap with #3315.** That open change adds SQLite busy retry under one
+deadline. It is based before #3338 and already conflicts with main on its own.
+It restructures the `CpuAdmissionQueue` constructor and adds a seventh
+parameter, `busyTimeoutMs`. It wraps the helper's checks in `admissionLockWait`
+and adds `claim()` to `gate-slot.sh`. This design adds the capability column
+in the constructor's existing schema transaction and changes `check()` and
+`cpuQueueText.ts`; in the helper it changes the text expression and the argv
+read; in the shell it changes the `--wait` line. It adds no constructor
+parameter: the age step is the existing `maxWaitMs`. Whichever lands second merges main append-only, keeps the
+other's wrapper and claim function, and reruns `scripts/gate-slot.queue.test.ts`.
+Draft #2926 is stale (last updated 2026-10-15), and its queue edits are already
+on main.
+
+### 5. Invariants the builder keeps
+
+1. The command lane admits only position 1 of that lane, only while a slot
+   descriptor is locked, and only after a permissive measured sample at
+   readiness and at claim (`requireLowPressure`).
+2. The start lane admits only position 1 of that lane, when the stage pressure
+   check allows it or the ticket is past its own bound. A stage admission
+   remains recoverable through `stage_admissions` until its checkpoint.
+3. No two admissions in the file are closer than `spacingMs`.
+4. Position counts only same-lane, unsuspended tickets that are not already
+   admitted, ordered by `(class, fifo_seq)`. The low-pressure passing rule
+   applies only within the lane.
+5. Only a ticket's first insert sets `since`. Nothing makes a ticket older than
+   its own wait.
+6. The additive capability column defaults to legacy ordering. Existing
+   columns, triggers, indexes and the legacy `seq` view retain V2 semantics.
+7. Cancellation, dead-owner removal, the unverified and unpolled pass-overs,
+   suspension, reconcile and the 24-hour removal are unchanged.
+8. Waiting text never shows a remaining-time estimate. It shows the cause and
+   the time already waited.
+
+### 6. Code areas and tests
+
+Code: `src/lib/runtime/cpuAdmission.ts` (schema capability, `check()`,
+the `CpuQueueWait` type),
+`src/lib/runtime/cpuQueueText.ts`, `src/lib/runtime/cpuPressure.ts`
+(`cpuPressureHoldDetail`), `scripts/cpu-admission.ts`, `scripts/gate-slot.sh`
+(the `--wait` line), `src/components/kanban/PipelineSection.tsx`,
+`src/lib/i18n/en.ts` and `uk.ts`, `src/lib/runtime/cpuAdmission.prePoll.fixture.ts`
+(its return type). The engines need no change: they pass the hold through
+`cpuPressureHoldDetail`. The per-check cost stays a scan of the waiting tickets
+inside the transaction that already scans them for owners and priorities. No speed claim is made.
+
+Every case below uses a fake clock and a private queue file. All of them are
+behavioural. Existing cases whose expectations encode the old order or text
+are rewritten in place. "A stage and a heavy check share FIFO" becomes the
+lane-independence case below. The `remainingMs` expectations become `waitedMs`
+and `heldBy`.
+
+`src/lib/runtime/cpuAdmission.fairness.test.ts` and
+`src/lib/runtime/cpuAdmission.test.ts`:
+
+- **Sustained high arrivals.** A normal and a low ticket are queued first. One
+  owned high ticket arrives per simulated minute, one admission is allowed per
+  minute, and pressure is permissive. New highs are admitted ahead of both
+  until the normal ticket reaches `T`. The normal is admitted at the first
+  admission after it reaches class 0 and the highs queued before it are gone.
+  The low is admitted after it reaches `2T` in the same way. This is the
+  audit's case (a) inverted.
+- **Preference before aging.** A high arriving while a normal is 9 minutes old
+  is admitted first. A high arriving after the normal is 10 minutes old waits
+  behind it. A high queued before the normal stays ahead of it.
+- **FIFO within the effective class.** Two normals and two lows age into
+  class 0 among high tickets. Admission order equals `fifo_seq` order within
+  class 0, including with checks run in reverse order.
+- **Dynamic priority.** A 5-minute-old normal raised to high is at once class 0
+  in FIFO place. A 15-minute-old low competes with normals in FIFO. A
+  12-minute-old normal lowered to low falls to class 1. `since` and
+  `fifo_seq` never change.
+- **No wall-clock promise.** Under continuous pressure, an aged command ticket
+  with `requireLowPressure` is never admitted (`heldBy: "pressure"`). A stage
+  under its bound is held. A stage past its bound at the head of the start lane
+  is admitted. That pins the existing rule.
+- **Lane independence.** The audit's case (b): an owned high command checks
+  with `consume=false`, answers ready and holds no slot. A normal stage then
+  checks and is admitted after spacing. An owned command never counts a stage,
+  and a stage never counts an owned command. A stage admission followed by a
+  command claim within `spacingMs` is refused.
+- **Mixed versions.** A frozen copy of the V2 class, `cpuAdmission.v2.fixture.ts`
+  (the class at `dcf07a26`, only its name changed, like the existing pre-poll
+  fixture), and V3 share one file:
+  - V3 adds only the capability column, leaving legacy triggers and indexes
+    unchanged; V2 can reopen the upgraded file;
+  - after V3 checks, every row's `priority` still equals its task rank;
+  - V2's positions for its own command tickets match strict
+    `(priority, fifo_seq)`;
+  - spacing holds across a V2 claim and a V3 stage admission;
+  - each version checks and claims only its own tickets across both aging
+    steps, in either poll order; old normal/new high and old low/new normal
+    both drain immediately when slots free, with shared spacing;
+  - neither version removes or rewrites the other's live ticket.
+- **Cold start.** V3 opens a file that the pre-poll fixture or V2 created, with
+  rows whose `since` is 25 minutes old. Legacy rows keep task rank until their
+  own upgraded checker polls, then their full durable age applies.
+- **Fencing.**
+  - Cancelling an aged ticket and checking the same key again gives a fresh
+    `since`.
+  - A dead owner's aged ticket is removed with its one reason line.
+  - An unpolled aged stage is passed over, then returns to its place, behind
+    earlier tickets and ahead of later ones.
+  - A suspended stage keeps its age.
+- **Text.** `cpuQueueDetail` and `parseCpuQueueDetail` round-trip the queue,
+  pressure and stalled forms, with and without the Viewer-publication suffix.
+  The old `up to` form and an unknown suffix parse to `null`.
+
+Other tests:
+
+- `scripts/gate-slot.queue.test.ts`, with the real `gate-slot.sh` and helper on
+  a private `LLV_GATE_LOCK_DIR`, `LLV_GATE_SLOTS=1` and a fake PSI file:
+  - a first command holds the slot, and a second prints
+    `Waiting for a heavy command slot · all 1 busy · waited 0 min`;
+  - a V3 stage check on the same queue file is admitted meanwhile;
+  - a holder count sampled from the lock files never exceeds 1;
+  - under high fake pressure an aged command stays held, and its line names the
+    pressure reason.
+- `src/lib/pipelines/engine.cpuQueue.test.ts`: a pending stage behind an owned
+  command ticket waiting for a slot launches. A held stage's `stateDetail`
+  shows the queue and pressure forms with waited minutes.
+- `src/components/pipelines/cpuQueue.test.ts`: the queue and pressure captions
+  in en and uk.
+- Rendered evidence, through the existing kanban driver only
+  (`src/components/kanban/kanbanBoard.browser.test.tsx` over
+  `issue1695Evidence.fixture.tsx`): update the `cpu-queue` scenario's text and
+  add a `cpu-pressure` scenario, in en and uk, light and dark. No new driver.
+
+Checks: each touched test file by path through `scripts/gate-slot.sh`, one at
+a time. Each run isolates `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and
+`LLV_STATE_DIR`, with `LLV_VIEWER_CONTROL_URL` on a closed port. Then
+typecheck, lint on changed files, the privacy-publication gate, and the
+audit's seam on the final head and on `dcf07a26`, with outputs kept privately.
+Expected seam output on the final head: (a) the normal ticket is admitted near
+minute 10; (b) the stage check returns `null`.
+
+### Deferred — not currently justified
+
+- **Teaching V1 and V2 the age rule.** That would mean writing aged classes
+  into `priority`, which those clients overwrite with the task rank on every
+  check. The transition ends as their processes are replaced.
+- **Per-lane spacing or per-lane stall detection.** That needs a second
+  admission row that older clients cannot read. Machine-wide "nothing started"
+  is still true as worded.
+- **Moving publication installs and release-step waits into the start lane.**
+  No evidence shows them waiting, and the existing passing rule already bounds
+  their wait behind slot-waiting checks at 10 minutes.
+- **A remaining-time estimate.** Neither slot turnover nor pressure gives one
+  that is honest.
+- **Raising `LLV_GATE_SLOTS`.** The audit lists it as a hypothesis, and it is
+  fenced here; it needs its own before/after measurement.
+- **Admission history in the queue file.** The audit could not tell admitted
+  tickets from cancelled ones, but nothing in this fix needs it.
 
 ## One gate lock namespace
 

@@ -2,7 +2,7 @@ import { withoutWriterWait } from "@/lib/agent/registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
@@ -634,4 +634,341 @@ test("an open reservation whose record was owed at a crash gets it back, dated f
   expect(store.get(uncertain.command.operationId)).toMatchObject({ waitReason: "evidence-unreadable", terminal: null });
   expect(store.get(handOff.command.operationId)).toMatchObject({ originalKey: "handoff-owed-key", waitReason: "checking", terminal: null });
   store.close();
+});
+
+
+test("restoration covers every ending through bounded sweeps before advancing completeness", async () => {
+  const { registry, conversation, filename } = sweepFixture("bounded-restoration");
+  const held = registry.holdDelivery(conversation.id, "ending template", "template-key");
+  registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  const template = registry.readOnlySnapshot();
+  const owner = template.deliveryOperationOwners[held.command.operationId]!;
+  const delivery = template.heldDeliveries[held.id]!;
+  const file = { ...template, deliveryOperationOwners: {}, heldDeliveries: {} } as typeof template;
+  const settledAt = Date.parse("2026-10-22T00:00:00Z");
+  for (let i = 0; i < 513; i++) {
+    const op = `bounded-operation-${String(i).padStart(4, "0")}`;
+    const id = `bounded-delivery-${i}`;
+    file.deliveryOperationOwners[op] = { ...owner, deliveryId: id, clientMessageId: op,
+      command: { ...owner.command, operationId: op }, settledAt: new Date(settledAt).toISOString() };
+    file.heldDeliveries[id] = { ...delivery, id, clientMessageId: op, command: { ...delivery.command, operationId: op }, deliveredAt: new Date(settledAt).toISOString() };
+  }
+  const reader = { readOnlySnapshot: () => file } as typeof registry;
+  const store = new DeliveryProgressStore(filename, () => settledAt, noTimer);
+  try {
+    expect(restoreMissingRecords(reader, store, settledAt)).toBe(false);
+    const first = Object.keys(file.deliveryOperationOwners).filter(key => store.get(key));
+    expect(first.length).toBeLessThanOrEqual(128);
+    expect(store.flush()).toBe(true);
+    store.close();
+    const registryFile = path.join(path.dirname(filename), "restart-registry.json");
+    fs.writeFileSync(registryFile, JSON.stringify(file));
+    const code = `import {AgentRegistry} from "./src/lib/agent/registry";
+      import {DeliveryProgressStore} from "./src/lib/runtime/deliveryProgress";
+      import {restoreMissingRecordsAsync} from "./src/lib/runtime/recordWait";
+      const registry=new AgentRegistry(${JSON.stringify(registryFile)},undefined,undefined,{sqliteMode:"off"});
+      const store=new DeliveryProgressStore(${JSON.stringify(filename)},()=>${settledAt});
+      if(!await restoreMissingRecordsAsync(registry,store,${settledAt}))throw Error("incomplete restarted restoration");
+      if(!store.flush())throw Error("progress flush refused");store.close();registry.close();`;
+    const child = Bun.spawn([process.execPath, "-e", code], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_STATE_OWNER: undefined } });
+    const watchdog = setTimeout(() => child.kill(), 30_000);
+    try {
+      const error = await new Response(child.stderr).text();
+      expect({ exit: await child.exited, error }).toEqual({ exit: 0, error: "" });
+    } finally { clearTimeout(watchdog); if (child.exitCode === null) { child.kill(); await child.exited; } }
+    const restarted = new DeliveryProgressStore(filename, () => settledAt, noTimer);
+    try {
+      let covered = false;
+      for (let i = 0; i < 100 && !covered; i++) covered = restoreMissingRecords(reader, restarted, settledAt);
+      expect(covered).toBe(true);
+      for (const key of Object.keys(file.deliveryOperationOwners)) expect(restarted.get(key)?.terminal?.state).toBe("delivered");
+      expect(restarted.get("bounded-operation-0512")?.originalKey).toBe("bounded-operation-0512");
+    } finally { restarted.close(); }
+  } finally { store.close(); registry.close(); }
+});
+
+
+test("asynchronous restoration prepares both its selection and freshness check without a synchronous refresh", async () => {
+  const { registry, filename } = sweepFixture("prepared-restoration");
+  const snapshot = registry.readOnlySnapshot();
+  const store = new DeliveryProgressStore(filename, () => 1000, noTimer);
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  let preparations = 0;
+  const reader = {
+    readOnlySnapshot: () => { throw new Error("unprepared restoration refresh"); },
+    prepareReadOnlySnapshot: async (signal?: AbortSignal) => {
+      signal?.throwIfAborted(); preparations++; return snapshot;
+    },
+  } as unknown as typeof registry;
+  try {
+    expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(true);
+    expect(preparations).toBe(2);
+    reader.prepareReadOnlySnapshot = async () => { throw new Error("preparation refused"); };
+    await expect(restoreMissingRecordsAsync(reader, store, 1000)).rejects.toThrow("preparation refused");
+    preparations = 0;
+    reader.prepareReadOnlySnapshot = async () => { preparations++; return snapshot; };
+    expect(await restoreMissingRecordsAsync(reader, store, 1000, () => {}, 0)).toBe(false);
+    expect(preparations).toBe(0);
+    let current = true;
+    reader.prepareReadOnlySnapshot = async () => { current = false; return snapshot; };
+    await expect(restoreMissingRecordsAsync(reader, store, 1000, () => {
+      if (!current) throw new Error("restoration owner retired");
+    })).rejects.toThrow("restoration owner retired");
+    preparations = 0;
+    reader.prepareReadOnlySnapshot = async () => ++preparations === 1 ? snapshot : { ...snapshot };
+    expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(false);
+  } finally { store.close(); registry.close(); }
+});
+
+
+/* The first read decodes every retained record. Inside one presence check it
+   took a startup slice past 250 ms on a loaded production copy. */
+test("the first read decodes in yielded slices, and a write while it yields completes the read synchronously", async () => {
+  const now = Date.parse("2026-10-11T00:00:00Z");
+  for (const variant of ["completes", "written"] as const) {
+    const filename = path.join(root, `cooperative-load-${variant}.sqlite`);
+    const seed = new DeliveryProgressStore(filename, () => now, noTimer);
+    seed.note("open-send", "conversation", { waitReason: "queued", originalKey: "open-key" });
+    expect(seed.flush()).toBe(true);
+    seed.close();
+    addRecentCompletions(filename, now);
+    const store = new DeliveryProgressStore(filename, () => now, noTimer);
+    const loaded = () => (store as unknown as { loaded: boolean }).loaded;
+    let turns = 0, reading = true;
+    const tick = () => { if (!reading) return; turns++; if (variant === "written" && turns === 1) {
+      store.note("late-send", "conversation", { waitReason: "queued" }); expect(store.flush()).toBe(true);
+    } setImmediate(tick); };
+    setImmediate(tick);
+    try {
+      await store.loadCooperatively();
+      reading = false;
+      expect(turns).toBeGreaterThan(0);
+      expect(loaded()).toBe(true);
+      // Either way every reader sees the file and the newer write.
+      expect(store.get("open-send")?.originalKey).toBe("open-key");
+      expect(store.presence("recent-completion-10000")).toBe("present");
+      if (variant === "written") expect(store.get("late-send")?.waitReason).toBe("queued");
+    } finally { reading = false; store.close(); }
+  }
+});
+
+test("asynchronous restoration reads the store cooperatively before its first presence check", async () => {
+  const { registry, conversation, filename } = sweepFixture("cooperative-restoration");
+  registry.holdDelivery(conversation.id, "owed before the first read", "cooperative-key");
+  const store = new DeliveryProgressStore(filename, () => 1000, noTimer);
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const events: string[] = [];
+  const load = store.loadCooperatively.bind(store), presence = store.presence.bind(store);
+  store.loadCooperatively = async check => { events.push("load"); await load(check); };
+  store.presence = operationId => { events.push("presence"); return presence(operationId); };
+  try {
+    await restoreMissingRecordsAsync(registry, store, 1000);
+    expect(events[0]).toBe("load");
+    expect(events).toContain("presence");
+  } finally { store.close(); registry.close(); }
+});
+
+/* Restoration's private deadline joins the registry preparation startup also
+   waits on. When restoration started it and its deadline passes first, only
+   restoration is refused: the unsignalled reader still receives the view
+   from the same, uninterrupted preparation. */
+test("an expired restoration deadline cannot refuse another reader of the shared registry preparation", async () => {
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const directory = fs.mkdtempSync(path.join(root, "shared-preparation-"));
+  const { normalizeRegistry } = await import("@/lib/agent/registry");
+  const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
+  const sqliteFilename = path.join(directory, "agent-registry.sqlite");
+  const seed = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const template = seed.beginSpawn("codex", "/repo/bulk", { title: "Bulk" }).launchId;
+  seed.close();
+  /* 512 receipts keep the shared preparation in flight across several slices. */
+  const launches = Array.from({ length: 512 }, (_, index) => `bulk-${index}`);
+  const bulk = new SqliteAgentRegistryStore(sqliteFilename, {
+    normalize: normalizeRegistry, initialSnapshot: () => { throw new Error("seeded registry required"); },
+  });
+  bulk.mutate(file => {
+    for (const launchId of launches) file.receipts[launchId] = { ...file.receipts[template]!, launchId };
+  }, false);
+  bulk.close();
+  let loads = 0, armed = false;
+  let started!: () => void;
+  const loadStarted = new Promise<void>(resolve => { started = resolve; });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename,
+    onSqliteSnapshotLoad: () => { if (!armed) return; loads++; started(); },
+  });
+  const store = new DeliveryProgressStore(path.join(directory, "delivery-progress.sqlite"), () => 1000, noTimer);
+  const restoration = new AbortController();
+  const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => restoration.signal);
+  try {
+    armed = true;
+    const restoring = restoreMissingRecordsAsync(registry, store, 1000);
+    await loadStarted;
+    const reading = registry.prepareReadOnlySnapshot();
+    for (let turn = 0; turn < 3; turn++) await Promise.resolve();
+    restoration.abort(new Error("restoration owner expired"));
+    await expect(restoring).rejects.toThrow("restoration owner expired");
+    const file = await reading;
+    expect(launches.every(launchId => file.receipts[launchId]?.launchId === launchId)).toBe(true);
+    expect(loads).toBe(1);
+  } finally { timeout.mockRestore(); store.close(); registry.close(); }
+});
+
+
+/* A send stored before its delivery carried command.operationId: owner and
+   delivery share one id, and normalization derives the operation from it.
+   Archived, the owner's ending is found through the indexed projection, which
+   must apply the same default or restoration completes past the record. */
+test("an archived legacy send whose delivery names no operation is restored before completeness advances", async () => {
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const directory = fs.mkdtempSync(path.join(root, "legacy-archived-ending-"));
+  const options = { sqliteMode: "sqlite" as const, sqliteFilename: path.join(directory, "agent-registry.sqlite") };
+  const open = () => new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, options);
+  const writer = open();
+  const conversation = writer.ensureConversation("codex", path.join(directory, "thread.jsonl"), "default");
+  const held = writer.holdDelivery(conversation.id, "legacy ending", "legacy-key");
+  writer.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  writer.close();
+  const legacy = "legacy-send";
+  let deliveredAt = "";
+  const db = new Database(options.sqliteFilename);
+  try {
+    const row = (collection: string, key: string) => db.query<{ value_json: string; row_order: number }, [string, string]>(
+      "SELECT value_json,row_order FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key)!;
+    const ownerRow = row("deliveryOperationOwners", held.command.operationId);
+    const deliveryRow = row("heldDeliveries", held.id);
+    const owner = JSON.parse(ownerRow.value_json);
+    const delivery = JSON.parse(deliveryRow.value_json);
+    deliveredAt = delivery.deliveredAt;
+    delete owner.settledAt;
+    delete delivery.command.operationId;
+    db.transaction(() => {
+      db.run("DELETE FROM registry_rows WHERE (collection='deliveryOperationOwners' AND row_key=?) OR (collection='heldDeliveries' AND row_key=?)",
+        [held.command.operationId, held.id]);
+      db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('heldDeliveries',?,?,?)",
+        [legacy, JSON.stringify({ ...delivery, id: legacy }), deliveryRow.row_order]);
+      db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('deliveryOperationOwners',?,?,?)",
+        [legacy, JSON.stringify({ ...owner, deliveryId: legacy, command: { ...owner.command, operationId: legacy } }), ownerRow.row_order]);
+    })();
+  } finally { db.close(); }
+  const archiver = open();
+  try {
+    archiver.archiveInactiveRows();
+    expect(archiver.readOnlySnapshot().deliveryOperationOwners[legacy]?.settledAt).toBe(deliveredAt);
+  } finally { archiver.close(); }
+  const cold = new Database(options.sqliteFilename);
+  try {
+    expect(cold.query("SELECT collection FROM registry_cold WHERE row_key=? ORDER BY collection").all(legacy))
+      .toEqual([{ collection: "deliveryOperationOwners" }, { collection: "heldDeliveries" }]);
+  } finally { cold.close(); }
+  const settledAt = Date.parse(deliveredAt);
+  expect(Number.isFinite(settledAt)).toBe(true);
+  /* Once on the projection this boot prepares, and again from an empty
+     progress store over the reopened, already prepared projection. */
+  for (const pass of ["prepared", "reopened"]) {
+    const registry = open();
+    const store = new DeliveryProgressStore(path.join(directory, `delivery-progress-${pass}.sqlite`), () => settledAt, noTimer);
+    try {
+      expect(store.get(legacy)).toBeNull();
+      expect(await restoreMissingRecordsAsync(registry, store, settledAt)).toBe(true);
+      expect({ pass, record: store.get(legacy)?.terminal?.state ?? null }).toEqual({ pass, record: "delivered" });
+      expect(store.flush()).toBe(true);
+    } finally { store.close(); registry.close(); }
+  }
+});
+
+
+/* An owner stored without its instant, whose delivery lost its digest: the
+   projection cannot tell which candidate normalization takes, so it keeps
+   the later. Compared as text, 'Thu, 01 Oct…' sorts after '2026-10-23…' and
+   the recent send fell out of the window while completeness advanced. */
+test("an archived legacy send with mixed-format candidate endings is restored before completeness advances", async () => {
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const { endingInstant } = await import("@/lib/agent/registryEndings");
+  const recent = "2026-10-23T12:00:00.000Z";
+  const now = Date.parse(recent) + 1000;
+  for (const [variant, retained] of [["mixed", "Thu, 01 Oct 2026 00:00:00 GMT"], ["offset", "2026-10-23T13:00:00+14:00"]] as const) {
+    const directory = fs.mkdtempSync(path.join(root, `legacy-${variant}-ending-`));
+    const options = { sqliteMode: "sqlite" as const, sqliteFilename: path.join(directory, "agent-registry.sqlite") };
+    const open = () => new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, options);
+    const writer = open();
+    const conversation = writer.ensureConversation("codex", path.join(directory, "thread.jsonl"), "default");
+    const held = writer.holdDelivery(conversation.id, "legacy ending", "legacy-key");
+    writer.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    writer.close();
+    const operation = held.command.operationId;
+    const db = new Database(options.sqliteFilename);
+    try {
+      const row = (collection: string, key: string) => JSON.parse(db.query<{ value_json: string }, [string, string]>(
+        "SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key)!.value_json);
+      const owner = row("deliveryOperationOwners", operation);
+      const delivery = row("heldDeliveries", held.id);
+      expect(owner.requestDigest).toBe(delivery.requestDigest);
+      delete owner.settledAt;
+      owner.settledDelivery = { ...delivery, deliveredAt: retained };
+      /* Its digest is derived again from the text it still carries. */
+      delete delivery.requestDigest;
+      delivery.text = "legacy ending";
+      delivery.deliveredAt = recent;
+      const update = db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?");
+      db.transaction(() => {
+        update.run(JSON.stringify(delivery), "heldDeliveries", held.id);
+        update.run(JSON.stringify(owner), "deliveryOperationOwners", operation);
+      })();
+    } finally { db.close(); }
+    const archiver = open();
+    try {
+      archiver.archiveInactiveRows();
+      expect(archiver.readOnlySnapshot().deliveryOperationOwners[operation]?.settledAt).toBe(recent);
+    } finally { archiver.close(); }
+    const cold = new Database(options.sqliteFilename);
+    try {
+      expect(cold.query("SELECT collection FROM registry_cold WHERE row_key IN (?, ?) ORDER BY collection").all(operation, held.id))
+        .toEqual([{ collection: "deliveryOperationOwners" }, { collection: "heldDeliveries" }]);
+    } finally { cold.close(); }
+    /* On the projection this boot prepares, over the reopened prepared one,
+       and rebuilt from nothing; each time from a progress store whose
+       checkpoint an hour earlier leaves only the recent candidate in range. */
+    for (const pass of ["prepared", "reopened", "rebuilt"]) {
+      if (pass === "rebuilt") {
+        const rebuild = new Database(options.sqliteFilename);
+        try {
+          rebuild.run("DELETE FROM registry_owner_endings");
+          rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+        } finally { rebuild.close(); }
+      }
+      const progressFile = path.join(directory, `delivery-progress-${pass}.sqlite`);
+      const seed = new DeliveryProgressStore(progressFile, () => now - 3_600_000, noTimer);
+      seed.checkpoint(now - 3_600_000);
+      expect(seed.flush()).toBe(true);
+      seed.close();
+      const registry = open();
+      const store = new DeliveryProgressStore(progressFile, () => now, noTimer);
+      try {
+        expect(store.completenessMark()).toBe(now - 3_600_000);
+        expect(store.get(operation)).toBeNull();
+        expect(await restoreMissingRecordsAsync(registry, store, now)).toBe(true);
+        expect({ variant, pass, record: store.get(operation)?.terminal?.state ?? null }).toEqual({ variant, pass, record: "delivered" });
+      } finally { store.close(); registry.close(); }
+      const projection = new Database(options.sqliteFilename, { readonly: true });
+      try {
+        const ending = projection.query<{ ending_ms: number | null; ending_text: string }, [string]>(
+          "SELECT ending_ms,ending_text FROM registry_owner_endings WHERE operation_id=?").get(operation)!;
+        expect({ variant, pass, instant: ending.ending_ms ?? endingInstant(ending.ending_text) }).toEqual({ variant, pass, instant: Date.parse(recent) });
+      } finally { projection.close(); }
+    }
+  }
+});
+
+test("conversation delivery history keeps separate sent message outcomes", () => {
+  const store = new DeliveryProgressStore(null, () => Date.parse("2026-10-24T00:00:00Z"), noTimer);
+  try {
+    for (const id of ["message-one", "message-two"]) store.note(id, "codex-conversation", { waitReason: "dispatching", attempted: true });
+    store.settle("message-one", "delivered", null);
+    store.settle("message-two", "failed", "send-refused");
+    const records = store.forConversation(["codex-conversation"]);
+    expect(records).toHaveLength(2);
+    expect(records.find(record => record.operationId === "message-one")?.phaseHistory?.at(-1)?.phase).toBe("delivered");
+    expect(records.find(record => record.operationId === "message-two")?.phaseHistory?.at(-1)?.phase).toBe("failed");
+  } finally { store.close(); }
 });

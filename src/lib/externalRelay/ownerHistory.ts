@@ -165,10 +165,13 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
     }
     let chat = args.data.chat, tz = ports.timeZone(), from = args.data.from, to = args.data.to, cursor: string | undefined;
     if (args.data.cursor !== undefined) {
-      if (chat !== undefined || from !== undefined || to !== undefined) return unavailable("invalid_arguments");
       let token: z.infer<typeof continuationSchema>;
       try { token = continuationSchema.parse(JSON.parse(Buffer.from(args.data.cursor, "base64url").toString("utf8"))); }
       catch { return unavailable("invalid_arguments"); }
+      // MCP restores the original filters before resolving its opaque handle.
+      // Accept those filters only when they agree with the service continuation.
+      if ((chat !== undefined && chat !== token.chat) || (from !== undefined && from !== token.from)
+        || (to !== undefined && to !== token.to)) return unavailable("invalid_arguments");
       ({ chat, tz, from, to, after: cursor } = token);
     }
     if (!chat || !chatPattern.test(chat)) return unavailable("invalid_arguments");

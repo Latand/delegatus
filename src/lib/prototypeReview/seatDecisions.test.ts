@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { GET as imageGET } from "@/app/api/image/route";
 import { prototypeMediaGET } from "./media";
@@ -29,7 +30,7 @@ function task() { return { id: "task-prototype", project: "project-a", status: "
 beforeEach(async () => { await resetPrototypeDeliveryWorkerForTests(); saveTasks([task()]); clearSeatRoundsForTests(); });
 afterEach(async () => { await resetPrototypeDeliveryWorkerForTests(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 function request(url: string, body?: unknown) {
-  return new NextRequest(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+  return new NextRequest(`http://localhost${url}`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 const seat: PrototypeWorld = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_seat", project: "project-a" }), stage: () => null, orchestrator: () => "conversation_seat" };
 const operator: PrototypeWorld = { ...prototypeWorld, orchestrator: () => "conversation_seat" };

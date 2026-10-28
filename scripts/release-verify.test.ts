@@ -17,7 +17,7 @@ test("real verifier consumes recorded read-only git, workflow, npm and image res
   const sha = "b".repeat(40);
   const ports: VerifyPorts = {
     now: () => 0, wait: async () => { throw new Error("unexpected wait"); }, provenance: () => true,
-    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { "dist-tags": { latest: "1.2.0" } },
+    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { latest: "1.2.0" },
     command: async (file, args) => {
       calls.push(`${file} ${args.join(" ")}`);
       if (file === "git" && args[0] === "show") return JSON.stringify({ name: "package-example", version: "1.2.0" });
@@ -39,11 +39,58 @@ test("real verifier consumes recorded read-only git, workflow, npm and image res
   expect(calls.some(c => /^(git (push|tag)|npm publish)/.test(c))).toBe(false);
 });
 
+test.each(["fresh", "delayed", "missing", "scoped"] as const)("release verification ignores a stale packument (%s metadata)", async mode => {
+  const sha = "b".repeat(40);
+  const registryReads: string[] = [];
+  const name = mode === "scoped" ? "@example/package-example" : "package-example";
+  const encodedName = encodeURIComponent(name);
+  let now = 0;
+  let waits = 0;
+  const ports: VerifyPorts = {
+    now: () => now,
+    wait: async () => { waits++; now += 30_000; },
+    provenance: () => true,
+    registry: async url => {
+      registryReads.push(url);
+      const pending = mode === "missing" || mode === "delayed" && waits === 0;
+      if (url.endsWith(`/${encodedName}/1.2.0`)) return pending ? null : { version: "1.2.0", dist: { integrity: "sha512-synthetic" } };
+      if (url.endsWith(`/-/package/${encodedName}/dist-tags`)) return pending ? null : { latest: "1.2.0" };
+      if (url.endsWith(`/${encodedName}`)) return { "dist-tags": { latest: "1.1.0" } };
+      throw new Error(`unexpected registry URL ${url}`);
+    },
+    command: async (file, args) => {
+      if (file === "git" && args[0] === "show") return JSON.stringify({ name, version: "1.2.0" });
+      if (file === "git" && args[0] === "rev-parse") return sha;
+      if (file === "git" && args[0] === "cat-file") return args[1] === "-p"
+        ? `object ${sha}\ntype commit\ntag v1.2.0\ntagger Tester <test@example.invalid> 0 +0000\n\nDelegatus 1.2.0` : "tag";
+      if (file === "git" && args[0] === "ls-remote") return `${sha}\trefs/tags/v1.2.0\n${sha}\trefs/tags/v1.2.0^{}`;
+      if (file === "gh" && args[0] === "repo") return "example/project";
+      if (file === "gh" && args[0] === "run" && args[1] === "list") {
+        const mac = args.includes("macos-newcomer.yml");
+        return JSON.stringify([{ databaseId: mac ? 3 : 1, headSha: mac ? "main" : sha, displayTitle: mac ? "macOS install after npm run 1" : "Publish v1.2.0", status: "completed", conclusion: "success" }]);
+      }
+      if (file === "docker" && args[0] === "buildx") return JSON.stringify({ manifests: [{ platform: { os: "linux", architecture: "amd64" } }, { platform: { os: "linux", architecture: "arm64" } }] });
+      throw new Error(`unexpected command ${file} ${args.join(" ")}`);
+    },
+  };
+
+  expect(await verifyRelease("v1.2.0", null, ports)).toEqual({
+    errors: mode === "missing" ? ["npm version/latest/integrity not verified"] : [],
+  });
+  const rounds = mode === "missing" ? 180 : mode === "delayed" ? 2 : 1;
+  expect(waits).toBe(mode === "missing" ? 180 : rounds - 1);
+  expect(now).toBe(mode === "missing" ? 90 * 60_000 : (rounds - 1) * 30_000);
+  expect(registryReads).toEqual(Array.from({ length: rounds }, () => [
+    `https://registry.npmjs.org/${encodedName}/1.2.0`,
+    `https://registry.npmjs.org/-/package/${encodedName}/dist-tags`,
+  ]).flat());
+});
+
 test("a green checkout-triggered macOS run cannot replace the install run linked to the selected npm run", async () => {
   const sha = "b".repeat(40); let now = 0; let waits = 0; let macReads = 0;
   const ports: VerifyPorts = {
     now: () => now, wait: async () => { waits++; now += 30_000; }, provenance: () => true,
-    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { "dist-tags": { latest: "1.2.0" } },
+    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { latest: "1.2.0" },
     command: async (file, args) => {
       if (file === "git" && args[0] === "show") return JSON.stringify({ name: "package-example", version: "1.2.0" });
       if (file === "git" && args[0] === "rev-parse") return sha;
@@ -140,7 +187,7 @@ function imagePorts(docker: (args: string[]) => string, calls: string[]): Verify
   const sha = "b".repeat(40); let now = 0;
   return {
     now: () => now, wait: async () => { now += 60 * 60_000; }, provenance: () => true,
-    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { "dist-tags": { latest: "1.2.0" } },
+    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { latest: "1.2.0" },
     command: async (file, args) => {
       calls.push(`${file} ${args.join(" ")}`);
       if (file === "git" && args[0] === "show") return JSON.stringify({ name: "package-example", version: "1.2.0" });

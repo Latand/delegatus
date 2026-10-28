@@ -10,16 +10,16 @@ setDefaultTimeout(30_000);
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
 // pre-push hook's other selected suites in the parent Bun process. The child
-// takes 45 s at load 18 on 24 cores; the bound stays inside the hook's
-// five-minute budget per file.
+// needs room for owned-runner setup and cleanup as well as every assertion;
+// the bound stays inside the hook's five-minute budget per file.
 if (process.env.LLV_PARKED_PUBLICATION_CHILD !== "1") {
   test("isolated parked publication regressions", () => {
     const result = spawnSync(process.execPath, ["test", import.meta.path], {
-      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 120_000,
+      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 240_000,
     });
     if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
     expect(result.status).toBe(0);
-  }, 125_000);
+  }, 245_000);
 } else {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
@@ -835,6 +835,37 @@ test("failed publication retains the hook tail, exit status and duration in lane
   } finally { h.cleanup(); }
 });
 
+test.each(["repaired", "unrepaired"])("skip-stage retries a settled publication failure (%s hook)", async hookState => {
+  const repaired = hookState === "repaired";
+  const h = fixture();
+  h.ports.now = () => "2026-10-22T12:00:00.000Z";
+  h.lane.runs[0]!.attempts[0]!.startedAt = "2026-10-22T11:00:00.000Z";
+  try {
+    h.lane.lastPassedCommit = h.head;
+    h.lane.state = "running";
+    h.lane.stateDetail = null;
+    savePipelines([h.lane]);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho pre-push: privacy >&2\nexit 1\n", { mode: 0o700 });
+
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.current()).toMatchObject({ state: "needs_decision", publishedCommit: null,
+      delivery: { operation: { state: "settled", result: { ok: false } } } });
+    const failedOperation = h.current().delivery!.operation!.id;
+    expect(h.pushes()).toBe(1);
+
+    if (repaired) fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "skip-stage", expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    await h.tick();
+
+    expect(h.current()).toMatchObject(repaired
+      ? { state: "completed", publishedCommit: h.head }
+      : { state: "needs_decision", publishedCommit: null, delivery: { operation: { state: "settled", result: { ok: false } } } });
+    expect(h.current().delivery!.operation!.id).not.toBe(failedOperation);
+    expect(h.pushes()).toBe(2);
+  } finally { h.cleanup(); }
+});
+
 /** A lane cut from an older main whose stage left `files` behind (none for a
     read-only stage), with main moved on by `behind` commits since. */
 function trailingLane(h: ReturnType<typeof fixture>, behind: number, files: Record<string, string> = {}): string {
@@ -1159,6 +1190,24 @@ function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   return h.lane.lastPassedCommit;
 }
 
+test("a passed read-only stage with no node_modules publishes and advances", async () => {
+  const h = fixture();
+  try {
+    const head = missingDependencyFixture(h);
+    const gateRan = path.join(h.root, "publication-gate-ran");
+    fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\ntest -d node_modules/publication-fixture-dependency\ntouch '${gateRan}'\n`, { mode: 0o700 });
+    savePipelines([h.lane]);
+
+    expect(fs.existsSync(path.join(h.repo, "node_modules"))).toBe(false);
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, h.ports)).error).toBeUndefined();
+    await h.tick();
+
+    expect(fs.existsSync(gateRan)).toBe(true);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});
+
 for (const [privacyFails, partial] of [[false, false], [true, false], [false, true]]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails}, partial installation: ${partial})`, async () => {
   const h = fixture();
   try {
@@ -1309,6 +1358,8 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
 async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+    const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+    registerPipelineTick(async () => {});
     const fs = await import("node:fs");
     const crashLog = ${JSON.stringify(crashLog ?? null)};
     const fixtureExec = ${publicationFixtureExec.toString()};
@@ -1804,6 +1855,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     const restart = async () => {
       const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
       const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(engine)});
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
         const ports = { ...defaultPipelinePorts(), exec: ${publicationFixtureExec.toString()},
           now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
@@ -1859,6 +1912,8 @@ test("permanent capacity deadlines stop after three retries across controller re
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
       const script = `import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(engine)};
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
         const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
         for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;

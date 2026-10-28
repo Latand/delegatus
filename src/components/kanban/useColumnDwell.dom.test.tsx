@@ -12,6 +12,8 @@ import { DWELL_CUE_MS, DWELL_EXIT_MS, DWELL_MS, useColumnDwell, type ColumnDwell
    hook is exercised; the board's own wiring is covered in KanbanBoard.dom. */
 
 const dom = new Window({ url: "http://localhost/" });
+// These interaction tests commit synchronously; animation timing has its own suite.
+Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
 Object.assign(globalThis, {
   window: dom,
   document: dom.document,

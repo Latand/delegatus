@@ -140,6 +140,28 @@ function fixture(count = 8) {
 }
 const exists = fs.existsSync;
 
+test.each([true, false])("a fresh install without a releases directory has nothing to retain (checkout=%s)", async checkout => {
+  const h = fixture(0);
+  fs.rmSync(h.record.releasesDir, { recursive: true });
+  if (!checkout) h.record.checkout = null;
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toEqual([]);
+  expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8"))).toEqual(report);
+  expect(exists(h.record.releasesDir)).toBeFalse();
+});
+
+test("a releases path that is a file still reports an inspection error", async () => {
+  const h = fixture(0);
+  fs.rmSync(h.record.releasesDir, { recursive: true });
+  fs.writeFileSync(h.record.releasesDir, "not a directory");
+  const report = await h.run();
+  expect(report.errors).toHaveLength(1);
+  expect(report.removed).toEqual([]);
+  expect(fs.readFileSync(h.record.releasesDir, "utf8")).toBe("not a directory");
+});
+
 test("a scoped partial scan protects only its affected release, including caches", async () => {
   const h = fixture();
   h.ports.scan = () => ({ ...EMPTY, uncertain: [{ pid: 123, reason: "maps:EACCES", roots: [h.dirs[1]!] }] });

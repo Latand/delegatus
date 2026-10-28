@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ready } from "./policy.fixture";
-import { productionReleaseController, type ReleasePorts } from "./run";
+import { productionReleaseController, releaseRequestDigest, ReleaseValidationRefusal, type ReleasePorts } from "./run";
+import { releaseStages } from "./stages";
+import type { CreatePipelineRequest } from "@/lib/pipelines/types";
 import { readReleaseProject, mutateReleaseProject } from "./store";
 import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
@@ -123,7 +125,7 @@ function staleRunFixture() {
     observe: async () => ({ policy, repoDir: "repo", src: "seat" }),
     task: (_project, run, adopted) => { expect(run.cut).toBe("next-cut"); expect(adopted).toBeUndefined(); return "next-task"; },
     create: async request => { creates++; expect(request.baseRef).toBe("next-cut");
-      expect(request.stages?.find(stage => stage.id === "publish")?.prompt).toContain("ask before every tag"); return "next-lane"; },
+      return "next-lane"; },
     pipeline: () => null,
   };
   const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },
@@ -289,4 +291,249 @@ test("a changed pipeline binding during a tag read is not overwritten", async ()
   await productionReleaseController(h.ports).reconcile(h.project);
   expect(readReleaseProject(h.project).live?.pipelineId).toBe("recovered-lane");
   expect(readReleaseProject(h.project).history).toEqual([]);
+});
+
+function refusedRunFixture(trigger = "requested") {
+  const h = staleRunFixture();
+  h.ports.taskDone = () => false;
+  h.ports.lookup = () => null;
+  h.policy.deployments.push({ revision: "old-cut", at: h.now - 8 * 3_600_000 });
+  h.policy.isAncestor = (a, b) => a === b || a === "old-cut" && b === "next-cut";
+  const request: CreatePipelineRequest = { task: "Release fixture", repoDir: "repo", src: "seat", baseRef: "old-cut", autoStart: true,
+    stages: releaseStages({ cut: "old-cut", lastTag: "v1.13.0", changes: [], askBeforePublish: true }) };
+  request.stages[0].prompt = "x".repeat(16_350);
+  mutateReleaseProject(h.project, row => ({ ...row, request: trigger === "requested" ? row.request : null,
+    live: { ...row.live!, trigger, requestedAt: trigger === "requested" ? row.live!.requestedAt : null, request } }));
+  return h;
+}
+
+test.each(["requested", "amount", "legacy-amount"])("a definitive %s refusal retains its reason and task, then recomposes for the current production cut", async trigger => {
+  const h = refusedRunFixture(trigger === "legacy-amount" ? "amount" : trigger);
+  if (trigger === "legacy-amount") mutateReleaseProject(h.project, row => {
+    const live = { ...row.live! }; delete live.requestedAt; return { ...row, live };
+  });
+  const original = readReleaseProject(h.project);
+  const submitted: { key: string; request: CreatePipelineRequest }[] = [];
+  h.ports.create = async (request, key) => {
+    submitted.push({ key, request });
+    if (submitted.length === 1) throw new ReleaseValidationRefusal(releaseRequestDigest(request), "validation refused oversized input");
+    expect(request.baseRef).toBe("next-cut");
+    expect(request.taskIds).toEqual(["finished-task"]);
+    return "next-lane";
+  };
+  let tasks = 0;
+  h.ports.task = (_project, _run, adopted) => { tasks++; expect(adopted).toBe("finished-task"); return adopted!; };
+  expect(await productionReleaseController(h.ports).reconcile(h.project)).toBe("release: refused");
+  const retired = readReleaseProject(h.project);
+  expect(retired.live).toBeNull();
+  expect(retired.request).toEqual(original.request);
+  expect(retired.history).toHaveLength(1);
+  expect(retired.history[0]).toMatchObject({ outcome: "refused", reason: "validation refused oversized input", taskId: "finished-task", request: original.live!.request });
+  await Promise.all([productionReleaseController(h.ports).launchIfDue(h.input), productionReleaseController(h.ports).launchIfDue(h.input)]);
+  await productionReleaseController(h.ports).reconcile(h.project);
+  expect(submitted).toHaveLength(2);
+  expect(submitted[1].key).not.toBe(submitted[0].key);
+  expect(tasks).toBe(1);
+  expect(readReleaseProject(h.project).live).toMatchObject({ cut: "next-cut", taskId: "finished-task", pipelineId: "next-lane" });
+});
+
+test.each(["error", "timeout", "untyped-proof", "wrong-digest", "no-lookup"])("an unproven %s keeps the exact saved payload and replay key", async kind => {
+  const h = refusedRunFixture();
+  const original = readReleaseProject(h.project);
+  if (kind === "no-lookup") delete h.ports.lookup;
+  h.ports.create = async request => {
+    if (kind === "error" || kind === "timeout") throw new Error(kind);
+    if (kind === "untyped-proof") throw Object.assign(new Error("refused"), { digest: releaseRequestDigest(request) });
+    throw new ReleaseValidationRefusal(kind === "wrong-digest" ? "other-payload" : releaseRequestDigest(request), "refused");
+  };
+  await expect(productionReleaseController(h.ports).reconcile(h.project)).rejects.toThrow(kind === "error" || kind === "timeout" ? kind : "refused");
+  expect(readReleaseProject(h.project)).toEqual(original);
+});
+
+test("an unreadable receipt check after refusal leaves the saved claim intact", async () => {
+  const h = refusedRunFixture();
+  const original = readReleaseProject(h.project);
+  h.ports.create = async request => {
+    h.ports.lookup = () => { throw new Error("receipt unavailable"); };
+    throw new ReleaseValidationRefusal(releaseRequestDigest(request), "refused");
+  };
+  await expect(productionReleaseController(h.ports).reconcile(h.project)).rejects.toThrow("receipt unavailable");
+  expect(readReleaseProject(h.project)).toEqual(original);
+});
+
+test("completion of the refused task before recomposition consumes its request without dispatch", async () => {
+  const h = refusedRunFixture();
+  let attempts = 0;
+  h.ports.create = async request => { attempts++; throw new ReleaseValidationRefusal(releaseRequestDigest(request), "refused"); };
+  await productionReleaseController(h.ports).reconcile(h.project);
+  h.ports.taskDone = (_project, task) => task === "finished-task";
+  h.ports.task = () => { throw new Error("must not recreate completed task"); };
+  expect(await productionReleaseController(h.ports).launchIfDue(h.input)).toBe("release: completed");
+  expect(attempts).toBe(1);
+  expect(readReleaseProject(h.project)).toMatchObject({ live: null, request: null });
+  expect(readReleaseProject(h.project).history.at(-1)).toMatchObject({ outcome: "completed", reason: "task-done" });
+});
+
+test("a running release prevents even the refused saved launch from being dispatched or retired", async () => {
+  const h = refusedRunFixture();
+  h.policy.live = true;
+  const original = readReleaseProject(h.project);
+  h.ports.create = async () => { throw new Error("must not dispatch"); };
+  expect(await productionReleaseController(h.ports).reconcile(h.project)).toBe("release: release-in-flight");
+  expect(readReleaseProject(h.project)).toEqual(original);
+});
+
+test.each(["receipt", "key", "cut", "task", "payload", "binding"])("a %s arriving during refusal prevents retirement of a changed or admitted claim", async change => {
+  const h = refusedRunFixture();
+  h.ports.create = async request => {
+    if (change === "receipt") h.ports.lookup = () => "admitted-lane";
+    else mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!,
+      ...(change === "key" ? { key: "other-key" } : {}), ...(change === "cut" ? { cut: "other-cut" } : {}),
+      ...(change === "task" ? { taskId: "other-task" } : {}), ...(change === "binding" ? { pipelineId: "admitted-lane" } : {}),
+      ...(change === "payload" ? { request: { ...row.live!.request!, spec: "changed request" } } : {}),
+    } }));
+    throw new ReleaseValidationRefusal(releaseRequestDigest(request), "refused");
+  };
+  await productionReleaseController(h.ports).reconcile(h.project);
+  expect(readReleaseProject(h.project).live).not.toBeNull();
+  expect(readReleaseProject(h.project).history).toEqual([]);
+  if (change === "receipt") {
+    await productionReleaseController(h.ports).reconcile(h.project);
+    expect(readReleaseProject(h.project).live?.pipelineId).toBe("admitted-lane");
+  }
+});
+
+test.each([false, true])("a newer request keeps its own task choice when a refused launch is retired (named task: %s)", async namedTask => {
+  const h = refusedRunFixture();
+  let creates = 0;
+  h.ports.create = async request => {
+    if (++creates > 1) return "new-lane";
+    mutateReleaseProject(h.project, row => ({ ...row, request: { ...row.request!, at: "2026-10-22T23:30:00Z", ...(namedTask ? { taskId: "new-task" } : {}) } }));
+    throw new ReleaseValidationRefusal(releaseRequestDigest(request), "refused");
+  };
+  h.ports.task = (_project, _run, adopted) => { expect(adopted).toBe(namedTask ? "new-task" : undefined); return "new-task"; };
+  await productionReleaseController(h.ports).launchIfDue(h.input);
+  expect(readReleaseProject(h.project).live).toMatchObject({ taskId: "new-task", pipelineId: "new-lane", requestedAt: "2026-10-22T23:30:00Z" });
+});
+
+test.each(["hold", "disabled", "gap", "changes", "soak", "other-release", "tick-off", "merge-off", "checks", "draining", "deploying", "tools", "rollback"])("recomposing a refused automatic launch keeps the %s gate", async gate => {
+  const h = refusedRunFixture("amount");
+  let attempts = 0;
+  h.ports.create = async request => { attempts++; throw new ReleaseValidationRefusal(releaseRequestDigest(request), "refused"); };
+  await productionReleaseController(h.ports).reconcile(h.project);
+  if (gate === "hold") mutateReleaseProject(h.project, row => ({ ...row, hold: { reason: "incident", at: "2026-10-22T23:30:00Z", by: { kind: "gateway", project: null, conversationId: null, seatEpoch: null } } }));
+  if (gate === "disabled") h.ports.settings = () => null;
+  if (gate === "gap") h.policy.lastTag.at = h.now - 3_600_000;
+  if (gate === "changes") h.policy.changes.pop();
+  if (gate === "soak") h.policy.deployments = [{ revision: "next-cut", at: h.now - 3_600_000 }];
+  if (gate === "other-release") h.policy.live = true;
+  if (gate === "tick-off") h.policy.tickEnabled = false;
+  if (gate === "merge-off") h.policy.mergeEnabled = false;
+  if (gate === "checks") h.policy.checks = "pending";
+  if (gate === "draining") h.policy.draining = true;
+  if (gate === "deploying") h.policy.deploying = true;
+  if (gate === "tools") h.policy.tools = ["Chrome"];
+  if (gate === "rollback") h.policy.isAncestor = (a, b) => a === b;
+  h.ports.task = () => { throw new Error("must not create a task"); };
+  await productionReleaseController(h.ports).launchIfDue(h.input);
+  expect(attempts).toBe(1);
+  expect(readReleaseProject(h.project).live).toBeNull();
+  expect(readReleaseProject(h.project).history).toHaveLength(1);
+});
+
+test.each(["normal", "lost-reply", "busy"])("fresh processes retire a real validation refusal and dedupe storage admission across seats: %s", async outcome => {
+  const loseReply = outcome === "lost-reply";
+  const h = refusedRunFixture();
+  const oldCut = "a".repeat(40), nextCut = "b".repeat(40);
+  mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, cut: oldCut,
+    request: { ...row.live!.request!, baseRef: oldCut } } }));
+  const policy = { ...h.policy, deployments: [{ revision: nextCut, at: h.now - 7 * 3_600_000 }, { revision: oldCut, at: h.now - 8 * 3_600_000 }] };
+  const script = `
+    import fs from "node:fs";
+    import path from "node:path";
+    import crypto from "node:crypto";
+    const [mode, worker] = process.argv.slice(1);
+    let sequence = 0;
+    crypto.randomUUID = () => worker + "0000000-0000-4000-8000-" + String(++sequence).padStart(12, "0");
+    const { productionReleaseController, releaseRequestDigest } = await import(${JSON.stringify(new URL("./run.ts", import.meta.url).href)});
+    const { readReleaseProject } = await import(${JSON.stringify(new URL("./store.ts", import.meta.url).href)});
+    const { createReleasePipeline } = await import(${JSON.stringify(new URL("./production.ts", import.meta.url).href)});
+    const { createPipelineFromRequest } = await import(${JSON.stringify(new URL("../pipelines/engine.ts", import.meta.url).href)});
+    const { pipelineRoleLookup } = await import(${JSON.stringify(new URL("../pipelines/roles.ts", import.meta.url).href)});
+    const { loadPipelines, pipelineDeliveryLookup } = await import(${JSON.stringify(new URL("../pipelines/store.ts", import.meta.url).href)});
+    const { createTask } = await import(${JSON.stringify(new URL("../tasks/commands.ts", import.meta.url).href)});
+    const { mutateTasksFile, loadTasks } = await import(${JSON.stringify(new URL("../tasks/store.ts", import.meta.url).href)});
+    const project = ${JSON.stringify(h.project)}, policy = ${JSON.stringify(policy)};
+    policy.isAncestor = (a, b) => a === b || a === ${JSON.stringify(oldCut)} && b === ${JSON.stringify(nextCut)};
+    if (!loadTasks().length) mutateTasksFile(state => {
+      const result = createTask(state.tasks, { project, text: "Release fixture", placement: "unplaced" }, state.recentCreates,
+        { id: () => "finished-task", now: () => "2026-10-22T00:00:00Z" });
+      if (!result.ok) throw new Error(result.error);
+      return { state: { tasks: result.tasks, recentCreates: result.recentCreates }, result: null };
+    });
+    const enginePorts = { roleLookup: pipelineRoleLookup, projectForCwd: () => project, sourcePathAllowed: () => true,
+      conversationIdForPath: () => "creator", now: () => "2026-10-22T23:30:00Z",
+      preflightRepo: async () => ({ ok: true, repoDir: process.env.LLV_STATE_DIR, gitCommonDir: path.join(process.env.LLV_STATE_DIR, ".git"), worktreeParent: process.env.LLV_STATE_DIR }),
+      exec: async (_file, args) => ({ code: 0, stdout: args[0] === "rev-parse" ? args.at(-1).replace(/\\^\\{commit\\}$/, "") : path.join(process.env.LLV_STATE_DIR, "remote.git"), stderr: "" }) };
+    const dispatches = [];
+    const ports = { now: () => policy.now, settings: () => (${JSON.stringify(h.ports.settings(h.project))}),
+      taskDone: () => false, supersedingTag: async () => null,
+      observe: async () => ({ policy, repoDir: process.env.LLV_STATE_DIR, src: "seat" }),
+      task: (_project, _run, adopted) => {
+        if (adopted !== "finished-task") throw new Error("lost task identity");
+        fs.appendFileSync(path.join(process.env.LLV_STATE_DIR, "task-calls"), adopted + "\\n");
+        return adopted;
+      },
+      create: async (request, key) => {
+        dispatches.push({ key, digest: releaseRequestDigest(request) });
+        if (mode === "busy") throw new Error("database is locked");
+        const id = await createReleasePipeline(request, key, (req, _ports, options) => createPipelineFromRequest(req, enginePorts, options));
+        if (mode === "lose") throw new Error("lost reply");
+        return id;
+      },
+      lookup: key => pipelineDeliveryLookup({ requestKey: key })?.id ?? null,
+      pipeline: id => { const lane = loadPipelines().find(p => p.id === id); return lane ? { state: lane.state, merged: false, declined: false } : null; } };
+    let error = null;
+    try {
+      const controller = productionReleaseController(ports);
+      if (mode === "retire" || mode === "reconcile") await controller.reconcile(project);
+      else await controller.launchIfDue(${JSON.stringify(h.input)});
+    } catch (caught) { error = caught.message; }
+    const row = readReleaseProject(project), lanes = loadPipelines();
+    console.log(JSON.stringify({ error, row, dispatches, lanes: lanes.map(lane => ({ id: lane.id, creationRequest: lane.creationRequest, taskIds: lane.taskIds, baseRef: lane.baseRef })),
+      tasks: loadTasks().map(task => task.id), digest: row.live?.request ? releaseRequestDigest(row.live.request) : null }));
+  `;
+  const run = async (mode: string, worker: string) => JSON.parse((await promisify(execFile)(process.execPath, ["-e", script, mode, worker],
+    { env: { ...process.env }, timeout: 30_000 })).stdout);
+  const retired = await run("retire", "1");
+  expect(retired.error).toBeNull();
+  expect(retired.row.live).toBeNull();
+  expect(retired.row.history[0].outcome).toBe("refused");
+  expect(retired.lanes).toEqual([]);
+  const attempts: { dispatches: { key: string; digest: string }[] }[] = [];
+  if (outcome !== "normal") {
+    const lost = await run(loseReply ? "lose" : "busy", "1");
+    attempts.push(lost);
+    expect(lost.error).toBe(loseReply ? "lost reply" : "database is locked");
+    expect(lost.row.live.pipelineId).toBeNull();
+    expect(lost.lanes).toHaveLength(loseReply ? 1 : 0);
+    expect(lost.row.history).toHaveLength(1);
+    expect(lost.dispatches).toEqual([{ key: lost.row.live.key, digest: lost.digest }]);
+    if (loseReply) expect(lost.lanes[0].creationRequest).toEqual(lost.dispatches[0]);
+  }
+  const mode = outcome === "normal" ? "launch" : "reconcile";
+  const results = await Promise.all([run(mode, "1"), run(mode, "2")]);
+  attempts.push(...results);
+  for (const result of results) expect([null, "database is locked"]).toContain(result.error);
+  const final = await run("reconcile", "3");
+  attempts.push(final);
+  expect(final.error).toBeNull();
+  expect(final.lanes).toHaveLength(1);
+  expect(final.row.live).toMatchObject({ cut: nextCut, taskId: "finished-task", pipelineId: final.lanes[0].id });
+  expect(final.lanes[0]).toMatchObject({ baseRef: nextCut, taskIds: ["finished-task"], creationRequest: { key: final.row.live.key, digest: final.digest } });
+  expect(final.tasks).toEqual(["finished-task"]);
+  for (const attempt of attempts) for (const dispatch of attempt.dispatches) expect(dispatch).toEqual(final.lanes[0].creationRequest);
+  const adoptions = fs.readFileSync(path.join(directory, "task-calls"), "utf8").trim().split("\n");
+  expect(new Set(adoptions)).toEqual(new Set(["finished-task"]));
+  expect(outcome === "normal" ? [1, 2] : [1]).toContain(adoptions.length);
 });

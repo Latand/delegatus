@@ -116,6 +116,10 @@ if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then
   reason="required host dependency is missing: python3"
   if [ -n "\$receipt" ] && mkdir -p "\${receipt%/*}"; then printf "{\"policyVersion\":1,\"boundary\":\"off\",\"reason\":\"%s\"}" "\$reason" > "\$receipt.new" && mv -f "\$receipt.new" "\$receipt"; fi
   if [ "\${LLV_SIGNAL_AUTOMATIC:-}" = 1 ]; then echo "agent signal sandbox: boundary off, running unprotected: \$reason" >&2; fi
+  if [ -n "\${LLV_SIGNAL_OOM_SCORE:-}" ]; then
+    if ! { echo "\$LLV_SIGNAL_OOM_SCORE" >/proc/self/oom_score_adj; } 2>/dev/null; then echo "Delegatus: workload OOM score unavailable; continuing with inherited score" >&2; fi
+    unset LLV_SIGNAL_OOM_SCORE
+  fi
   if [ "\${LLV_SIGNAL_IGNORE_NATIVE_STDIO:-}" = 1 ]; then
     if [ "\${LLV_SIGNAL_KEEP_NATIVE_STDERR:-}" = 1 ]; then exec </dev/null >/dev/null; else exec </dev/null >/dev/null 2>&1; fi
   fi
@@ -266,7 +270,7 @@ COPY --from=build /app/scripts/whisper_transcribe.py ./scripts/whisper_transcrib
 COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/scripts/runtime-host-viewer-adapter.ts ./scripts/runtime-host-viewer-adapter.ts
 COPY --from=build /app/scripts/runtime-host-healthcheck.ts ./scripts/runtime-host-healthcheck.ts
-COPY --from=build /app/scripts/gate-slot.sh /app/scripts/owned-runner.ts /app/scripts/cpu-admission.ts /app/scripts/test-child-guardian.ts ./scripts/
+COPY --from=build /app/scripts/gate-slot.sh /app/scripts/owned-runner.ts /app/scripts/cpu-admission.ts /app/scripts/cpu-admission-lock.ts /app/scripts/test-child-guardian.ts ./scripts/
 COPY --from=build /app/node_modules ./node_modules
 
 # Permission gate: the compose service runs this image as a non-root user

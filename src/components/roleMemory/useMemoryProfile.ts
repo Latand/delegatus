@@ -23,7 +23,8 @@ export async function readProfileStream(body: ReadableStream<Uint8Array>, accept
   } finally { reader.releaseLock(); }
 }
 
-export function useMemoryProfile(project: string, locale: Locale, rulesRevision: unknown) {
+/** `rulesRevision` is a string that changes only when the rules the profile summarises change, so a background re-read of the same rules sends no request. */
+export function useMemoryProfile(project: string, locale: Locale, rulesRevision: string) {
   const [view, setView] = useState<MemoryProfileView | null>(null);
   const [error, setError] = useState<ProfileError | null>(null);
   const [sending, setSending] = useState(false);
@@ -37,6 +38,9 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
   const controller = useRef<AbortController | null>(null);
   const currentView = useRef(view);
   useEffect(() => { currentView.current = view; }, [view]);
+  const latestRevision = useRef(rulesRevision);
+  const readRevision = useRef(rulesRevision);
+  useEffect(() => { latestRevision.current = rulesRevision; }, [rulesRevision]);
   const read = useCallback(async () => {
     if (streamActive.current || !controller.current) return;
     const signal = controller.current.signal;
@@ -51,6 +55,7 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
   useEffect(() => {
     const abort = new AbortController(); controller.current = abort;
     streamActive.current = false;
+    readRevision.current = latestRevision.current;
     void read();
     let ticks = 0;
     const timer = setInterval(() => {
@@ -58,7 +63,12 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
     }, 2_000);
     return () => { abort.abort(); clearInterval(timer); };
   }, [read]);
-  useEffect(() => { void read(); }, [rulesRevision, read]);
+  /* The mount's own read already carries this revision; only a later change reads again. */
+  useEffect(() => {
+    if (readRevision.current === rulesRevision) return;
+    readRevision.current = rulesRevision;
+    void read();
+  }, [rulesRevision, read]);
   const summarize = useCallback(async () => {
     if (streamActive.current || !controller.current) return;
     const signal = controller.current.signal;
@@ -82,5 +92,6 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
       if (!signal.aborted && revision === sequence.current) { streamActive.current = false; setSending(false); }
     }
   }, [project, locale]);
-  return { view: view?.locale === locale ? view : null, error, running: sending || view?.run?.state === "running", summarize };
+  const current = view?.locale === locale ? view : null;
+  return { view: current, error, loaded: current !== null || error !== null, running: sending || view?.run?.state === "running", summarize };
 }

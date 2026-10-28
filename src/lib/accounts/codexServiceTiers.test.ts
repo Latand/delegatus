@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { codexLaunchTier, codexModelServiceTiers, fastestTier, raisesTier, tierOffers } from "./codexServiceTiers";
+import { codexServiceTierRefusal, codexLaunchTier, codexModelServiceTiers, fastestTier, raisesTier, tierOffers } from "./codexServiceTiers";
 
-test("catalog tiers are per account and never inferred from speed hints", () => {
+test("explicit catalogue tiers are authoritative per account", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tier-catalog-"));
   try {
     const accounts = ["account-a", "account-b", "account-c"].map((id, i) => {
@@ -14,6 +14,10 @@ test("catalog tiers are per account and never inferred from speed hints", () => 
     });
     expect(tierOffers(accounts, "gpt-6-astra", "ultrafast")).toEqual({ offering: ["account-c"], lacking: ["account-a", "account-b"], offered: ["priority", "ultrafast"] });
     expect(codexModelServiceTiers(accounts[0]!.home, "missing")).toBeNull();
+    fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", service_tiers: [], additional_speed_tiers: ["ultrafast"],
+    }] }));
+    expect(codexModelServiceTiers(root, "gpt-6.1-sol")).toEqual([]);
     expect(codexModelServiceTiers(root, "gpt-6-astra")).toBeNull();
     fs.writeFileSync(path.join(root, "models_cache.json"), "invalid");
     expect(codexModelServiceTiers(root, "gpt-6-astra")).toBeNull();
@@ -68,4 +72,55 @@ test("Turbo only raises: tier order flex < default < priority < ultrafast, unkno
   expect(raisesTier("priority", "priority")).toBe(false);
   expect(raisesTier("ultrafast", "priority")).toBe(false);
   expect(raisesTier("scale", "ultrafast")).toBe(false);
+});
+
+
+test("refusal diagnostics preserve per-account model evidence and scope", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tier-refusal-"));
+  try {
+    const accounts = ["account-a", "account-b"].map(id => {
+      const home = path.join(root, id); fs.mkdirSync(home);
+      fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [
+        { slug: "gpt-6-luna", service_tiers: [{ id: "priority" }] },
+        { slug: "gpt-6-astra", service_tiers: [{ id: "ultrafast" }] },
+        { slug: "gpt-6.1-sol", service_tiers: [{ id: "ultrafast" }] },
+      ] }));
+      return { id, label: id === "account-a" ? "account A" : "account B", home };
+    });
+    const message = codexServiceTierRefusal(accounts, "gpt-6-luna", "ultrafast");
+    expect(message).toContain("serviceTier ultrafast for model gpt-6-luna; evaluated allowed accounts");
+    for (const account of accounts) expect(message).toContain(`account "${account.label}" (${account.id}): gpt-6-luna offered: priority; ultrafast offered for other models on this account: gpt-6-astra, gpt-6.1-sol`);
+    const pinned = codexServiceTierRefusal([accounts[0]!], "gpt-6-luna", "ultrafast", "account-a");
+    expect(pinned).toContain('evaluated pinned account "account-a"');
+    expect(pinned).not.toContain("account-b");
+    expect(codexServiceTierRefusal(accounts, "missing", "ultrafast")).toContain("missing offered: unknown (catalog unavailable)");
+    expect(codexServiceTierRefusal([], "gpt-6-luna", "ultrafast", "unknown-account")).toContain('pinned account "unknown-account": none');
+    fs.writeFileSync(path.join(root, "models_cache.json"), "invalid");
+    expect(codexServiceTierRefusal([{ id: "account-c", home: root }], "gpt-6-luna", "ultrafast")).toContain("catalog unavailable");
+    expect(tierOffers(accounts, "gpt-6-astra", "ultrafast").offering).toEqual(["account-a", "account-b"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy cache speed tiers supply explicit launch tier ids when service tiers are absent", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-tiers-"));
+  try {
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [
+      { slug: "gpt-6.1-sol", additional_speed_tiers: ["fast", "ultrafast", "unknown"] },
+    ] }));
+    expect(codexModelServiceTiers(home, "gpt-6.1-sol")).toEqual([
+      { id: "priority", name: "priority" }, { id: "ultrafast", name: "ultrafast" },
+    ]);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("inherited launch tiers are preferences and explicit speed still wins", () => {
+  const input = { engine: "codex" as const, model: "gpt-6.1-sol", fast: undefined, serviceTier: undefined,
+    inheritedServiceTier: "ultrafast", roleDefault: "priority", roleDefaultApplies: true };
+  expect(codexLaunchTier(input)).toEqual({ tier: "ultrafast", required: false, source: "inherited" });
+  expect(codexLaunchTier({ ...input, serviceTier: "priority" })).toEqual({ tier: "priority", required: true, source: "explicit" });
+  expect(codexLaunchTier({ ...input, fast: true })).toEqual({ tier: "priority", required: true, source: "fast" });
+  expect(codexLaunchTier({ ...input, fast: false })).toMatchObject({ tier: null });
+  expect(codexLaunchTier({ ...input, inheritedServiceTier: "bad tier" })).toHaveProperty("error");
+  expect(codexLaunchTier({ ...input, engine: "claude" })).toHaveProperty("error");
 });

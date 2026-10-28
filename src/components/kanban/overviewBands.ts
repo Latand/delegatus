@@ -1,5 +1,5 @@
 import type { FileEntry } from "@/lib/types";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";

@@ -3,6 +3,8 @@ import { expect, test } from "bun:test";
 import {
   CODEX_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
+  CODEX_GPT61_TERRA_MODEL,
+  launchModelIds,
   CODEX_GPT6_LUNA_MODEL,
   CODEX_GPT6_SOL_MODEL,
   CODEX_SOL_MODEL,
@@ -15,7 +17,7 @@ import {
   modelDisplayName,
   modelFromBody,
   normalizeClaudeLaunchModel,
-  validateLaunchModel, claudeSpawnTier, claudeTierDisplayName } from "./models";
+  validateLaunchModel, listedModels, claudeSpawnTier, claudeTierDisplayName } from "./models";
 
 test("the model catalog exposes Opus 5.5 and GPT-6.1-Sol as launch defaults while retaining the catalogue", () => {
   expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" });
@@ -67,7 +69,7 @@ test("spawn model validation accepts CLI ids and rejects control characters", ()
 test("explicit launch models are admitted only from the selected engine catalog", () => {
   expect(validateLaunchModel("codex", CODEX_TERRA_MODEL)).toEqual({ model: CODEX_TERRA_MODEL });
   expect(validateLaunchModel("codex", "gpt-5.6-codex")).toEqual({
-    error: `invalid codex model id "gpt-5.6-codex"; valid codex model ids: ${ENGINE_MODELS.codex.map((option) => option.id).join(", ")}`,
+    error: `invalid codex model id "gpt-5.6-codex"; valid codex model ids: ${launchModelIds("codex").join(", ")}`,
   });
   expect(validateLaunchModel("claude", "claude-fable-5")).toEqual({
     error: `invalid claude model id "claude-fable-5"; valid claude model ids: ${ENGINE_MODELS.claude.map((option) => option.id).join(", ")}`,
@@ -191,4 +193,21 @@ test("Haiku 5.5 and the previous Haiku launch with pinned ids and keep their dis
   expect(modelDisplayName("claude", "haiku-5-5")).toBe("Haiku 5.5");
   expect(modelDisplayName("claude", "haiku-5-5[1m]")).toBe("Haiku 5.5 (1M)");
   expect(claudeCatalogModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
+});
+
+test("Haiku 5.5 is listed once while the CLI alias stays a valid launch id", () => {
+  expect(listedModels("claude").filter((option) => option.label === "Haiku 5.5").map((option) => option.id)).toEqual(["claude-haiku-5-5"]);
+  expect(validateLaunchModel("claude", "haiku")).toEqual({ model: "haiku" });
+  expect(validateLaunchModel("claude", "claude-haiku-5-5")).toEqual({ model: "claude-haiku-5-5" });
+  /* A stored alias choice stays visible, standing in for the pinned row. */
+  expect(listedModels("claude", "haiku").filter((option) => option.label === "Haiku 5.5").map((option) => option.id)).toEqual(["haiku"]);
+  expect(modelDisplayName("claude", "haiku")).toBe("Haiku 5.5");
+});
+
+ test("reviewed Terra wire metadata admits launch and images alongside historical ids", () => {
+  expect(validateLaunchModel("codex", CODEX_GPT61_TERRA_MODEL)).toEqual({ model: "gpt-6.1-terra" });
+  expect(codexModelSupportsImages(CODEX_GPT61_TERRA_MODEL)).toBeTrue();
+  expect(launchModelIds("codex")).toContain(CODEX_TERRA_MODEL);
+  expect(validateLaunchModel("codex", "gpt-6.2-terra")).toHaveProperty("error");
+  expect(codexModelSupportsImages("gpt-6.2-terra")).toBeFalse();
 });

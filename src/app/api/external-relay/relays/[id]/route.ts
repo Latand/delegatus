@@ -41,6 +41,7 @@ export async function PATCH(req: NextRequest, context: Context) {
                 "id",
                 "enabled",
                 "engine",
+                "cloudEnvironmentId",
                 "model",
                 "effort",
                 "project",
@@ -70,14 +71,14 @@ export async function PATCH(req: NextRequest, context: Context) {
             if (
               (next.engine !== null &&
                 next.engine !== "claude" &&
-                next.engine !== "codex") ||
+                next.engine !== "codex" && next.engine !== "codex-cloud") ||
               (next.model !== null &&
                 (typeof next.model !== "string" ||
                   !next.engine ||
-                  "error" in validateLaunchModel(next.engine, next.model))) ||
+                  (next.engine === "codex-cloud" ? next.model !== "gpt-6.1-sol" : "error" in validateLaunchModel(next.engine, next.model)))) ||
               (next.effort !== null &&
                 (!next.engine ||
-                  !effortScale(next.engine, next.model)?.includes(
+                  !effortScale(next.engine === "codex-cloud" ? "codex" : next.engine, next.model)?.includes(
                     next.effort,
                   ))) ||
               (next.project !== null &&
@@ -94,6 +95,7 @@ export async function PATCH(req: NextRequest, context: Context) {
                 (!Number.isInteger(next.memberLimitPerHour) ||
                   next.memberLimitPerHour < 0 ||
                   next.memberLimitPerHour > 1000)) ||
+              (next.cloudEnvironmentId != null && (typeof next.cloudEnvironmentId !== "string" || !next.cloudEnvironmentId.trim() || next.cloudEnvironmentId.length > 256)) ||
               (next.ownerTier !== undefined && typeof next.ownerTier !== "boolean") ||
               typeof next.enabled !== "boolean"
             )

@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
-import { StructuredSendRefusedError } from "./engineHost";
+import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "./engineHost";
 import type { EngineHost } from "./engineHost";
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
@@ -236,9 +237,9 @@ test("a queued message is the operator's only from a Viewer page; a script's is 
   const post = (id: string, headers: Record<string, string>) => handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
     method: "POST", headers: { host: "localhost", ...headers }, body: JSON.stringify(command(id)),
   }), { client: () => f.client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [] });
-  expect((await post("op-page", { "sec-fetch-site": "same-origin" })).status).toBe(202);
-  /* A script sends no fetch metadata, whatever token it holds. */
-  expect((await post("op-script", {})).status).toBe(202);
+  expect((await post("op-page", { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" })).status).toBe(202);
+  /* Fetch metadata alone is no page: a script can stamp it, but holds no session. */
+  expect((await post("op-script", { "sec-fetch-site": "same-origin" })).status).toBe(202);
   const origins = Object.fromEntries(f.journal.nativeQueueRead(conversationId).map((entry) => [entry.entryId, entry.versions[0]!.origin]));
   expect(origins).toEqual({ "op-page": { kind: "operator" }, "op-script": { kind: "agent", role: "api-client" } });
   f.journal.close();
@@ -532,6 +533,8 @@ test("native queue profile requests and image versions survive reopening without
   expect(entries.map(e => e.profilePolicy)).toEqual(["thread-at-dispatch", "thread-at-dispatch"]);
   expect(entries.map(e => e.versions[0]?.requestedRuntime)).toEqual([first.runtime, second.runtime]);
   expect(entries[0]?.versions[0]?.images).toEqual(images);
+  first.runtime!.model = "changed-after-admission";
+  expect(reopened.nativeQueueRead(conversationId)[0]?.versions[0]?.requestedRuntime?.model).toBe("model-one");
   reopened.close();
 });
 
@@ -709,7 +712,7 @@ test.each(["add", "start", "send-now"] as const)("persistent drain holds authent
   }, () => f.host);
   const post = (id: string, manual = false) => handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
     method: "POST", headers: { host: "localhost",
-      ...(manual ? { "sec-fetch-site": "same-origin" } : { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }) },
+      ...(manual ? { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" } : { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }) },
     body: JSON.stringify(command(id, { action, origin: { kind: "operator" },
       ...(action !== "add" ? { turnId: null } : {}),
       ...(action === "send-now" ? { entryId: seed.operationId, expectedRevision: 1 } : {}) })),
@@ -760,6 +763,144 @@ test("a native entry's record shows the switch it follows, the successor it wait
   expect(notes).toEqual(["switching-accounts", "awaiting-host", "evidence-unreadable", "dispatching", "awaiting-turn"]);
   expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
   f.journal.close();
+});
+
+test("a native add deferred after preparation returns through the native queue and retries its original operation", async () => {
+  const f = fixture();
+  const add = command("op-native-admission-deferred");
+  f.journal.executeOperation(add);
+  const deferred = new NativeQueueExecutor({
+    client: f.client,
+    resolveHost: () => f.host,
+    binding: () => binding,
+    authorizeDispatch: () => { throw new StructuredDispatchDeferredError("account admission is busy"); },
+  });
+
+  expect(await deferred.execute(add)).toBe(false);
+  expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({ status: "queued", reason: "account admission is busy" });
+  expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({
+    state: "admitted", mutationOperationId: add.operationId,
+    reason: "account admission is busy",
+    versions: [expect.objectContaining({ input: expect.any(Array) })],
+  });
+
+  await f.executor.execute(add);
+  expect(f.calls.filter((call) => call === "thread/queue/add")).toHaveLength(1);
+  expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("applied");
+  f.journal.close();
+});
+
+test("a persisted native effect with a legacy idempotency key stays on the native recovery path", async () => {
+  const f = fixture();
+  const legacy = { ...command("op-native-legacy-replay"), idempotencyKey: "seat-tick:legacy:replay" };
+  let executed = 0;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: `effect:${legacy.operationId}`, kind: "runtime.native-queue", eventSeq: 1, payload: legacy }],
+    status: async () => ({ status: "queued", at: new Date().toISOString() }),
+    transition: async () => { throw new Error("legacy native effect must not use the generic transition path"); },
+    nativeQueueExecute: async (effect) => {
+      executed += 1;
+      expect(effect).toMatchObject({ operationId: legacy.operationId, idempotencyKey: legacy.idempotencyKey, action: "add" });
+    },
+  }, () => f.host);
+
+  await queue.drain();
+  expect(executed).toBe(1);
+  f.journal.close();
+});
+
+test("a legacy wake retries after process restart but never repeats an uncertain native add", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "native-wake-restart-"));
+  const script = path.join(directory, "replay.ts");
+  const modulePath = (file: string) => JSON.stringify(path.resolve(import.meta.dir, file));
+  fs.writeFileSync(script, `
+    import fs from "node:fs";
+    import path from "node:path";
+    import { RuntimeJournal } from ${modulePath("../../runtime-host/journal.ts")};
+    import { StructuredDeliveryQueue } from ${modulePath("structuredDeliveryQueue.ts")};
+    import { NativeQueueExecutor } from ${modulePath("nativeQueueExecutor.ts")};
+    import { StructuredDispatchDeferredError } from ${modulePath("engineHost.ts")};
+    import { structuredContentDigest } from ${modulePath("structuredContent.ts")};
+    const [directory, mode] = process.argv.slice(2);
+    const journal = new RuntimeJournal(path.join(directory, "journal.sqlite"), { structuredHosts: true });
+    const conversationId = "conversation_wake_restart";
+    const binding = { threadId: "thread-wake-restart", accountId: null };
+    const operationId = "wake-restart-operation";
+    const writesFile = path.join(directory, "native-writes.json");
+    const writes = fs.existsSync(writesFile) ? JSON.parse(fs.readFileSync(writesFile, "utf8")) : [];
+    try {
+      if (mode === "defer") {
+        journal.append({ scope: "session:" + conversationId, kind: "session-status", payload: {
+          conversationId, sessionKey: { engine: "codex", sessionId: binding.threadId }, accountId: null,
+          hostKind: "codex-app-server", host: "hosted", turn: "running", activeTurnId: "turn-wake",
+          capabilities: { steer: true, nativeQueue: true, structuredAttention: true },
+        } });
+        const text = "work owed to the designated seat";
+        journal.executeOperation({ kind: "send", operationId, conversationId,
+          idempotencyKey: "seat-tick:fixture:7:interval:owed", text, policy: "queue",
+          contentDigest: structuredContentDigest({ text, images: [] }) });
+        const effect = journal.effectBatch(100).find(effect => effect.kind === "runtime.native-queue");
+        fs.writeFileSync(path.join(directory, "command.json"), JSON.stringify(effect.payload));
+      }
+      const command = JSON.parse(fs.readFileSync(path.join(directory, "command.json"), "utf8"));
+      const client = {
+        operationStatus: async id => journal.operationResult(id),
+        nativeQueueRead: async id => journal.nativeQueueRead(id),
+        nativeQueueTransition: async (id, change) => journal.nativeQueueTransition(id, change),
+        transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
+      };
+      const host = {
+        health: async () => ({ status: "active", activeTurnRef: "turn-wake" }),
+        nativeQueue: {
+          queue: { threadId: binding.threadId, add: async (id, input) => {
+            writes.push({ id, input });
+            fs.writeFileSync(writesFile, JSON.stringify(writes));
+            throw new Error("native write accepted but its reply was lost");
+          } },
+          prepare: async (_entry, version) => [{ type: "text", text: version.text }],
+        },
+      };
+      const executor = new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding,
+        authorizeDispatch: () => { if (mode === "defer") throw new StructuredDispatchDeferredError("admission held"); } });
+      const queue = new StructuredDeliveryQueue({
+        effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+        status: async id => journal.operationResult(id)?.receipt ?? null,
+        transition: client.transitionOperation,
+        nativeQueueExecute: (effect, refusal) => executor.execute(effect, refusal),
+      }, () => host);
+      await queue.drain();
+      if (mode === "recover") {
+        await executor.execute(command);
+        let refused = false;
+        try { journal.nativeQueueTransition(operationId, { phase: "deferred", reason: "late deferral" }); }
+        catch { refused = true; }
+        if (!refused) throw new Error("uncertain operation accepted a late deferral");
+      }
+      console.log(JSON.stringify({ receipt: journal.operationResult(operationId).receipt,
+        entry: journal.nativeQueueRead(conversationId)[0], writes, effects: journal.effectBatch(100) }));
+    } finally { journal.close(); }
+  `);
+  const run = async (mode: string) => {
+    const child = Bun.spawn([process.execPath, script, directory, mode], { stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (code !== 0) throw new Error(`wake replay child ${mode} exited ${code}: ${stderr}`);
+    return JSON.parse(stdout);
+  };
+  try {
+    const deferred = await run("defer");
+    expect(deferred.receipt).toMatchObject({ status: "queued", idempotencyKey: "seat-tick:fixture:7:interval:owed" });
+    expect(deferred.writes).toEqual([]);
+    expect(deferred.effects).toHaveLength(1);
+    const uncertain = await run("lose-reply");
+    expect(uncertain.receipt.status).toBe("uncertain");
+    expect(uncertain.writes).toEqual([{ id: "wake-restart-operation", input: deferred.entry.versions[0].input }]);
+    expect(uncertain.entry).toMatchObject({ state: "uncertain", mutationOperationId: "wake-restart-operation",
+      versions: deferred.entry.versions, proof: null });
+    const recovered = await run("recover");
+    expect(recovered.writes).toEqual(uncertain.writes);
+    expect(recovered.entry).toEqual(uncertain.entry);
+    expect(recovered.receipt).toEqual(uncertain.receipt);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("a native entry whose journal status cannot be read records why it waits", async () => {
@@ -862,7 +1003,7 @@ function handOffFixture(name: string, sqlite = false) {
   return { f, root, registry, cleanup: () => { f.journal.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 function handOff(key: string, text = "queued for Codex") {
-  return new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+  return new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ kind: "native-queue", conversationId, idempotencyKey: key, action: "add", text, binding }) });
 }
 
@@ -1059,7 +1200,7 @@ test("a hand-off whose supplied operation id names another key's owner is refuse
   const dependencies = { client: () => client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
     registry: () => registry, progress };
   const named = (key: string, text: string, operationId: string, target = conversationId) =>
-    new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+    new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
       body: JSON.stringify({ kind: "native-queue", conversationId: target, idempotencyKey: key, action: "add", text, operationId, binding }) });
   try {
     const input = handOff("owner-a", "message A");

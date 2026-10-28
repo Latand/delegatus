@@ -1,3 +1,4 @@
+import { dispatchConversationMessage } from "@/lib/conversation/messageDispatch";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { agentRegistry } from "@/lib/agent/registry";
 import { deliverConversationMessage } from "@/lib/delivery";
@@ -39,8 +40,11 @@ export async function deliverLinkedSeatMessage(project: string, text: string, so
   const path = conversation?.generations.at(-1)?.path ?? "";
   const request = { conversationId: admitted.recipient, path, text: admitted.text, origin: admitted.origin,
     clientMessageId, admissionGuard, policy: "steer-or-queue" as const, images: [] };
-  const structured = await enqueue(request);
-  if (structured) {
+  const selected = await dispatchConversationMessage(request, { ...request, pid: null }, {
+    structured: enqueue, legacy: deliverConversationMessage,
+  });
+  if (selected.transport === "structured") {
+    const structured = selected.result;
     if (structured.ok) return { st: "accepted", operationId: structured.operationId };
     if (structured.operationId) {
       const receipt = sendReceiptFor(agentRegistry().readOnlySnapshot(), structured.operationId);
@@ -50,7 +54,7 @@ export async function deliverLinkedSeatMessage(project: string, text: string, so
     }
     return { st: structured.status >= 500 ? "retry" : "refused", code: structured.code ?? "delivery_refused" };
   }
-  const legacy = await deliverConversationMessage({ ...request, pid: null });
+  const legacy = selected.result;
   if (legacy.ok) return { st: "accepted", operationId: legacy.operationId ?? undefined };
   if (legacy.code) return { st: "refused", code: legacy.code };
   return { st: "retry" };

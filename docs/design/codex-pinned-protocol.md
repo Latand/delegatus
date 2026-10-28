@@ -1,10 +1,10 @@
 # Pinned Codex app-server boundary
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
-0.162.1 and 0.163.0. Each version has the CLI's stable and experimental
+0.162.1, 0.163.0 and 0.164.0. Each version has the CLI's stable and experimental
 bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. The
 generated TypeScript closure for the server-request union and its response
-types sits beside 0.162.1; the 0.163.0 closure is byte-identical, so the
+types sits beside 0.162.1; the 0.163.0 and 0.164.0 closures are byte-identical, so the
 router keeps importing it from there.
 
 Regenerate with the exact executable being reviewed:
@@ -24,14 +24,47 @@ contract.
 
 Installed CLI pin: `0.162.1`.
 
-Verified with `codex --version` on 2026-10-20. The shared
+Verified with `codex --version` on 2026-10-26. The shared
 `native-codex-versions` YAML anchor in `.github/workflows/bun-runtime.yml`
 declares the versions for the native runtime job, the manual queue campaign
-and the local pre-push native phase. It includes the oldest supported CLI
-and every generated host pin. `scripts/bun-runtime-workflow.test.ts` fails
-when this installed pin is absent from the matrix or the matrix differs from
-the host pins under `src/lib/accounts/protocol/`. Update this line when the
-installed pin changes and update the shared matrix in the same change.
+and the local pre-push native phase. It currently includes 0.154.0, 0.159.0,
+0.162.1 and 0.163.0. The 0.164.0 matrix entry is deferred to a workflow
+publication follow-up; this backend slice runs all five versions explicitly
+and records the results in `evidence/codex-compatibility/checks.json`.
+`scripts/bun-runtime-workflow.test.ts` requires every existing matrix pin and
+the complete local engine campaign for that one deferred version. Add
+0.164.0 to the shared matrix and remove the temporary local exception in the
+workflow follow-up. Update the installed-pin line when the installed CLI
+changes.
+
+Codex 0.164.0 changes `ThreadItem.imageGeneration` to accept a durable
+`fileId`, an inline `result`, or both. The generated schemas are pinned
+verbatim; the additive admission check continues to refuse this change under
+an older pin. All 80 retained server-request type files match 0.164.0, so the
+request router retains its 0.162.1 imports. Image presentation and fetching
+the durable attachment belong to the subsequent UI slice.
+
+## Requested CLI checks
+
+The packaged tooling can request a check from the serving Viewer:
+
+```sh
+bun dist/gate/codex-update.ts check http://127.0.0.1:8898/api/codex-update/check
+```
+
+The command validates and pins a loopback address before reading the existing
+host controller credential, sends no account or member credentials, and
+refuses redirects. The route accepts only that authenticated controller and
+refuses a Viewer that no longer owns the serving state. An acknowledgement
+means the check was accepted; it does not claim that the CLI was installed.
+
+Explicit checks coalesce with the existing minute scheduler and bypass its
+daily wait. They retain pending report delivery, schema and native fixture
+probes, compatibility re-probes after release changes, rejected-release
+holds, the shared launch lock, final serving-authority and idle checks, and
+one-step rollback custody. No manual updater-state edits are needed. The
+installed CLI update stays pending until this support is deployed and no
+Codex processes remain under the existing admission policy.
 
 The native steering fixture disables `instant_interrupt` only for its
 `dropped-after` case, keeping accepted input pending until its explicit

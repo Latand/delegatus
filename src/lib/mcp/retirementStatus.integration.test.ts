@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const originalEnv = { ...process.env };
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-mcp-"));
@@ -22,6 +23,7 @@ const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, revokedOrch
 const { POST } = await import("@/app/api/runtime/deployments/route");
 const { viewerMcpBindings, productionViewerControlDependencies, productionDomainDependencies } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("./server");
+const { handleMcpHttpRequest } = await import("./http");
 
 let sequence = 0;
 afterAll(() => {
@@ -60,6 +62,7 @@ async function fixture(kind: "seat" | "worker" | "unidentified") {
   let callerId = conversationId;
   let launchId = "seat-assignment";
   let callerGeneration = generationId;
+  const hostProcess = captureProcessIdentity(process.pid);
   if (kind === "worker") {
     const spawn = registry.beginSpawnRequest({ engine: "codex", cwd: root, transport: "structured",
       explicitProject: "project-a", launchProfile: { cwd: root, role: "worker", title: "Read retirement observations" } });
@@ -69,13 +72,13 @@ async function fixture(kind: "seat" | "worker" | "unidentified") {
     callerGeneration = generationId;
     registry.settleSpawn(launchId, { key: { engine: "codex", sessionId: callerGeneration }, artifactPath: transcript,
       cwd: root, accountId: null, status: "live", host: null,
-      structuredHost: { kind: "codex-app-server", endpoint: "fixture", process: { pid: process.pid, startIdentity: "fixture" },
+      structuredHost: { kind: "codex-app-server", endpoint: "fixture", process: hostProcess,
         eventCursor: 0, protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
       claimEpoch: 1, claimOwner: "fixture", pendingAction: null });
   } else if (kind === "seat") {
     // Designation and host evidence, with no spawn receipt for the seat.
     registry.upsert({ key, artifactPath: transcript, cwd: root, accountId: null, status: "live", host: null,
-      structuredHost: { kind: "codex-app-server", endpoint: "fixture", process: { pid: process.pid, startIdentity: "fixture" },
+      structuredHost: { kind: "codex-app-server", endpoint: "fixture", process: hostProcess,
         eventCursor: 0, protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
       claimEpoch: 1, claimOwner: "fixture", pendingAction: null });
     beginOrchestratorSeatIntent({ project: "project-a", mandate: "Own project", clientRequestId: "fixture-seat", mode: "spawn", now: at });
@@ -88,6 +91,7 @@ async function fixture(kind: "seat" | "worker" | "unidentified") {
     refused: [row(callerId, callerGeneration), row(foreignId, foreignGeneration), row(unknownId, unknownGeneration)] }));
   const requests: Array<Record<string, unknown>> = [];
   const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (new URL(request.url).pathname === "/api/mcp") return handleMcpHttpRequest(new NextRequest(request));
     expect(new URL(request.url).pathname).toBe("/api/runtime/deployments");
     requests.push(await request.clone().json());
     return POST(new NextRequest(request));
@@ -142,8 +146,6 @@ test("served schema teaches automatic launch identity and bounded pagination", a
     const tool = (await f.client.listTools()).tools.find(tool => tool.name === "deployment_status")!;
     const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
     for (const name of ["kind", "project", "callerLaunchId", "limit", "cursor"]) expect(properties[name]).toBeDefined();
-    expect(properties.callerLaunchId!.description).toContain("Optional");
-    expect(tool.description).toContain("designated seat");
     expect(tool.inputSchema.required ?? []).not.toContain("callerLaunchId");
   } finally { await f.close(); }
 });

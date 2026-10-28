@@ -138,3 +138,62 @@ test("compact ownership preserves source, attempt, publication and recovery cust
     }
   } finally { f.db.close(); }
 });
+
+
+test.each(["completed", "closed", "superseded"] as const)("the production projection releases %s attempts and successor source custody", async outcome => {
+  const f = setup();
+  try {
+    const original = f.lane.runs[0]!.attempts[0]!;
+    for (const protection of ["none", "publication", "activation", "historical", "peer", "source-publication"] as const) {
+      const lane = structuredClone(f.lane), attempt = lane.runs[0]!.attempts[0]!;
+      if (outcome === "superseded") lane.runs[0]!.attempts.push({ ...attempt, n: 2,
+        conversationId: "conversation_current", sessionId: "current", agentPath: "/fixture/current.jsonl", launchId: "current" });
+      else { lane.state = outcome; lane.cursor = null; }
+      if (protection === "historical") attempt.historical = true;
+      if (protection === "publication") lane.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
+      if (protection === "activation") attempt.activation = { id: "activation", phase: "dispatching", clientAttemptId: "fixture", startedAt: lane.createdAt, fence: "fixture",
+        input: { role: attempt.effectiveRole, prompt: "Build", cwd: "/fixture", project: "fixture", clientAttemptId: "fixture", title: "Fixture", runtimeProfile: {}, membership: {} } } as typeof attempt.activation;
+      const successor = { ...buildPipeline({ ...f.lane, state: "provisioning", id: "successor", now: f.lane.createdAt }), state: "paused",
+        srcConversationId: original.conversationId, srcPath: original.agentPath, runs: f.lane.runs.map(run => ({ ...run, attempts: [] })) } as Pipeline;
+      if (protection === "source-publication") successor.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
+      const rows = [lane, successor];
+      if (protection === "peer") rows.push({ ...f.lane, id: "peer", worktreeDir: "/fixture-pipeline-peer", branch: "pipeline/fixture-peer" });
+      expect(rows.every(isStoredPipeline)).toBe(true);
+      savePipelines(rows);
+      const reader = await pipelineRetirementReader();
+      for (const selected of [target, { conversations: [], launchId: "launch-owner" }, { conversations: [], sessionId: "session-owner" },
+        { conversations: ["conversation_owner"] }, { conversations: [], agentPath: target.agentPath }]) {
+        const fullTarget = { conversationId: selected.conversations[0] ?? null, sessionId: "sessionId" in selected ? selected.sessionId : undefined,
+          agentPath: ("agentPath" in selected ? selected.agentPath : null) ?? null, launchId: "launchId" in selected ? selected.launchId : undefined, paneId: null };
+        expect(reader(selected)).toBe(pipelineHostHasLiveWork(rows, fullTarget));
+      }
+      expect(reader(target)).toBe(protection !== "none");
+      if (outcome === "superseded") expect(reader({ conversations: ["conversation_current"] })).toBe(true);
+    }
+  } finally { f.db.close(); }
+});
+
+
+test("released conversation aliases end source custody while independent paths and owners retain it", async () => {
+  const f = setup();
+  try {
+    const lane = structuredClone(f.lane);
+    lane.state = "completed"; lane.cursor = null;
+    const successor = { ...buildPipeline({ ...f.lane, state: "provisioning", id: "successor", now: f.lane.createdAt }), state: "paused",
+      srcConversationId: "conversation_alias", srcPath: "/fixture/independent.jsonl",
+      runs: f.lane.runs.map(run => ({ ...run, attempts: [] })) } as Pipeline;
+    savePipelines([lane, successor]);
+    const selected = { conversations: ["conversation_owner", "conversation_alias"] };
+    const reader = await pipelineRetirementReader();
+    expect(reader(selected)).toBe(false);
+    expect(reader({ ...selected, agentPath: successor.srcPath })).toBe(true);
+    successor.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
+    savePipelines([lane, successor]);
+    expect(() => reader(selected)).toThrow("changed");
+    expect((await pipelineRetirementReader())(selected)).toBe(true);
+    delete successor.publicationAdmission;
+    const peer = { ...f.lane, id: "peer", worktreeDir: "/fixture-pipeline-peer", branch: "pipeline/fixture-peer" };
+    savePipelines([lane, successor, peer]);
+    expect((await pipelineRetirementReader())(selected)).toBe(true);
+  } finally { f.db.close(); }
+});

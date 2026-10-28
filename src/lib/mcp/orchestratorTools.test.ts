@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { POST as ghostPOST } from "@/app/api/orchestrator/ghost/route";
 import { POST as rotatePOST } from "@/app/api/orchestrator/rotate/route";
 import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
@@ -840,7 +841,7 @@ for (const [name, handler] of [["seat", seatPOST], ["rotate", rotatePOST], ["gho
   for (const malformed of [false, true]) {
     test(`real ${name} route marks ${malformed ? "invalid JSON" : "cross-origin"} before admission`, async () => {
       const response = await handler(new NextRequest(`http://127.0.0.1/api/orchestrator/${name}`, {
-        method: "POST", headers: { host: "127.0.0.1", ...(malformed ? {} : { origin: "https://example.com" }) },
+        method: "POST", headers: { host: "127.0.0.1", ...(malformed ? { cookie: `llv_operator=${soloBrowserSession()}` } : { origin: "https://example.com" }) },
         body: "{",
       }));
       expect(response.status).toBe(malformed ? 400 : 403);
@@ -1105,4 +1106,29 @@ test("owner relay admits orchestrator messages only while its recorded run and s
   ledger([]);
   expect(await send()).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
   expect(posts).toHaveLength(1);
+});
+
+
+test.each(["create_orchestrator", "rotate_orchestrator"] as const)("tier roundtrip: %s forwards tier and legacy fast", async tool => {
+  const { TOOL_INPUT_SCHEMAS } = await import("./server");
+  for (const speed of [{ serviceTier: "ultrafast" }, { fast: false }, { fast: true, serviceTier: "priority" }]) {
+    const { control, posts } = controlStub();
+    const input = TOOL_INPUT_SCHEMAS[tool].parse({ project: "proj-a", clientRequestId: `tier-${tool}`, engine: "codex", model: "gpt-6.1-sol", ...speed });
+    await bindingsWith(control)[tool](input);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toMatchObject(speed);
+  }
+});
+
+test("tier roundtrip: get_orchestrator distinguishes native tier from persisted profile", async () => {
+  const transcript = path.join(sandbox, "tier-readback.jsonl");
+  fs.writeFileSync(transcript, "{}\n");
+  const conversation = testRegistry.ensureConversation("codex", transcript, "account-a");
+  testRegistry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: true, serviceTier: "priority" });
+  seatActive("proj-a", conversation.id, transcript);
+  const { control } = controlStub();
+  const read = () => bindingsWith(control).get_orchestrator({ project: "proj-a" });
+  expect(await read()).toMatchObject({ runtime: { accountId: "account-a", serviceTier: "priority", serviceTierSource: "profile" } });
+  fs.appendFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "ultrafast" } } }) + "\n");
+  expect(await read()).toMatchObject({ runtime: { accountId: "account-a", serviceTier: "ultrafast", serviceTierSource: "native" } });
 });

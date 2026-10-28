@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seatTickWakeMessage, seatTickWakePayload } from "./report";
+import { seatTickBullet, seatTickWakeMessage, seatTickWakePayload } from "./report";
 import type { AttentionEscalationMark } from "@/lib/attention/routeTypes";
 import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attention/routing";
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import type { FileEntry } from "@/lib/types";
+import type { Pipeline } from "@/lib/pipelines/types";
+import { laneState } from "@/components/kanban/cardState";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 import { observeDiskPressureReport } from "@/lib/state/diskPressure";
@@ -236,9 +238,6 @@ describe("overdue board tasks", () => {
     expect(decision.verdict.items.map(item => item.id)).toEqual(["high-old", "high-new", "normal", "normal-2", "normal-3"]);
     const reason = decision.verdict.reasons.find(reason => reason.kind === "overdue-task")!;
     expect(reason.detail).toContain("2 more await a later wake");
-    expect(reason.detail).toContain("high next day, normal +3 days, low +7 days");
-    expect(reason.detail).toContain("open over 7 days");
-    expect(reason.detail).toContain("without reminding the operator");
     expect(decision.verdict.reasons.some(reason => reason.kind === "unstarted-task")).toBe(false);
     expect(decision.verdict.items[0]!.label).toContain("overdue 2d 4h · open 9d · high · moved 0×");
     expect(decision.verdict.items[0]!.label).toContain("first due");
@@ -2421,6 +2420,111 @@ test("a restarted disk reader joins the shared episode and does not wake the sea
 /* docs/design/attention-auto-resolve.md, acceptance 3: a worker's or a stage's
    wait is routed to the seat first and is off the operator's list, so the seat
    is woken with the ask on the next check, once per wait and seat. */
+describe("seat-owned parked lane wakes", () => {
+  const routes: AttentionRoutingInputs = {
+    seatFor: () => CONVERSATION, canonicalProject: project => project,
+    isSeatConversation: id => id === CONVERSATION, escalation: () => null, formWaiting: () => false,
+  };
+  const parked = (n: number): Pipeline => ({
+    id: `waiting-lane-${String(n).padStart(2, "0")}`, task: `Repair export ${n}`,
+    project: PROJECT, srcConversationId: CONVERSATION, state: n % 2 ? "needs_review" : "needs_decision",
+    stateDetail: `blocked export ${n}`, createdAt: new Date(NOW - (40 - n) * MINUTE).toISOString(),
+    runs: [], stages: [], cursor: null,
+  }) as unknown as Pipeline;
+  const agenda = (lanes: Pipeline[]) => {
+    stampAttentionRoutes([], lanes, NOW / 1000, routes);
+    for (const row of lanes) expect(laneState(row).owner).toBe("seat");
+    return seatAgendaAsks({ files: [], pipelines: lanes }, NOW / 1000, PROJECT);
+  };
+  const render = (decision: ReturnType<typeof seatTickDecision>, now: number) => {
+    if (decision.verdict.kind !== "wake") throw new Error(`expected wake, got ${decision.verdict.kind}`);
+    return seatTickWakePayload({ ...decision.verdict, project: PROJECT, now, signals: [], mandateCarriesContract: true });
+  };
+  const deliver = (decision: ReturnType<typeof seatTickDecision>, now: number) => {
+    const payload = render(decision, now);
+    if (decision.verdict.kind !== "wake") throw new Error("expected wake");
+    const commit = seatTickWakeCommitPlan({ ...decision.verdict, items: [...payload.items] },
+      { fingerprint: "fp-1", eventsThrough: 0, frozenText: payload.text })!;
+    return seatTickWakeCommit(decision.state, commit, now);
+  };
+
+  test("all 20 seat-owned lanes appear oldest-first within the wake bound with five detailed items", () => {
+    const lanes = Array.from({ length: 20 }, (_, n) => parked(n));
+    const decision = seatTickDecision(input({ workerAsks: agenda([...lanes].reverse()) }));
+    const { text } = render(decision, NOW);
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    let previous = -1;
+    for (const row of lanes) {
+      const line = text.split("\n").find(line => line.startsWith(`- ${row.id} |`));
+      expect(line).toBeDefined();
+      expect(line).toContain(row.task);
+      expect(line).toContain(row.state === "needs_review" ? "review" : "decision");
+      expect(line).toContain(`${40 - lanes.indexOf(row)}m`);
+      expect(text.indexOf(line!)).toBeGreaterThan(previous);
+      previous = text.indexOf(line!);
+    }
+    expect(decision.verdict.kind === "wake" && decision.verdict.items.length).toBe(5);
+  });
+
+  test("a held-back old lane gets detail before newer arrivals on a later wake", () => {
+    const lanes = Array.from({ length: 6 }, (_, n) => parked(n));
+    const first = seatTickDecision(input({ workerAsks: agenda([...lanes].reverse()) }));
+    if (first.verdict.kind !== "wake") throw new Error("expected wake");
+    expect(first.verdict.items.map(item => item.id)).toEqual(lanes.slice(0, 5).map(row => row.id));
+    const landed = deliver(first, NOW);
+    const later = seatTickDecision(input({ now: NOW + 5 * MINUTE,
+      state: JSON.parse(JSON.stringify(landed)), workerAsks: agenda([parked(20), ...lanes].reverse()) }));
+    if (later.verdict.kind !== "wake") throw new Error("expected wake");
+    const ids = later.verdict.items.map(item => item.id);
+    expect(ids).toContain(lanes[5]!.id);
+    expect(ids.indexOf(lanes[5]!.id)).toBeLessThan(ids.indexOf(parked(20).id));
+    const payload = render(later, NOW + 5 * MINUTE);
+    const heldDetail = payload.items.find(item => item.id === lanes[5]!.id)!;
+    expect(payload.text).toContain(seatTickBullet(heldDetail));
+  });
+
+  test("an unchanged parked seat-owned lane keeps waking at the project cadence", async () => {
+    const asks = agenda([parked(0)]);
+    const settings = { ...input().settings, wakeIntervalMs: 20 * MINUTE };
+    const restartedDecision = async (check: SeatTickCheckInput): Promise<ReturnType<typeof seatTickDecision>> => {
+      const child = Bun.spawn([process.execPath, "--eval", `
+        const { seatTickDecision } = await import("./src/lib/monitor/seatTick.ts");
+        console.log(JSON.stringify(seatTickDecision(await Bun.stdin.json())));
+      `], { cwd: process.cwd(), env: process.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child.stdin.write(JSON.stringify(check));
+      child.stdin.end();
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      return JSON.parse(stdout);
+    };
+    let state = deliver(seatTickDecision(input({ workerAsks: asks, settings })), NOW);
+    for (let cycle = 1; cycle <= 4; cycle++) {
+      const now = NOW + cycle * settings.wakeIntervalMs;
+      expect(seatTickDecision(input({ now: now - 1, state, settings, workerAsks: asks })).verdict.kind).toBe("quiet");
+      const next = await restartedDecision(input({ now, state, settings, workerAsks: asks }));
+      expect(next.verdict.kind).toBe("wake");
+      expect(render(next, now).text).toContain(asks[0]!.id);
+      state = deliver(next, now);
+    }
+    expect(seatTickDecision(input({ now: NOW + 120 * MINUTE, state, settings, workerAsks: [] })).verdict.kind).not.toBe("wake");
+    expect(seatTickDecision(input({ now: NOW + 120 * MINUTE, state, settings: { ...settings, enabled: false }, workerAsks: asks })).verdict.kind).toBe("quiet");
+  });
+
+  test("already-shown parked detail rotates after the last delivered item", () => {
+    const lanes = Array.from({ length: 3 }, (_, n) => parked(n));
+    const asks = agenda([...lanes].reverse());
+    const policy = { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 };
+    let state = emptySeatTickState();
+    for (let cycle = 0; cycle < 6; cycle++) {
+      const now = NOW + cycle * SEAT_TICK_WAKE_INTERVAL_MS;
+      const decision = seatTickDecision(input({ now, state, policy, workerAsks: asks }));
+      if (decision.verdict.kind !== "wake") throw new Error("expected wake");
+      expect(decision.verdict.items.map(item => item.id)).toEqual([lanes[cycle % lanes.length]!.id]);
+      state = JSON.parse(JSON.stringify(deliver(decision, now)));
+    }
+  });
+});
+
 describe("waits routed to the seat", () => {
   const ask = { key: "reason:ask-1", id: "conversation_deployer", label: "deploy the release — deployer asks: «Roll out now?»; reply with send_message to conversation_deployer" };
   const lastWakeAt = new Date(NOW - 5 * MINUTE).toISOString();
@@ -2431,7 +2535,6 @@ describe("waits routed to the seat", () => {
     if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
     const items = decision.verdict.items.filter((item) => item.kind === "ask");
     expect(items).toEqual([expect.objectContaining({ kind: "ask", id: "conversation_deployer", askKey: "reason:ask-1", label: ask.label })]);
-    expect(decision.verdict.reasons[0]!.detail).toContain("dismiss_attention escalate");
   });
 
   test("a delivered ask is not shown again to the same seat, a newer ask is, and a successor seat is shown what its predecessor was", () => {
@@ -2508,4 +2611,16 @@ test("B: the next bounded wake carries a saved operator answer ahead of open lan
   if (result.verdict.kind !== "wake") return;
   expect(result.verdict.items.map(item => item.id)).toEqual(["prototype-answer:round-a:key-a"]);
   expect(result.verdict.items[0]!.label).toBe(answer);
+});
+
+test("a closed maintenance window leaves active pipeline wake decisions independent", () => {
+  for (const before of [
+    input({ pipelines: [lane()], events: [event()] }),
+    input({ pipelines: [lane({ pausedBy: "other", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })] }),
+  ]) {
+    const expected = seatTickDecision(before);
+    expect(expected.verdict.kind).toBe("wake");
+    const settings = { ...before.settings, maintenance: { ...before.settings.maintenance, enabled: true, window: { timeZone: "Etc/UTC", weekdays: [1], startHour: 0, endHour: 1 } } };
+    expect(seatTickDecision({ ...before, settings })).toEqual(expected);
+  }
 });

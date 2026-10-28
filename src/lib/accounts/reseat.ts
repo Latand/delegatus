@@ -72,11 +72,13 @@ export function chooseProjectReseatTarget(
   allowedAccountIds: readonly string[] | null,
   now = Date.now(),
   model?: string | null,
+  fallbackAccountIds: readonly string[] = [],
 ): ProjectReseatSelection {
   const candidates = allowedAccountIds === null
     ? accounts
     : accounts.filter((account) => allowedAccountIds.includes(account.id));
-  const target = chooseReseatTarget(currentAccountId, observations, candidates, now, model);
+  const target = chooseReseatTarget(currentAccountId, observations, candidates.filter(account => !fallbackAccountIds.includes(account.id)), now, model)
+    ?? chooseReseatTarget(currentAccountId, observations, candidates, now, model);
   if (target) return { kind: "target", target };
   return allowedAccountIds === null
     ? { kind: "none" }

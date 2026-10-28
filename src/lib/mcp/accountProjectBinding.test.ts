@@ -157,6 +157,7 @@ test("add and remove are confirmed by the record read back, and an independent r
     engine: "claude",
     accountId: RESERVED,
     bound: true,
+    fallback: false,
     allowed: expect.objectContaining({ restricted: true, allowed: [{ accountId: RESERVED, label: "Reserved" }] }),
   });
   expect(Buffer.byteLength(JSON.stringify(added))).toBeLessThan(400);
@@ -218,6 +219,17 @@ test("a mutation missing its engine, account or project is refused with nothing 
   await expect(tool.account_project_binding({ clientRequestId: "binding-no-account", action: "add", engine: "claude", project: ATLAS }))
     .rejects.toThrow("accountId is required");
   await expect(tool.account_project_binding({ clientRequestId: "binding-bad-action", action: "toggle", engine: "claude", accountId: RESERVED, project: ATLAS }))
-    .rejects.toThrow("action must be list, add or remove");
+    .rejects.toThrow("action must be list, add, remove or set-fallback");
   expect(accountProjectBindings()).toEqual([]);
+});
+
+test("binding tool adds, lists and clears the fallback flag", async () => {
+  const tool = bindingsFor();
+  const target = { engine: "claude", accountId: RESERVED, project: ATLAS };
+  expect(await tool.account_project_binding({ ...target, action: "add", fallback: true })).toMatchObject({ bound: true, fallback: true });
+  expect(await tool.account_project_binding({ action: "list", project: ATLAS })).toMatchObject({ bindings: [expect.objectContaining({ fallback: true })] });
+  expect(await tool.account_project_binding({ ...target, action: "set-fallback", fallback: false })).toMatchObject({ changed: true, fallback: false });
+  expect(accountProjectBindings()[0].fallback).toBe(false);
+  await expect(tool.account_project_binding({ ...target, action: "set-fallback" })).rejects.toThrow("fallback is required");
+  await expect(tool.account_project_binding({ ...target, accountId: SPARE, action: "set-fallback", fallback: true })).rejects.toThrow("NOT_BOUND");
 });

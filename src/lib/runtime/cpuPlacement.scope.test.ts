@@ -230,11 +230,11 @@ scopeTest("a headless review run launches into the work slice", async () => {
 scopeTest("gate-slot runs a gate in the work slice with the same quotas", () => {
   const lock = fs.mkdtempSync(path.join(sandbox, "locks-"));
   const result = spawnSync("/bin/bash", [path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", REPORT], { encoding: "utf8",
-    env: { ...process.env, ...env, DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLICE: slices.work, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1" } });
+    env: { ...process.env, ...env, DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLICE: slices.work, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1", LLV_GATE_MEM: undefined } });
   expect(result.status).toBe(0);
   const seen = report(result.stdout);
   expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
-  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["10", "60000 20000", String(8 * GIB), "360000 20000"]);
+  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["10", "60000 20000", String(14 * GIB), "360000 20000"]);
 });
 
 scopeTest("a workflow setup and its orphaned child run in a work scope without memory properties", async () => {
@@ -265,7 +265,7 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   const pressure = path.join(sandbox, "merger-pressure");
   fs.writeFileSync(pressure, "some avg10=80.00 avg60=0.00 avg300=0.00 total=1\n");
   const gateEnv = { ...env, DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_FILE: pressure, LLV_GATE_PSI_RELEASE_SECONDS: "1", LLV_GATE_POLL_SECONDS: "0.1",
-    LLV_GATE_SLICE: slices.work, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1" };
+    LLV_GATE_SLICE: slices.work, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1", LLV_GATE_MEM: undefined };
   const marker = path.join(sandbox, "merger-ran");
   const slot = `flock -n "${lock}/llv-heavy-gate.slot1.lock" true && echo free || echo taken`;
   const batch = new MergeBatch(repo, stateFile, (cwd, args, runEnv) => commandRunner(cwd, args, { ...runEnv, ...gateEnv } as NodeJS.ProcessEnv), async () => "");
@@ -280,7 +280,7 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   expect(fs.readFileSync(marker, "utf8")).toBe("run\n");
   const seen = report(result.output);
   expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
-  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["10", "60000 20000", String(8 * GIB), "360000 20000"]);
+  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["10", "60000 20000", String(14 * GIB), "360000 20000"]);
 }, 30_000);
 
 scopeTest("boot adoption relaunches Codex and Claude hosts in the CPU scope of their class, with memory off and on", async () => {

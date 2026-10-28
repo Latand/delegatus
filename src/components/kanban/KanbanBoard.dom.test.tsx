@@ -18,6 +18,8 @@ setKanbanCardsOpenByDefault(true);
    No route, no store, no state directory is touched. */
 
 const dom = new Window({ url: "http://localhost/" });
+// These interaction tests commit synchronously; animation timing has its own suite.
+Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
 Object.assign(globalThis, {
   window: dom,
   document: dom.document,
@@ -398,8 +400,14 @@ test("a shelf takes the wide share, one at a time, and gives it back when work r
   click(pin());
   expect(pin()?.getAttribute("aria-pressed")).toBe("true");
   expect(localStorage.getItem("llv:kanban-wide:v1")).toBe("done");
-  flushSync(() => host.querySelector<HTMLElement>('.card[data-id="task:a"]')!.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event));
+  flushSync(() => {
+    const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
+    card.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true, pointerId: 1, pointerType: "mouse", buttons: 1 }) as unknown as Event);
+    card.dispatchEvent(new dom.PointerEvent("pointerup", { bubbles: true, pointerId: 1, pointerType: "mouse", buttons: 0 }) as unknown as Event);
+  });
   expect(wideColumns(host)).toEqual(["done"]);
+  // Complete the pointer gesture before remounting; a held pointer suppresses later clicks.
+  flushSync(() => document.dispatchEvent(new dom.PointerEvent("pointerup", { bubbles: true }) as unknown as Event));
 
   const again = mount(tasks, NO_PORTS);
   expect(wideColumns(again.host)).toEqual(["done"]);

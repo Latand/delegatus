@@ -124,7 +124,7 @@ test("fresh Codex commands fix CODEX_HOME in the typed shell command", () => {
   fs.mkdirSync(home, { recursive: true });
   const spec = freshSpecFor("codex", SANDBOX, { codexHome: home });
 
-  expect(spec.command).toStartWith(`( unset LLV_TELEGRAM_MCP_TOKEN; env -u LLV_TOKEN -u LLV_TELEGRAM_MCP_TOKEN CODEX_HOME='${home}' `);
+  expect(spec.command).toStartWith(`( unset LLV_TELEGRAM_MCP_TOKEN; env -u LLV_TOKEN -u LLV_TELEGRAM_MCP_TOKEN -u DELEGATUS_TOKEN -u LLV_OPERATOR_TOKEN -u DELEGATUS_OPERATOR_TOKEN CODEX_HOME='${home}' `);
   expect(spec.command).toContain("codex");
   expect(spec.command).toContain("'--disable' 'multi_agent'");
   expect(spec.launchProfile?.allowSubagents).toBe(false);
@@ -250,6 +250,8 @@ test("Telegram grants load the connector token only into granted CLI processes",
 
     fs.rmSync(telegramSessionPath());
     fs.writeFileSync(telegramSessionPath(), validSession, { mode: 0o644 });
+    fs.chmodSync(telegramSessionPath(), 0o644);
+    expect(fs.statSync(telegramSessionPath()).mode & 0o777).toBe(0o644);
     expect(tokenIsExported()).toBe(false);
 
     fs.chmodSync(telegramSessionPath(), 0o600);
@@ -578,7 +580,7 @@ test("Codex resume derives its owning account home from the transcript path", ()
   const spec = resumeSpecFor("codex-sessions", transcript);
 
   expect(spec?.command).toStartWith(
-    `( unset LLV_TELEGRAM_MCP_TOKEN; env -u LLV_TOKEN -u LLV_TELEGRAM_MCP_TOKEN CODEX_HOME='${path.join(SANDBOX, "legacy")}' `,
+    `( unset LLV_TELEGRAM_MCP_TOKEN; env -u LLV_TOKEN -u LLV_TELEGRAM_MCP_TOKEN -u DELEGATUS_TOKEN -u LLV_OPERATOR_TOKEN -u DELEGATUS_OPERATOR_TOKEN CODEX_HOME='${path.join(SANDBOX, "legacy")}' `,
   );
   expect(spec?.command).toContain("'mcp_servers.viewer.enabled=true'");
   expect(spec?.command).toContain("'mcp_servers.unrelated.enabled=false'");
@@ -906,5 +908,36 @@ test("terminal seat launches deny native questions while worker launches stay un
         expect(spec.command.includes("request_user_input_async")).toBe(seat);
       }
     }
+  }
+});
+
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} terminal boundaries remove operator credentials and preserve child input`, async () => {
+  const { resolveBinary, shellQuote } = await import("./cli");
+  const home = path.join(SANDBOX, `operator-credentials-${engine}`);
+  fs.mkdirSync(home, { recursive: true });
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  if (engine === "codex") {
+    const inventory = path.join(home, "inventory");
+    fs.writeFileSync(inventory, "#!/bin/sh\nprintf '[]'\n", { mode: 0o700 });
+    process.env.LLV_CODEX_BINARY = inventory;
+  }
+  try {
+    const spec = freshSpecFor(engine, SANDBOX, { codexHome: home, claudeConfigDir: home, deferClaudeSpawnPolicy: true });
+    // Codex launches embed LLV_CODEX_BINARY, which this case points at the inventory stub.
+    const binary = engine === "codex" ? process.env.LLV_CODEX_BINARY! : resolveBinary(engine);
+    const boundary = ` ${shellQuote(binary)} `;
+    const index = spec.command.indexOf(boundary);
+    expect(index).toBeGreaterThan(0);
+    const names = ["LLV_TOKEN", "DELEGATUS_TOKEN", "LLV_OPERATOR_TOKEN", "DELEGATUS_OPERATOR_TOKEN"];
+    const script = `console.log(JSON.stringify({present:${JSON.stringify(names)}.filter(name=>process.env[name]!==undefined),argv:process.argv.slice(1),input:await Bun.stdin.text()}))`;
+    const command = spec.command.slice(0, index) + ` ${shellQuote(process.execPath)} -e ${shellQuote(script)} -- 'fixed argument' )`;
+    const child = Bun.spawn(["sh", "-c", command], { cwd: SANDBOX, env: { ...process.env, ...Object.fromEntries(names.map(name => [name, "fixture"])) }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    child.stdin.write("fixed input"); child.stdin.end();
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(output)).toEqual({ present: [], argv: ["fixed argument"], input: "fixed input" });
+  } finally {
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previousBinary;
   }
 });

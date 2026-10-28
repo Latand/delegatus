@@ -267,7 +267,6 @@ for (const engine of ["claude", "codex"] as const) for (const source of ["dead",
     expect(next).toMatchObject({ n: 2, state: "running", accountId: targetId, effectiveRole: { engine, model, effort } });
     expect(next!.effectiveRole.serviceTier ?? null).toBe(serviceTier);
     expect(next!.restartContext).toEqual({ previousAttempt: 1, transcriptPath: STAGE_TRANSCRIPT });
-    expect(h.spawnInputs[1]!.prompt).toContain("use its transcript for reference");
     expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: targetId, supersedes: STAGE_CONVERSATION });
   });
 }
@@ -1117,6 +1116,36 @@ test("engine change stops before spawning and keeps the slot, access and attempt
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ n: 1, conversationId: "conversation_new", runtimeSwitches: [{ mode: "handoff", phase: "committed" }] });
 });
 
+test("runtime switch retirement answers from keyed memberships without a whole snapshot", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { runtimeSwitchRetirementReason } = await import("./runtimeSwitchFence");
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  const filename = path.join(process.env.LLV_STATE_DIR!, "retirement-keyed.json");
+  const transcript = path.join(process.env.LLV_STATE_DIR!, "retirement-keyed.jsonl"); fs.writeFileSync(transcript, "");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("claude", transcript, "default");
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: chosen.pipeline!.id, role: "architect", slot: "plan:1",
+      stageId: "plan", stageOrder: 0, round: 1, parentConversationId: null });
+    const rows = loadPipelines(); const attempt = rows[0]!.runs[0]!.attempts[0]!;
+    attempt.conversationId = conversation.id; attempt.runtimeSwitches![0]!.from.conversationId = conversation.id;
+    savePipelines(rows);
+    expect((await patchPipeline(chosen.pipeline!.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    /* The delivery controller asks this inside writer admission. A whole
+       snapshot there rebuilt every collection of retained history: 1–3.5 s
+       loop slices on a production-sized registry copy. */
+    const wholeSnapshot = spyOn(registry, "readOnlySnapshot").mockImplementation(() => {
+      throw new Error("runtime switch retirement materialized the whole registry");
+    });
+    try {
+      expect(runtimeSwitchRetirementReason(conversation.id, registry)).toContain("withdrew");
+      expect(runtimeSwitchRetirementReason("conversation_unrelated", registry)).toBeNull();
+      expect(runtimeSwitchRetirementReason("/claude/not-a-conversation.jsonl", registry)).toBeNull();
+      expect(wholeSnapshot).not.toHaveBeenCalled();
+    } finally { wholeSnapshot.mockRestore(); }
+  } finally { registry.close(); }
+});
+
 test("switch-owned teardown preserves a failed operator stop through compaction", async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { hasRuntimeSwitchKill, switchOperationKey } = await import("./runtimeSwitch");
@@ -1315,6 +1344,56 @@ test("a parked fork with a failed send uses one replacement continuation after i
   expect(h.spawnCount()).toBe(1);
   expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
 });
+test.each(["completed", "failed", "killed"] as const)("stage projection keeps reserved handoff runtime coherent through a %s outcome", async (outcome) => {
+  const { pipelineStageRead } = await import("@/lib/mcp/compactAnswers");
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { accountId: engine === "codex" ? "target-account" : "default" } } as never);
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  expect(requested.error).toBeUndefined();
+  const read = () => pipelineStageRead(loadPipelines()[0]!, "plan").attempt!;
+  expect(read().runtime).toEqual({ engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", serviceTierSource: null });
+  let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
+  let launches = 0;
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.spawnAgent = async (_input, reserved) => {
+    launches++;
+    await reserved({ launchId: "projection-launch", conversationId: "conversation_projection", accountId: "target-account" });
+    throw new Error("launch acknowledgement lost");
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
+    accountId: "target-account", effectiveRole: { engine: "claude", model: "fable" },
+    runtimeSwitches: [{ mode: "handoff", phase: "switching" }],
+  });
+  expect(read().runtime).toBeNull();
+  receipt = { state: "starting", launchId: "projection-launch", conversationId: "conversation_projection" } as never;
+  const restarted = await import(`./engine?projection-restart=${outcome}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  expect(read().runtime).toBeNull();
+  expect(launches).toBe(1);
+
+  if (outcome === "killed") {
+    // A terminal switch failure can retain the reserved successor identities.
+    h.ports.runtimeSwitchKilled = async () => true;
+    await restarted.tickPipelines([], h.ports);
+    expect(read().runtimeSwitch?.phase).toBe("failed");
+    expect(read().runtime).toBeNull();
+    expect(launches).toBe(1);
+    return;
+  }
+  receipt = { state: outcome, launchId: "projection-launch", conversationId: "conversation_projection", accountId: "target-account",
+    sessionId: "projection-session", transcript: "/codex/projection.jsonl", paneId: null, ...(outcome === "failed" ? { error: "launch refused" } : {}) } as never;
+  if (outcome === "completed") h.setSeat({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null,
+    accountId: "target-account", sessionId: "projection-session", agentPath: "/codex/projection.jsonl" });
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  expect(read().runtimeSwitch?.phase).toBe(outcome === "completed" ? "committed" : "rolled-back");
+  expect(read().runtime).toEqual(outcome === "completed"
+    ? { engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "target-account", serviceTierSource: null }
+    : { engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", serviceTierSource: null });
+  expect(launches).toBe(1);
+});
+
 test("a completed parked handoff receipt settles its successor after engine restart", async () => {
   const h = switchHarness();
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);

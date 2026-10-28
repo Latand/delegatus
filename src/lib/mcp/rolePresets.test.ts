@@ -101,6 +101,24 @@ test("role_presets persists pinned Haiku 5.5 for trivial builder work", async ()
   expect(loadRoleOverrides().overrides.builder?.variants?.trivial).toEqual(config);
 });
 
+test("role_presets persists reviewed Terra efforts alongside historical saved model ids", async () => {
+  const before = await read();
+  const terra = { engine: "codex" as const, model: "gpt-6.1-terra", effort: "ultra" };
+  const historical = { engine: "codex" as const, model: "gpt-5.6-sol", effort: "high" };
+  const answer = await tools(SEAT).role_presets({
+    clientRequestId: "terra-preset",
+    expectedRevision: before.revision,
+    overrides: { builder: { config: terra }, reviewer: { config: historical } },
+  }) as { changed: boolean };
+  expect(answer.changed).toBe(true);
+  const after = await read();
+  expect(after.roles.find(role => role.id === "builder")!.config).toEqual(terra);
+  expect(after.roles.find(role => role.id === "reviewer")!.config).toEqual(historical);
+  expect(after.choices.codex![terra.model]).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  expect(loadRoleOverrides().overrides.builder?.config).toEqual(terra);
+  expect(loadRoleOverrides().overrides.reviewer?.config).toEqual(historical);
+});
+
 test("the seat writes a full config, and the row, the revision and an independent read agree", async () => {
   const before = await read();
   const answer = await tools(SEAT).role_presets({
@@ -299,7 +317,7 @@ test("role_presets validates catalog-backed Codex tiers and persists a reviewer 
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
   expect(loadRoleOverrides().schemaVersion).toBe(5);
   const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "tier-role-unoffered", overrides: { reviewer: { config: { ...config, serviceTier: "unoffered" } } } }));
-  expect(refused.message).toContain("offered: priority, ultrafast");
+  expect(refused.message).toContain(`account "account C" (${account.id}): gpt-6-astra offered: priority, ultrafast`);
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
   const cleared = { engine: "codex", model: "gpt-6-astra", effort: "high" };
   await tools(SEAT).role_presets({ clientRequestId: "tier-role-clear", overrides: { reviewer: { config: cleared } } });

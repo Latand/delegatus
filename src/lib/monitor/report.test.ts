@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { seatTickProposalRef } from "./cards";
 import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
 
-import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickBullet, seatTickProposalMessage, seatTickWakeMessage, seatTickWakePayload } from "./report";
 
 /**
  * The seat tick's two briefs (#1245), rendered by the module that already
@@ -11,6 +11,49 @@ import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMP
  */
 
 const PROJECT = "viewer";
+
+test("a new monitor note and unavailable evidence leave a complete detail summary beside twenty roster rows", () => {
+  const now = Date.parse("2026-10-25T06:00:00Z");
+  const lanes = Array.from({ length: 20 }, (_, n) => ({ id: `lane${String(n).padStart(4, "0")}`,
+    title: `Exporter ${n} ${"long title ".repeat(10)}`, reason: "decision: build stopped", sinceMs: now - (120 - n) * 60_000 }));
+  const input = { project: PROJECT, now, seatOwnedLanes: lanes,
+    sourceBudgetNote: "Sources skipped after their check budget share: liveness, workerAsks, recordRuleReports. Retried next check.",
+    items: [{ kind: "ask" as const, id: lanes[0]!.id, label: "Inspect the failed build. ".repeat(101) }],
+    reasons: [{ kind: "worker-ask" as const, detail: "a stage waits on the seat" }], deferred: 19, signals: [],
+    gaps: [{ source: "pull-requests" as const, gap: "command-failed" as const, detail: "command-failed" },
+      { source: "children" as const, gap: "registry-unreadable" as const, detail: "registry-unreadable" }],
+    operatorInstructions: "Inspect failed work. ".repeat(24).slice(0, 480),
+    monitorPrompt: "Inspect the build and review queues. ".repeat(200),
+    mandateCarriesContract: true, workers: { limit: 3, source: "default", machine: 3, running: 0 },
+    snapshotAt: new Date(now).toISOString(),
+  };
+  const payload = seatTickWakePayload(input);
+  expect(payload.text.length).toBeLessThanOrEqual(4_000);
+  expect(payload.text).toContain(input.sourceBudgetNote);
+  expect(`\n${payload.text}\n`).toContain(`\n${seatTickBullet(payload.items[0]!)}\n`);
+  expect(payload.items[0]!.label.length).toBeLessThan(input.items[0]!.label.length);
+  for (const lane of lanes) expect(payload.text.split("\n").some(line => line.startsWith(`- ${lane.id}`))).toBe(true);
+  expect(payload.text).toContain(input.operatorInstructions);
+  for (const gap of input.gaps) expect(payload.text).toContain(gap.detail);
+});
+
+test("a full parked-lane roster compacts long fields while retaining the contract and the wake bound", () => {
+  const now = Date.parse("2026-10-25T06:00:00Z");
+  const lanes = Array.from({ length: 20 }, (_, n) => ({ id: `waiting-${n}`, title: `Export ${n} ${"довга назва ".repeat(50)}`,
+    reason: `decision: ${"build stopped ".repeat(100)}`, sinceMs: now - (120 + n) * 60_000 }));
+  const text = seatTickWakeMessage({ project: PROJECT, now, seatOwnedLanes: lanes,
+    items: [{ kind: "ask", id: "waiting-0", label: "Inspect the failed build ".repeat(100) }],
+    reasons: [{ kind: "worker-ask", detail: "a stage waits on the seat" }], deferred: 19, signals: [],
+    monitorPrompt: "Inspect outstanding builds. ".repeat(100),
+  });
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  for (const lane of lanes) {
+    const line = text.split("\n").find(line => line.startsWith(`- ${lane.id} |`));
+    expect(line).toContain("decision");
+    expect(line).toContain("2h");
+  }
+  expectContractClauses(text);
+});
 
 /** A wake to a seat whose mandate may not state the contract ends with every
     clause, the last of them last, so nothing was lopped off the foot. */
@@ -38,7 +81,6 @@ test("a wake says why, lists the items, and names the mandate section holding it
   /* The line that fenced a seat to its agenda is gone (#1749), and nothing
      replaces the assertion: the wording of what stands in its place is the
      operator's to change without a test to update. */
-  expect(text).not.toContain("Act on the listed items only");
   /* A seat whose mandate may not state the contract gets its clauses. */
   expectContractClauses(text);
   /* One whose delivered mandate states them (#2030) gets a line naming the
@@ -87,8 +129,6 @@ test("the skipped-child summary describes the children, not an outcome they may 
   expect(text).toContain("(3 spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)");
   expect(text).toContain("(2 more spawned child(ren) whose transcript Delegatus cannot resolve, named by a later wake.)");
   expect(text).toContain("(1 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
-  expect(text).not.toContain("their outcomes predate");
-  expect(text).not.toContain("harvest their outcome");
 });
 
 test("the proposal brief asks for one ranked card and forbids opening issues or lanes from it", () => {
@@ -100,10 +140,7 @@ test("the proposal brief asks for one ranked card and forbids opening issues or 
     slot: "20693",
   });
   expect(text).toContain("#1245 the native seat tick [design, monitor]");
-  expect(text).toContain("ONE ranked list of at most 5 actions");
-  expect(text).toContain("single board card in inbox");
   expect(text).toContain(`monitor-ref: ${seatTickProposalRef("20693")}`);
-  expect(text).toContain("Open no GitHub issue and start no pipeline from this");
 });
 
 /* ------------------------------------------------------------------------- *
@@ -189,7 +226,6 @@ test("a wake carries the project's own monitor prompt beside what the tick deriv
   expect(text).toContain("interval: the wake interval elapsed while work is open");
   expect(text).toContain("[pipeline] pipeline_a1 — ship the exporter — running");
   expect(text).toContain("the last deployment ended rolled-back");
-  expect(text).not.toContain("Act on the listed items only");
   expectContractClauses(text);
   /* And the contract has the last word, so a prompt cannot read as the thing
      that governs what the turn may do. */

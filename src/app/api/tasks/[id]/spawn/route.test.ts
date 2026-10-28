@@ -58,7 +58,7 @@ test("task retry refuses a retained tier when its resolved account changes to on
       spawnAgentWithPrompt: async () => { launches += 1; throw new Error("refusal must precede launch"); },
     });
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "service_tier_unavailable", error: expect.stringContaining("offered: priority") });
+    expect(await response.json()).toMatchObject({ code: "service_tier_unavailable", error: expect.stringContaining('selected account "account-b": account "account-b": gpt-6-astra offered: priority') });
     expect(launches).toBe(0); expect(mutations).toBe(0);
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(1);
   } finally {

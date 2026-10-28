@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
    read below (docs/design/rename-delegatus.md §5). */
@@ -53,7 +53,8 @@ const nextConfig: NextConfig = {
       // masks in JavaScript when `bufferutil` is absent. A CommonJS external
       // keeps the importing modules synchronous; `serverExternalPackages`
       // emits `import("ws")` and turns every importer into an async module.
-      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws" }];
+      // The provenance verifier also runs under Node and resolves its installed graph.
+      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws", "@sigstore/bundle": "commonjs @sigstore/bundle", "@sigstore/tuf": "commonjs @sigstore/tuf", "@sigstore/verify": "commonjs @sigstore/verify" }];
       const originalEntry = config.entry;
       config.entry = async () => ({
         ...(typeof originalEntry === "function" ? await originalEntry() : originalEntry),
@@ -84,20 +85,27 @@ const nextConfig: NextConfig = {
 };
 
 export default function configureNext(phase: string): NextConfig {
+  if (phase === PHASE_DEVELOPMENT_SERVER) {
+    // Bun can exit tsc before its large --showConfig stdout pipe is flushed.
+    // Read the same project through the installed TypeScript API at startup.
+    return { ...nextConfig, experimental: { ...nextConfig.experimental, useTypeScriptCli: false } };
+  }
   if (phase === PHASE_PRODUCTION_BUILD) {
     // Every build entry point loads this config before Next launches TypeScript.
     // Preserve unrelated Node options and any larger caller-supplied heap.
     const options = process.env.NODE_OPTIONS ?? "";
     const limits = [...options.matchAll(/(?:^|\s)["']?--max[-_]old[-_]space[-_]size(?:=|\s+)["']?(\d+)/g)];
-    const heap = Math.max(6144, ...limits.map(match => Number(match[1])));
+    const heap = Math.max(11264, ...limits.map(match => Number(match[1])));
     process.env.NODE_OPTIONS = `${options} --max-old-space-size=${heap}`.trim();
     // Keep the full repository check in tsconfig.json for development and gates.
     return { ...nextConfig,
       // Heavy gates have a three-CPU quota. Next otherwise sees the host's
       // online CPUs and starts 23 page-data workers in each lane. Leave one
       // CPU for their coordinator and bound their aggregate memory demand.
-      experimental: { ...nextConfig.experimental, cpus: 2 },
-      typescript: { tsconfigPath: "tsconfig.production.json" },
+      experimental: { ...nextConfig.experimental, cpus: 2, ...(process.env.LLV_GATE_FULL_TYPES === process.cwd() ? { useTypeScriptCli: true } : {}) },
+      // Runtime gates use Next's freshly generated route/page validators in
+      // the single full-project check. Ordinary/hosted builds keep their scope.
+      typescript: { tsconfigPath: process.env.LLV_GATE_FULL_TYPES === process.cwd() ? "tsconfig.json" : "tsconfig.production.json" },
     };
   }
   return nextConfig;

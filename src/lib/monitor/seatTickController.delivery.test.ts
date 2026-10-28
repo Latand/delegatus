@@ -1,5 +1,22 @@
-import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
+import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, emptySeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
 import type { HostState, SeatTickOutstandingWake, SeatTickRunRecord, AgentLivenessRecord, ConversationMessage, DeliveryOutcome, ChildFixture } from "./seatTickController.fixture";
+
+test("an authoritative seat quota obligation withholds ordinary agenda delivery", async () => {
+  const rig = harness({ pipelines: OPEN_LANE });
+  let checked = 0;
+  rig.deps.sources!.recoverQuota = async project => { expect(project).toBe(PROJECT); checked++; return true; };
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("refused");
+  expect(checked).toBe(1); expect(rig.sent).toEqual([]);
+});
+
+test("failed source preparation cannot dispatch a seat quota continuation", async () => {
+  const rig = harness({ pipelines: OPEN_LANE });
+  let checked = 0;
+  rig.deps.sources!.prepareRead = async () => { throw new Error("source preparation unavailable"); };
+  rig.deps.sources!.recoverQuota = async () => { checked++; return true; };
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("error");
+  expect(checked).toBe(0); expect(rig.sent).toEqual([]);
+});
 
 
 /* Running children are observed through a rotating window, so a stall on a
@@ -446,6 +463,36 @@ test("new-child discovery runs during historical bootstrap and keeps every older
   const completedOwner = accounting.page("owner", 1)[0]!;
   expect(completedOwner.kind === "owner" && completedOwner.bootstrap).toBeUndefined();
 }, 30_000);
+
+test("retained work past its age bound survives succession while the successor receives newly derived work", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "retained-succession-")), "tick.json");
+  const pending = outstandingWake({ clientMessageId: "seat-tick:fixture:7:interval:original",
+    operationId: "original-wake-operation", text: "the predecessor's frozen payload",
+    preparedAt: new Date(NOW - 3 * 60 * MINUTE).toISOString(), dispatch: { token: "original-dispatch", state: "returned" } });
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, outstandingWake: pending }, stateFile);
+  const common = { stateFile, pipelines: OPEN_LANE, wakeState: "retained" as const, withdrawal: "too-late" as const };
+  const first = harness({ ...common, seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null } });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent).toEqual([]);
+  expect(first.deps.readState!(PROJECT).outstandingWake).toEqual(pending);
+  expect(first.deps.readState!(PROJECT).retiredWakes).toEqual([]);
+
+  const seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+  const successor = harness({ ...common, seat, now: NOW + MINUTE });
+  await runSeatTickCheck(PROJECT, successor.deps);
+  expect(successor.sent).toHaveLength(1);
+  expect(successor.sent[0]!.conversationId).toBe(SUCCESSOR);
+  expect(successor.sent[0]!.clientMessageId).not.toBe(pending.clientMessageId);
+  expect(successor.sent[0]!.text).not.toBe(pending.text);
+  expect(successor.sent[0]!.text).toContain(OPEN_LANE[0]!.id);
+  expect(successor.deps.readState!(PROJECT).retiredWakes).toMatchObject([
+    { wake: pending, reason: "seat-superseded", supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 } },
+  ]);
+  const restarted = harness({ ...common, seat, now: NOW + 2 * MINUTE });
+  await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(restarted.sent).toEqual([]);
+  expect(restarted.deps.readState!(PROJECT).retiredWakes.map(entry => entry.wake)).toEqual([pending]);
+});
 
 test("a wake stranded by a replaced seat is retired, and the successor's own wake goes out (#1594)", async () => {
   const fixture = childFixture("stranded-retired-seat");

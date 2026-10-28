@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import { effortTierLabel } from "@/components/builderCopy";
 import { Select } from "@/components/ui/Select";
 import { effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { listedModels } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 
 import type { RuntimeDraft } from "./runtimeProfile";
@@ -82,7 +82,7 @@ export function RuntimeControlsView({
         onChange={(event) => editModel(event.target.value)}
       >
         {withDefaults ? <option value="">{t("draft.modelDefault")}</option> : null}
-        {ENGINE_MODELS[engine].map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+        {listedModels(engine, draft.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
       </Select>
       <Select
         aria-label={t("runtimeConfig.effort")}

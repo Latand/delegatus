@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -177,7 +178,7 @@ async function awaitResumePublication(
   const now = dependencies.now ?? Date.now;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const probe = dependencies.probeStagedLaunch ?? recoverStagedStructuredLaunch;
-  const staged = registry.readOnlySnapshot().receipts[launchId];
+  const staged = registry.spawnReceipt(launchId) ?? undefined;
   const deadline = (stagedLaunchRecovery(staged)?.startedAt ?? now()) + RESUME_PUBLICATION_BOUND_MS;
   for (;;) {
     /* The probe may publish a host that no continuation of this process holds,
@@ -198,7 +199,7 @@ async function awaitResumePublication(
     if (now() >= deadline) {
       const reason = `host resume did not publish within ${RESUME_PUBLICATION_BOUND_MS / 1_000} s: ${stagedLaunchRecovery(receipt)?.reason ?? "publication pending"}`;
       const failed = await (dependencies.failStagedLaunch ?? failStagedResume)(launchId, registry, client, reason);
-      const settled = failed.receipt ?? registry.readOnlySnapshot().receipts[launchId];
+      const settled = failed.receipt ?? registry.spawnReceipt(launchId);
       if (settled?.state === "completed") return settled.artifactPath;
       throw new StructuredResumeUnpublishedError(settled?.error ?? reason);
     }
@@ -220,9 +221,8 @@ async function settleParkedResumeFence(
   dependencies: StructuredRecoveryDependencies,
 ): Promise<boolean> {
   if (!client) return false;
-  const snapshot = registry.readOnlySnapshot();
-  const launchId = snapshot.entries[sessionKeyId(key)]?.structuredHostOperationId;
-  const receipt = launchId ? snapshot.receipts[launchId] : null;
+  const launchId = registry.structuredRecoveryFacts(key).entries[sessionKeyId(key)]?.structuredHostOperationId;
+  const receipt = launchId ? registry.spawnReceipt(launchId) : null;
   if (!launchId || !receipt || receipt.purpose !== "resume-successor"
     || receipt.state !== "path-pending" || !stagedLaunchRecovery(receipt)) return false;
   const settled = await (dependencies.probeStagedLaunch ?? recoverStagedStructuredLaunch)(launchId, registry, client, {
@@ -295,7 +295,7 @@ function candidateFor(
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
   const key = { engine: conversation.engine, sessionId: generation.id } as const;
-  const snapshot = registry.readOnlySnapshot();
+  const snapshot = registry.structuredRecoveryFacts(key, { conversationId: conversation.id });
   const entry = snapshot.entries[sessionKeyId(key)];
   /* Captured survivors fence every replacement path, including recovery whose
      old root is already dead. Only a successful termination retry can verify
@@ -508,14 +508,14 @@ async function recoverCandidate(
         ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
       };
       const releasedKey = current.key;
-      const releasedEntry = registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)];
+      const releasedEntry = registry.structuredRecoveryFacts(releasedKey).entries[sessionKeyId(releasedKey)];
       const releasedCustody = releasedEntry ? {
         claimEpoch: releasedEntry.claimEpoch,
         claimOwner: releasedEntry.claimOwner,
         writerClaimEpoch: releasedEntry.structuredHost?.writerClaimEpoch ?? null,
         process: releasedEntry.structuredHost?.process ?? null,
       } : null;
-      await ownership.releaseHost(releasedKey);
+      await withHostStopOrigin({ path: "structured-recovery", operationId: ownership.operationId }, () => ownership.releaseHost(releasedKey));
       await assertOwnership();
       await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
         request.authorityGuard?.();
@@ -587,7 +587,7 @@ async function recoverCandidate(
       ? request.origin.role === "seat-tick" ? "seat-tick" : "agent"
       : request.origin?.kind === "operator" ? "operator" : "unspecified";
     console.error(`[structured recovery] reserved ${launchId}; source=${surface}`);
-    const predecessorOperation = registry.readOnlySnapshot().entries[sessionKeyId(current.key)]?.structuredHostOperationId;
+    const predecessorOperation = registry.structuredRecoveryFacts(current.key).entries[sessionKeyId(current.key)]?.structuredHostOperationId;
     let claimed = false;
     let predecessorEpoch = 0;
     let successorEpoch: number | null = null;
@@ -627,7 +627,7 @@ async function recoverCandidate(
         resumeAdmission: {
           beforeClaim: () => {
             assertAuthority(); admissionGuard?.();
-            predecessorEpoch = registry.readOnlySnapshot().entries[sessionKeyId(current.key)]?.claimEpoch ?? 0;
+            predecessorEpoch = registry.structuredRecoveryFacts(current.key).entries[sessionKeyId(current.key)]?.claimEpoch ?? 0;
           },
           claimed: claim => {
             const claimOwner = claim.claimOwner;
@@ -641,7 +641,7 @@ async function recoverCandidate(
             admissionGuard = () => {
               assertAuthority();
               if (!request.authorityGuard) request.admissionGuard?.();
-              const snapshot = registry.readOnlySnapshot();
+              const snapshot = registry.structuredRecoveryFacts(current.key, { launchId });
               const receipt = snapshot.receipts[launchId];
               const entry = snapshot.entries[sessionKeyId(current.key)];
               if (!claimOwner || !receipt || receipt.conversationId !== current.conversationId
@@ -669,7 +669,7 @@ async function recoverCandidate(
       if (!claimed) admissionGuard?.();
       await ownership?.authorizeAccount?.(account.accountId ?? null);
       assertAuthority();
-      const snapshot = registry.readOnlySnapshot();
+      const snapshot = registry.structuredRecoveryFacts(current.key, { launchId: begun.receipt.launchId });
       const receipt = snapshot.receipts[begun.receipt.launchId];
       const entry = snapshot.entries[sessionKeyId(current.key)];
       if ((receipt?.state === "failed" || receipt?.state === "conflicted")
@@ -694,14 +694,14 @@ async function recoverCandidate(
       await assertAccountAuthorized();
     } catch (error) {
       if (ownsSuccessor()) {
-        const successorEntry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+        const successorEntry = registry.structuredRecoveryFacts(current.key).entries[sessionKeyId(current.key)];
         const successorCustody = successorEntry ? {
           claimEpoch: successorEntry.claimEpoch,
           claimOwner: successorEntry.claimOwner,
           writerClaimEpoch: successorEntry.structuredHost?.writerClaimEpoch ?? null,
           process: successorEntry.structuredHost?.process ?? null,
         } : null;
-        await ownership?.releaseHost(current.key);
+        await withHostStopOrigin({ path: "structured-recovery-successor-cleanup", operationId: ownership?.operationId ?? begun.receipt.launchId }, () => ownership?.releaseHost(current.key));
         await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
           request.authorityGuard?.();
           ownership?.assertCurrent?.();
@@ -741,7 +741,7 @@ export async function recoverDeadStructuredConversation(
   const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
   if (retired) throw new Error(retired);
   let admittedRequest = request;
-  const admissionSnapshot = registry.readOnlySnapshot();
+  const admissionSnapshot = registry.livenessConversationSnapshot(candidate.conversationId);
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {
     const [{ curatorRecoveryGuard }, { defaultSeatTickAdmissionSources }] = await Promise.all([
       import("@/lib/memory/curation/admission"), import("@/lib/monitor/seatTickAdmissionSources"),

@@ -6,19 +6,29 @@ export type AgentModelOption = {
       full `label` stays in menu rows and accessible names. */
   shortLabel: string;
   use: "implement" | "review" | "general";
+  /** This row is a launch alias of the row with this id: it stays a valid
+      model id but is not offered beside it (see listedModels). */
+  duplicateOf?: string;
 };
 
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
 export const CODEX_GPT61_SOL_MODEL = "gpt-6.1-sol";
+export const CODEX_GPT61_TERRA_MODEL = "gpt-6.1-terra";
 export const CODEX_GPT6_SOL_MODEL = "gpt-6-sol";
 export const CODEX_GPT6_LUNA_MODEL = "gpt-6-luna";
 export const CODEX_SOL_MODEL = "gpt-5.6-sol";
 export const CODEX_TERRA_MODEL = "gpt-5.6-terra";
 export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
+// Wire admission remains stable when a picker retires an older choice.
+const CODEX_LAUNCH_MODEL_IDS = [CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL,
+  CODEX_GPT6_SOL_MODEL, CODEX_GPT6_LUNA_MODEL, CODEX_SOL_MODEL,
+  CODEX_TERRA_MODEL, CODEX_LUNA_MODEL, CODEX_GPT61_TERRA_MODEL] as const;
+
 const CODEX_IMAGE_INPUT_MODELS = new Set([
   CODEX_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
+  CODEX_GPT61_TERRA_MODEL,
   CODEX_GPT6_SOL_MODEL,
   CODEX_GPT6_LUNA_MODEL,
   CODEX_SOL_MODEL,
@@ -54,7 +64,7 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
     // Claude Code 2.1.296 resolves `haiku` to claude-haiku-5-5 on
     // first-party auth. Pinned rows keep both generations selectable.
-    { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
+    { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general", duplicateOf: "claude-haiku-5-5" },
     { id: "claude-haiku-5-5", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
   ],
@@ -82,13 +92,28 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
   ],
 };
 
+/** The rows a picker offers for `engine`. A launch alias that names the same
+    release as a pinned row stays valid but is not listed beside it, unless it
+    is the current choice, which then stands in for the pinned row. */
+export function listedModels(engine: "claude" | "codex" | "copilot", current?: string | null): readonly AgentModelOption[] {
+  const rows = ENGINE_MODELS[engine];
+  const alias = rows.find((option) => option.duplicateOf && option.id === current);
+  return rows.filter((option) => option.duplicateOf ? option === alias : option.id !== alias?.duplicateOf);
+}
+
 export type LaunchModelValidation = { model: string } | { error: string };
 
-/** Validate a fresh-launch model against the catalog rendered by the Viewer.
+/** Accepted wire ids, including reviewed models awaiting catalogue presentation.
+    Historical catalogue ids remain valid for saved role and pipeline values. */
+export function launchModelIds(engine: "claude" | "codex" | "copilot"): string[] {
+  return engine === "codex" ? [...CODEX_LAUNCH_MODEL_IDS] : ENGINE_MODELS[engine].map(option => option.id);
+}
+
+/** Validate a fresh-launch model against the reviewed launch ids.
     Resume and migration paths deliberately do not call this helper. */
 export function validateLaunchModel(engine: "claude" | "codex" | "copilot", model: string): LaunchModelValidation {
   const requested = model.trim();
-  const validIds = ENGINE_MODELS[engine].map((option) => option.id);
+  const validIds = launchModelIds(engine);
   if (validIds.includes(requested)) return { model: requested };
   if (engine === "copilot" && requested.length <= 128 && COPILOT_MODEL_ID.test(requested)) return { model: requested };
   return {

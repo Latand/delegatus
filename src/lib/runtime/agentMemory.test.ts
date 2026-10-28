@@ -1,5 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { agentMemoryCeiling, GIB } from "./agentMemory";
+import { readHostExit, reclaimHostExit, recordHostExit } from "./hostExit";
+import { spawnSync } from "node:child_process";
 
 test("reserves the core budget and bounds each agent at launch", () => {
   for (const [n, gb] of [[1,53],[5,42],[8,26.5],[11,19],[14,15],[20,10.5],[30,7],[53,4]]) {
@@ -33,7 +35,7 @@ import * as childProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { procBackend } from "@/lib/proc";
-import { AgentMemoryCell, agentOomScore, parseMemorySize, probeAgentScopes, tickAgentMemoryWatchdogs, viewerUnitFromCgroup, wrapAgentCommand, normalizeHostMemory, planAgentMemory, invalidateAgentScopeProbe, type AgentMemoryPlan } from "./agentMemory";
+import { AgentMemoryCell, agentOomScore, parseMemorySize, probeAgentScopes, tickAgentMemoryWatchdogs, viewerUnitFromCgroup, wrapAgentCommand, wrapAgentLaunch, normalizeHostMemory, planAgentMemory, invalidateAgentScopeProbe, type AgentMemoryPlan } from "./agentMemory";
 const basePlan: AgentMemoryPlan = { mechanism: "scope", platform: "linux", limitBytes: 15 * GIB, budgetBytes: 106 * GIB, reserveBytes: 19 * GIB, totalBytes: 125 * GIB, score: 500, unit: "delegatus-agent-test-123.scope", slice: "delegatus-agents-test.slice", viewerUnit: "delegatus.service", systemdVersion: 255 };
 
 test("size overrides are binary, invalid values ignored, tiny hosts stay bounded", () => {
@@ -61,6 +63,48 @@ test("scope preserves literal argv and binding; watchdog raises score; off is un
   expect(viewerUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service")).toBe("delegatus.service");
   expect(viewerUnitFromCgroup("0::/system.slice/delegatus.service")).toBeNull();
 });
+test.skipIf(process.platform !== "linux")("a refused workload score warns and still execs with literal argv and native status", () => {
+  const plan = planAgentMemory({ engine: "codex", sessionKey: "score-refused", liveAgents: 1 },
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+  const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+  // The kernel refuses this value even when the test has elevated privileges.
+  plan.score = -1001;
+  const args = ["$literal", "two words", '"quote"'];
+  const wrapped = wrapAgentCommand(plan, process.execPath, ["-e",
+    'console.log(JSON.stringify({score:Number(require("node:fs").readFileSync("/proc/self/oom_score_adj","utf8")),args:process.argv.slice(1)}));process.exit(23)', ...args]);
+  const result = spawnSync(wrapped.command, wrapped.args, { encoding: "utf8", timeout: 5_000 });
+  expect(result.status).toBe(23);
+  expect(result.signal).toBeNull();
+  expect(JSON.parse(result.stdout)).toEqual({ score: inherited, args });
+  expect(result.stderr).toContain("workload OOM score unavailable");
+});
+
+test("disabled memory and unsupported platforms clear inherited deferred scores", () => {
+  const env = { NODE_ENV: "test" as const, LLV_SIGNAL_LAUNCHER: "launcher", LLV_SIGNAL_OOM_SCORE: "900" };
+  const plan = planAgentMemory({ engine: "codex", sessionKey: "score-off", liveAgents: 1 },
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+  for (const unsupported of [null, { ...plan, mechanism: "none" as const }, { ...plan, platform: "darwin" as const }]) {
+    expect(wrapAgentLaunch(unsupported, "agent", ["literal"], env)).toEqual({ command: "agent", args: ["literal"], env: { NODE_ENV: "test", LLV_SIGNAL_LAUNCHER: "launcher" } });
+  }
+  expect(env.LLV_SIGNAL_OOM_SCORE).toBe("900");
+});
+
+test.skipIf(process.platform !== "linux")("the final Python exec warns on a refused score and preserves native exit status", () => {
+  const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+  const result = spawnSync("python3", ["-B", "-c", String.raw`
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('launcher', sys.argv[1])
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+launcher.execute(sys.argv[2:])
+`, path.resolve("bin/agent-signal-sandbox.py"), process.execPath, "-e",
+    'console.log(JSON.stringify({score:Number(require("node:fs").readFileSync("/proc/self/oom_score_adj","utf8")),pending:process.env.LLV_SIGNAL_OOM_SCORE??null}));process.exit(23)'],
+    { env: { ...process.env, LLV_SIGNAL_OOM_SCORE: "-1001" }, encoding: "utf8", timeout: 5_000 });
+  expect(result.status).toBe(23);
+  expect(JSON.parse(result.stdout)).toEqual({ score: inherited, pending: null });
+  expect(result.stderr).toContain("workload OOM score unavailable");
+});
+
 test("probe requires delegated memory and a successful fake scope runner", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-probe-"));
   const manager = path.join(root, "user.slice/user-1000.slice/user@1000.service");
@@ -76,7 +120,7 @@ test("probe requires delegated memory and a successful fake scope runner", () =>
     expect(probeAgentScopes(options)).toBeNull();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
-function fakeCell() {
+function fakeCell(identity?: (pid: number) => string | null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-cell-"));
   const group = `/${basePlan.slice}/${basePlan.unit}`;
   const dir = path.join(root, group);
@@ -87,12 +131,25 @@ function fakeCell() {
   fs.writeFileSync(slice, "oom 0\noom_kill 0\n");
   const calls: string[][] = [];
   let notify = () => {};
-  const cell = new AgentMemoryCell(basePlan, { cgroupRoot: root, cgroupForPid: () => group, now: () => 100_000,
+  const cell = new AgentMemoryCell(basePlan, { identity, cgroupRoot: root, cgroupForPid: () => group, now: () => 100_000,
     watch: ((_file: string, listener: () => void) => { notify = listener; return { close() {} }; }) as unknown as typeof fs.watch,
     runner: (command, args) => { calls.push([command, ...args]); return ""; } });
   cell.attach(123);
   return { cell, file, slice, calls, notify: () => notify(), dispose: () => { cell.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
+for (const alive of [false, true]) test(`scope cleanup records only a native host that still runs (alive=${alive})`, () => {
+  const native = { pid: 2147482501, startIdentity: `fixture-scope-exit-${alive}`, bootEpoch: "fixture-boot" };
+  const fixture = fakeCell(pid => pid === native.pid && alive ? native.startIdentity : null);
+  try {
+    fixture.cell.setExitProcess(native);
+    if (!alive) { recordHostExit(native, null, "SIGKILL"); reclaimHostExit(native); }
+    fs.writeFileSync(fixture.file, "oom 1\noom_kill 1\n");
+    fixture.cell.settleExit({ expected: false });
+    expect(fixture.calls).toHaveLength(1);
+    expect(fixture.calls[0]).toContain(basePlan.unit!);
+    expect(readHostExit(native)?.stop?.path ?? null).toBe(alive ? "agent-memory-scope-reap" : null);
+  } finally { fixture.dispose(); }
+});
 test("launch population varies automatic caps while repeated descendant OOMs leave the session running", () => {
   // The launch population, rather than the engine or role, explains these caps.
   expect([1, 5, 7, 10, 12].map((liveAgents) => agentMemoryCeiling(30 * GIB, liveAgents).limitBytes / GIB))
@@ -410,6 +467,32 @@ function watchdogChild() {
   return Object.assign(new EventEmitter(), { pid: 123, exitCode: null as number | null, signalCode: null as NodeJS.Signals | null,
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
 }
+for (const outcome of ["ready", "refused", "attachment-error"] as const) test(`a deferred socket spawn binds memory to its native root (${outcome})`, async () => {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const spawnReady = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const child = Object.assign(watchdogChild(), { spawnReady });
+  const failed = new Promise<Error>(resolve => child.once("error", resolve));
+  const killed: number[] = [];
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null, limitBytes: 100, budgetBytes: 1000 }, {
+    identity: pid => { if (outcome === "attachment-error") throw new Error("fixture attachment failed"); return `${pid}:native`; },
+    sample: () => [{ pid: 124, identity: "124:native", rss: 101, name: "agent" }],
+    kill: pid => { killed.push(pid); },
+  });
+  try {
+    cell.wrapSpawn(() => child as unknown as ChildProcessWithoutNullStreams)("agent", [], {});
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([]);
+    child.pid = 124;
+    if (outcome === "refused") reject(new Error("fixture launch refused"));
+    else resolve();
+    await spawnReady.catch(() => {});
+    if (outcome === "attachment-error") expect((await failed).message).toBe("fixture attachment failed");
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual(outcome === "ready" ? [124] : []);
+    expect(killed).not.toContain(123);
+  } finally { cell.close(); }
+});
 for (const launch of ["wrapSpawn", "attach"] as const) for (const limit of ["agent", "shared"] as const) test(`watchdog ${launch} acquires an initially unavailable owned identity and enforces the ${limit} limit`, () => {
   const child = watchdogChild();
   const killed: number[] = [];

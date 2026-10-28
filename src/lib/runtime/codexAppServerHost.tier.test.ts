@@ -235,7 +235,7 @@ test("a tier missing from the live catalog is refused before any call", async ()
   const server = new TierAppServer("tier-thread", ["priority"]);
   const host = await startHost(server);
   try {
-    await expect(host.setTier({ operationId: "turbo-1", serviceTier: "ultrafast", cut: "boundary" })).rejects.toThrow("not offered");
+    await expect(host.setTier({ operationId: "turbo-1", serviceTier: "ultrafast", cut: "boundary" })).rejects.toThrow('serviceTier ultrafast for model gpt-6.1-sol; evaluated selected account "default"');
     expect(tierUpdates(server)).toHaveLength(0);
   } finally { await host.release(); }
 });
@@ -388,4 +388,70 @@ test("a turn waiting for an approval is never cut", async () => {
     expect(outcome).toMatchObject({ cut: "none", reason: "the turn is waiting for an answer" });
     expect(server.methods()).not.toContain("turn/interrupt");
   } finally { await host.release(); }
+});
+
+
+test("speed control roundtrip reaches native settings without release or interruption, and MCP replay survives reopening receipts", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { changeConversationSpeed } = await import("./conversationSpeed");
+  const { applyConversationAction } = await import("@/lib/conversation/actions");
+  const { viewerMcpBindings, productionViewerControlDependencies } = await import("@/lib/mcp/bindings");
+  const { createMcpToolService, SqliteMcpReceiptStore } = await import("@/lib/mcp/server");
+  const { POST } = await import("@/app/api/conversation-host/route");
+  const { NextRequest } = await import("next/server");
+  const { setConversationHostDependenciesForTests } = await import("@/app/api/conversation-host/dependencies");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "speed-roundtrip-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const conversation = registry.ensureConversation("codex", path.join(root, "thread.jsonl"), "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: false, serviceTier: "default" });
+  fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] }] }));
+  const native = new TierAppServer();
+  const host = await startHost(native);
+  const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+  const receiptFile = path.join(root, "receipts.sqlite");
+  let receipts = new SqliteMcpReceiptStore(receiptFile);
+  const forbidden = async (): Promise<never> => { throw new Error("unexpected lifecycle effect"); };
+  setConversationHostDependenciesForTests({ applyConversationAction: request => applyConversationAction(request, {
+    registry: () => registry, structuredEnabled: () => true, dispatchStructuredControl: forbidden,
+    interruptConversation: forbidden, killConversation: forbidden, resumeConversation: forbidden,
+    compactConversation: forbidden, answerDialogKey: forbidden,
+    changeSpeed: (id, tier, operationId) => changeConversationSpeed(id, tier, operationId, { registry, host: async () => host,
+      accounts: () => [{ id: "account-a", label: "Account A", kind: "managed", home: root, sessionsDir: root, authPresent: true, loginPane: null, createdAt: 0 }] }),
+  }) });
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => POST(new NextRequest(request)) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  const bindings = viewerMcpBindings(undefined, productionViewerControlDependencies(true));
+  const args = { clientRequestId: "speed-roundtrip", conversationId: conversation.id, action: "speed", serviceTier: "ultrafast" };
+  try {
+    await startTurn(host, native);
+    const first = await createMcpToolService(bindings, receipts).callTool("conversation_action", args);
+    expect(first).toMatchObject({ ok: true, appliedTier: "ultrafast", echoed: true });
+    expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile.serviceTier).toBe("ultrafast");
+    expect((await host.health()).activeTurnRef).toBe("turn-1");
+    receipts.close();
+    receipts = new SqliteMcpReceiptStore(receiptFile);
+    const service = createMcpToolService(bindings, receipts);
+    expect(await service.callTool("conversation_action", args)).toMatchObject({ ...first, replayed: true });
+    expect(tierUpdates(native)).toHaveLength(1);
+    expect(native.methods()).not.toContain("turn/interrupt");
+    expect(native.methods()).not.toContain("thread/resume");
+    expect((await host.health()).status).not.toBe("dead");
+    native.echo = () => "priority";
+    const refused = await service.callTool("conversation_action", { ...args, clientRequestId: "speed-native-refusal" });
+    expect(refused).toMatchObject({ ok: false, details: { code: "tier_differs", requestedTier: "ultrafast", appliedTier: "priority", echoed: true } });
+    expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile.serviceTier).toBe("priority");
+    expect(tierUpdates(native)).toHaveLength(2);
+  } finally {
+    viewer.stop(true);
+    setConversationHostDependenciesForTests(null);
+    receipts.close();
+    registry.close();
+    await host.release();
+    if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

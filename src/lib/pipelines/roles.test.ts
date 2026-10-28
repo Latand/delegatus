@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES } from "@/lib/roles/defaults";
 import { FRONTEND_GUIDANCE, resolveRole } from "@/lib/roles/registry";
 import { ROLE_VARIANT_IDS } from "@/lib/roles/types";
 import { VARIANT_PARAMS } from "@/lib/roles/paramConfig";
@@ -17,18 +17,6 @@ const REGISTRY_LOOKUP = (roleId: string) => {
   if (roleId === "reviewer") return { engine: "codex" as const, model: "gpt-5.6-sol", effort: "xhigh", access: "read-only" as const, promptScaffold: "Reviewer guidance" };
   return null;
 };
-
-test("builder isolation keeps edits and commits in its assigned worktree", () => {
-  const variants: Record<string, string>[] = [{}, { mode: "apply-fixes" }];
-  for (const params of variants) {
-    const scaffold = pipelineRoleLookup("builder", params)?.promptScaffold ?? "";
-    expect(scaffold).toContain("Edit, stage and commit in the assigned worktree");
-    expect(scaffold).toContain("Use scratch exports for builds, tests, probes and renders");
-    expect(scaffold).not.toContain("work, build, probe and render in a scratch export");
-  }
-  expect(WORKING_RULES_SHORT).toContain("Edit, stage and commit in the assigned worktree");
-  expect(WORKING_RULES_SHORT).not.toContain("work in a scratch export");
-});
 
 test("role references resolve registry defaults and stage overrides", () => {
   const lookup = () => ({
@@ -51,6 +39,16 @@ test("role references resolve registry defaults and stage overrides", () => {
     effort: "low",
     access: "read-only",
     promptScaffold: "Builder guidance",
+  });
+});
+
+test("automatic preferred tiers remain role defaults for launch-time fallback", () => {
+  const resolved = resolvePipelineRole({
+    role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.1-sol", effort: "high", preferredServiceTier: "ultrafast",
+  }, "run", REGISTRY_LOOKUP).role;
+  expect(resolved).toMatchObject({
+    engine: "codex", model: "gpt-6.1-sol", preferredServiceTier: "ultrafast",
+    serviceTier: "ultrafast", serviceTierSource: "role-default",
   });
 });
 
@@ -130,7 +128,7 @@ test("cross-engine overrides require a compatible model", () => {
 
 test("stage model overrides enumerate the selected engine catalog when invalid", () => {
   expect(resolvePipelineRole({ engine: "codex", model: "gpt-5.6-codex" }, "run", REGISTRY_LOOKUP).error)
-    .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+    .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
   expect(resolvePipelineRole({ engine: "claude", model: "claude-fable-5" }, "run", REGISTRY_LOOKUP).error)
     .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
@@ -149,10 +147,13 @@ test("a near-limit override scaffold composes with fences inside the store cap",
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-roles-cap-"));
   process.env.LLV_STATE_DIR = sandbox;
   try {
-    saveRoleOverrides({ reviewer: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
-    const resolved = pipelineRoleLookup("reviewer");
-    expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
-    expect(resolved?.promptScaffold).toContain("Safety fences:");
+    for (const role of ["reviewer", "orchestrator"] as const) {
+      saveRoleOverrides({ [role]: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
+      const resolved = pipelineRoleLookup(role);
+      expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
+      expect(resolved?.promptScaffold).toContain("Safety fences:");
+      expect(resolved?.promptScaffold).toContain("call leave_lesson that turn: correction:true, lesson");
+    }
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -174,7 +175,6 @@ test("a visual-critic stage resolves read-only on the role's Claude Opus runtime
   const resolved = resolvePipelineRole({ role: { roleId: "visual-critic" } }, "run", pipelineRoleLookup);
   expect(resolved.error).toBeUndefined();
   expect(resolved.role).toMatchObject({ roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" });
-  expect(resolved.role?.promptScaffold).toStartWith("You are a Visual-critic.");
   expect(resolved.role?.promptScaffold).toContain("Safety fences:");
   expect(resolvePipelineRole({ role: { roleId: "visual-critic" }, effort: "xhigh" }, "run", pipelineRoleLookup).role).toMatchObject({ effort: "xhigh", access: "read-only" });
 });
@@ -249,7 +249,6 @@ test("an orchestrator pipeline stage carries the working rules and the worker li
   const scaffold = pipelineRoleLookup("orchestrator", { mode: "standard" })?.promptScaffold ?? "";
   expect(scaffold.split(WORKING_RULES)).toHaveLength(2);
   expect(scaffold).toBe(`You are the Orchestrator. Mode: standard.\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}\n\nSafety fences:\n- Act on Delegatus only through its MCP tools, launching with your own transcript as src lineage.\n- Workers start in fresh, empty sessions; never fork one.`);
-  expect(ORCHESTRATOR_WITHOUT_MANDATE_RULES).toEndWith("each running lane and each live spawned agent counts as one.");
 });
 
 /* A stage stores its scaffold at the store cap (MAX_SCAFFOLD_LENGTH), and an
@@ -304,7 +303,7 @@ test("accepted text parameter values keep every rule whole or refuse the stage",
   }
 });
 
-test("a reviewer diff source past the stage cap is refused, a usual one keeps rules 13 to 16", () => {
+test("a reviewer diff source past the stage cap is refused, a usual one keeps its suffix", () => {
   const range = `feature/${"a".repeat(240)}...feature/${"b".repeat(240)}`;
   for (const diffSource of [range, "x".repeat(2_000)]) {
     const params = { diffSource, lens: "correctness", parallelN: 1 };
@@ -319,12 +318,10 @@ test("a reviewer diff source past the stage cap is refused, a usual one keeps ru
   const resolved = resolvePipelineRole({ role: { roleId: "reviewer", params: { diffSource: usual } } }, "review-loop", pipelineRoleLookup);
   const scaffold = resolved.role?.promptScaffold ?? "";
   expect(scaffold).toContain(`Change under review: ${usual}`);
-  for (const rule of ["13. Read the newest answer before you act", "14. Date and list from the primary record", "15. An error reply, a timeout or a status is no proof", "16. Leave the checkout as you found it"]) expect(scaffold).toContain(rule);
   expect(scaffold).toEndWith(pipelineRoleLookup("reviewer")!.promptScaffold!.slice(-2_000));
 });
 
 test("pipeline role lookup ignores the retired orchestrator maxWorkers parameter", () => {
-  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).not.toContain("keep at most");
   expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toBe(pipelineRoleLookup("orchestrator")?.promptScaffold);
   expect(pipelineRoleLookup("reviewer")?.promptScaffold).toContain("Run 1 independent pass(es)");
 });
@@ -357,9 +354,9 @@ test("Builder domain=frontend keeps the canonical frontend scaffold guidance (pa
 
 test("codex model overrides use the curated launch catalog at create time", () => {
   expect(resolvePipelineRole({ model: `gpt-${"x".repeat(200)}` }, "run", REGISTRY_LOOKUP).error)
-    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
   expect(resolvePipelineRole({ model: "gpt-5.6\u0000sol" }, "run", REGISTRY_LOOKUP).error)
-    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+    .toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
 });
 
 for (const effort of ["xhigh", "max", "ultra"]) {

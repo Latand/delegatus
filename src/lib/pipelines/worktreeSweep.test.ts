@@ -2045,7 +2045,8 @@ test("activity restarts the retention clock of a role's temp checkout", async ()
   expect(recordWorktreeProvenance(dir, { creator: "merge-batch", id: "batch" })).toBe(true);
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   const busy = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
-  expect(busy.kept).toEqual([{ path: dir, reason: "live-conversation", bytes: expect.any(Number) }]);
+  expect(busy.kept).toEqual([{ path: dir, reason: "live-conversation", bytes: expect.any(Number),
+    repository: root, observedAt: busy.at, pipelineId: undefined }]);
   const quiet = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: busy, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS + 1 }));
   expect(quiet.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention" })]);
   expect(fs.existsSync(dir)).toBe(true);
@@ -3461,6 +3462,25 @@ test("a slice's elapsed-work budget defers candidates without spending their ret
   expect(report.progress?.complete).toBe(false);
   expect(report.kept.filter(row => row.reason === "deferred")).toHaveLength(1);
   expect(fs.existsSync(first.dir) && fs.existsSync(second.dir)).toBe(true);
+});
+
+test("drilldown metadata identifies deferred owners and preserves decision observation time across slices", async () => {
+  const root = repository();
+  const a = lane(root, path.join(caseDir, "observe-a"), "observe-a");
+  const b = lane(root, path.join(caseDir, "observe-b"), "observe-b");
+  const pipelines = [a, b].map((entry, index) => pipeline({ id: `observe-${index}`, task: `Preserve export ${index}`,
+    repoDir: root, worktreeDir: entry.dir, branch: index === 0 ? "observe-a" : "observe-b", state: "running" }));
+  const firstAt = Date.parse("2026-10-23T10:00:00.000Z");
+  const first = await sweepMergedWorktrees(ports({ pipelines, maxCandidates: 1, now: () => firstAt }));
+  const observed = first.kept.find(row => row.observedAt);
+  expect(observed).toBeDefined();
+  expect(first.kept.every(row => row.repository === root && row.pipelineId?.startsWith("observe-"))).toBe(true);
+  expect(first.kept.find(row => row.reason === "deferred")?.observedAt).toBeUndefined();
+  const later = await sweepMergedWorktrees(ports({ pipelines, previous: first, maxCandidates: 1, now: () => firstAt + 60_000 }));
+  expect(later.kept.find(row => row.path === observed!.path)?.observedAt).toBe(first.at);
+  recordWorktreeSweep(later, pipelines);
+  const { readWorktreePage } = await import("./worktreeDrilldown");
+  expect(readWorktreePage(null).rows.map(row => row.task).sort()).toEqual(["Preserve export 0", "Preserve export 1"]);
 });
 
 

@@ -18,6 +18,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
 import { publicationPushBudgetMs } from "./gateBudget";
+import { recoverablePublication } from "./publicationHistory";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -53,7 +54,7 @@ test("an unpinned base without origin resolves local main without fetching", asy
     await git(root, "init", "-q", "-b", "main");
     await git(root, "config", "user.name", "Fixture");
     await git(root, "config", "user.email", "noreply@example.invalid");
-    await git(root, "commit", "-q", "--allow-empty", "-m", "base");
+    await git(root, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
     const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {
@@ -189,6 +190,66 @@ async function isolatedIdentityRepo() {
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));
   return { root, repo, env, exec, run };
 }
+
+test.each(["deletion", "modification", "normal"] as const)("passed stage settlement handles %s while leaving ignored files alone", async (change) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    fs.mkdirSync(path.join(box.repo, ".artifacts"));
+    const tracked = ".artifacts/brief.md";
+    fs.writeFileSync(path.join(box.repo, tracked), "tracked brief\n");
+    await box.run("add", tracked);
+    await box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "tracked brief");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), ".artifacts/\n");
+    await box.run("add", ".gitignore");
+    await box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "ignore artifacts");
+    const subject = pipeline();
+    subject.repoDir = subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const ignored = path.join(box.repo, ".artifacts/untracked.md");
+    fs.writeFileSync(ignored, "ignored draft\n");
+    if (change === "deletion") fs.unlinkSync(path.join(box.repo, tracked));
+    else if (change === "modification") fs.writeFileSync(path.join(box.repo, tracked), "updated brief\n");
+    else fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    // New eligible files still join the settlement commit, with literal names.
+    fs.writeFileSync(path.join(box.repo, "new[1].md"), "new output\n");
+    const result = await commitPipelineStage(subject, "build", true, box.exec);
+    expect(result).toMatchObject({ ok: true });
+    const expected = change === "normal" ? "A\tnew[1].md\nM\tsource.ts"
+      : `${change === "deletion" ? "D" : "M"}\t${tracked}\nA\tnew[1].md`;
+    expect(await box.run("diff", "--name-status", subject.baseRef, "HEAD")).toBe(expected);
+    expect(await box.run("ls-files", ".artifacts/untracked.md")).toBe("");
+    expect(fs.readFileSync(ignored, "utf8")).toBe("ignored draft\n");
+    expect(await box.run("status", "--porcelain")).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["listing", "newly ignored"] as const)("passed stage settlement preserves work on a %s untracked path refusal", async (refusal) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.repoDir = subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "new.md"), "stage output\n");
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (args[0] === "ls-files" && args.includes("--others")) {
+        if (refusal === "listing") return { code: 1, stdout: "", stderr: "index read refused" };
+        // The ignore policy changes after discovery; Git must still refuse it.
+        fs.writeFileSync(path.join(box.repo, ".git/info/exclude"), "new.md\n");
+      }
+      return result;
+    };
+    const result = await commitPipelineStage(subject, "build", true, exec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("settlement unexpectedly committed");
+    expect(result.error).toStartWith("staging the passed stage:");
+    expect(result.error).toContain("new.md");
+    expect(result.commitRefusal).toBeUndefined();
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(await box.run("ls-files", "new.md")).toBe("");
+    expect(fs.readFileSync(path.join(box.repo, "new.md"), "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test("a real stale dirty checkout provisions from the freshly fetched origin/main tip", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-base-"));
@@ -1066,7 +1127,7 @@ test("pass commits a dirty stage and retry resets plus cleans", async () => {
     expect(await resetPipelineStage(subject, exec)).toEqual({ ok: true, sha: subject.lastPassedCommit });
     expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 1;");
     expect(calls).toContain(`git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`);
-    expect(calls).toContain(`git add -A -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
+    expect(calls).toContain(`git add -u -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
     expect(calls).toContain(`git reset --hard ${subject.lastPassedCommit}`);
     expect(calls).toContain("git clean -fd");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -1716,7 +1777,10 @@ test("read-only stage records a declared report without granting source commits"
   }
 });
 
-test("read-only stage records an ignored declared report", async () => {
+test.each([
+  { label: "read-write", allowCommit: true },
+  { label: "read-only", allowCommit: false },
+])("$label settlement leaves an ignored declared report untracked", async ({ allowCommit }) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-ignored-output-"));
   try {
     (await git(root, "init", "--initial-branch=main"));
@@ -1731,17 +1795,50 @@ test("read-only stage records an ignored declared report", async () => {
     const subject = pipeline();
     subject.worktreeDir = root;
     subject.lastPassedCommit = (await git(root, "rev-parse", "HEAD"));
+    const head = subject.lastPassedCommit;
     fs.mkdirSync(path.join(root, "reports"));
     fs.writeFileSync(path.join(root, "reports", "audit.md"), "audited\n");
 
     expect((await git(root, "status", "--porcelain"))).toBe("");
-    const result = (await commitPipelineStage(subject, "audit", false, realExec, ["reports/audit.md"]));
-    expect(result.ok).toBeTrue();
-    expect(result.ok && result.sha).not.toBe(subject.lastPassedCommit);
-    expect((await git(root, "show", "HEAD:reports/audit.md"))).toBe("audited");
+    const result = (await commitPipelineStage(subject, "audit", allowCommit, realExec, ["reports/audit.md"]));
+    expect(result).toEqual({ ok: true, sha: head });
+    expect((await git(root, "ls-files", "--", "reports/audit.md"))).toBe("");
+    expect((await git(root, "rev-parse", "HEAD"))).toBe(head);
+    expect(fs.readFileSync(path.join(root, "reports", "audit.md"), "utf8")).toBe("audited\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test.each([
+  { label: "read-write", allowCommit: true, mutateAfterListing: 1 },
+  { label: "read-only", allowCommit: false, mutateAfterListing: 2 },
+])("$label settlement refuses an output that becomes ignored after discovery", async ({ allowCommit, mutateAfterListing }) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const output = path.join(box.repo, "new.md");
+    fs.writeFileSync(output, "stage output\n");
+    let listings = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (command === "git" && args[0] === "ls-files" && args.includes("--others")) {
+        listings += 1;
+        if (listings === mutateAfterListing) fs.appendFileSync(path.join(box.repo, ".git", "info", "exclude"), "\n/new.md\n");
+      }
+      return result;
+    };
+
+    const result = await commitPipelineStage(subject, "audit", allowCommit, exec, ["new.md"]);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("new.md") });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    expect(await box.run("ls-files", "--", "new.md")).toBe("");
+    expect(await box.run("ls-files", "--others", "--exclude-standard", "--", "new.md")).toBe("");
+    expect(fs.readFileSync(output, "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test("a declared output directory leaves ignored descendants alone", async () => {
@@ -2005,13 +2102,32 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
   };
 }
 
+test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
+  const box = await publishSandbox();
+  try {
+    const head = await box.commit("change.txt", "accepted work\n");
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    const refusal = kind === "assertion" ? "(fail) named assertion" : kind === "cleanup" ? "owned runner: budget cleanup failed: fixture refusal" : "";
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${refusal}\nowned runner: deadline expired\npre-push: no verdict within the push budget of 10 s: "types" was still running\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected publication refusal");
+    expect(result.failure?.retryableDeadline).toBe(kind === "pure");
+    expect(result.outcome).toBe(kind === "pure" ? "not-landed" : undefined);
+    expect(recoverablePublication(result)).toBe(kind === "pure");
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
 for (const scenario of [
   { name: "ordinary repository", adapter: false, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 900_000 },
   { name: "ordinary gate change", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000 },
   { name: "engine gate change", adapter: true, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 1_500_000 },
   { name: "engine gate refusal", adapter: true, file: "src/lib/pipelines/engine.ts", refused: true, unreadable: null, ms: 1_500_000 },
-  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_500_000 },
-  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_500_000 },
+  { name: "runtime gate change", adapter: true, file: "Dockerfile", refused: false, unreadable: null, ms: 1_800_000 },
+  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_800_000 },
+  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_800_000 },
 ]) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
   const box = await publishSandbox();
   try {
@@ -3095,6 +3211,100 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test.each(["before-push", "after-confirm"] as const)("operator rejection fences publication and retains its real receipt: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  try {
+    const { task } = await admitProactiveTask(candidate(`publication-${phase}`), context(), undefined, authority());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "accepted outcome\n");
+    let effects = 0;
+    const untouched: ExecPort = async () => { effects++; throw new Error("fenced effect ran"); };
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("disabled") });
+    expect(effects).toBe(0);
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    let rejected = false;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (!rejected && (phase === "before-push" || args.includes("ls-remote") && result.stdout.startsWith(head))) {
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        rejected = true;
+      }
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(rejected).toBe(true);
+    if (phase === "before-push") {
+      expect(result).toMatchObject({ ok: false });
+      expect(await box.originHead()).toBe("");
+    } else {
+      expect(result).toMatchObject({ ok: true, remote: "published", sha: head });
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published" } });
+      expect(await box.originHead()).toBe(head);
+    }
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("accepted outcome\n");
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(effects).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["success", "refused"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  if (outcome === "refused") {
+    fs.mkdirSync(path.join(box.origin, "hooks"), { recursive: true });
+    await git(box.origin, "config", "core.hooksPath", path.join(box.origin, "hooks"));
+    fs.writeFileSync(path.join(box.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  }
+  const interval = globalThis.setInterval;
+  let watch: (() => void) | undefined;
+  globalThis.setInterval = ((callback: () => void, ms: number) => {
+    if (ms === 50) watch = callback;
+    return interval(callback, ms);
+  }) as typeof setInterval;
+  try {
+    const project = `active-push-${outcome}`;
+    const { task } = await admitProactiveTask({ ...candidate(project), project }, { ...context(), project }, undefined, authority());
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "retained outcome\n");
+    let pushes = 0;
+    let confirmations = 0;
+    let abortedAtRejection: boolean | undefined;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      if (args.includes("push")) {
+        pushes++;
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        expect(watch).toBeDefined();
+        watch!();
+        abortedAtRejection = options?.signal?.aborted;
+      }
+      if (pushes && args.includes("ls-remote")) confirmations++;
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(pushes).toBe(1);
+    expect(abortedAtRejection).toBe(false);
+    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head } : { ok: false });
+    expect(confirmations).toBe(outcome === "success" ? 1 : 0);
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result });
+    expect(await box.originHead()).toBe(outcome === "success" ? head : "");
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("retained outcome\n");
+    let nextEffects = 0;
+    expect(await publishPipelineBranch(findPipelineRecord(box.subject.id)!, async () => {
+      nextEffects++; throw new Error("new publication must remain fenced");
+    }, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(nextEffects).toBe(0);
+  } finally {
+    globalThis.setInterval = interval;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
 test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {
   const subject = pipeline();
   const head = "7".repeat(40);
@@ -3246,6 +3456,26 @@ test("the publication's dependency install and its push run without the Viewer's
       for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
       expect(cpuPriorityFromEnv(env)).toEqual({ database: path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), taskIds: ["priority-task-a", "priority-task-b"] });
     }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test.each([undefined, "", "--max-old-space-size=2048 --no-warnings", "--max-old-space-size=16384"])("publication hands its hook a heap and memory cap, preserving caller options: %s", async (options) => {
+  const box = await publishSandbox();
+  const previous = { NODE_OPTIONS: process.env.NODE_OPTIONS, LLV_GATE_MEM: process.env.LLV_GATE_MEM };
+  try {
+    const head = await box.commit("stage.txt", "stage work\n");
+    const hooks = path.join(box.root, "hooks");
+    fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "%s\\n" "$NODE_OPTIONS" "$LLV_GATE_MEM" > hook-memory.txt\n', { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    if (options === undefined) { delete process.env.NODE_OPTIONS; delete process.env.LLV_GATE_MEM; }
+    else { process.env.NODE_OPTIONS = options; process.env.LLV_GATE_MEM = "24G"; }
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "hook-memory.txt"), "utf8"))
+      .toBe(`${options ?? "--max-old-space-size=11264"}\n${options === undefined ? "14G" : "24G"}\n`);
   } finally {
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(box.root, { recursive: true, force: true });

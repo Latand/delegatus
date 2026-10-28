@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 
@@ -15,6 +16,8 @@ import type { CompanionSettings } from "@/lib/voiceCompanion/storage";
  */
 
 const harness = installOnboardingDom();
+// Call-state tests use no animation timeline or layout engine.
+Object.defineProperty(harness.dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
 installActEnv();
 /* The floating component reads the page through the window's own globals. */
 const view = harness.dom as unknown as Window & typeof globalThis;
@@ -576,10 +579,10 @@ async function liveHarness() {
       const project = target.searchParams.get("project");
       return jsonResponse({ seat: { project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null, all: null });
     }
-    if (target.pathname === "/api/voice-companion/calls") return callsRoute.GET(new NextRequest(`http://127.0.0.1${target.pathname}`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+    if (target.pathname === "/api/voice-companion/calls") return callsRoute.GET(new NextRequest(`http://127.0.0.1${target.pathname}`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     if (target.pathname === "/api/voice-companion/resume") {
       const resume = await import("@/app/api/voice-companion/resume/route");
-      return resume.GET(new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+      return resume.GET(new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: "GET", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     }
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
@@ -587,7 +590,7 @@ async function liveHarness() {
     if (body?.action === "command" && holding.command) await holding.command;
     const lost = body?.action === "command" ? failing.command : null;
     if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
-    const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+    const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
     const answer = await (body ? route.POST(request) : route.GET(request));
     if (lost === "after") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     return answer;

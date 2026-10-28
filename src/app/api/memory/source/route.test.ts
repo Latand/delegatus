@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,7 +25,7 @@ afterEach(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 function request(body: unknown, headers: Record<string, string> = {}) {
-  return new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { "Content-Type": "application/json", Origin: "http://localhost", host: "localhost", ...headers }, body: JSON.stringify(body) });
+  return new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, "Content-Type": "application/json", Origin: "http://localhost", host: "localhost", ...headers }, body: JSON.stringify(body) });
 }
 test("GET is uncached and an operator PUT starts importing without accepting a supplied phase or roots", async () => {
   const response = await GET(); expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -51,7 +52,7 @@ test("only the operator's same-origin write can select engines; import evidence 
 });
 test("invalid bodies and an engines-first choice change nothing", async () => {
   for (const value of [null, [], {}, { source: "other" }, { source: true }]) expect((await PUT(request(value))).status).toBe(400);
-  expect((await PUT(new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { Origin: "http://localhost", host: "localhost" }, body: "{" }))).status).toBe(400);
+  expect((await PUT(new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, Origin: "http://localhost", host: "localhost" }, body: "{" }))).status).toBe(400);
   expect((await PUT(request({ source: "engines" }))).status).toBe(409);
   expect(readMemorySourceFile()).toBeNull();
 });
@@ -91,4 +92,66 @@ test("GET carries the sync schedule in the engines position with a ready import,
   expect(JSON.stringify(body)).not.toContain(root);
   expect((await PUT(request({ source: "engines", syncIntervalHours: 0 }))).status).toBe(200);
   expect((await (await GET()).json()).sync).toMatchObject({ intervalHours: 0, nextAt: null });
+});
+
+test("an import that failed after the current choice is named on the read; a newer choice or Delegatus hides it", async () => {
+  const { writeImportRows } = await import("@/lib/memory/importStore");
+  const record = (id: string, at: string, state: "failed" | "ready", reason?: "integrity" | "interrupted") => ({ kind: "import" as const, id, state, at, previous: null,
+    backup: path.join(root, "backups", "engine-memory", id), files: 0, candidates: 0, parts: 0, ...(reason ? { reason } : {}) });
+  const read = async () => (await GET()).json();
+  /* No import store yet: the unchosen read is unchanged. */
+  expect(await read()).toEqual({ choice: null, phase: null });
+  await writeImportRows([record("fixture-old", "2026-10-17T10:00:00.000Z", "failed", "interrupted"), record("fixture-new", "2026-10-17T12:00:00.000Z", "failed", "integrity"), record("fixture-ok", "2026-10-17T13:00:00.000Z", "ready")]);
+  expect(await read()).toEqual({ choice: null, phase: null, lastFailure: { reason: "integrity", at: "2026-10-17T12:00:00.000Z" } });
+  /* The engines position restored by the failed import keeps its earlier changedAt. */
+  fs.writeFileSync(path.join(root, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: "2026-10-17T11:00:00.000Z" }));
+  expect((await read()).lastFailure).toEqual({ reason: "integrity", at: "2026-10-17T12:00:00.000Z" });
+  /* A later choice: the successful import's engines position, which keeps its import id. */
+  fs.writeFileSync(path.join(root, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: "2026-10-17T13:30:00.000Z", importId: "fixture-ok", phase: "active" }));
+  expect((await read()).lastFailure).toBeUndefined();
+  chooseSource("active");
+  expect((await read()).lastFailure).toBeUndefined();
+});
+
+test("GET names the admission hold in front of the import's pending passes, by word and only while parts are pending", async () => {
+  const { writeImportRows } = await import("@/lib/memory/importStore");
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const progress = (pendingParts: number) => ({ files: 351, parts: 351, pendingFiles: pendingParts, pendingParts, pendingLoadedParts: pendingParts, adopted: 80, dropped: 40 });
+  const seed = (pendingParts: number) => writeImportRows([{ kind: "import", id: "fixture-import", state: "ready", at: "2026-10-17T00:00:00.000Z", previous: null,
+    backup: path.join(root, "backups", "engine-memory", "fixture-import"), files: 351, candidates: 351, parts: 351, hostProject: "held-project", progress: progress(pendingParts) }]);
+  const read = async () => (await GET()).json();
+  chooseSource("importing"); await seed(231);
+  /* Nothing holds it: no word. */
+  expect((await read()).import.admission).toBeUndefined();
+  /* Seat wakes off for the host project. */
+  writeSeatTickSettings("held-project", { ...defaultSeatTickSettings("held-project"), enabled: false });
+  const held = await read();
+  expect(held.import).toMatchObject({ admission: "wakesOff", counts: { pendingParts: 231 } });
+  expect(JSON.stringify(held)).not.toContain("curation:");
+  expect(JSON.stringify(held)).not.toContain(root);
+  /* Nothing left to pass: the hold stops nothing, so it is not named. */
+  await seed(0);
+  expect((await read()).import.admission).toBeUndefined();
+  /* The automatic update draining holds every project. */
+  writeSeatTickSettings("held-project", defaultSeatTickSettings("held-project"));
+  await seed(10);
+  fs.mkdirSync(path.join(root, "self-update"), { recursive: true });
+  fs.writeFileSync(path.join(root, "self-update", "auto-drain.json"), JSON.stringify({ id: "drain", target: "release", since: "2026-10-17T00:00:00.000Z", until: 0, persistent: true }));
+  expect((await read()).import.admission).toBe("update");
+  /* The engines position names no hold: the sync is not the import. */
+  chooseSource("engines");
+  expect((await read()).import?.admission).toBeUndefined();
+});
+
+test("the driver's frame states read back through GET with the hold or the undo they draw", async () => {
+  const { MEMORY_SOURCE_FRAME_STATES, seedMemorySourceState } = await import("@/lib/memory/fixtures/sourceStates");
+  const wanted: Partial<Record<typeof MEMORY_SOURCE_FRAME_STATES[number], { admission?: string; undo?: unknown }>> = {
+    "importing-held": { admission: "wakesOff" }, "draining-held": { admission: "update" },
+    "active-undone": { undo: { state: "undone", kept: 0 } }, "active-partly-undone": { undo: { state: "partlyUndone", kept: 1 } },
+  };
+  for (const state of MEMORY_SOURCE_FRAME_STATES) {
+    await seedMemorySourceState(state);
+    const body = await (await GET()).json();
+    expect({ state, admission: body.import?.admission, undo: body.import?.undo }).toEqual({ state, admission: wanted[state]?.admission, undo: wanted[state]?.undo });
+  }
 });

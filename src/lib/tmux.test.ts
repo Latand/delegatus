@@ -11,7 +11,10 @@ import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/co
 import { freshSpecFor, resumeSpecForSession, prepareAgentPublicationSpec, withSpawnCapability } from "@/lib/agent/cli";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { agentRegistry } from "@/lib/agent/registry";
+import { statePath } from "@/lib/configDir";
 import {
+  activeTmuxSession,
+  tmuxEndpointHealth,
   cdCommandForCwd,
   sendShellCommandToPane,
   classifyTmuxAttachSnapshot,
@@ -25,7 +28,6 @@ import {
   spawnAgentWithPrompt,
   renameTmuxWindowForPid,
   resolveTmuxAttach,
-  resolveTmuxEndpointContract,
   selectSpawnedAgentProcess,
   SPAWN_READY_TIMEOUT_MS,
   tmuxAttachCommands,
@@ -98,38 +100,6 @@ describe("cdCommandForCwd", () => {
 
 test("reports the configured tmux endpoint", () => {
   expect(tmuxEndpoint()).toBe(process.env.TMUX_TMPDIR || "/tmp");
-});
-
-describe("tmux endpoint ownership", () => {
-  test("keeps legacy delivery available and reports a stale migration marker", () => {
-    expect(resolveTmuxEndpointContract({
-      configuredTmpdir: "/tmp",
-      externalFlag: "0",
-      migrationComplete: true,
-      uid: 1000,
-    })).toEqual({
-      external: false,
-      tmuxTmpdir: "/tmp",
-      health: {
-        status: "degraded",
-        code: "migration-marker-endpoint-mismatch",
-        configuredTmpdir: "/tmp",
-        expectedTmpdir: "/run/user/1000/agent-log-viewer",
-        message: "A migration completion marker exists while the Viewer is using /tmp. Legacy tmux delivery remains active; remove the stale marker or complete the supervisor migration.",
-      },
-    });
-
-    expect(resolveTmuxEndpointContract({
-      configuredTmpdir: "/run/user/1000/agent-log-viewer",
-      externalFlag: "1",
-      migrationComplete: true,
-      uid: 1000,
-    })).toEqual({
-      external: true,
-      tmuxTmpdir: "/run/user/1000/agent-log-viewer",
-      health: { status: "healthy" },
-    });
-  });
 });
 
 describe("spawn pane fencing", () => {
@@ -799,6 +769,31 @@ test("file-backed Docker tmux delivery applies the adapter's host CLI paths befo
   } finally {
     if (previous.home === undefined) delete process.env.HOME; else process.env.HOME = previous.home;
     if (previous.shim === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS; else process.env.LLV_DOCKER_NSENTER_SHIMS = previous.shim;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retired external mode cannot redirect session selection or degrade endpoint health", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-retired-mode-"));
+  const keys = ["PATH", "TMUX_TMPDIR", "LLV_LEGACY_TMUX_EXTERNAL"] as const;
+  const previous = keys.map(key => process.env[key]);
+  const marker = statePath("legacy-tmux-migration-complete");
+  const previousMarker = fs.existsSync(marker) ? fs.readFileSync(marker) : null;
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, "retired");
+  fs.writeFileSync(path.join(root, "tmux"), '#!/bin/sh\nif [ "$1" = "list-clients" ]; then echo "10 current"; exit 0; fi\nexit 1\n', { mode: 0o755 });
+  Object.assign(process.env, { PATH: `${root}${path.delimiter}${process.env.PATH}`, TMUX_TMPDIR: root, LLV_LEGACY_TMUX_EXTERNAL: "1" });
+  try {
+    expect(tmuxEndpoint()).toBe(root);
+    expect(tmuxEndpointHealth()).toEqual({ status: "healthy" });
+    expect(await activeTmuxSession()).toBe("current");
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+    if (previousMarker === null) fs.rmSync(marker, { force: true });
+    else fs.writeFileSync(marker, previousMarker);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

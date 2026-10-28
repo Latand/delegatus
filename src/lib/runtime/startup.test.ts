@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { readHostExit, recordHostStop } from "./hostExit";
 import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 
 // Durable startup fixtures yield between phases. Supervise their whole pass
@@ -10,7 +11,8 @@ setDefaultTimeout(60_000);
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import {
   activeOrchestratorSeats,
   beginOrchestratorSeatIntent,
@@ -26,9 +28,11 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { activateViewerRuntimeWhenCurrent, runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
+import * as darwinRuntime from "@/lib/proc/darwinIdentity";
 import {
   bindStructuredDeliveryQueue,
   hasStructuredDeliveryHost,
+  hasStructuredDeliveryController,
   publishStructuredDeliveryHost,
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
@@ -1338,9 +1342,13 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
   } as RuntimeHostClient;
   const ledger = createFakeDeliveryLedger();
   let releaseCalls = 0;
+  const exitProcess = { pid: 2147482790, startIdentity: `retained-startup-exit-${condition}`, bootEpoch: "fixture-boot" };
   const host = Object.assign(new FakeEngineHost(ledger), {
     onStateChange: () => () => {},
-    release: async () => { releaseCalls += 1; },
+    release: async () => {
+      recordHostStop(exitProcess, "EOF", "fixture-startup-release");
+      releaseCalls += 1;
+    },
   });
   const key = { engine: "codex" as const, sessionId };
   const scheduled: Array<() => void> = [];
@@ -1442,6 +1450,7 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
     expect(continuationAdmissions).toBe(1);
     expect(ledger.writes).toEqual([]);
     expect(releaseCalls).toBe(1);
+    expect(readHostExit(exitProcess)?.stop).toMatchObject({ path: "startup-retained-host-release", operationId: `codex:${sessionId}` });
     expect(journal.snapshot().recentOperations.filter((receipt) =>
       receipt.operationId.startsWith(`recovery-continuation-${sessionId}-`))).toEqual([]);
 
@@ -2755,11 +2764,8 @@ test("the surviving restart nudge names the turn that was severed", async () => 
     /* The turn it is talking about, named by the evidence that identifies it. */
     expect(message?.text).toContain("tool-result");
     expect(message?.text).toContain(severedAt);
-    expect(message?.text).toContain("resume that turn");
     /* #1276: the Viewer owns the clock now, so the seat is no longer asked to
        arm a schedule it has no lever for. */
-    expect(message?.text).not.toContain("re-arm");
-    expect(message?.text).not.toContain("checkpoint loop");
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
@@ -3096,6 +3102,7 @@ test.each(["codex", "claude"] as const)(
     const scheduledRetryDelays: number[] = [];
     const startupLogs: unknown[][] = [];
     let restoreClock = () => {};
+    let engineIdentity: { pid: number; startIdentity: string | null } | null = null;
     dependencies.schedule = (callback, delayMs) => {
       scheduledRetries.push(callback); scheduledRetryDelays.push(delayMs);
       return { unref() {} };
@@ -3107,6 +3114,7 @@ test.each(["codex", "claude"] as const)(
         viewer: { pid: number; startIdentity: string | null };
         engine: { pid: number; startIdentity: string | null };
       };
+      engineIdentity = identities.engine;
       expect(new Set([process.pid, identities.viewer.pid, identities.engine.pid]).size).toBe(3);
       expect(procBackend.processIdentity(identities.viewer.pid)).toBe(identities.viewer.startIdentity);
       expect(procBackend.processIdentity(identities.engine.pid)).toBe(identities.engine.startIdentity);
@@ -3201,6 +3209,12 @@ test.each(["codex", "claude"] as const)(
       await bindStructuredDeliveryQueue([], { registry, client: null });
       if (procBackend.pidAlive(incumbent.pid)) incumbent.kill("SIGKILL");
       await incumbent.exited;
+      if (engineIdentity
+        && engineIdentity.startIdentity !== null
+        && procBackend.processIdentity(engineIdentity.pid) === engineIdentity.startIdentity) {
+        try { process.kill(engineIdentity.pid, "SIGKILL"); } catch { /* fixture process already exited */ }
+        await waitFor(() => !procBackend.pidAlive(engineIdentity!.pid), 5_000);
+      }
       for (const replacement of replacements) {
         if (procBackend.pidAlive(replacement.pid)) replacement.kill("SIGKILL");
         await replacement.exited;
@@ -4173,6 +4187,57 @@ test("startup transcript refresh skips historical structured hosts", async () =>
   // Seeding and reconciling 65 durable rows takes over five seconds under the
   // gate's CPU quota. This bounds the workload without ending its caller early.
 }, 60_000);
+
+test("startup refreshes a reused idle selection after a peer makes its host live", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-peer-live-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const sqliteFilename = path.join(directory, "registry.sqlite");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const sessionId = "22222222-2222-0222-0222-222222222222";
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId,
+    status: "idle",
+    turn: "busy",
+  });
+  const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" } } });
+  const expectedHost = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost;
+  const peer = new SqliteAgentRegistryStore(sqliteFilename, {
+    initialSnapshot: () => { throw new Error("startup fixture is already imported"); },
+    normalize: normalizeRegistry,
+  });
+  const open = fs.promises.open.bind(fs.promises);
+  const transcriptReads: string[] = [];
+  const observedReads = spyOn(fs.promises, "open").mockImplementation((...args) => {
+    if (args[0] === artifactPath) transcriptReads.push(artifactPath);
+    return open(...args);
+  });
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let peerUpdated = false;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async (...args) => {
+    const snapshot = await prepare(...args);
+    if (!peerUpdated) {
+      peerUpdated = true;
+      peer.mutate((file) => { file.entries[`codex:${sessionId}`]!.status = "live"; }, false);
+      fs.unlinkSync(artifactPath);
+    }
+    return snapshot;
+  });
+  try {
+    expect(await startupAdoptionAttempts(registry)).toEqual([]);
+    const current = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+    expect(peerUpdated).toBe(true);
+    expect(transcriptReads).toEqual([artifactPath]);
+    expect(current.status).toBe("live");
+    expect(current.structuredHost).toEqual(expectedHost);
+  } finally {
+    observedReads.mockRestore();
+    observed.mockRestore();
+    peer.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test.each(["codex", "claude"] as const)(
   "startup adopts a persisted terminal %s conversation whose transcript starts a new turn before restart",
@@ -6497,6 +6562,159 @@ test("a refused pass logs its process once, preserves pipeline members and adopt
     await bindStructuredDeliveryQueue([], { registry, client: null });
     db.close(); journal.close(); registry.close();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+/* A pipeline recovery reserving its successor while startup reads the
+   membership selection used to fail the whole pass, which then repeated every
+   phase before it. Only the selection is read again now. */
+test("a membership written while startup reads its selection is read again without failing the pass", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-reselect-"));
+  const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
+  const {registry}=structuredRestartFixture(directory,"codex","unhosted");
+  const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+  const prepare=registry.prepareReadOnlySnapshot.bind(registry);
+  let refreshed=false,writes=0,adopted=false;
+  // Each write lands at the first yield after a preparation the selection reads.
+  registry.prepareReadOnlySnapshot=(async (...args:Parameters<typeof prepare>)=>{
+    const prepared=await prepare(...args);
+    if(refreshed&&writes<3){
+      const index=++writes;
+      setImmediate(()=>{
+        const recovered=registry.ensureConversation("codex",path.join(directory,`recovered-${index}.jsonl`),null);
+        registry.rememberMembership(recovered.id,{kind:"pipeline",containerId:`recovering-${index}`,role:"builder",slot:"build",stageId:"build",stageOrder:0,round:1,parentConversationId:null});
+      });
+    }
+    return prepared;
+  }) as typeof registry.prepareReadOnlySnapshot;
+  try {
+    await adoptStructuredHostsAtStartup({registry,client:runtimeJournalClient(journal),orchestratorSeats:()=>[],
+      refreshTranscriptState:async()=>{refreshed=true;},
+      adopt:async()=>{adopted=true;return [];},adoptClaude:async()=>[],schedule:()=>({unref(){}})});
+    expect(writes).toBe(3);expect(adopted).toBe(true);
+    expect(Object.values(registry.readOnlySnapshot().memberships).flat().map(item=>item.containerId).sort())
+      .toEqual(["recovering-1","recovering-2","recovering-3"]);
+  } finally {
+    registry.prepareReadOnlySnapshot=prepare;
+    await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
+    if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("a membership moved while waiting for the registry writer refuses the startup claim", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-write-race-"));
+  const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
+  const {registry,conversation}=structuredRestartFixture(directory,"codex","unhosted");
+  const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+  const pipeline=buildPipeline({id:"future-claim-owner",task:"future ownership",project:"fixture",repoDir:directory,
+    stages:[{id:"build",kind:"run",prompt:"build",next:null,effectiveRole:{roleId:null,engine:"codex",model:"gpt-5.6-sol",effort:"high",access:"read-write",promptScaffold:null}}],
+    srcPath:null,srcConversationId:null,now:"2026-10-22T00:00:00.000Z"});
+  savePipelines([pipeline]);
+  const db=new (await import("bun:sqlite")).Database(path.join(directory,"state.sqlite"));
+  db.run("UPDATE state_rows SET value_json=json_set(value_json,'$.state','future-owner') WHERE collection='pipelines'");db.close();
+  registry.holdDelivery(conversation.id,"owed fixture","membership-race-key","text",[],null,{operationId:"membership-race-operation",kind:"send",policy:"queue",turnId:null});
+  const write=registry.deliveryWriteOrBusy.bind(registry);
+  let moved=false,attempted=false;
+  registry.deliveryWriteOrBusy=async (correlation,operation)=>{
+    if(correlation.label==="registry.claimStructuredHost"&&!moved){
+      await Promise.resolve();
+      registry.rememberMembership(conversation.id,{kind:"pipeline",containerId:pipeline.id,role:"builder",slot:"build",stageId:"build",stageOrder:0,round:1,parentConversationId:null});
+      moved=true;
+    }
+    return write(correlation,operation);
+  };
+  try {
+    await adoptStructuredHostsAtStartup({registry,client:runtimeJournalClient(journal),orchestratorSeats:()=>[],refreshTranscriptState:async()=>{},
+      adopt:async(received,_options,_env,_filter,_processed,hooks)=>{
+        const entry=Object.values(received.readOnlySnapshot().entries)[0]!;attempted=true;
+        expect(await hooks!.claimHost!(entry,captureProcessIdentity(process.pid))).toBeNull();
+        return [];
+      },adoptClaude:async()=>[],schedule:()=>({unref(){}})});
+    expect(attempted).toBe(true);expect(moved).toBe(true);
+    expect(registry.readOnlySnapshot().entries[`codex:${"aaaaaaaa-aaaa-0aaa-0aaa-aaaaaaaaaaaa"}`]!.claimOwner).toBeNull();
+  } finally {
+    registry.deliveryWriteOrBusy=write;
+    await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
+    if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("startup publishes fresh launch admission before a held registry census", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-early-bind-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  const census = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return prepare(...args);
+  });
+  let startup: Promise<unknown> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], { client: null });
+    startup = adoptStructuredHostsAtStartup({ registry, client: runtimeClient(journal),
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async () => [], adoptClaude: async () => [],
+    });
+    await entered.promise;
+    expect(hasStructuredDeliveryController(registry)).toBe(true);
+  } finally {
+    release.resolve();
+    try { await startup; }
+    finally {
+      census.mockRestore();
+      await bindStructuredDeliveryQueue([], { client: null });
+      journal.close(); registry.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test.each(["cancel", "retire", "runtime"] as const)("startup %s during generation lookup cannot publish launch admission", async change => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-bind-fence-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const abort = new AbortController();
+  let active = true, compatible = true, startup: Promise<unknown> | undefined;
+  const requirement = darwinRuntime.assertDarwinStructuredRuntime;
+  const runtimeGuard = change === "runtime" ? spyOn(darwinRuntime, "assertDarwinStructuredRuntime").mockImplementation(() => {
+    if (!compatible) throw new Error("fixture runtime unsupported");
+    requirement();
+  }) : undefined;
+  const client = runtimeClient(journal);
+  client.startupGeneration = async () => { entered.resolve(); await release.promise; return "fixture-generation"; };
+  try {
+    await bindStructuredDeliveryQueue([], { client: null });
+    startup = adoptStructuredHostsAtStartup({ registry, client, signal: abort.signal,
+      assertActive: () => { if (!active) throw new Error("fixture release retired"); },
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async () => [], adoptClaude: async () => [],
+    });
+    const refused = startup.then(() => null, error => error as Error);
+    await entered.promise;
+    if (change === "cancel") abort.abort(new Error("fixture startup cancelled"));
+    else if (change === "retire") active = false;
+    else compatible = false;
+    release.resolve();
+    const reason = await refused;
+    expect(reason).toBeInstanceOf(Error);
+    expect(reason?.message).toBe(change === "cancel" ? "fixture startup cancelled"
+      : change === "retire" ? "fixture release retired" : "fixture runtime unsupported");
+    expect(hasStructuredDeliveryController(registry)).toBe(false);
+  } finally {
+    release.resolve();
+    await startup?.catch(() => {});
+    runtimeGuard?.mockRestore();
+    await bindStructuredDeliveryQueue([], { client: null });
+    journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

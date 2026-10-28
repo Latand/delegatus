@@ -91,3 +91,11 @@ test("an engine whose command is missing lists its accounts but offers no sign-i
   expect(card.textContent).toContain("Install the Codex CLI");
   expect(host.querySelector("[data-onboarding-accounts=claude]")?.hasAttribute("inert")).toBe(false);
 });
+
+test("Claude explains the expected second sign-in on its own card", async () => {
+  const host = await mount(engineState("claude", [], ""), engineState("codex", [], ""));
+  const note = host.querySelector("[data-onboarding-engine=claude] [data-onboarding-claude-signin]");
+  expect(note?.textContent).toContain("own Claude sign-in in an isolated configuration");
+  expect(note?.textContent).toContain("second sign-in is expected");
+  expect(host.querySelector("[data-onboarding-engine=codex] [data-onboarding-claude-signin]")).toBeNull();
+});

@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -1360,21 +1361,35 @@ function idleContinuationRefusedBeforeExecution(result: RuntimeOperationResult |
     Unknown outcomes and operations that began execution grant no authority. */
 export async function idleContinuationDeliveryRetryable(conversationId: string, clientMessageId: string,
   dependencies: Pick<StructuredMessageDependencies, "registry" | "client"> = {}): Promise<boolean> {
+  return await idleContinuationDeliveryRetryEvidence(conversationId, clientMessageId, dependencies) === true;
+}
+
+/** null retains the continuation while its receipt or idle recipient is
+    unavailable. Only definitive evidence may end a durable recovery debt. */
+export async function idleContinuationDeliveryRetryEvidence(conversationId: string, clientMessageId: string,
+  dependencies: Pick<StructuredMessageDependencies, "registry" | "client"> = {}): Promise<boolean | null> {
   try {
     const registry = (dependencies.registry ?? agentRegistry)();
     const evidence = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
-    if (evidence.outcome !== "admitted" || evidence.state !== "failed") return false;
+    if (evidence.outcome !== "admitted" || evidence.state !== "failed") return null;
     const previous = registry.conversationDeliverySnapshot({ conversationId }).heldDeliveries[evidence.deliveryId];
     const captured = previous?.command.onlyIfIdle;
+    if (!previous) return null;
+    if (!captured || !["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return false;
     const client = (dependencies.client ?? runtimeHostClient)();
-    if (!client || !previous || !captured || !["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return false;
+    if (!client) return null;
     const session = await readRuntimeSession(client, { conversationId });
-    if (!session || captured.writerClaim !== session.writerClaim || previous.generationId !== session.sessionKey.sessionId
-      || captured.revision === session.revision || !runtimeIdleKillMatches(session, session.sessionKey,
-        { revision: session.revision, writerClaim: captured.writerClaim })) return false;
+    if (!session) return null;
+    if (previous.generationId !== session.sessionKey.sessionId) return false;
+    if (!session.writerClaim) return null;
+    if (captured.writerClaim !== session.writerClaim) return false;
+    if (captured.revision === session.revision || !runtimeIdleKillMatches(session, session.sessionKey,
+      { revision: session.revision, writerClaim: captured.writerClaim })) return null;
     const result = await client.operationStatus(previous.command.operationId);
-    return result?.operationId === previous.command.operationId && idleContinuationRefusedBeforeExecution(result);
-  } catch { return false; } // Unconfirmed receipt or owner remains pending.
+    if (!result || result.operationId !== previous.command.operationId) return null;
+    if (idleContinuationRefusedBeforeExecution(result)) return true;
+    return ["failed", "rejected", "delivered", "turn-started", "steered"].includes(result.receipt.status) ? false : null;
+  } catch { return null; } // Unconfirmed receipt or owner remains pending.
 }
 
 export async function enqueueStructuredMessage(
@@ -1525,6 +1540,7 @@ export async function enqueueStructuredMessage(
           request.admissionGuard?.();
           const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
             path: generation.path, conversationId: owner.conversation.id, origin: request.origin,
+            authorityGuard: request.recoveryAuthorityGuard,
           }, { registry, client });
           if (!recovered) return continuationRefused("the conversation cannot be resumed");
           if (recovered.hold) return continuationRefused("the recovered host's account is parked");
@@ -2082,7 +2098,9 @@ export async function enqueueStructuredMessage(
       lastWritten = written;
       try {
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
         await dependencies.authorizeDispatch?.();
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
       catch (error) {

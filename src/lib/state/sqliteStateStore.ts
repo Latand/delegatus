@@ -1,3 +1,4 @@
+import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
@@ -18,7 +19,7 @@ import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
-import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
+import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
@@ -347,7 +348,10 @@ function connectDatabase(filename: string): Database {
 function connectRawDatabase(filename: string): Database {
   return stateLockAttempt("state.connection", () => {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-    const db = observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state");
+    const db = observeRegistryWriter(
+      observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state"),
+      filename, viewerLoopMonitor.current() ?? "state database write",
+    );
     try {
       db.exec("PRAGMA busy_timeout = 0");
       db.exec("PRAGMA synchronous = FULL");
@@ -522,7 +526,9 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_imports ADD COLUMN reconciled_sha256 TEXT");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
-        installPipelineControllerSchedule(db, path.dirname(filename));
+        // Only a policy upgrade resets the scheduler. Missing indexes repair
+        // in place without changing existing queue clocks or cursors.
+        installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesCurrent(db));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");
@@ -997,17 +1003,31 @@ export function stateEvidenceVersion(filename: string): string {
   return `${reader.generation}:${version}:${schema}`;
 }
 
+/* Schema readiness per file and schema_version. Every schema edit moves
+   schema_version, and a replaced file has another identity. */
+const evidenceSchemaMemo = evidenceOwner as typeof evidenceOwner & { __llvPipelineEvidenceSchema?: { key: string; ready: boolean } };
+function evidenceIndexReadyAt(db: Database, key: string): boolean {
+  if (evidenceSchemaMemo.__llvPipelineEvidenceSchema?.key !== key) {
+    evidenceSchemaMemo.__llvPipelineEvidenceSchema = { key, ready: pipelineEvidenceSchemaReady(db) };
+  }
+  return evidenceSchemaMemo.__llvPipelineEvidenceSchema.ready
+    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+}
+
 /** The index's validity is checked against the actual trigger definitions.
- * Schema loss or an older store takes the complete reader path. */
+ * Schema loss or an older store takes the complete reader path. Opening the
+ * state database and checking its schema cost about 16 ms on a production
+ * copy, and one startup admission asks two or three times; the persistent
+ * version connection answers it, and the schema check runs once per
+ * schema_version. */
 export function pipelineEvidenceRevision(filename: string): string | null {
   if (!fs.existsSync(filename)) return null;
-  const db = connectReadonlyDatabase(filename);
-  try {
-    if (!pipelineEvidenceIndexReady(db)) return null;
-    const revision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
-    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
-    return revision ? `${databaseFileIdentity(filename)}:${schema}:${revision.revision}` : null;
-  } finally { db.close(); }
+  if (stateEvidenceVersion(filename) === "missing" || !evidenceVersions.reader) return null;
+  const { db, identity } = evidenceVersions.reader;
+  const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+  if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
+  const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+  return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
 export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: number; rows: Map<string, { revision: number; value: T }> };
@@ -1032,8 +1052,8 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
   const db = connectReadonlyDatabase(filename);
   try {
     db.exec("BEGIN");
-    if (!pipelineEvidenceIndexReady(db)) return null;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    if (!evidenceIndexReadyAt(db, `${filename}:${openedIdentity}:${schema}`)) return null;
     if (databaseFileIdentity(filename) !== openedIdentity) throw new StateSnapshotChangedError();
     const identity = `${openedIdentity}:${schema}`;
     const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
@@ -1517,8 +1537,16 @@ export class SqliteStateCollection<T> {
   }
 
   pipelineOwnerExists(identities: readonly [string, string][], live: boolean): boolean {
-    return identities.some(([kind, identity]) => Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
-      WHERE kind=? AND identity=? ${live ? "AND live=1" : ""} LIMIT 1`).get(kind,identity)));
+    return identities.some(([kind, identity]) => {
+      const source = live ? kind === "srcConversationId" ? "conversationId" : kind === "srcPath" ? "agentPath" : null : null;
+      // Source publication (2) retains custody. A released operational attempt
+      // (-1) ends an idle creator's obligation to stay beside its successor.
+      const released = source ? `AND live=CASE WHEN EXISTS (SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live=-1) THEN 2 ELSE 1 END` : "";
+      return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? ${live ? "AND live>0" : ""} ${released} LIMIT 1`)
+        .get(kind, identity, ...(source ? [source, identity] : [])));
+    });
   }
 
   pipelineTickReady(now: number, excluded: readonly string[]): boolean {

@@ -22,6 +22,10 @@ export interface ReleaseController {
   reconcile: (project: string) => Promise<string | null>;
   launchIfDue: (input: SeatTickCheckInput) => Promise<string | null>;
 }
+/** Proof from the create adapter that this exact payload failed before admission. */
+export class ReleaseValidationRefusal extends Error {
+  constructor(readonly digest: string, reason: string) { super(reason); }
+}
 const lockKey = Symbol.for("delegatus.release.controller");
 const globalLocks = globalThis as typeof globalThis & { [lockKey]?: Map<string, Promise<string | null>> };
 function serialized(project: string, work: () => Promise<string | null>): Promise<string | null> {
@@ -59,13 +63,39 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
   if (row.hold) return "release: hold";
   if (!ports.settings(project)?.enabled && run.trigger !== "requested") return "release: releases-off";
   if (!run.taskId) {
-    const taskId = ports.task(project, run, row.request?.taskId);
+    const prior = row.history.at(-1);
+    const refusedTask = prior?.outcome === "refused" && (prior.requestedAt ?? null) === (run.requestedAt ?? null) ? prior.taskId ?? undefined : undefined;
+    const adopted = row.request?.taskId ?? refusedTask;
+    if (adopted && ports.taskDone(project, adopted)) {
+      return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
+    }
+    const taskId = ports.task(project, run, adopted);
     row = mutateReleaseProject(project, current => current.live?.key === run!.key
       ? { ...current, live: { ...current.live, taskId, request: { ...current.live.request!, taskIds: [taskId], finishesTask: true } } } : current);
     run = row.live;
   }
   if (!run?.request) return null;
-  const pipelineId = await ports.create(run.request, run.key);
+  const submitted = run;
+  const digest = releaseRequestDigest(run.request);
+  let pipelineId: string;
+  try { pipelineId = await ports.create(run.request, run.key); }
+  catch (error) {
+    // Transport errors and unknown outcomes keep both the payload and replay key.
+    const lookup = ports.lookup;
+    if (!(error instanceof ReleaseValidationRefusal) || error.digest !== digest || !lookup) throw error;
+    let retired = false;
+    mutateReleaseProject(project, current => {
+      const live = current.live;
+      if (!live || live.key !== submitted.key || live.cut !== submitted.cut || live.taskId !== submitted.taskId
+        || live.pipelineId !== null || !live.request || releaseRequestDigest(live.request) !== digest
+        || lookup(live.key)) return current;
+      retired = true;
+      // Keep the pending request; the next launch selects a current cut through all gates.
+      return { ...current, live: null, blocked: null,
+        history: [...current.history, { ...live, outcome: "refused" as const, at: ports.now(), reason: error.message }].slice(-10) };
+    });
+    return retired ? "release: refused" : null;
+  }
   mutateReleaseProject(project, current => current.live?.key === run!.key
     ? { ...current, live: { ...current.live, pipelineId }, request: current.request?.at === run!.requestedAt ? null : current.request, blocked: null } : current);
   return "release: launched";

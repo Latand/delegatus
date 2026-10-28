@@ -6,7 +6,7 @@ import { isReviewGate } from "@/lib/roles/sizing";
    One decision serves every path. Explicit evidence searches (search_memory,
    search_transcripts) are tools a stage calls itself and stay available. */
 
-/** Roles that stay clean: they read no memory and leave none (operator,
+/** Roles that stay clean: they read no memory and receive no closing lesson request; explicit operator corrections still leave lessons (operator,
     2026-10-07: «ревьюер всегда чистый»). */
 export const CLEAN_ROLE_IDS = ["reviewer", "verifier", "issue-reporter", "curator"] as const;
 

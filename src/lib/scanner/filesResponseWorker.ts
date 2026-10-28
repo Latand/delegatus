@@ -1,4 +1,6 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
+import { assertSeatTickWork, seatTickWorkRemainingMs } from "@/lib/monitor/seatTickWork";
+import { DeadlineExceededError } from "@/lib/deadline";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto, { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -399,8 +401,9 @@ function askWorker(
     const id = String(worker.nextId++);
     const timer = setTimeout(() => {
       const detail = worker.stderr.trim();
+      worker.pending = null;
       retire(worker, "timed out");
-      reject(new Error(`files response worker timed out${detail ? `: ${detail}` : ""}`));
+      reject(new DeadlineExceededError(`files response worker timed out${detail ? `: ${detail}` : ""}`, timeoutMs));
     }, timeoutMs);
     worker.pending = { id, resolve, reject, timer };
     try {
@@ -479,18 +482,20 @@ export function buildFilesResponseInWorker(
 
 /** Use the existing bounded worker queue and lifetime for seat source reads. */
 export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<FilesResponseRepresentation> {
-  const deadline = Date.now() + (runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
+  assertSeatTickWork();
+  const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, seatTickWorkRemainingMs() ?? Infinity);
   const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
   let expired = false;
   let timer: ReturnType<typeof setTimeout>;
   const current = previous.catch(() => undefined).then(() => {
+    assertSeatTickWork();
     const remaining = deadline - Date.now();
-    if (expired || remaining <= 0) throw new Error("seat source worker deadline exceeded in queue");
+    if (expired || remaining <= 0) throw new DeadlineExceededError("seat source worker deadline exceeded in queue", 0);
     return dispatch(request, { ...runtime, timeoutMs: remaining });
   });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { expired = true; reject(new Error("seat source worker deadline exceeded")); }, Math.max(1, deadline - Date.now()));
+    timer = setTimeout(() => { expired = true; reject(new DeadlineExceededError("seat source worker deadline exceeded", 0)); }, Math.max(1, deadline - Date.now()));
   });
   return Promise.race([current, timeout]).finally(() => clearTimeout(timer));
 }
