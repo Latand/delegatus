@@ -24,17 +24,13 @@ import {
   HISTORY_BUDGET_BYTES,
   HISTORY_HEADING,
   launchOverheadBytes,
-  splitMandate,
   type HandoffDigestRequest,
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
-  ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
-  ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
-  ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
   orchestratorMandateUpgraded,
@@ -917,10 +913,6 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   })]);
 });
 
-/* #1452: the recorded version follows the TEXT. A stale seat rotated onto the
-   built-in default is on the current version. #2030: a rotation that names no
-   mandate over a stale incumbent rebuilds the core from the current default;
-   `keepIncumbentMandate: true` keeps the incumbent's text AND version. */
 test("a rotation onto the built-in default records the CURRENT version, whatever the incumbent ran on", async () => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
@@ -947,53 +939,28 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
-test("a rotation asked to keep the incumbent's mandate keeps its text and version", async () => {
+test.each([false, true])("an older seat rotates onto the default version (legacy keep flag=%s)", async (keepIncumbentMandate) => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000033"),
-    mandate: "v3 rules: you do not talk to the user",
-    promptVersion: 3,
+    mandate: `${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${HANDOFF_HEADING}\nPrior rotation notes.`,
+    promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1,
   }, seeded.deps);
-
+  // Stored rotations include a handoff, so their mandate is never byte-equal
+  // to the default even when its core happens to be current.
+  const incumbent = orchestratorSeatFor("proj-a").active!;
+  expect(incumbent.promptVersion).toBe(ORCHESTRATOR_PROMPT_VERSION - 1);
   const successor = "conversation_66666666-6666-4666-8666-666666666666";
   const { deps } = dependencies({
-    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-kept.jsonl" } }),
+    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } }),
   });
-  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034", keepIncumbentMandate: true }, deps);
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034", keepIncumbentMandate }, deps);
 
   expect(result.status).toBe(200);
-  const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: 3 });
-  expect(active?.mandate).toStartWith("v3 rules: you do not talk to the user");
+  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
 });
 
-/* #2030 review: a seat carried forward on its v20 mandate holds the clock
-   heading with the v17–v20 paragraph under it. Delivery replaces that shipped
-   section, so the successor reads every tick contract clause once. */
-test("a rotation that keeps a v20 incumbent's mandate still delivers every tick contract clause once", async () => {
-  /* A v20 seat carries the opening as it shipped, heading included. */
-  const v20Clock = `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
-  const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, v20Clock);
-  const seeded = dependencies();
-  await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000039"), mandate: v20Core, promptVersion: 20 }, seeded.deps);
-
-  const successor = "conversation_66666666-6666-4666-8666-666666666666";
-  const { deps, recorded } = dependencies({
-    spawn: async (body) => {
-      recorded.spawns.push(body);
-      return { status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-kept-v20.jsonl" } };
-    },
-  });
-  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000040", keepIncumbentMandate: true }, deps);
-
-  expect(result.status).toBe(200);
-  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: successor, promptVersion: 20 });
-  const delivered = String(recorded.spawns[0]!.prompt);
-  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
-  expect(delivered).not.toContain("act on the items it lists first, then make one bounded pass over the rest of the board");
-});
-
-test("a no-mandate rotation preserves an edited older core and bounded handoff history", async () => {
+test("a no-mandate rotation refreshes the version and retains bounded handoff history", async () => {
   const olderCore = "Edited seat rules: keep the operator's triage order and limit: 200.";
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
@@ -1013,14 +980,12 @@ test("a no-mandate rotation preserves an edited older core and bounded handoff h
 
   expect(result.status).toBe(200);
   const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1 });
-  expect(splitMandate(active!.mandate).core).toBe(olderCore);
-  expect(result.body.mandateDisposition).toBe("preserved");
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  expect(result.body.mandateDisposition).toBe("replaced");
   expect(recorded.digests).toHaveLength(1);
   expect(active!.mandate).toContain("merged the exporter lane");
   expect(active!.mandate).toContain("digest lane parked on review");
-  /* And what the successor was delivered opens with the same bytes. */
-  expect(String(recorded.spawns[0]!.prompt)).toContain(olderCore);
+  expect(recorded.spawns).toHaveLength(1);
 });
 
 test("an EDITED mandate over a stale seat records no version, so the successor is neither flagged stale nor prefilled over on the next rotation (#1452)", async () => {
@@ -1075,7 +1040,7 @@ test("a current-version rotation override receives one directive while its store
   expect(delivered).toStartWith("rotation override mandate");
   expect(delivered.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
   const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: null });
   expect(active?.mandate).toStartWith("rotation override mandate");
   expect(active?.mandate).not.toContain(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE);
 });
@@ -2019,7 +1984,7 @@ test("AC1: three stacked handoffs compact into ONE rotation history section", as
     },
   });
 
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001002" }, deps);
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001002", mandate: stackedMandate(core, 3) }, deps);
 
   expect(rotated.status).toBe(200);
   const prompt = String(recorded.spawns[0]!.prompt);
@@ -2132,7 +2097,7 @@ test("AC3: a failed summarizer falls back to the latest two handoffs, verbatim a
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "timeout" }),
   });
 
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001021" }, deps);
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001021", mandate: stackedMandate("own the board", 4) }, deps);
 
   expect(rotated.status).toBe(200);
   const prompt = String(recorded.spawns[0]!.prompt);
