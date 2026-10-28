@@ -7,7 +7,7 @@ const roots: string[] = [];
 afterEach(() => { saveTasks([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const stage = (id: string, next: string | null, extra: Record<string, unknown> = {}) => ({ id, kind: "run", role: { roleId: "builder" }, prompt: `Do ${id}`, next, ...extra });
 const current = () => loadPipelines()[0]!;
-const content = { headline: "Task complete", text: "Storage is updated. Reads retain the outcome.", left: "Interface follows." };
+const content = { headline: "Task complete", text: "Storage is updated in 6\u00a0s. Reads retain the outcome.", left: "Interface follows." };
 
 async function fixture(stages: unknown[]) {
   const f = await realWorktreeLane("task-summary", stages);
@@ -27,9 +27,9 @@ async function fixture(stages: unknown[]) {
 test.each(["pass", "fail", "absent", "refresh", "earlier"] as const)("only the completing pass applies the task summary: %s", async kind => {
   const f = await fixture(kind === "earlier" ? [stage("build", "verify"), stage("verify", null)] : [stage("build", null)]);
   if (kind === "refresh") { const pipeline = current(); pipeline.refreshOf = { pipelineId: "source", base: f.base }; savePipelines([pipeline]); }
-  expect((await f.report(1, { verdict: kind === "fail" ? "fail" : "pass", ...(kind === "absent" ? {} : { taskSummary: content, result: "Stored the outcome." }) })).error).toBeUndefined();
+  expect((await f.report(1, { verdict: kind === "fail" ? "fail" : "pass", ...(kind === "absent" ? {} : { taskSummary: content, result: "Stored the outcome (1\u00a0→\u00a02\u00a0s)." }) })).error).toBeUndefined();
   if (kind !== "absent") {
-    expect(current().runs[0]!.attempts[0]!.report).toMatchObject({ taskSummary: content, result: "Stored the outcome." });
+    expect(current().runs[0]!.attempts[0]!.report).toMatchObject({ taskSummary: content, result: "Stored the outcome (1\u00a0→\u00a02\u00a0s)." });
     const valid = current();
     expect(isStoredPipeline(valid)).toBe(true);
     for (const fields of [{ result: "x".repeat(161) }, { result: 42 }, { result: "two\nlines" }, { taskSummary: { headline: "", text: "Body" } }]) {

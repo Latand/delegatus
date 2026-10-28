@@ -542,6 +542,12 @@ test.each(["pass", "fail", "needs_decision"])("stage result and task summary nor
     .toHaveProperty("result", "x".repeat(160));
 });
 
+test("non-breaking spaces survive the stage result and task summary; breaking runs around them collapse", () => {
+  const glued = "Three retries (1\u00a0→\u00a02\u00a0→\u00a04\u00a0s); 80\u202fk rows in 6\u00a0s";
+  expect(normalizeStageCompletion({ verdict: "pass", result: ` ${glued}\u00a0`, taskSummary: { headline: "Export in 6\u00a0s", text: `${glued}.\n Done \u00a0 here.` } }))
+    .toMatchObject({ result: glued, taskSummary: { headline: "Export in 6\u00a0s", text: `${glued}. Done here.` } });
+});
+
 test.each([
   [{ result: "x".repeat(161) }, "result", "160"],
   [{ result: 1 }, "result", "160"],

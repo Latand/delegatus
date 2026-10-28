@@ -1876,7 +1876,7 @@ export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
     srcPath: null, srcConversationId: null, createdAt: iso(created), closedAt: closed === null ? null : iso(closed), updatedAt: iso(closed ?? 1), ...over,
   });
   const data = {
-    fixResult: L("A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk", "Повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину"),
+    fixResult: L("A retry resumes from the last confirmed chunk; a 503 test; a 30\u00a0s timeout per chunk", "Повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30\u00a0с на частину"),
     refreshFix: L("Removed the marker; both changes kept, the rate limit and the retry; tests green", "Маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені"),
   };
   const fail = (stageId: string, n: number) => ({ stageId, attempt: n, edge: "fail" as const });
@@ -1891,7 +1891,7 @@ export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
         ] },
         { stageId: "review", attempts: [
           attempt("p-export", "review", "reviewer", 1, 254, 236, "passed", { activatedBy: pass("build", 2), findings: ["P1 — duplicate rows", "P2 — no retry test", "P2 — no timeout"], result: L("Duplicate rows after a retry, no retry test, no upload timeout", "Дублі рядків після повтору, без тесту на повтор і без таймауту") }),
-          attempt("p-export", "review", "reviewer", 2, 209, 196, "passed", { activatedBy: pass("fix", 1), result: L("No findings; memory stays under 120 MB", "Без зауважень; пам’ять не перевищує 120 МБ") }),
+          attempt("p-export", "review", "reviewer", 2, 209, 196, "passed", { activatedBy: pass("fix", 1), result: L("No findings; memory stays under 120\u00a0MB", "Без зауважень; пам’ять не перевищує 120\u00a0МБ") }),
         ] },
         { stageId: "fix", attempts: [
           attempt("p-export", "fix", "builder", 1, 234, 211, "passed", { activatedBy: fail("review", 1), result: data.fixResult }),
@@ -1934,13 +1934,13 @@ export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
   );
   const tasks = [
     { id: "t-csv", project: "atlas", status: "done", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-csv",
-      text: `${L("CSV export fails on large projects", "Експорт CSV падає на великих проєктах")}\n${L("Past 50k rows the export worker runs out of memory.", "Понад 50 тис. рядків воркер експорту вилітає по пам’яті.")}`,
+      text: `${L("CSV export fails on large projects", "Експорт CSV падає на великих проєктах")}\n${L("Past 50k rows the export worker runs out of memory.", "Понад 50\u00a0тис. рядків воркер експорту вилітає по пам’яті.")}`,
       createdAt: iso(300), updatedAt: iso(83), doneAt: iso(83),
-      note: { text: L("Deployed 2.14.1; an 80k-row export passed on production.", "Розгорнуто 2.14.1; експорт 80 тис. рядків на проді пройшов."), author: { kind: "agent", conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(84) },
+      note: { text: L("Deployed 2.14.1; an 80k-row export passed on production.", "Розгорнуто 2.14.1; експорт 80\u00a0тис. рядків на проді пройшов."), author: { kind: "agent", conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(84) },
       summary: {
         headline: L("CSV export holds up on large projects", "Експорт CSV витримує великі проєкти"),
-        text: L("The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1 → 2 → 4 s), then a clear error. 80k rows take 6 s; the file format is unchanged.", "Файл пишеться потоком частинами по 5 000 рядків; збій сховища дає три повтори (1 → 2 → 4 с), далі зрозуміла помилка. 80 тис. рядків проходять за 6 с; формат файлу той самий."),
-        left: L("nothing required; an idea: show the export's progress in the UI", "нічого обов’язкового; ідея: показувати прогрес експорту в інтерфейсі"),
+        text: L("The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1\u00a0→\u00a02\u00a0→\u00a04\u00a0s), then a clear error. 80k rows take 6\u00a0s; the file format is unchanged.", "Файл пишеться потоком частинами по 5\u00a0000 рядків; збій сховища дає три повтори (1\u00a0→\u00a02\u00a0→\u00a04\u00a0с), далі зрозуміла помилка. 80\u00a0тис. рядків проходять за 6\u00a0с; формат файлу той самий."),
+        left: L("nothing required; an idea: show the export's progress in the\u00a0UI", "нічого обов’язкового; ідея: показувати прогрес експорту в інтерфейсі"),
         author: { kind: "stage", pipelineId: "p-deploy", stageId: "deploy", attempt: 1, conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(83),
       } },
     { id: "t-long", project: "atlas", status: "assigned", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-long",
@@ -1949,7 +1949,7 @@ export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
       summary: { headline: longHeadline, text: longText, author: { kind: "orchestrator", conversationId: "conversation_seat" }, updatedAt: iso(45) },
       note: { text: L("The fix for the sort order is running.", "Виправлення сортування працює."), author: { kind: "orchestrator", conversationId: "conversation_seat" }, updatedAt: iso(20) } },
     { id: "t-plain", project: "atlas", status: "inbox", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-plain",
-      text: `${L("Orders page is slow on phones", "Сторінка замовлень повільна на телефоні")}\n${L("Over 3 s on a mid-range phone.", "Понад 3 с на середньому телефоні.")}`,
+      text: `${L("Orders page is slow on phones", "Сторінка замовлень повільна на телефоні")}\n${L("Over 3\u00a0s on a mid-range phone.", "Понад 3\u00a0с на середньому телефоні.")}`,
       createdAt: iso(200), updatedAt: iso(200) },
   ];
   return {
@@ -1969,7 +1969,8 @@ export function taskSummaryResponses(): Record<string, (request: Request) => Res
 }
 
 /** Every text range under `selector` inside `scope`: whole in the window, never cut by a scrolling or
-    clipping ancestor, never ended in an ellipsis. Returns the failures, empty when everything is whole. */
+    clipping ancestor, never ended in an ellipsis, and no number on another line than its unit, nor a pause
+    sequence («1 → 2 → 4 s») or a spaced thousand («5 000») broken inside. Returns the failures, empty when everything is whole. */
 async function wholeTextFailures(page: Page, scope: string, selector: string): Promise<string[]> {
   return page.evaluate(({ scope, selector }) => {
     const failures: string[] = [];
@@ -1986,6 +1987,11 @@ async function wholeTextFailures(page: Page, scope: string, selector: string): P
         const range = document.createRange(); range.selectNodeContents(text);
         const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
         if (!rects.length) failures.push(`unrendered: ${text.textContent.slice(0, 40)}`);
+        for (const glued of text.textContent.matchAll(/\d+(?:[\s\u00a0]+→[\s\u00a0]+\d+)*[\s\u00a0]+(?:s|с|MB|МБ|тис\.)(?![\p{L}])|\d+[\s\u00a0]+→[\s\u00a0]+\d+|\d{1,3}(?:[\s\u00a0]\d{3})+(?!\d)/gu)) {
+          const span = document.createRange(); span.setStart(text, glued.index); span.setEnd(text, glued.index + glued[0].length);
+          const lines = new Set([...span.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
+          if (lines.size > 1) failures.push(`split: «${glued[0].replace(/\u00a0/g, "⍽")}» across ${lines.size} lines`);
+        }
         for (const rect of rects) {
           const inWindow = rect.left >= -0.5 && rect.top >= -0.5 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5;
           const inClips = clips.every((clip) => rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5);

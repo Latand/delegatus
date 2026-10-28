@@ -5,6 +5,13 @@ import {
 
 const fields = { headline: TASK_SUMMARY_HEADLINE_LIMIT, text: TASK_SUMMARY_TEXT_LIMIT, left: TASK_SUMMARY_LEFT_LIMIT } as const;
 
+/** Collapses each whitespace run to one space and trims, except that a run of non-breaking spaces alone stays one
+    non-breaking space: a writer's «6\u00a0s» or «1\u00a0→\u00a02» keeps its number to its unit. JS `\s` matches
+    U+00A0, U+2007, U+202F and U+FEFF too, so a plain `/\s+/` collapse used to undo them. */
+export function collapseSpaces(text: string): string {
+  return text.replace(/\s+/g, (run) => (/^[\u00a0\u2007\u202f\ufeff]+$/.test(run) ? run[0]! : " ")).trim();
+}
+
 /** Shared by task edits and stage reports; reject rather than truncate. */
 export function normalizeTaskSummary(input: unknown): { value: TaskSummaryContent } | { error: string } {
   if (!input || typeof input !== "object" || Array.isArray(input)) return { error: "summary must be an object with headline and text" };
@@ -14,7 +21,7 @@ export function normalizeTaskSummary(input: unknown): { value: TaskSummaryConten
     if (field === "left" && raw[field] === undefined) continue;
     if (typeof raw[field] !== "string") return { error: `summary.${field} must be a string of at most ${fields[field]} characters` };
     if (field !== "text" && /[\r\n]/.test(raw[field])) return { error: `summary.${field} must be one line of at most ${fields[field]} characters` };
-    const text = raw[field].replace(/\s+/g, " ").trim();
+    const text = collapseSpaces(raw[field]);
     if (text.length > fields[field] || (field !== "left" && !text)) return { error: `summary.${field} must be ${field === "left" ? "at most" : "1 to"} ${fields[field]} characters` };
     if (field !== "left" || text) value[field] = text;
   }

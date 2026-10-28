@@ -1,4 +1,4 @@
-import { normalizeTaskSummary } from "@/lib/tasks/summary";
+import { collapseSpaces, normalizeTaskSummary } from "@/lib/tasks/summary";
 import type { TaskSummaryContent } from "@/lib/tasks/types";
 import { MAX_STAGE_RESULT_CHARS, MAX_STAGE_FINDING_CHARS, MAX_STAGE_REPORT_FINDINGS, MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
 import { STAGE_FINDING_SEVERITIES, type StageFinding, type StageFindingSeverity, type StageVerdict, type StageVerdictStatus } from "./types";
@@ -395,7 +395,7 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   if (!verdict) return refusal("the reported verdict is invalid: blocked must be boolean; blocked:true requires fail and a non-empty blockedReason of at most " + MAX_STAGE_REPORT_SUMMARY_CHARS + " characters; blockedReason requires blocked:true");
   const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
   if (input.result !== undefined && typeof input.result !== "string") return refusal(`result must be a string of at most ${MAX_STAGE_RESULT_CHARS} characters`);
-  const result = typeof input.result === "string" ? input.result.replace(/\s+/g, " ").trim() : "";
+  const result = typeof input.result === "string" ? collapseSpaces(input.result) : "";
   if (result.length > MAX_STAGE_RESULT_CHARS) return refusal(`result must be at most ${MAX_STAGE_RESULT_CHARS} characters`);
   const taskSummary = input.taskSummary === undefined ? null : normalizeTaskSummary(input.taskSummary);
   if (taskSummary && "error" in taskSummary) return refusal(taskSummary.error.replace(/^summary/, "taskSummary"));

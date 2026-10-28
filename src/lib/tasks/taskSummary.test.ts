@@ -57,6 +57,15 @@ test.each([{}, [], 12, "text", { ...content, headline: "" }, { ...content, text:
   expect(JSON.stringify(task)).toBe(before);
 });
 
+test("non-breaking spaces a writer ties a number to its unit with survive patch, storage and the reader", () => {
+  const glued = { headline: "Export holds at 80\u00a0k rows", text: "Three retries (1\u00a0→\u00a02\u00a0→\u00a04\u00a0s), then an error.\n80\u202fk rows take 6\u00a0s.", left: "show progress in the\u00a0UI" };
+  const result = patchTask([task], task.id, { summary: glued }, now);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.task.summary).toMatchObject({ ...glued, text: "Three retries (1\u00a0→\u00a02\u00a0→\u00a04\u00a0s), then an error. 80\u202fk rows take 6\u00a0s." });
+  saveTasks(result.tasks, file);
+  expect(loadTasks(file)[0]?.summary).toEqual(result.task.summary);
+});
+
 test("maximum fields survive storage; malformed metadata is discarded; summary stays off the wire", () => {
   const result = patchTask([task], task.id, { summary: { headline: "h".repeat(120), text: "t".repeat(600), left: "l".repeat(200) } }, now);
   if (!result.ok) throw new Error(result.error);
