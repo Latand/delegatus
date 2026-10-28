@@ -23,6 +23,13 @@ export interface TaskStep {
 
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
+/** Agent-maintained estimate; absence means nobody has reported one. */
+export interface TaskProgress {
+  value: number;
+  setAt: string;
+  by: import("@/lib/pauseResumeActor").PauseResumeActor;
+}
+
 /** Who put a task in its column (docs/design/orchestrator-arrows.md §5):
     written with the status by a writer that names itself, `from` null on a
     create. A status that changes without a named writer loses the record, so
@@ -206,6 +213,8 @@ export interface BoardTask {
   status: TaskStatus;
   /** The named writer of the current status; absent when nobody named one. Local; never crosses. */
   statusBy?: TaskStatusBy;
+  /** Local estimate and trusted attribution; never inferred from status. */
+  progress?: TaskProgress;
   hold?: TaskHold;
   /** Up to twenty partial outcomes recorded alongside the task. */
   steps?: TaskStep[];
