@@ -10,6 +10,8 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { realExec } from "@/lib/workflows/provision";
 
 import { resolvePipelineLink, type PipelineLinkPorts } from "./linkSource";
+import { literalRemoteUrls, resolveDeliveryRemote } from "./git";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import type { Pipeline } from "./types";
 
 /* The pasted-link resolver (docs/research/competitors-2026-10.md rank 4).
@@ -175,6 +177,31 @@ test("a fork URL that this checkout's Git rewrites send to another repository is
     /* With the rewrite on the contributor remote alone, the fork's own URL still reaches the fork. */
     await git("remote", "set-url", "--push", "contributor", other);
     expect(await resolve(checkout)).toMatchObject({ ok: true, source: { request: { delivery: { remote: "https://github.com/contributor/project.git" } } } });
+  });
+});
+
+test.each(["insteadOf", "pushInsteadOf"])("a named fork remote's stored URL is validated after expansion (%s)", async (rewrite) => {
+  await withCheckout(async (checkout, _other, git) => {
+    const answers = { "repos/owner/project/pulls/41": prJson({ head: { ref: "fix", sha: HEAD_SHA, repo: { full_name: "Contributor/Project" } } }) };
+    await git("config", "url.ssh://github.com/.insteadOf", "https://github.com/");
+    const preview = () => resolvePipelineLink("https://github.com/owner/project/pull/41", checkout, { ...ports({ answers }), exec: realExec });
+    const safe = await preview();
+    if (!safe.ok) throw new Error(safe.error);
+    const stored = await resolveDeliveryRemote(checkout, safe.source.request.delivery!.remote, realExec, { allowLiteral: true });
+    if (!stored.ok) throw new Error(stored.error);
+    expect(stored.remote).toBe("ssh://github.com/contributor/project.git");
+    const effective = await literalRemoteUrls(checkout, stored.remote, realExec);
+    expect(effective).not.toBeNull();
+    expect([...effective!.fetch, ...effective!.push].map(githubRepositoryOfRemote)).toEqual([safe.source.head!.repository, safe.source.head!.repository]);
+    /* Both rules exist before preview. Git expands the alias once, then
+       publication applies the second rule to the URL that expansion stored. */
+    await git("config", `url.ssh://github.com/secondary/project.git.${rewrite}`, "ssh://github.com/contributor/project.git");
+    const resolved = await preview();
+    if (!resolved.ok) throw new Error(resolved.error);
+    expect(resolved.source.head!.repository).toBe("contributor/project");
+    expect(resolved.source.request.delivery!.remote).toBe("contributor");
+    expect(await resolveDeliveryRemote(checkout, resolved.source.request.delivery!.remote, realExec, { allowLiteral: true }))
+      .toMatchObject({ ok: false, status: 400, error: expect.stringContaining("to another repository") });
   });
 });
 

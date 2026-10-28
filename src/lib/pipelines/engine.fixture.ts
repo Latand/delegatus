@@ -187,6 +187,12 @@ function harness() {
       /* Review ingress requires a publishable remote, so the default repo has
          one. A test that needs the no-origin case overrides this. */
       if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: "git@example.invalid:owner/repo.git\n", stderr: "" };
+      if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+      // Model the command-line-only remote used to validate a stored URL.
+      if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+        const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+        if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+      }
       if (args[0] === "ls-remote") {
         const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
         return { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${branch}\n`, stderr: "" };

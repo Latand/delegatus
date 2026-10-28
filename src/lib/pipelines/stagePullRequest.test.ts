@@ -3,6 +3,9 @@ import { ensureStagePullRequest } from "./stagePullRequest";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import type { ExecPort } from "@/lib/workflows/provision";
+import { emptyRepositoryEntry, forgeCacheView, readForgeCache, updateForgeCache } from "@/lib/forge/cache";
+import { resolvePipelineLink } from "./linkSource";
+import { resolveDeliveryRemote } from "./git";
 import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
 
 const REMOTE = "https://github.com/example/widgets.git";
@@ -389,6 +392,51 @@ test("a fork delivery reads its PR in the upstream repository and accepts its he
       "number,headRefName,baseRefName,state,headRefOid,isCrossRepository,headRepository,headRepositoryOwner"]]);
     expect(f.pipeline.delivery!.target.pr).toBe(17);
   } finally { f.close(); }
+});
+
+test("a fork renamed in the forge cache keeps its identity from link preview through publication", async () => {
+  const f = await publishedHeadFixture();
+  const oldRepository = "old-fork/widgets";
+  const previous = readForgeCache().data.repositories[oldRepository];
+  try {
+    updateForgeCache(data => { data.repositories[oldRepository] = { ...emptyRepositoryEntry(), canonical: "contributor/widgets" }; });
+    const repoDir = f.pipeline.repoDir;
+    for (const args of [
+      ["remote", "set-url", "origin", REMOTE],
+      ["remote", "add", "contributor", `https://github.com/${oldRepository}.git`],
+    ]) {
+      const result = await realExec("git", args, repoDir);
+      expect(result.code, result.stderr).toBe(0);
+    }
+    const preview = await resolvePipelineLink("https://github.com/example/widgets/pull/17", repoDir, {
+      exec: realExec, cache: forgeCacheView(), tasks: () => [], pipelines: () => [], projectForCwd: () => null, taskLinks: () => [],
+      gh: async () => JSON.stringify({ number: 17, title: "Fork fix", state: "open", base: { ref: f.pipeline.baseBranch },
+        head: { ref: f.row.headRefName, sha: f.row.headRefOid, repo: { full_name: "Contributor/Widgets" } } }),
+    });
+    if (!preview.ok) throw new Error(preview.error);
+    expect(preview.source.head).toMatchObject({ repository: "contributor/widgets", remote: "contributor", fork: true });
+    const input = preview.source.request.delivery!;
+    const stored = await resolveDeliveryRemote(repoDir, input.remote, realExec, { allowLiteral: true });
+    if (!stored.ok) throw new Error(stored.error);
+    expect(stored.remote).toBe(`https://github.com/${oldRepository}.git`);
+    f.pipeline.delivery!.target = { ...f.pipeline.delivery!.target, ...input, remote: stored.remote, repository: stored.repository };
+    const row = { ...f.row, isCrossRepository: true, headRepository: { name: "Widgets" }, headRepositoryOwner: { login: "Contributor" } };
+    const exec: ExecPort = async (command, args) => {
+      expect(command).toBe("gh");
+      expect(args.slice(0, 5)).toEqual(["pr", "view", "17", "--repo", "example/widgets"]);
+      return { code: 0, stdout: JSON.stringify(row), stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    row.headRepositoryOwner.login = "unrelated";
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+      .toEqual({ ok: false, error: "the delivery pull request differs in headRepository (expected the delivery remote's repository)" });
+  } finally {
+    updateForgeCache(data => {
+      if (previous) data.repositories[oldRepository] = previous;
+      else delete data.repositories[oldRepository];
+    });
+    f.close();
+  }
 });
 
 test.each([

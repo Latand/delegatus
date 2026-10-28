@@ -5,6 +5,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { deliveryPullRequestRepository, githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { canonicalRepository } from "@/lib/forge/resolve";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
@@ -79,9 +80,13 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
   /* A fork PR lives in the upstream `prRepository`, and its head in the fork
      the delivery remote pushes to. */
-  const pushRepository = githubRepositoryOfRemote(delivery.target.remote);
-  const repository = deliveryPullRequestRepository(delivery.target);
-  if (!repository || !pushRepository) return { ok: false, error: "the delivery remote has no supported pull request service" };
+  const pushName = githubRepositoryOfRemote(delivery.target.remote);
+  const prName = deliveryPullRequestRepository(delivery.target);
+  if (!prName || !pushName) return { ok: false, error: "the delivery remote has no supported pull request service" };
+  // Preview admits recorded repository renames; settlement uses the same view.
+  const canonical = canonicalRepository();
+  const pushRepository = canonical(pushName).toLowerCase();
+  const repository = canonical(prName).toLowerCase();
   const crossRepository = repository !== pushRepository;
   if (crossRepository && delivery.target.pr === undefined) return { ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
@@ -116,7 +121,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       pr?.headRefName !== branch ? "headRefName" : null,
       pr?.headRefOid !== acceptedHead ? "headRefOid" : null,
       pr?.isCrossRepository !== crossRepository ? `isCrossRepository (expected ${crossRepository ? "the fork" : "same repository"})` : null,
-      crossRepository && `${pr?.headRepositoryOwner?.login}/${pr?.headRepository?.name}`.toLowerCase() !== pushRepository
+      crossRepository && canonical(`${pr?.headRepositoryOwner?.login}/${pr?.headRepository?.name}`.toLowerCase()).toLowerCase() !== pushRepository
         ? "headRepository (expected the delivery remote's repository)" : null,
       linked === undefined && pr?.baseRefName !== pipeline.baseBranch ? "baseRefName" : null,
     ].filter(Boolean);

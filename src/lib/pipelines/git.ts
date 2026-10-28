@@ -86,16 +86,13 @@ export async function resolveDeliveryRemote(repoDir: string, requested: string |
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(remote) && !/^[^/]+:/.test(remote)) remote = path.resolve(repoDir, remote);
   const repository = projectIdentityFromRemote(remote, repoDir)?.project;
   if (!repository) return { ok: false, error: "invalid delivery remote", status: 400 };
-  /* Publication pushes to a stored literal as written, and Git applies this
-     checkout's URL rewrites to it on the way, so a literal is accepted only
-     when every URL Git would use for it names the repository it names. */
-  if (alias.code === 2) {
-    const effective = await literalRemoteUrls(repoDir, remote, exec);
-    if (!effective) return { ok: false, error: "could not read the repository's remotes; retry the request", status: 409 };
-    const elsewhere = [...effective.fetch, ...effective.push].find((url) => projectIdentityFromRemote(url, repoDir)?.project !== repository);
-    if (elsewhere !== undefined) {
-      return { ok: false, status: 400, error: `this checkout's Git url insteadOf or pushInsteadOf settings rewrite the delivery remote ${remote} to another repository; remove the rewrite or deliver through a configured remote` };
-    }
+  /* Publication uses the stored URL literally, including when a named remote
+     expanded to it. Git can apply another existing rewrite to that URL. */
+  const effective = await literalRemoteUrls(repoDir, remote, exec);
+  if (!effective) return { ok: false, error: "could not read the repository's remotes; retry the request", status: 409 };
+  const elsewhere = [...effective.fetch, ...effective.push].find((url) => projectIdentityFromRemote(url, repoDir)?.project !== repository);
+  if (elsewhere !== undefined) {
+    return { ok: false, status: 400, error: `this checkout's Git url insteadOf or pushInsteadOf settings rewrite the delivery remote ${remote} to another repository; remove the rewrite or deliver through a configured remote` };
   }
   return { ok: true, remote, repository };
 }
