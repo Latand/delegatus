@@ -3714,7 +3714,7 @@ test("owner launch custody retained by a live admission owner is no proof of no 
   }
 });
 
-for (const worker of [false, true]) test(`a live owner run whose stop never confirms quarantines at its bound and settles once (worker=${worker})`, async () => {
+for (const releaseFails of [false, true]) for (const worker of [false, true]) test(`a live owner run whose stop never confirms quarantines at its bound and settles once (worker=${worker}, releaseFails=${releaseFails})`, async () => {
   const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
   const completions: unknown[] = [];
   let completionArrived!: () => void, releaseCompletion!: () => void;
@@ -3732,12 +3732,25 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
   const requestId = `live_stop_bound_${worker}`;
+  const chains = await import("./conversations");
+  const release = chains.releaseConversationAsync;
+  let refusedRelease = false;
+  const releasing = spyOn(chains, "releaseConversationAsync").mockImplementation(async (...args) => {
+    if (releaseFails && !refusedRelease && args[1].state === "broken") {
+      refusedRelease = true; throw Error("fixture chain lock unavailable");
+    }
+    return release(...args);
+  });
+  const chainRequest = requestSchema.parse({ ...contextRequest, request_id: `${requestId}-previous`, chat: { key: `bounded-stop-${worker}` } });
+  const previous = (await chains.reserveChainConversationAsync(paired, paired.targets[0]!, chainRequest, "owner-tier", Date.now() + 5000))!;
+  await chains.releaseConversationAsync(previous.id, { conversationId: `conversation_live_stop_bound_${worker}` }, Date.now() + 5000, chainRequest.request_id);
   let stops = 0, skew = 0, finished = false, recover = false;
   let reached!: () => void;
   const refused = new Promise<void>(r => { reached = r; });
   const logging = spyOn(console, "error").mockImplementation(() => {});
   const ports: import("./ownerRun").OwnerRunPorts = {
-    launch: async () => ({ status: 202, body: { conversationId: `conversation_live_stop_bound_${worker}` } }),
+    launch: async () => { throw Error("continuation must reuse its conversation"); },
+    continue: async turn => ({ ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId }),
     observe: async () => ({ state: "running" }), stopRetryMs: 1, pollMs: 1, now: () => Date.now() + skew,
     stop: async () => {
       if (++stops === 3) reached();
@@ -3752,6 +3765,7 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
     await refused;
     await new Promise<void>(r => setImmediate(r));
     expect(finished).toBe(false); expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    expect(chains.readConversations().find(row => row.id === previous.id)?.pendingCursor?.operationId).toBe(`relay-owner-${requestId}`);
     skew = OWNER_STOP_PENDING_LIMIT_MS + 1;
     while (!readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released) await Bun.sleep(1);
     expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({
@@ -3761,6 +3775,14 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
     expect(finished).toBe(false);
     expect(runningCount(paired.id, "target_1")).toBe(0);
     expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    if (releaseFails) expect(refusedRelease).toBe(true);
+    else {
+      const releaseDeadline = Date.now() + 2000;
+      while (chains.readConversations().find(row => row.id === previous.id)?.state === "running" && Date.now() < releaseDeadline) await Bun.sleep(1);
+      const detached = chains.readConversations().find(row => row.id === previous.id)!;
+      expect(detached).toMatchObject({ state: "broken", runningRequestId: null });
+      expect(detached.pendingCursor).toBeUndefined();
+    }
     releaseCompletion();
     expect(await done).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.any(String) } });
     expect(finished).toBe(true);
@@ -3769,8 +3791,8 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
     const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
     expect(held).toMatchObject({ completionAccepted: true, ownerTurn: { released: { reason: "stop_unconfirmed" } } });
     expect(held.ownerTurn!.confirmed).toBeUndefined();
-    const chains = await import("./conversations");
     expect(chains.readConversations().find(row => row.chatKey === `bounded-stop-${worker}`)).toMatchObject({ state: "broken", runningRequestId: null });
+    expect(chains.readConversations().find(row => row.id === previous.id)?.pendingCursor).toBeUndefined();
     // Quarantine settles the execution promise and retains the unconfirmed
     // cutoff. No later sweep retries control or completes the request again.
     const before = stops;
@@ -3786,7 +3808,7 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
     expect(next).toMatchObject({ outcome: "answered", answer: { text: "Ready" } });
     expect(stops).toBe(before);
   } finally {
-    releaseCompletion(); recover = true; await done; logging.mockRestore(); dropRun(requestId); await service.close();
+    releaseCompletion(); recover = true; await done; releasing.mockRestore(); logging.mockRestore(); dropRun(requestId); await service.close();
   }
 }, 15000);
 

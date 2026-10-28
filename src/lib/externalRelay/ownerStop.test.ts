@@ -8,12 +8,12 @@ import * as controls from "@/lib/conversation/actions";
 import * as sourcesModule from "@/lib/monitor/seatTickSources";
 import * as storeModule from "./store";
 import { confirmOwnerStop, OWNER_STOP_PENDING_LIMIT_MS, observeOwnerContinuation, type OwnerRunPorts } from "./ownerRun";
-import { dropRun, readRunLedger, reserveRun, writeRelayFile, type RunRecord } from "./store";
+import { dropRun, newTargetSettings, readRelayStore, readRunLedger, reserveRun, updateRelayStore, writeRelayFile, type PairedRelay, type RunRecord } from "./store";
 import { advertisedSlots } from "./runner";
 import { sweepExternalRelayOrphans } from "./poller";
 import type { RegistryFile } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
-import { readConversations, type RelayConversation } from "./conversations";
+import { readConversations, reserveChainConversationAsync, releaseConversationAsync, type RelayConversation } from "./conversations";
 import { procBackend } from "@/lib/proc";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
@@ -99,34 +99,59 @@ for (const mode of ["off", "sqlite"] as const) test(`failed admission owned by a
   }
 });
 
-test("a legacy slot-only release quarantines across fresh processes, retaining its cutoff and undelivered answer", async () => {
+test("a legacy slot-only release quarantines across fresh processes, detaching its continuation cursor and retaining delivery custody", async () => {
   const f = fixture();
   const now = Date.parse("2026-10-28T12:00:00Z");
   const cancelledAt = new Date(now - OWNER_STOP_PENDING_LIMIT_MS).toISOString();
-  const request = requestSchema.parse({ ...contextRequest, input: { ...contextRequest.input,
+  const request = requestSchema.parse({ ...contextRequest, request_id: f.run.requestId, chat: { key: "restart-stop-chain" }, input: { ...contextRequest.input,
     requester: { ...contextRequest.input.requester, is_owner: true } } });
   const context = ownerTierFor({ ownerTier: true }, request)!;
   const lateAnswer = { body: { lease_id: f.run.leaseId, outcome: "answered" as const,
     answer: { action: "reply" as const, text: "Saved answer", reply_to: context.messageId }, duration_ms: 1 }, files: [] };
-  f.run.ownerTurn = { ...f.run.ownerTurn!, context, rawRequest: request, cancelledAt,
+  const target = { ...newTargetSettings({ target_id: f.run.targetId, name: "Target", answered_by: "install", fallback: "none" }), engine: "codex" as const, ownerTier: true };
+  const relay = { id: f.run.relayId, targets: [target], paused: false } as PairedRelay;
+  const previousRelays = readRelayStore();
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const chainFile = statePath("external-relay/conversations.json");
+  const previousChains = fs.existsSync(chainFile) ? fs.readFileSync(chainFile) : null;
+  const chain = (await reserveChainConversationAsync(relay, target, request, "owner-tier", Date.now() + 5000))!;
+  const operationId = "relay-owner-stop-continuation";
+  await releaseConversationAsync(chain.id, { state: "running", runningRequestId: request.request_id, conversationId: f.run.conversationId,
+    pendingCursor: { operationId, seen: ["unconfirmed"], staticDigest: "pending" } }, Date.now() + 5000, request.request_id);
+  f.run.ownerTurn = { ...f.run.ownerTurn!, clientAttemptId: operationId, continuation: { operationId }, context, rawRequest: request, cancelledAt,
     released: { at: cancelledAt, reason: "stop_unconfirmed" }, lateAnswer };
   reserveRun(f.run, 1);
   try {
     for (let restart = 0; restart < 2; restart++) {
       const child = Bun.spawn([process.execPath, "-e", `
         import { confirmOwnerStop } from "./src/lib/externalRelay/ownerRun";
-        import { readRunLedger, ownerStopPending } from "./src/lib/externalRelay/store";
+        import { readRunLedger, ownerStopPending, newTargetSettings } from "./src/lib/externalRelay/store";
+        import { sweepConversationsAsync, resolveChainConversationAsync, reserveChainConversationAsync, releaseConversationAsync } from "./src/lib/externalRelay/conversations";
+        import { ownerRelayAuthorized } from "./src/lib/externalRelay/ownerAuthority";
+        import { sweepExternalRelayOrphans } from "./src/lib/externalRelay/poller";
         let stops = 0;
         const run = readRunLedger().runs.find(row => row.requestId === "owner-stop-completed");
         const settled = await confirmOwnerStop(run, { now: () => ${now}, stopRetryMs: 1,
           stop: async () => { stops++; throw Error("control refused"); },
           observe: async () => ({ state: "running" }) });
         const saved = readRunLedger().runs.find(row => row.requestId === run.requestId);
-        console.log(JSON.stringify({ settled, stops, pending: ownerStopPending(saved), capacityReleased: saved.capacityReleased === true }));
+        const target = { ...newTargetSettings({ target_id: run.targetId, name: "Target", answered_by: "install", fallback: "none" }), engine: "codex" };
+        const relay = { id: run.relayId, targets: [target] };
+        await sweepConversationsAsync([relay], ${Date.parse(chain.createdAt)}, Date.now() + 5000);
+        const request = { ...saved.ownerTurn.rawRequest, request_id: "restart-next" };
+        await resolveChainConversationAsync(relay, target, request, "owner-tier", Date.now() + 5000);
+        const next = await reserveChainConversationAsync(relay, target, request, "owner-tier", Date.now() + 5000);
+        let sends = 0;
+        globalThis.fetch = async () => { sends++; throw Error("unexpected service delivery"); };
+        await sweepExternalRelayOrphans();
+        console.log(JSON.stringify({ settled, stops, pending: ownerStopPending(saved), capacityReleased: saved.capacityReleased === true,
+          admitted: !!next, conversationId: next?.conversationId ?? null, authorized: ownerRelayAuthorized(run.relayId, run.targetId, run.requestId), sends }));
+        if (next) await releaseConversationAsync(next.id, {}, Date.now() + 5000, request.request_id);
       `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
       const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect(code).toBe(0);
-      expect(JSON.parse(output)).toEqual({ settled: true, stops: restart ? 0 : 3, pending: false, capacityReleased: true });
+      expect(JSON.parse(output)).toEqual({ settled: true, stops: restart ? 0 : 3, pending: false, capacityReleased: true,
+        admitted: true, conversationId: null, authorized: false, sends: 0 });
       expect(error.includes("ALARM:")).toBe(!restart);
     }
     const saved = readRunLedger().runs.find(row => row.requestId === f.run.requestId)!;
@@ -134,7 +159,12 @@ test("a legacy slot-only release quarantines across fresh processes, retaining i
     expect(saved.ownerTurn?.confirmed).toBeUndefined();
     expect(saved.ownerTurn?.cancelledAt).toBe(cancelledAt);
     expect(saved.ownerTurn?.lateAnswer).toEqual(lateAnswer);
-  } finally { f.close(); }
+    expect(saved.ownerTurn?.continuation).toEqual({ operationId });
+  } finally {
+    if (previousChains) fs.writeFileSync(chainFile, previousChains); else fs.rmSync(chainFile, { force: true });
+    updateRelayStore(() => previousRelays);
+    f.close();
+  }
 });
 
 test("quarantine rechecks custody after awaiting its ledger writer", async () => {

@@ -1016,7 +1016,7 @@ export async function runClaimedRequest(
               const custody = readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn;
               if (custody?.quarantinedAt || custody?.confirmed) {
                 void releaseCapacity?.().catch(() => console.error("Owner relay settled capacity release pending"));
-                if (conversation && custody.quarantinedAt) void releaseConversationAsync(conversation.id, { state: "broken" }, Date.now() + 5000, requestId)
+                if (conversation && custody.quarantinedAt) void releaseConversationAsync(conversation.id, { state: "broken", pendingCursor: undefined }, Date.now() + 5000, requestId)
                   .catch(() => console.error("Owner relay quarantined chain release pending"));
               }
             } catch { console.error("Owner relay settled capacity custody unreadable"); }
@@ -1253,16 +1253,18 @@ export async function runClaimedRequest(
       for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
       await ownerTools?.dispose();
       let releasePin = true;
+      let quarantined = false;
       if (conversation && owner) {
         try {
           const held = readRunLedger().runs.find(r => r.requestId === requestId);
           releasePin = !ownerRunPending() && !(held && ownerStopPending(held));
-          if (held?.ownerTurn?.quarantinedAt) conversationBroken = true;
+          if (held?.ownerTurn?.quarantinedAt) { conversationBroken = true; quarantined = true; }
         } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
       }
       if (conversation && releasePin) {
         const compacted = conversationEvidence.compacted;
         await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+          ...(quarantined ? { pendingCursor: undefined } : {}),
           ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
             lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
             lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000, requestId);

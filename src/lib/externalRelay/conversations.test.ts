@@ -2,7 +2,7 @@ import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { conversationAuthority, reserveChainConversation, reserveChainConversationAsync, releaseConversation, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
+import { conversationAuthority, reserveChainConversation, reserveChainConversationAsync, releaseConversation, releaseConversationAsync, resolveChainConversationAsync, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
 import { sampleRequest, contextRequest } from "./request.fixture";
 import { externalRelayFile, newTargetSettings, readRunLedger, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay, type RunRecord } from "./store";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
@@ -35,15 +35,39 @@ test(`${asyncSweep ? "async" : "sync"} chain sweep separates ${state} custody fr
   } finally { dropRun("root"); }
 });
 
+for (const asyncSweep of [false, true]) test(`${asyncSweep ? "async" : "sync"} quarantine detaches a pending continuation cursor without changing delivery custody`, async () => {
+  const first = reserveChainConversation(relay, target, request(), "owner-tier")!;
+  const pendingCursor = { operationId: "relay-owner-root", seen: ["unconfirmed"], staticDigest: "pending" };
+  await releaseConversationAsync(first.id, { state: "running", runningRequestId: "root", conversationId: "conversation_old", pendingCursor }, Date.now() + 5000, "root");
+  const run: RunRecord = { requestId: "root", relayId: relay.id, targetId: target.id, leaseId: "fixture", childPid: null, childIdentity: null,
+    conversationId: "conversation_old", ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: first.createdAt,
+    capacityReleased: true, ownerTurn: { clientAttemptId: pendingCursor.operationId, continuation: { operationId: pendingCursor.operationId },
+      cancel: "interrupt", cancelledAt: "2026-10-28T11:50:00Z", quarantinedAt: "2026-10-28T12:00:00Z" } };
+  reserveRun(run);
+  try {
+    if (asyncSweep) await sweepConversationsAsync([relay], Date.parse(first.createdAt), Date.now() + 5000);
+    else sweepConversations([relay], readRunLedger().runs, Date.parse(first.createdAt));
+    const broken = readConversations().find(row => row.id === first.id)!;
+    expect(broken).toMatchObject({ state: "broken", runningRequestId: null, seen: [], staticDigest: null });
+    expect(broken.pendingCursor).toBeUndefined();
+    await resolveChainConversationAsync(relay, target, request("next", "root"), "owner-tier", Date.now() + 5000);
+    const next = await reserveChainConversationAsync(relay, target, request("next", "root"), "owner-tier", Date.now() + 5000);
+    expect(next).toMatchObject({ state: "running", runningRequestId: "next", conversationId: null, seen: [], staticDigest: null });
+    expect(readRunLedger().runs.find(row => row.requestId === "root")).toEqual(run);
+  } finally { dropRun("root"); }
+});
+
 test("late cleanup and attribution cannot overwrite a successor's chain reservation", async () => {
   const { releaseConversationAsync } = await import("./conversations");
   const first = reserveChainConversation(relay, target, request(), "owner-tier")!;
   releaseConversation(first.id, { state: "broken" });
   const next = reserveChainConversation(relay, target, request("next", "root"), "owner-tier")!;
   expect(next.id).toBe(first.id);
-  for (const patch of [{ state: "broken" as const }, { state: "running" as const, runningRequestId: "root", conversationId: "conversation_old" }]) {
+  const pendingCursor = { operationId: "relay-owner-next", seen: ["next"], staticDigest: "next" };
+  await releaseConversationAsync(next.id, { state: "running", runningRequestId: "next", pendingCursor }, Date.now() + 5000, "next");
+  for (const patch of [{ state: "broken" as const, pendingCursor: undefined }, { state: "running" as const, runningRequestId: "root", conversationId: "conversation_old" }]) {
     await releaseConversationAsync(first.id, patch, Date.now() + 5000, "root");
-    expect(readConversations().find(row => row.id === next.id)).toMatchObject({ state: "running", runningRequestId: "next", conversationId: null });
+    expect(readConversations().find(row => row.id === next.id)).toMatchObject({ state: "running", runningRequestId: "next", conversationId: null, pendingCursor });
   }
 });
 test("a requester and their authority scope every chain", () => {

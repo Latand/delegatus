@@ -489,6 +489,9 @@ export async function sweepConversationsAsync(relays: PairedRelay[], now: number
       const target = relay?.targets.find(item => item.id === record.targetId);
       const run = runs.find(run => run.requestId === record.runningRequestId);
       if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) {
+        // Quarantine leaves uncertain delivery in the run ledger. Its cursor
+        // must stop reserving this chain so the next turn starts fresh.
+        if (run?.ownerTurn?.quarantinedAt) delete record.pendingCursor;
         record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null; changed = true;
       }
       if (record.state === "running") continue;
@@ -504,7 +507,10 @@ function sweepAction(relays: PairedRelay[], runs: RunRecord[], now: number, remo
     for (let i = rows.length - 1; i >= 0; i--) {
       const record = rows[i]!; if (onlyRelayId && record.relayId !== onlyRelayId) continue; const relay = relays.find((r) => r.id === record.relayId); const target = relay?.targets.find((t) => t.id === record.targetId);
       const run = runs.find(run => run.requestId === record.runningRequestId);
-      if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) { record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null; }
+      if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) {
+        if (run?.ownerTurn?.quarantinedAt) delete record.pendingCursor;
+        record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null;
+      }
       if (record.state === "running") continue;
       if (record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine || now - Date.parse(record.lastTurnAt) > 3 * 86400000 || sizes && transcriptBytes(record) > 32 * 1024 * 1024) {
         deleteConversationFiles(record); rows.splice(i, 1);
