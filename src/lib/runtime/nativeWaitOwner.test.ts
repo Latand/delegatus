@@ -16,7 +16,7 @@ test("wait owner passes only the caller's environment to the engine", async () =
     projectValuePresent: "UNDECLARED_PROJECT_VALUE" in process.env,
   }))`], {
     cwd: root,
-    env: { PATH: process.env.PATH, DECLARED_VALUE: "fixture-explicit" },
+    env: { NODE_ENV: "test", PATH: process.env.PATH, DECLARED_VALUE: "fixture-explicit" },
   });
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk.toString(); });
