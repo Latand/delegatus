@@ -27,6 +27,11 @@ operator's view of a review is in [Pipelines in depth](guide/pipelines.md).
    head.
 5. `pass` follows the reviewer's own pass edge.
 
+A pass approves the exact head the reviewer saw. A commit after it is not
+covered: it needs a new review before it can merge. A stage that parks in
+`needs_decision` waits for an answer through `pipeline_action
+resolve-decision` (see [Control](pipelines.md#control)).
+
 ## The budget
 
 The number of rounds is fixed when the pipeline is created, on the reviewer's
@@ -126,6 +131,7 @@ started from the **Flow** chip of the scheme view. Flows are retired
 interface starts one, the desktop has a single view, the board, and the phone
 shows old flow rounds as history only. Stored flows stay readable. `/api/flows`
 and the MCP tools `list_flows`, `get_flow` and `flow_action` still serve
-existing flows, and their artifacts live under the state directory's
-`flows/<id>/`. `.claude/skills/review-loop/` still describes flows, for agents
-that drive old ones.
+existing flows as history, and their artifacts live under the state
+directory's `flows/<id>/`; the server refuses to start or drive one. The
+`.claude/skills/review-loop/` skill is a short pointer to this page for the
+compatibility window.

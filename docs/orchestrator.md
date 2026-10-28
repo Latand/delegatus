@@ -20,7 +20,7 @@ guide.
 1. **Run Delegatus.** `bunx delegatus-cli` serves it on `127.0.0.1:8898` and
    supervises the structured runtime host that agents launch through; see
    [Getting started](guide/getting-started.md). Neither Docker nor tmux is
-   required for this flow.
+   required.
 2. **The Delegatus MCP server needs no step.** Every agent Delegatus launches,
    the orchestrator included, gets the `viewer` server on its own when its
    account registers none (`src/lib/agent/spawnPolicy.ts`). Registration is
