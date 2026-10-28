@@ -799,6 +799,95 @@ test("review probe: companion scope cannot enter an unadopted proactive lane", a
   expect(() => assertProactivePipelineExecution(lane, "dispatch")).not.toThrow();
 });
 
+const pausedWorkerStates = ["deferred", "unconfirmed", "failed", "unresolved", "throws", "starting", "exiting", "survivor", "claimed", "pending", "dead", "unhosted"] as const;
+test.each([...pausedWorkerStates])("paused lane worker capacity follows retained custody: %s", async kind => {
+  const f = await fixture(`paused-worker-${kind}`);
+  setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
+  const ordinary = mutateTasks(tasks => {
+    const made = createTask(tasks, { project: f.project, text: "Requested correction", placement: "unplaced" }, [],
+      { id: () => `paused-ordinary-${kind}`, now: () => f.at });
+    if (!made.ok) throw new Error(made.error);
+    return { tasks: made.tasks, result: made.task };
+  });
+  const made = await createPipelineFromRequest({ task: ordinary.text, repoDir: "/repo", taskIds: [ordinary.id], publication: "internal",
+    stages: [{ id: "work", kind: "run", role: { roleId: "builder" }, prompt: "Apply the correction", next: null }] }, f.h.ports);
+  if (!made.pipeline) throw new Error(made.error);
+  const ordinaryId = made.pipeline.id;
+  const registry = agentRegistry();
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: made.pipeline.worktreeDir, taskIds: [ordinary.id],
+    conversationId: `conversation_paused_worker_${kind}`, role: "builder",
+    origin: { kind: "container", container: "pipeline", containerId: ordinaryId, creatorConversationId: null },
+    memberships: [{ kind: "pipeline", containerId: ordinaryId, role: "builder", slot: "work:1", stageId: "work", stageOrder: 0, round: 1, parentConversationId: null }],
+    launchProfile: emptyLaunchProfile({ cwd: made.pipeline.worktreeDir, model: "gpt-5.6-sol" }) });
+  if (begun.kind !== "created") throw new Error("fresh ordinary worker required");
+  const sessionId = ["20000000", "0000", "4000", "8000", (pausedWorkerStates.indexOf(kind) + 1).toString(16).padStart(12, "0")].join("-");
+  const artifactPath = `/codex/${sessionId}.jsonl`;
+  const entry = { key: sessionKeyFromTranscript("codex", artifactPath)!, artifactPath, cwd: made.pipeline.worktreeDir,
+    accountId: null, status: "dead" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null };
+  const settled = kind === "dead" || kind === "unhosted";
+  if (kind !== "starting") registry.completeSpawn(begun.receipt.launchId, {
+    ...entry, status: kind === "unhosted" ? "unhosted" : settled || ["exiting", "survivor", "claimed", "pending"].includes(kind) ? "dead" : "live",
+    claimOwner: kind === "claimed" ? "pending-owner" : null, pendingAction: kind === "pending" ? "resume" : null,
+    ...(kind === "exiting" ? { pendingHostExits: [{ process: captureProcessIdentity(process.pid), launchId: null }] } : {}),
+    ...(kind === "survivor" ? { structuredTerminationSurvivors: [captureProcessIdentity(process.pid)] } : {}),
+  });
+  mutateTasks(tasks => {
+    const patched = patchTask(tasks, ordinary.id, { status: "done" }, f.at);
+    if (!patched.ok) throw new Error(patched.error);
+    return { tasks: patched.tasks, result: undefined };
+  });
+  await f.tick();
+  const spawns = () => f.h.spawnInputs.filter(input => input.membership.containerId === f.id);
+  expect(spawns()).toHaveLength(0);
+  expect(f.current().stateDetail).toContain("capacity is exhausted");
+  const ordinaryLane = loadPipelines().find(lane => lane.id === ordinaryId)!;
+  const attempt = ordinaryLane.runs[0]!.attempts.at(-1)!;
+  expect(attempt.state).toBe("running");
+  attempt.conversationId = begun.receipt.conversationId;
+  attempt.launchId = begun.receipt.launchId;
+  attempt.agentPath = artifactPath;
+  attempt.paneId = null;
+  savePipelines(loadPipelines().map(lane => lane.id === ordinaryId ? ordinaryLane : lane));
+  f.h.setConversationActive(true);
+  f.h.ports.stopStageAgent = async () => {
+    if (kind === "throws") throw new Error("stop confirmation unavailable");
+    if (kind === "failed") return { outcome: "failed", error: "stop confirmation unavailable" };
+    if (kind === "unconfirmed") return { outcome: "unconfirmed", operationId: null, detail: "stop confirmation unavailable" };
+    if (kind === "unresolved") return { outcome: "unresolved", error: "host still alive", survivors: [captureProcessIdentity(process.pid)] };
+    return { outcome: settled ? "stopped" : "deferred" };
+  };
+  expect((await patchPipeline(ordinaryId, { action: "pause", reason: "Hold requested work" }, f.h.ports)).error).toBeUndefined();
+  const paused = loadPipelines().find(lane => lane.id === ordinaryId)!;
+  expect(paused.state).toBe("paused");
+  expect(!!paused.runs[0]!.attempts.at(-1)!.suspension?.stoppedAt).toBe(settled);
+  const check = () => assertProactivePipelineExecution(f.current(), "dispatch");
+  expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+  await f.tick();
+  expect(spawns()).toHaveLength(settled ? 1 : 0);
+  if (settled) expect(check).not.toThrow();
+  else expect(check).toThrow("worker capacity is exhausted");
+  // A fresh process must observe the same retained capacity while the lane is paused.
+  if (!settled) {
+    const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "lane-dispatch"],
+      { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+    try {
+      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      if (code) throw new Error(err);
+      expect(JSON.parse(out.split("RESULT ")[1]!).error).toContain("worker capacity is exhausted");
+    } finally { if (child.exitCode === null) child.kill(); await child.exited; }
+    if (["deferred", "unconfirmed", "failed", "throws", "starting", "claimed", "pending"].includes(kind)) {
+      if (kind === "starting") registry.completeSpawn(begun.receipt.launchId, entry);
+      else registry.upsert(entry);
+      f.h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
+      expect((await patchPipeline(ordinaryId, { action: "pause", reason: "Confirm stopped host" }, f.h.ports)).error).toBeUndefined();
+      expect(() => assertProactivePipelineExecution(f.current(), "dispatch")).not.toThrow();
+      expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+      await f.tick();
+      expect(spawns()).toHaveLength(1);
+    }
+  }
+});
+
 const standaloneStates = ["dead", "unhosted", "live", "claimed", "pending", "starting", "exiting", "survivor"] as const;
 test.each([...standaloneStates])("review probe: standalone worker capacity follows retained custody: %s", async kind => {
   const f = await fixture(`standalone-${kind}`);

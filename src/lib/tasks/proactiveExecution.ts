@@ -58,17 +58,23 @@ export function proactiveExecutionError(tasks: readonly BoardTask[], file = TASK
           const members = agentRegistry().conversationMemberships(id as `conversation_${string}`);
           if (members.some(member => member.kind === "orchestrator")) continue;
           const lanes = members.filter(member => member.kind === "pipeline");
-          if (!lanes.length) {
+          const unsettled = () => {
             const retained = agentRegistry().conversationRetentionSnapshot(id);
-            const awaitingExit = Object.values(retained.entries).some(entry => entry.pendingHostExits?.length);
-            if (awaitingExit || !hostlessConversationEvidence(retained, id)) workers.add(id);
+            return Object.values(retained.entries).some(entry => entry.pendingHostExits?.length)
+              || !hostlessConversationEvidence(retained, id);
+          };
+          if (!lanes.length) {
+            if (unsettled()) workers.add(id);
             continue;
           }
           for (const member of lanes) {
             if (member.containerId === live.pipeline?.id) continue;
             const lane = findPipelineRecord(member.containerId);
             if (!lane) return "proactive worker capacity is unreadable";
-            if (["running", "provisioning"].includes(lane.state) && !lane.closedAt && !lane.hiddenAt) workers.add(`pipeline:${lane.id}`);
+            // Pause is persisted before termination is confirmed. Retained
+            // host and exit custody still owns a slot until positively settled.
+            if (!lane.closedAt && !lane.hiddenAt && (["running", "provisioning"].includes(lane.state)
+              || lane.state === "paused" && unsettled())) workers.add(`pipeline:${lane.id}`);
           }
         }
         if (workers.size >= limit.value) return "proactive worker capacity is exhausted";
