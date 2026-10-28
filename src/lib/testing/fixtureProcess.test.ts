@@ -166,6 +166,88 @@ test("identity cleanup escalates a TERM-resistant child and preserves a same-arg
   } finally { await stopFixtureProcess(child); await stopFixtureProcess(bystander); }
 }, 5_000);
 
+for (const exitRead of [1, 2]) test(`identity cleanup retains terminal evidence from kernel read ${exitRead}`, async () => {
+  const child = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+  const identity = captureProcessIdentity(child.pid!);
+  const originalExited = procBackend.processExited.bind(procBackend);
+  const originalAlive = procBackend.pidAlive.bind(procBackend);
+  const originalIdentity = procBackend.processIdentity.bind(procBackend);
+  const originalKill = process.kill;
+  let reads = 0;
+  let terminalObserved = false;
+  let readsAfterExit = 0;
+  const alive = spyOn(procBackend, "pidAlive").mockImplementation(pid => {
+    if (pid === child.pid && terminalObserved) readsAfterExit += 1;
+    return pid === child.pid && terminalObserved ? true : originalAlive(pid);
+  });
+  const token = spyOn(procBackend, "processIdentity").mockImplementation(pid =>
+    pid === child.pid && terminalObserved ? identity.startIdentity : originalIdentity(pid));
+  const exited = spyOn(procBackend, "processExited").mockImplementation(pid => {
+    if (pid !== child.pid) return originalExited(pid);
+    if (++reads !== exitRead) return false;
+    // A terminal snapshot followed by an absent stat read during reaping.
+    // Kill the real fixture; later reads must never revive its identity.
+    originalKill(pid, "SIGKILL");
+    terminalObserved = true;
+    return true;
+  });
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid && signal === "SIGTERM") return true;
+    return originalKill(pid, signal);
+  });
+  try {
+    await stopFixtureIdentity(identity);
+    expect(terminalObserved).toBe(true);
+    expect(readsAfterExit).toBe(0);
+    expect(reads).toBe(exitRead);
+    expect(send.mock.calls).toEqual(exitRead === 1 ? [] : [[child.pid!, "SIGTERM"]]);
+  } finally {
+    send.mockRestore(); exited.mockRestore(); alive.mockRestore(); token.mockRestore();
+    await stopFixtureProcess(child);
+  }
+}, 5_000);
+
+test("identity cleanup refuses missing authority without signalling a live child", async () => {
+  const child = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+  const identity = captureProcessIdentity(child.pid!);
+  const originalIdentity = procBackend.processIdentity.bind(procBackend);
+  const token = spyOn(procBackend, "processIdentity").mockImplementation(pid => pid === child.pid ? null : originalIdentity(pid));
+  const send = spyOn(process, "kill");
+  try {
+    await expect(stopFixtureIdentity(identity, 40)).rejects.toThrow("owned fixture identity survived bounded cleanup");
+    expect(send).not.toHaveBeenCalled();
+    expect(procBackend.pidAlive(child.pid!)).toBe(true);
+  } finally {
+    send.mockRestore(); token.mockRestore();
+    await stopFixtureProcess(child);
+  }
+}, 3_000);
+
+test("identity cleanup rechecks the start token after its exit probe", async () => {
+  const child = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+  const identity = captureProcessIdentity(child.pid!);
+  const originalIdentity = procBackend.processIdentity.bind(procBackend);
+  const originalExited = procBackend.processExited.bind(procBackend);
+  let replaced = false;
+  const token = spyOn(procBackend, "processIdentity").mockImplementation(pid =>
+    pid === child.pid && replaced ? "reused" : originalIdentity(pid));
+  const exited = spyOn(procBackend, "processExited").mockImplementation(pid => {
+    if (pid !== child.pid) return originalExited(pid);
+    replaced = true;
+    return false;
+  });
+  const send = spyOn(process, "kill");
+  try {
+    await stopFixtureIdentity(identity);
+    expect(replaced).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+    expect(originalIdentity(child.pid!)).toBe(identity.startIdentity);
+  } finally {
+    send.mockRestore(); exited.mockRestore(); token.mockRestore();
+    await stopFixtureProcess(child);
+  }
+}, 3_000);
+
 test.skipIf(process.platform !== "linux")("actual recycled PID with identical argv survives every shared teardown path", () => {
   const program = `
 import { spawn } from "node:child_process";
