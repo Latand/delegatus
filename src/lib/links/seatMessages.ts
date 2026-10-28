@@ -17,7 +17,7 @@ export type SeatMessage = { id: string; p: string; at: number; k: string; t: str
 export type SeatMessagePart = { v: 1; out?: SeatMessage[]; ack?: Ack[] };
 type Row = { key: string; dir: "out" | "in"; id: string; link: string; connection: string; p: string; at: number; k: string;
   t?: string; ackPending?: boolean; digest: string; sentAt?: number; ack?: Ack; receivedAt?: number; prelude?: string;
-  st?: "received" | "delivering" | "accepted" | "refused"; code?: string; operationId?: string;
+  st?: "received" | "delivering" | "accepted" | "refused" | "not-delivered"; admissionFence?: string; code?: string; operationId?: string;
   lease?: { pid: number; identity: string | null; token: string } };
 const DAY = 86_400_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -39,7 +39,9 @@ function collection(create = false): SqliteStateCollection<Row> | null {
   if (create) initializeStateCollections(file, [seed]);
   const opened = new SqliteStateCollection<Row>(file, { collection: seed.collection, schemaVersion: 1,
     busyMessage: "linked seat messages busy", key: seed.key, clone: structuredClone, strictDecode: true,
-    decode: v => OBJECT(v) && typeof v.key === "string" && (v.dir === "in" || v.dir === "out") && typeof v.id === "string" ? v as Row : null });
+    decode: v => OBJECT(v) && typeof v.key === "string" && (v.dir === "in" || v.dir === "out") && typeof v.id === "string"
+      && (v.admissionFence === undefined || (v.dir === "out" && typeof v.admissionFence === "string" && UUID.test(v.admissionFence)))
+      && (v.st !== "not-delivered" || typeof v.admissionFence === "string") ? v as Row : null });
   stores.set(file, opened); return opened;
 }
 const snapshots = new WeakMap<SqliteStateCollection<Row>, { revision: number; rows: Row[] }>();
@@ -75,7 +77,7 @@ export function resolveSeatMessageMachine(machine: string, project: string): Lin
   return link;
 }
 
-export function queueSeatMessage(link: LinkedPeer, project: string, text: string, seatConversationId: string, clientMessageId: string) {
+export function queueSeatMessage(link: LinkedPeer, project: string, text: string, seatConversationId: string, clientMessageId: string, admissionFence?: string) {
   if (!text.trim()) refuse("message_empty", "Message text is required.");
   if (text.length > 8_000) refuse("message_too_long", "Seat messages are limited to 8000 UTF-16 units.");
   if (!seatMessageTextValid(text)) refuse("relay_reserved_metadata", "Relay the words without Delegatus authority markers or bridge trailers.");
@@ -87,28 +89,65 @@ export function queueSeatMessage(link: LinkedPeer, project: string, text: string
     const prior = tx.get(key);
     if (prior) {
       if (prior.digest !== digest) refuse("idempotency_conflict", "The message key does not match its original words or sender.");
-      return seatMessageAcceptance(prior, link.label);
+      if (prior.st !== "not-delivered") return seatMessageAcceptance(prior, link.label);
+      if (prior.admissionFence !== admissionFence) refuse("seat_message_fenced", "The MCP-to-outbox hop was fenced before admission; retry the original clientRequestId.");
     }
-    const all = rows().filter(row => row.dir === "out" && row.link === link.install);
+    const all = rows().filter(row => row.dir === "out" && row.link === link.install && row.st !== "not-delivered");
     if (all.filter(row => !row.ack && Date.now() - row.at <= 30 * DAY).length >= 20) refuse("message_backlog", `20 messages to ${link.label} are still waiting.`);
     if (all.filter(row => row.at >= Date.now() - DAY).length >= 200) refuse("quota", "The link's daily seat-message quota was reached.");
-    const row: Row = { key, dir: "out", id: randomUUID(), link: link.install, connection: connection(link), p, k, t: text, at: Date.now(), digest };
+    const row: Row = { key, dir: "out", id: prior?.id ?? randomUUID(), link: link.install, connection: connection(link), p, k, t: text, at: Date.now(), digest,
+      ...(prior?.admissionFence ? { admissionFence: prior.admissionFence } : {}) };
     tx.put(row); return seatMessageAcceptance(row, link.label);
   });
 }
 function seatMessageAcceptance(row: Row, machine?: string) {
   return { outcome: "accepted", operationId: `seatmsg_${row.id}`, ...(machine ? { machine } : {}), state: row.ack?.st ?? "queued", ...(row.ack?.code ? { code: row.ack.code } : {}) };
 }
-export function recoverSeatMessage(install: string, clientMessageId: string) {
-  const row = rows().find(row => row.key === `out:${install}:${sha(clientMessageId)}`);
-  return row ? seatMessageAcceptance(row) : null;
+/** Explicit retries bind the current fence before atomically reclaiming their
+ * MCP receipt. Old HTTP requests cannot revive a fenced attempt. */
+export function seatMessageRetryFence(install: string, clientMessageId: string): string | undefined {
+  const row = collection()?.get(`out:${install}:${sha(clientMessageId)}`);
+  return row?.st === "not-delivered" ? row.admissionFence : undefined;
 }
+
+export function recoverSeatMessage(install: string, clientMessageId: string, request?: {
+  project: string; text: string; caller: string; claimedAt: string; admissionFence?: string; fence?: boolean;
+}, now = Date.now()) {
+  const key = `out:${install}:${sha(clientMessageId)}`;
+  const opened = collection();
+  const row = opened?.get(key);
+  const p = request ? canonicalProject(request.project) : "", k = request ? sha(request.caller).slice(0, 16) : "";
+  const digest = request ? sha(JSON.stringify({ p, k, t: request.text })) : "";
+  if (row && request && row.digest !== digest) refuse("idempotency_conflict", "The recovery payload contradicts the outbound message.");
+  if (row && row.st !== "not-delivered") return seatMessageAcceptance(row);
+  // An absent row older than retention may have been delivered and pruned.
+  // Close recovery without granting a resend that could duplicate delivery.
+  if (!row && request && Number.isFinite(Date.parse(request.claimedAt)) && now - Date.parse(request.claimedAt) > 35 * DAY) {
+    return { outcome: "history-expired", state: "history-expired", resend: "manual-check", duplicateRisk: true };
+  }
+  // Allow the original admission a bounded window. The CAS below, rather
+  // than elapsed time or peer reachability, is the proof of non-delivery.
+  if (!request || request.fence === false || !Number.isFinite(Date.parse(request.claimedAt)) || now - Date.parse(request.claimedAt) < 30_000) return null;
+  return collection(true)!.boundedPatch(2, tx => {
+    const current = tx.get(key);
+    if (current && current.digest !== digest) refuse("idempotency_conflict", "The recovery payload contradicts the outbound message.");
+    if (current && current.st !== "not-delivered") return seatMessageAcceptance(current);
+    // Rotate once for each admitted retry attempt, including one interrupted
+    // before it reached the outbox. Repeated lookups keep the fence stable.
+    const fence = current && current.admissionFence !== request.admissionFence ? current.admissionFence! : randomUUID();
+    tx.put({ key, dir: "out", id: current?.id ?? randomUUID(), link: install, connection: "", p, k,
+      at: current?.at ?? now, digest, st: "not-delivered", admissionFence: fence });
+    return { outcome: "not-executed", state: "not-delivered", hop: "mcp-to-outbox", resend: "safe", duplicateRisk: false };
+  });
+}
+
 function connection(link: LinkedPeer): string {
   return link.side === "grant" ? link.key : `${link.key}:${peerRows().find(peer => peer.id === link.id)?.grantId ?? "missing"}`;
 }
 export function seatMessageReceipt(operationId: string) {
   const row = rows().find(row => row.dir === "out" && `seatmsg_${row.id}` === operationId);
   if (!row) return null;
+  if (row.st === "not-delivered") return { operationId, state: "not-delivered" };
   const linked = linkedContext().links.some(link => link.install === row.link && row.connection === connection(link) && link.projects.has(row.p) && peerSeatMessages(link.key));
   const expired = Date.now() - row.at > 30 * DAY;
   return { operationId, state: row.ack?.st ?? (!linked || expired ? row.sentAt ? "unknown" : "not-delivered" : "queued"),
@@ -118,7 +157,7 @@ export function messagesPending(id: string): boolean {
   const link = linkedContext().links.find(link => link.side === "peer" && link.id === id);
   return !!link && peerSeatMessages(link.key) && rows().some(row => row.link === link.install && row.connection === connection(link) && (
     row.dir === "in" ? row.ackPending && (row.st === "accepted" || row.st === "refused")
-      : !row.ack && link.projects.has(row.p) && Date.now() - row.at <= 30 * DAY));
+      : row.st !== "not-delivered" && !row.ack && link.projects.has(row.p) && Date.now() - row.at <= 30 * DAY));
 }
 
 /** The envelope is strict. Invalid individual rows with a valid id get a refusal. */
@@ -176,7 +215,7 @@ export function acceptSeatMessages(link: LinkedPeer, part: SeatMessagePart): num
 export function seatMessagesPart(link: LinkedPeer | null): SeatMessagePart {
   if (!link || !peerSeatMessages(link.key)) return { v: 1 };
   const all = rows();
-  const candidates = all.filter(row => row.dir === "out" && row.link === link.install && row.connection === connection(link) && !row.ack && link.projects.has(row.p) && Date.now() - row.at <= 30 * DAY)
+  const candidates = all.filter(row => row.dir === "out" && row.link === link.install && row.connection === connection(link) && row.st !== "not-delivered" && !row.ack && link.projects.has(row.p) && Date.now() - row.at <= 30 * DAY)
     .sort((a, b) => a.at - b.at).slice(0, 10);
   const pending: Row[] = [];
   const out: SeatMessage[] = [];
@@ -237,6 +276,8 @@ export async function drainSeatMessages(link: LinkedPeer): Promise<void> {
     }
   }
   // A retained id outlives the replay window. Prune in bounded batches.
-  const expired = (pending.length ? rows() : snapshot).filter(row => Date.now() - (row.receivedAt ?? row.at) > 35 * DAY).slice(0, 100);
+  // Negative fences and their admitted retries retain the key permanently:
+  // an old HTTP request must never regain admission through expiry.
+  const expired = (pending.length ? rows() : snapshot).filter(row => !row.admissionFence && Date.now() - (row.receivedAt ?? row.at) > 35 * DAY).slice(0, 100);
   if (expired.length) collection(true)!.boundedPatch(expired.length, tx => { for (const row of expired) tx.delete(row.key); });
 }
