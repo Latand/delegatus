@@ -3,7 +3,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { observeHostExit, readHostExit, withHostStopOrigin, type HostExitRecord } from "./hostExit";
 
 /* Isolated state only: this suite seats registry rows and signals processes it
    started itself. It must never read the operator's live state directory, and
@@ -151,6 +154,51 @@ test("a kill on a severed host nothing owns reaps the process so its row can ret
     });
   } finally {
     child.kill();
+  }
+});
+
+for (const refusal of [undefined, null, "SIGTERM", "SIGKILL"] as const) test(`severed-host escalation records KILL before its effect (refused=${refusal})`, async () => {
+  const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000);process.stdout.write("ready")'], { stdio: ["ignore", "pipe", "pipe"] });
+  const closed = once(child, "close");
+  let signalSpy: ReturnType<typeof spyOn> | undefined;
+  const kill = process.kill.bind(process);
+  const signals: string[] = [];
+  const boundaries: Array<HostExitRecord["stop"] | undefined> = [];
+  try {
+    await once(child.stdout!, "data");
+    const identity = captureProcessIdentity(child.pid!);
+    observeHostExit(child, identity);
+    const { registry, conversationId, key } = seat(`escalation-${refusal}`, { ...identity, startIdentity: identity.startIdentity! }, AN_HOUR_AGO);
+    try {
+      signalSpy = spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === child.pid && signal !== 0) {
+          signals.push(String(signal));
+          boundaries.push(readHostExit(identity)?.stop);
+          if (signal === refusal) throw new Error("fixture signal refused");
+        }
+        return kill(pid, signal);
+      });
+      const reap = () => reapSeveredStructuredHost(registry, conversationId, key, { ...later, processCpuMs: () => 4_700 });
+      const outcome = refusal === undefined ? await reap()
+        : await withHostStopOrigin({ path: "kill-action", operationId: "severed-escalation-operation" }, reap);
+      const source = refusal === undefined
+        ? { path: "registry-recovery", operationId: boundaries[0]?.operationId }
+        : { path: "kill-action", operationId: "severed-escalation-operation" };
+      expect(source.operationId).toBeTruthy();
+      expect(outcome?.reaped).toBe(refusal !== "SIGKILL");
+      expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(boundaries).toMatchObject(["SIGTERM", "SIGKILL"].map(signal => ({ ...source, signal })));
+      if (refusal === "SIGKILL") {
+        expect(readHostExit(identity)).toMatchObject({ stop: { path: "kill-action", operationId: "severed-escalation-operation", signal: "SIGTERM" }, exit: null });
+        return;
+      }
+      await closed;
+      expect(readHostExit(identity)).toMatchObject({ stop: { ...source, signal: "SIGKILL" }, exit: { code: null, signal: "SIGKILL" } });
+    } finally { registry.close(); }
+  } finally {
+    signalSpy?.mockRestore();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await closed;
   }
 });
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { readHostExit, recordHostStop } from "./hostExit";
 import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 
 // Durable startup fixtures yield between phases. Supervise their whole pass
@@ -10,7 +11,8 @@ setDefaultTimeout(60_000);
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import {
   activeOrchestratorSeats,
   beginOrchestratorSeatIntent,
@@ -26,9 +28,11 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { activateViewerRuntimeWhenCurrent, runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
+import * as darwinRuntime from "@/lib/proc/darwinIdentity";
 import {
   bindStructuredDeliveryQueue,
   hasStructuredDeliveryHost,
+  hasStructuredDeliveryController,
   publishStructuredDeliveryHost,
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
@@ -1338,9 +1342,13 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
   } as RuntimeHostClient;
   const ledger = createFakeDeliveryLedger();
   let releaseCalls = 0;
+  const exitProcess = { pid: 2147482790, startIdentity: `retained-startup-exit-${condition}`, bootEpoch: "fixture-boot" };
   const host = Object.assign(new FakeEngineHost(ledger), {
     onStateChange: () => () => {},
-    release: async () => { releaseCalls += 1; },
+    release: async () => {
+      recordHostStop(exitProcess, "EOF", "fixture-startup-release");
+      releaseCalls += 1;
+    },
   });
   const key = { engine: "codex" as const, sessionId };
   const scheduled: Array<() => void> = [];
@@ -1442,6 +1450,7 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
     expect(continuationAdmissions).toBe(1);
     expect(ledger.writes).toEqual([]);
     expect(releaseCalls).toBe(1);
+    expect(readHostExit(exitProcess)?.stop).toMatchObject({ path: "startup-retained-host-release", operationId: `codex:${sessionId}` });
     expect(journal.snapshot().recentOperations.filter((receipt) =>
       receipt.operationId.startsWith(`recovery-continuation-${sessionId}-`))).toEqual([]);
 
@@ -4179,6 +4188,57 @@ test("startup transcript refresh skips historical structured hosts", async () =>
   // gate's CPU quota. This bounds the workload without ending its caller early.
 }, 60_000);
 
+test("startup refreshes a reused idle selection after a peer makes its host live", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-peer-live-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const sqliteFilename = path.join(directory, "registry.sqlite");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const sessionId = "22222222-2222-0222-0222-222222222222";
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId,
+    status: "idle",
+    turn: "busy",
+  });
+  const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" } } });
+  const expectedHost = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost;
+  const peer = new SqliteAgentRegistryStore(sqliteFilename, {
+    initialSnapshot: () => { throw new Error("startup fixture is already imported"); },
+    normalize: normalizeRegistry,
+  });
+  const open = fs.promises.open.bind(fs.promises);
+  const transcriptReads: string[] = [];
+  const observedReads = spyOn(fs.promises, "open").mockImplementation((...args) => {
+    if (args[0] === artifactPath) transcriptReads.push(artifactPath);
+    return open(...args);
+  });
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let peerUpdated = false;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async (...args) => {
+    const snapshot = await prepare(...args);
+    if (!peerUpdated) {
+      peerUpdated = true;
+      peer.mutate((file) => { file.entries[`codex:${sessionId}`]!.status = "live"; }, false);
+      fs.unlinkSync(artifactPath);
+    }
+    return snapshot;
+  });
+  try {
+    expect(await startupAdoptionAttempts(registry)).toEqual([]);
+    const current = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+    expect(peerUpdated).toBe(true);
+    expect(transcriptReads).toEqual([artifactPath]);
+    expect(current.status).toBe("live");
+    expect(current.structuredHost).toEqual(expectedHost);
+  } finally {
+    observedReads.mockRestore();
+    observed.mockRestore();
+    peer.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test.each(["codex", "claude"] as const)(
   "startup adopts a persisted terminal %s conversation whose transcript starts a new turn before restart",
   async (engine) => {
@@ -6580,5 +6640,81 @@ test("a membership moved while waiting for the registry writer refuses the start
     await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
     if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
     fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("startup publishes fresh launch admission before a held registry census", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-early-bind-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  const census = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return prepare(...args);
+  });
+  let startup: Promise<unknown> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], { client: null });
+    startup = adoptStructuredHostsAtStartup({ registry, client: runtimeClient(journal),
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async () => [], adoptClaude: async () => [],
+    });
+    await entered.promise;
+    expect(hasStructuredDeliveryController(registry)).toBe(true);
+  } finally {
+    release.resolve();
+    try { await startup; }
+    finally {
+      census.mockRestore();
+      await bindStructuredDeliveryQueue([], { client: null });
+      journal.close(); registry.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test.each(["cancel", "retire", "runtime"] as const)("startup %s during generation lookup cannot publish launch admission", async change => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-bind-fence-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const abort = new AbortController();
+  let active = true, compatible = true, startup: Promise<unknown> | undefined;
+  const requirement = darwinRuntime.assertDarwinStructuredRuntime;
+  const runtimeGuard = change === "runtime" ? spyOn(darwinRuntime, "assertDarwinStructuredRuntime").mockImplementation(() => {
+    if (!compatible) throw new Error("fixture runtime unsupported");
+    requirement();
+  }) : undefined;
+  const client = runtimeClient(journal);
+  client.startupGeneration = async () => { entered.resolve(); await release.promise; return "fixture-generation"; };
+  try {
+    await bindStructuredDeliveryQueue([], { client: null });
+    startup = adoptStructuredHostsAtStartup({ registry, client, signal: abort.signal,
+      assertActive: () => { if (!active) throw new Error("fixture release retired"); },
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async () => [], adoptClaude: async () => [],
+    });
+    const refused = startup.then(() => null, error => error as Error);
+    await entered.promise;
+    if (change === "cancel") abort.abort(new Error("fixture startup cancelled"));
+    else if (change === "retire") active = false;
+    else compatible = false;
+    release.resolve();
+    const reason = await refused;
+    expect(reason).toBeInstanceOf(Error);
+    expect(reason?.message).toBe(change === "cancel" ? "fixture startup cancelled"
+      : change === "retire" ? "fixture release retired" : "fixture runtime unsupported");
+    expect(hasStructuredDeliveryController(registry)).toBe(false);
+  } finally {
+    release.resolve();
+    await startup?.catch(() => {});
+    runtimeGuard?.mockRestore();
+    await bindStructuredDeliveryQueue([], { client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

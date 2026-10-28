@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useModalLayer } from "@/components/modalLayer";
 
 import { X } from "@/components/icons";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -75,6 +77,7 @@ export function PipelineTemplatePicker({
   const [state, setState] = useState<PickerState>(() =>
     repoDir.trim() ? { phase: "checking" } : { phase: "blocked", code: "missing", path: "" });
   const generation = useRef(0);
+  const focusRepositoryOnOpen = useRef(!repoDir.trim());
   const [linkInput, setLinkInput] = useState("");
   const [answer, setAnswer] = useState<LinkAnswer | null>(null);
   const [taskChoice, setTaskChoice] = useState<{ source: PipelineLinkSource; taskId: string | null } | null>(null);
@@ -180,15 +183,16 @@ export function PipelineTemplatePicker({
     sheet.querySelector("[data-pipeline-link-attach-failed]")?.scrollIntoView?.({ block: "nearest" });
   }, [attachFailed]);
 
+  const panel = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || creating) return;
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [creating, onClose]);
+    const dialog = panel.current!;
+    // showModal moves focus itself; retain the opener before it does.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.showModal();
+    if (focusRepositoryOnOpen.current) dialog.querySelector<HTMLInputElement>("input")?.focus();
+    return () => { dialog.close(); if (opener?.isConnected) opener.focus(); };
+  }, []);
+  useModalLayer({ containerRef: panel, onClose: () => { if (!creating) onClose(); }, manageFocus: false });
   const templates = PIPELINE_TEMPLATES.filter((template) => template.id !== "blank");
   const blockedPath = state.phase === "blocked" ? (state.path || shownRepoDir).trim() : "";
   const blockedMessage = state.phase === "blocked"
@@ -196,20 +200,36 @@ export function PipelineTemplatePicker({
       ? t(`pipelinePreflight.${state.code}`, { path: blockedPath })
       : t("pipelinePreflight.empty"))
     : null;
-  return (
+  return createPortal(
     <div
       data-pipeline-picker-state={state.phase}
-      className={`fixed inset-0 ${Z.modal} flex items-end justify-center bg-black/40 sm:items-center`}
+      data-scheme-ui
+      onPointerDown={event => event.stopPropagation()}
+      className={`fixed inset-0 ${Z.modal} flex items-end justify-center sm:items-center`}
       role="presentation"
       onClick={(event) => {
+        event.stopPropagation();
         if (event.target === event.currentTarget && !creating) onClose();
       }}
     >
-      <div
+      <dialog
+        ref={panel}
+        tabIndex={-1}
+        onCancel={event => event.preventDefault()}
+        onClick={event => {
+          if (event.target !== event.currentTarget || creating) return;
+          const box = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) onClose();
+        }}
+        onKeyDown={event => {
+          if (event.key === "Tab") return;
+          event.stopPropagation();
+          if (event.key === "Escape") { event.preventDefault(); if (!creating) onClose(); }
+        }}
         role="dialog"
         aria-modal="true"
         aria-label={t("pipelineTemplates.title")}
-        className="flex max-h-[100dvh] w-full max-w-[460px] flex-col overflow-hidden rounded-t-surface bg-card shadow-2 sm:max-h-[calc(100dvh-2rem)] sm:rounded-surface"
+        className="fixed inset-x-0 bottom-0 top-auto mx-auto my-0 flex max-h-[100dvh] w-full max-w-[460px] flex-col overflow-hidden rounded-t-surface border-0 bg-card p-0 text-primary shadow-2 backdrop:bg-black/40 sm:top-0 sm:bottom-0 sm:my-auto sm:h-fit sm:max-h-[calc(100dvh-2rem)] sm:rounded-surface"
       >
         <div
           ref={scroller}
@@ -235,6 +255,7 @@ export function PipelineTemplatePicker({
             <span className="text-label font-semibold text-secondary">{t("pipelineTemplates.repoDir")}</span>
             <input
               value={shownRepoDir}
+              title={shownRepoDir}
               disabled={formLocked}
               autoFocus={!repoDir.trim()}
               onInput={(event) => {
@@ -327,8 +348,8 @@ export function PipelineTemplatePicker({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </dialog>
+    </div>, document.body,
   );
 }
 

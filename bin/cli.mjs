@@ -8,6 +8,7 @@ import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
@@ -94,7 +95,11 @@ Options:
       --new-token      Create a new access key
       --new-operator-token  Rotate the operator spawn capability
   -v, --version        Show the version
-  -h, --help           Show this help`,
+  -h, --help           Show this help
+
+Commands:
+  stop --all           Stop the Viewer, the runtime host and every agent
+                       host Delegatus started`,
     badPort: (value) => `Invalid port: ${value}`,
     flagNeedsValue: (flag) => `Option ${flag} requires a value.`,
     hostnameNeedsValue: () => "Option --hostname requires a value.",
@@ -110,7 +115,6 @@ Options:
     bannerOpening: (url) => `  Opening:   ${url}`,
     bannerOpenUrl: (url) => `  Open ${url} in your browser.`,
     bannerReads: () => "  Reads logs from ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
-    bannerDebug: () => "  DELEGATUS_DEBUG=1 — show startup diagnostics.",
     bannerStop: () => "  Ctrl+C — stop.  --tailscale — access from your phone.",
     tsLinkWarn: () => "  The link contains an access key — don't forward it to others.",
     tsCookie: () => "  After the first open the key is stored in a cookie for 30 days.",
@@ -147,7 +151,11 @@ Options:
       --new-token      Створити новий ключ доступу
       --new-operator-token  Оновити операторський ключ запуску агентів
   -v, --version        Показати версію
-  -h, --help           Показати довідку`,
+  -h, --help           Показати довідку
+
+Команди:
+  stop --all           Зупинити Viewer, runtime host і кожен хост агента,
+                       який запустив Delegatus`,
     badPort: (value) => `Некоректний порт: ${value}`,
     flagNeedsValue: (flag) => `Опція ${flag} потребує значення.`,
     hostnameNeedsValue: () => "Опція --hostname потребує значення.",
@@ -163,7 +171,6 @@ Options:
     bannerOpening: (url) => `  Відкриваю: ${url}`,
     bannerOpenUrl: (url) => `  Відкрийте ${url} у браузері.`,
     bannerReads: () => "  Читає логи з ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
-    bannerDebug: () => "  DELEGATUS_DEBUG=1 — показати діагностику запуску.",
     bannerStop: () => "  Ctrl+C — зупинити.  --tailscale — доступ з телефона.",
     tsLinkWarn: () => "  Посилання містить ключ доступу — не пересилайте його стороннім.",
     tsCookie: () => "  Після першого відкриття ключ зберігається у cookie на 30 днів.",
@@ -196,21 +203,35 @@ const m = MESSAGES[LANG];
    DELEGATUS_DEBUG=1 keeps Next's lines, and it is also what lets the children
    print their startup diagnostics (`src/lib/startupDiagnostics.ts`). An error
    is never dropped: it waits for the banner, or for the launcher to fail. */
-const NEXT_STARTUP_LINE = /^\s*(?:▲ Next\.js |- (?:Local|Network|Environments|Experiments):|✓ (?:Starting|Ready in|Running next\.config))/;
+const NEXT_STARTUP_PREFIXES = ["▲ Next.js ", "- Local:", "- Network:", "- Environments:", "- Experiments:", "✓ Starting", "✓ Ready in", "✓ Running next.config"];
+const TERMINAL_DIAGNOSTIC_PREFIXES = ["[viewer loop-gap] ", "[performance summary] ", "[state transaction-hold] "];
 const HELD_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 /* The name `src/lib/startupDiagnostics.ts` reads. */
 const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
+/* The name `src/lib/viewerLoopMonitor.ts` reads. */
+const LOOP_DIAGNOSTICS_ENV = "LLV_LOOP_DIAGNOSTICS";
 
-function withoutNextStartupLines(text) {
-  return text
-    .split("\n")
-    .filter((line) => !NEXT_STARTUP_LINE.test(line.replace(/\x1b\[[0-9;]*m/g, "")))
-    .join("\n");
+/* Only the prefix is needed to classify a line. A malformed/very long prefix
+   is forwarded after this bound, so unknown output cannot grow an unbounded
+   unfinished line or hide a real error. */
+const OUTPUT_PREFIX_LIMIT = 256;
+
+function outputDisposition(line) {
+  const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
+  const next = plain.trimStart();
+  const diagnostics = process.env.JOURNAL_STREAM === undefined ? TERMINAL_DIAGNOSTIC_PREFIXES : [];
+  if (NEXT_STARTUP_PREFIXES.some(prefix => next.startsWith(prefix))
+    || diagnostics.some(prefix => plain.startsWith(prefix))) return "drop";
+  if (NEXT_STARTUP_PREFIXES.some(prefix => prefix.startsWith(next))
+    || diagnostics.some(prefix => prefix.startsWith(plain))
+    || /\x1b(?:\[[0-9;]*)?$/.test(plain)) return null;
+  return "pass";
 }
 
 function createStartupOutput() {
   const held = [];
   const tails = { stdout: "", stderr: "" };
+  const sources = new Set();
   let failureFile = null;
   let failureRevision = null;
   let heldBytes = 0;
@@ -220,8 +241,23 @@ function createStartupOutput() {
     if (released) return;
     released = true;
     for (const [stream, text] of held.splice(0)) stream.write(text);
+    heldBytes = 0;
+  };
+  const emit = (stream, text) => {
+    if (!text.length) return;
+    if (released) {
+      stream.write(text);
+      return;
+    }
+    held.push([stream, text]);
+    heldBytes += Buffer.byteLength(text);
+    if (heldBytes > HELD_OUTPUT_LIMIT_BYTES) release();
   };
   return {
+    finish() {
+      for (const source of sources) source.finish();
+      release();
+    },
     setFailureFile(file, revision) { failureFile = file; failureRevision = revision; },
     persistFailure() {
       if (!failureFile) return;
@@ -233,25 +269,66 @@ function createStartupOutput() {
     setDebug(value) {
       debug = value;
     },
-    write(stream, chunk) {
+    /* One framer per producing pipe, recreated for every child generation.
+       Closed pipes remove their state instead of accumulating retired hosts. */
+    source(stream, input) {
       const channel = stream === process.stderr ? "stderr" : "stdout";
-      tails[channel] = (tails[channel] + String(chunk)).slice(-32 * 1024);
-      const text = debug ? String(chunk) : withoutNextStartupLines(String(chunk));
-      if (!text) return;
-      if (released) {
-        stream.write(text);
-        return;
-      }
-      held.push([stream, text]);
-      heldBytes += text.length;
-      if (heldBytes > HELD_OUTPUT_LIMIT_BYTES) release();
+      const decoder = new StringDecoder("utf8");
+      let prefix = "";
+      let disposition = null;
+      let finished = false;
+      const consume = (text) => {
+        let offset = 0;
+        while (offset < text.length) {
+          const newline = text.indexOf("\n", offset);
+          const end = newline < 0 ? text.length : newline + 1;
+          if (disposition === null) {
+            const take = Math.min(end - offset, OUTPUT_PREFIX_LIMIT - prefix.length);
+            prefix += text.slice(offset, offset + take);
+            offset += take;
+            disposition = outputDisposition(prefix);
+            if (disposition === null && (prefix.length === OUTPUT_PREFIX_LIMIT || offset === newline + 1)) disposition = "pass";
+            if (disposition !== null) {
+              // Keep any surrogate pair crossing the prefix bound in one write.
+              if (disposition === "pass") emit(stream, prefix + text.slice(offset, end));
+              prefix = "";
+              offset = end;
+            }
+          } else {
+            if (disposition === "pass") emit(stream, text.slice(offset, end));
+            offset = end;
+          }
+          if (newline >= 0 && offset === end) disposition = null;
+        }
+      };
+      const source = {
+        write(chunk) {
+          if (finished) return;
+          tails[channel] = (tails[channel] + String(chunk)).slice(-32 * 1024);
+          if (debug) emit(stream, chunk);
+          else consume(decoder.write(chunk));
+        },
+        finish() {
+          if (finished) return;
+          finished = true;
+          consume(decoder.end());
+          if (prefix && outputDisposition(prefix) !== "drop") emit(stream, prefix);
+          prefix = "";
+          sources.delete(source);
+        },
+      };
+      sources.add(source);
+      input?.once("end", () => source.finish());
+      input?.once("close", () => source.finish());
+      if (!input) source.finish();
+      return source;
     },
     release,
   };
 }
 
 const startupOutput = createStartupOutput();
-process.once("exit", () => startupOutput.release());
+process.once("exit", () => startupOutput.finish());
 
 function usage() {
   return m.usage();
@@ -537,7 +614,9 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   });
 
   /* A child that could not be spawned may have no stdio streams at all. */
-  child.stdout?.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
+  const stdout = startupOutput.source(process.stdout, child.stdout);
+  const stderr = startupOutput.source(process.stderr, child.stderr);
+  child.stdout?.on("data", (chunk) => stdout.write(chunk));
   child.stderr?.on("data", (chunk) => {
     const text = chunk.toString("utf8");
     if (text.includes("EADDRINUSE")) {
@@ -549,7 +628,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
       return;
     }
 
-    startupOutput.write(process.stderr, chunk);
+    stderr.write(chunk);
   });
 
   child.on("exit", async (code, signal) => {
@@ -709,10 +788,12 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     currentRelease = release;
     hooks.onStarted?.(child, release);
     /* A child that could not be spawned may have no stdio streams at all. */
-    child.stdout?.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
+    const stdout = startupOutput.source(process.stdout, child.stdout);
+    const stderr = startupOutput.source(process.stderr, child.stderr);
+    child.stdout?.on("data", (chunk) => stdout.write(chunk));
     child.stderr?.on("data", (chunk) => {
       state.stderrTail = `${state.stderrTail}${chunk}`.slice(-8_192);
-      startupOutput.write(process.stderr, chunk);
+      stderr.write(chunk);
     });
     child.once("exit", () => {
       if (current !== processHandle || stopping || state.stopping || state.readyAt === null) return;
@@ -854,12 +935,11 @@ function localUrl(options, runtime) {
    when an opener reported success. */
 function printBanner(version, options, runtime, browser, debug) {
   const url = localUrl(options, runtime);
-  console.log(`  ✳ Delegatus v${version}`);
+  if (debug) console.log(`  ✳ Delegatus v${version}`);
   console.log(browser === "opened" ? m.bannerOpened(url) : browser === "opening" ? m.bannerOpening(url) : m.bannerOpenUrl(url));
   if (debug) console.log(m.bannerReads());
   console.log(agentStartupMessage(LANG));
-  console.log(m.bannerStop());
-  if (!debug) console.log(m.bannerDebug());
+  if (debug) console.log(m.bannerStop());
 }
 
 async function printTailscaleBanner(runtime) {
@@ -1047,6 +1127,18 @@ async function main() {
     });
     return;
   }
+  /* `delegatus stop --all`: stops every recorded launcher on this state
+     directory, the Viewer and runtime host each started, and every agent host
+     the registry records, each by its recorded identity (bin/stop-all.mjs).
+     It starts nothing. */
+  if (process.argv[2] === "stop") {
+    const { runStopCommand } = await import("./stop-all.mjs");
+    process.exitCode = await runStopCommand(process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(launcherCheckout || findPackageRoot(cliDir)).stateDirectory,
+      lang: LANG,
+    });
+    return;
+  }
   /* `delegatus export` / `delegatus import` (install-memory-transfer §4.2): a
      loopback client of the running Viewer. It starts nothing. */
   if (process.argv[2] === "export" || process.argv[2] === "import") {
@@ -1136,12 +1228,18 @@ async function main() {
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);
-  // Pipes/files keep service diagnostics, and journal metadata takes precedence
-  // even when a service gives the launcher a terminal. Clear an inherited quiet
-  // choice too: a shell or a previous launcher must not silence the service.
-  const quiet = !debug && process.stdout.isTTY === true && process.env.JOURNAL_STREAM === undefined;
+  // A captured first run is still a newcomer launch. Journal metadata and an
+  // explicit debug request retain service diagnostics, regardless of the TTY.
+  const quiet = !debug && process.env.JOURNAL_STREAM === undefined;
   if (quiet) process.env[QUIET_DIAGNOSTICS_ENV] = "1";
   else delete process.env[QUIET_DIAGNOSTICS_ENV];
+  /* A packaged install's diagnostics go wherever the person who started it
+     sends them, often a file nothing rotates: its children bound the
+     loop-gap and performance-summary volume (src/lib/viewerLoopMonitor.ts).
+     A checkout, which is how a service runs from its repository, keeps every
+     line in its journal as before, and so does DELEGATUS_DEBUG=1. */
+  if (!checkout && !debug) process.env[LOOP_DIAGNOSTICS_ENV] = "bounded";
+  else delete process.env[LOOP_DIAGNOSTICS_ENV];
 
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
@@ -1580,7 +1678,7 @@ function handOffLauncher({ checkout, entry, record }) {
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = ["team", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+      const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         done(false);
@@ -1651,7 +1749,7 @@ if (process.argv[2] === "doctor") {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
-    const oneShot = ["team", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+    const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir), process.env, { launch: !oneShot });
   } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
   const selectedLauncher = releaseLauncher();

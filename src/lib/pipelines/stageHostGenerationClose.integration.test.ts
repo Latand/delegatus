@@ -67,9 +67,18 @@ const { runtimeHostClient } = await import("@/lib/runtime/client");
 const { probeRuntimeSocket } = await import("@/runtime-host/hostRehearsalRun");
 const { RUNTIME_HOST_CONTAINER_ENV } = await import("@/runtime-host/hostRelease");
 const { buildPipeline, loadPipelines, savePipelines } = await import("./store");
-const { defaultPipelinePorts, drainStageActivations, patchPipeline, stopPipelineStageAgent, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, drainStageActivations, patchPipeline, stopPipelineStageAgent, tickPipelines: engineTickPipelines } = await import("./engine");
+const { registerPipelineTick } = await import("./controllerSignal");
 const { PATCH } = await import("@/app/api/pipelines/[id]/route");
 type Pipeline = import("./types").Pipeline;
+
+// Direct scheduler observations run as the controller. HTTP close calls keep
+// the caller's sidecar shape and still cross the real transport above.
+async function tickPipelines(...args: Parameters<typeof engineTickPipelines>) {
+  const unregister = registerPipelineTick(async () => {});
+  try { return await engineTickPipelines(...args); }
+  finally { unregister(); }
+}
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const generationFixture = path.join(import.meta.dir, "fixtures", "stageHostGeneration.ts");
@@ -1364,10 +1373,12 @@ test.each(["{broken", JSON.stringify({ runs: [] })])("malformed archive %s defer
   pipeline.cursor = null;
   pipeline.closedAt = new Date(Date.now() - 5 * 86400000).toISOString();
   pipeline.hiddenAt = pipeline.closedAt;
+  await loseIncumbent(current);
+  const settledAt = NOW();
+  pipeline.terminalReap = { rounds: 1, stopped: 0, lastAt: settledAt, settledAt, settledAttempts: ["build:1"] };
   savePipelines(loadPipelines().map((record) => record.id === pipeline.id ? pipeline : record));
   const { archiveSettledPipelines } = await import("./store");
   await archiveSettledPipelines();
-  await loseIncumbent(current);
   const before = current.entry()!;
   const db = new Database(path.join(isolatedEnvironment.LLV_STATE_DIR, "state.sqlite"));
   const row = db.query("SELECT value_json FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").get(pipeline.id) as { value_json: string };

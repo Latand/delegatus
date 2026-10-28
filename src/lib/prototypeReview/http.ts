@@ -20,6 +20,8 @@ import type { DecidePrototypeInput } from "./types";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
+import { isTelegramDestinationConfigurationReason } from "./telegramPostSignals";
+import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 
 export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
   const ambiguous = error instanceof PrototypeError && (error as { code?: string }).code === "short_id_ambiguous";
@@ -51,6 +53,15 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
     const { round } = resendTarget(request, body?.reviewId, world);
     if (typeof body.clientRequestId !== "string" || !body.clientRequestId.trim() || body.clientRequestId.length > 200) throw new PrototypeError("clientRequestId is required");
     if (round.decision) throw new PrototypeError("Рішення вже збережено. Щоб доставити відповідь поточному координатору, натисніть «Надіслати ще раз» біля стану доставки рішення.", 409);
+    // Keep the existing refusal until pairing changes what a resend can do.
+    // No post is admitted here; the sender rechecks the destination on retry.
+    const previous = round.telegramPost;
+    if (previous?.state === "failed" && isTelegramDestinationConfigurationReason(previous.reason)) {
+      const destination = ownerReviewDestination();
+      if (destination.reason && destination.reason === previous.reason && destination.detail === previous.destinationDetail) {
+        return NextResponse.json({ reviewId: round.id, telegramPost: previous }, { headers: { "cache-control": "private, no-store" } });
+      }
+    }
     const key = `${round.id}:resend:${body.clientRequestId.trim()}`;
     const telegramPost = await postPrototypeReviewToTelegram(round, key);
     return NextResponse.json({ reviewId: round.id, telegramPost }, { headers: { "cache-control": "private, no-store" } });
@@ -168,9 +179,10 @@ export async function reviewGET(request: NextRequest,taskId: string,world: Proto
 }
 export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery,now: () => number = Date.now): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
+  // A team install asks a missing or lapsed member session to sign in first.
+  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   const operator = directOperatorActivityAuthority(request);
   if (!operator.ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return NextResponse.json({ error: "only the operator may decide prototypes" },{ status: 403 });
-  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const caller = world.caller(request);
     if (caller.conversationId) throw new PrototypeError("only the operator may decide prototypes",403);
@@ -214,9 +226,10 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
     as the review window. The answer is the column's next read. */
 export async function decisionsPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
+  // A team install asks a missing or lapsed member session to sign in first.
+  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   const operator = directOperatorActivityAuthority(request);
   if (!operator.ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return NextResponse.json({ error: "only the operator may decide prototypes" },{ status: 403 });
-  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const caller = world.caller(request);
     if (caller.conversationId) throw new PrototypeError("only the operator may decide prototypes",403);

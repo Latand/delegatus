@@ -453,7 +453,9 @@ also run the shared supply-chain check; CI audits weekly and by dispatch.
 
 Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
-(default `8G`), and a default Node heap of 6144 MB. The slot locks live in
+(default `14G`), and a default Node heap of 11264 MiB (11 GiB). The pipeline
+publisher passes both defaults to hooks on older branches; explicit caller
+settings take precedence. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.
@@ -488,6 +490,10 @@ An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
 workers at two to fit the gate's three-CPU quota. The Viewer build and its
 runtime consumers share a private source tree with read-only dependencies;
 they neither contend on another build's `.next/lock` nor consume its output.
+The publication Viewer build checks the full repository together with fresh
+Next validators. It uses an 11 GiB Node heap floor and defaults to a 14 GiB
+gate memory cap; an explicit `LLV_GATE_MEM` remains authoritative. Other gate
+commands keep the budgets above. Production builds use the same 11 GiB heap floor.
 Checkout self-update installation and compilation have immediate admission in a high-weight scope
 beside the agent work slice. Nonempty command output renews a 30-minute silence
 bound, with total bounds of one hour for install and two hours for compilation,
@@ -497,6 +503,27 @@ See `docs/design/cpu-placement.md#release-build-admission-and-deadlines`.
 
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
+
+For a command whose admission or execution can outlast a foreground tool call,
+start one recording in the engine's background-command facility:
+
+```sh
+bash scripts/gate-slot.sh --record "$TMPDIR/check.log" bun run test <file>
+```
+
+After `recording started`, make one blocking call with a tool timeout above
+540 seconds: `bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`.
+It waits up to nine minutes, then prints one line with the state and the last
+20 log lines (at most 16 KiB). Queued output includes the latest admission
+position and reason; running output means admission completed. An exit of 124
+with a queued/running state means the run remains active: repeat the same wait.
+A finished state includes the command's exit code, which the wait also returns.
+`--wait LOG <seconds>` changes only that wait's deadline, from zero through
+540 seconds. Longer deadlines refuse with exit 2, leaving time for startup and
+output within a ten-minute foreground window. Unknown logs refuse with exit 2.
+Use a fresh log path for every recording; logs and their `.gate`
+sidecars remain available for later waits. Waiters take no slot and send no
+completion notifications. Use these waits in place of sleep/poll loops.
 
 Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real

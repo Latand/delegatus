@@ -31,6 +31,7 @@ const row = {
   ...emptySeatTickState(),
   seatEpoch: 7,
   lastCheckAt: "2026-08-28T12:00:00.000Z",
+  localFinishedLaneCursor: "pipeline_local_cursor",
   lastWakeAt: "2026-08-28T11:00:00.000Z",
   deployResumeThrough: "2026-08-28T10:00:00.000Z",
   lastWakeReasons: ["stalled" as const],
@@ -374,6 +375,7 @@ test("a rotation keeps the harvest cursor: what the project was told is not the 
   const rotated = seatTickStateForEpoch({ ...row, harvestedChildren: [CHILD] }, 8);
   expect(rotated.seatEpoch).toBe(8);
   expect(rotated.harvestedChildren).toEqual([CHILD]);
+  expect(rotated.localFinishedLaneCursor).toBe(row.localFinishedLaneCursor);
   expect(rotated.stalledSeen).toEqual([]);
 });
 

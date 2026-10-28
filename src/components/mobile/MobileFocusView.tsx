@@ -13,7 +13,7 @@ import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useRuntimeBusState, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName } from "@/lib/displayNames";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
 import { conversationFrameRole } from "@/lib/roleFrames";
@@ -33,7 +33,7 @@ import { ChatEngineMark } from "./chatEngineMark";
 import { paneState, type PaneState } from "@/components/paneState";
 import type { BranchGroup } from "@/components/projectModel";
 import { draftWorkingDirectory } from "@/components/projectModel";
-import { cleanTitle, engineBadge, effortTitle, fileModelLabel } from "@/components/utils";
+import { cleanTitle, engineBadge, effortTitle, conversationModelLabel } from "@/components/utils";
 
 import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -886,7 +886,7 @@ const BAR_META_STATE = "min-w-0 max-w-[calc(100%-0.625rem)] truncate";
 function ChatIdentity({ file }: { file: FileEntry }) {
   const { t } = useLocale();
   const badge = engineBadge(file);
-  const modelName = fileModelLabel(file);
+  const modelName = conversationModelLabel(file);
   const model = modelName
     ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
     : badge.label;

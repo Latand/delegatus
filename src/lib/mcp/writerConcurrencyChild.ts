@@ -2,6 +2,7 @@ import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import fs from "node:fs";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import type { StateLockHolder } from "@/lib/blockingWaits";
 
 // The benchmark already requires an owned PID namespace. Load its Viewer
 // before the barrier fixture, whose parent polling is synchronous test work.
@@ -172,16 +173,16 @@ if (kind === "task") {
     // must refuse this live lease even when SQLite itself is available.
     const prototype = SqliteStateCollection.prototype as unknown as {
       options: { collection: string };
-      tryAcquireLease(db: import("bun:sqlite").Database, token: string): boolean;
+      tryAcquireLease(db: import("bun:sqlite").Database, token: string): true | StateLockHolder;
     };
     const acquire = prototype.tryAcquireLease;
     prototype.tryAcquireLease = function (db, token) {
       const acquired = acquire.call(this, db, token);
-      if (acquired && this.options.collection === "tasks") {
+      if (acquired === true && this.options.collection === "tasks") {
         db.query("UPDATE state_leases SET acquired_at = ? WHERE collection = 'tasks' AND owner_token = ?")
           .run(Date.now() - 60_000, token);
         holdAfterRead();
-      } else if (!acquired && this.options.collection === "tasks") {
+      } else if (acquired !== true && this.options.collection === "tasks") {
         fs.writeFileSync(`${readyPath}.waiting`, "lease refused\n");
       }
       return acquired;
@@ -249,9 +250,10 @@ if (kind === "task" && operation === "create" && writer === "http") {
 } else if (kind === "pipeline" && operation === "create" && writer === "http") {
   const input = { task: `${writer} pipeline`, src: creatorPath, repoDir: process.cwd(), autoStart: false, stages: [] };
   const { POST } = await import("@/app/api/pipelines/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
   const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify(input),
   }));
   if (!response.ok) throw new Error(`HTTP pipeline create failed: ${response.status} ${await response.text()}`);

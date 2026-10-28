@@ -30,25 +30,35 @@ import { expect, test } from "bun:test";
 import { loadManifest } from "./generate-stills";
 
 const DIR = import.meta.dir;
-const git = (cwd: string, ...args: string[]): string => execFileSync("git", args, { cwd }).toString().trim();
-const repoRoot = git(DIR, "rev-parse", "--show-toplevel");
+const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: DIR }).toString().trim();
 const EVIDENCE_SUITE = "docs/screenshots/issue-499/evidence.test.ts";
 const DEEPEN_SCRIPT = "docs/screenshots/issue-499/deepen-to-evidence-revision.sh";
+const OWNED_RUNNER = join(repoRoot, "scripts/owned-runner.ts");
+
+function fixtureCommand(file: string, args: string[], cwd: string, deadline: number, stdio: "pipe" | "ignore" = "pipe"): Buffer {
+  const remaining = Math.floor(deadline - performance.now());
+  if (remaining <= 0) throw new Error("depth-one fixture command budget exhausted");
+  // Finish command-tree cleanup before Bun reaches the fixture deadline.
+  return execFileSync(process.execPath, [OWNED_RUNNER, "--budget", String(remaining + 5_000),
+    process.execPath, OWNED_RUNNER, ...(process.platform === "linux" ? [] : ["--portable"]), file, ...args], {
+    cwd, stdio, env: { ...process.env, LLV_OWNED_RUN_TIMEOUT_MS: String(remaining) },
+  });
+}
 
 /** Run the focused evidence suite in `cwd` with the same runner publish.yml
     uses (bun); return its exit code without throwing. */
-function runEvidenceSuite(cwd: string): number {
+function runEvidenceSuite(cwd: string, deadline: number): number {
   try {
-    execFileSync(process.execPath, ["test", EVIDENCE_SUITE], { cwd, stdio: "ignore" });
+    fixtureCommand(process.execPath, ["test", EVIDENCE_SUITE], cwd, deadline, "ignore");
     return 0;
   } catch (error) {
     return typeof (error as { status?: number }).status === "number" ? (error as { status: number }).status : 1;
   }
 }
 
-function ancestorPresent(cwd: string, rev: string): boolean {
+function ancestorPresent(cwd: string, rev: string, deadline: number): boolean {
   try {
-    execFileSync("git", ["cat-file", "-e", `${rev}^{commit}`], { cwd, stdio: "ignore" });
+    fixtureCommand("git", ["cat-file", "-e", `${rev}^{commit}`], cwd, deadline, "ignore");
     return true;
   } catch {
     return false;
@@ -63,13 +73,15 @@ test(
     const nodeModules = join(repoRoot, "node_modules");
     expect(existsSync(nodeModules)).toBe(true);
 
+    // Keep the existing work budget and leave ten seconds for owned cleanup.
+    const deadline = performance.now() + 180_000;
     const work = mkdtempSync(join(tmpdir(), "issue-499-depth-one-"));
     const clone = join(work, "checkout");
     try {
       // A `file://` clone is required for a genuinely shallow local checkout —
       // git ignores `--depth` for plain local-path clones. `--depth 1` matches
       // actions/checkout@v4's default fetch-depth.
-      execFileSync("git", ["clone", "--depth", "1", "--quiet", `file://${repoRoot}`, clone], { stdio: "ignore" });
+      fixtureCommand("git", ["clone", "--depth", "1", "--quiet", `file://${repoRoot}`, clone], repoRoot, deadline, "ignore");
       symlinkSync(nodeModules, join(clone, "node_modules"));
 
       const sourceRevision = loadManifest().sourceRevision;
@@ -77,26 +89,26 @@ test(
       // The checkout is genuinely depth-one: shallow, and the manifest's
       // recorded ancestor sourceRevision is absent — the exact condition the
       // release publish hits.
-      expect(git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
-      expect(ancestorPresent(clone, sourceRevision)).toBe(false);
+      expect(fixtureCommand("git", ["rev-parse", "--is-shallow-repository"], clone, deadline).toString().trim()).toBe("true");
+      expect(ancestorPresent(clone, sourceRevision, deadline)).toBe(false);
 
       // RED: without the deepen step, the full evidence suite cannot resolve the
       // ancestor sourceRevision tree/harness bytes and fails.
-      expect(runEvidenceSuite(clone)).not.toBe(0);
+      expect(runEvidenceSuite(clone, deadline)).not.toBe(0);
 
       // Apply the EXACT remedy publish.yml applies before `bun test`.
-      execFileSync("bash", [DEEPEN_SCRIPT], { cwd: clone, stdio: "ignore" });
+      fixtureCommand("bash", [DEEPEN_SCRIPT], clone, deadline, "ignore");
 
       // The deepen step made the ancestor sourceRevision reachable and connected.
-      expect(ancestorPresent(clone, sourceRevision)).toBe(true);
-      expect(() => execFileSync("git", ["merge-base", "--is-ancestor", sourceRevision, "HEAD"], { cwd: clone })).not.toThrow();
+      expect(ancestorPresent(clone, sourceRevision, deadline)).toBe(true);
+      expect(() => fixtureCommand("git", ["merge-base", "--is-ancestor", sourceRevision, "HEAD"], clone, deadline)).not.toThrow();
 
       // GREEN: the untouched full evidence suite — including the sourceRevision
       // tree and harness-bytes provenance assertions — now passes.
-      expect(runEvidenceSuite(clone)).toBe(0);
+      expect(runEvidenceSuite(clone, deadline)).toBe(0);
     } finally {
       rmSync(work, { recursive: true, force: true });
     }
   },
-  180_000,
+  190_000,
 );

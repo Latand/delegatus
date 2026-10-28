@@ -50,6 +50,130 @@ test("a malformed clock never silently resets the daily budget", async () => {
   const work = fixture(); fs.writeFileSync(work.ports.clockFile, "broken");
   await expect(createCodexUpdateTicker(work.ports)()).rejects.toThrow(); expect(work.updates()).toBe(0);
 });
+
+test("an explicit request bypasses the daily wait without rewriting its clock", async () => {
+  const work = fixture();
+  const clock = JSON.stringify({ until: CHECK_INTERVAL_MS, notice: null });
+  fs.writeFileSync(work.ports.clockFile, clock);
+  const requests: boolean[] = [];
+  work.ports.update = async requested => { requests.push(requested); };
+  const tick = createCodexUpdateTicker(work.ports);
+  await tick(); await tick(true); await tick();
+  expect(requests).toEqual([true]);
+  expect(fs.readFileSync(work.ports.clockFile, "utf8")).toBe(clock);
+});
+
+test.each(["unreadable", "demoted"])("pending recovery keeps authority and readable-state guards (%s)", async outcome => {
+  const work = fixture(); await createCodexUpdateTicker(work.ports)();
+  const clock = fs.readFileSync(work.ports.clockFile, "utf8");
+  let current = true, calls = 0;
+  work.ports.current = () => current;
+  work.ports.update = async () => { calls++; };
+  work.ports.hasPending = async () => {
+    if (outcome === "unreadable") throw new Error("pending state unreadable");
+    current = false;
+    return true;
+  };
+  const check = createCodexUpdateTicker(work.ports)();
+  if (outcome === "unreadable") await expect(check).rejects.toThrow("pending state unreadable");
+  else await check;
+  expect(calls).toBe(0);
+  expect(fs.readFileSync(work.ports.clockFile, "utf8")).toBe(clock);
+});
+
+test("requests during outbox delivery join the budget decision and coalesce during preparation", async () => {
+  const work = fixture();
+  fs.writeFileSync(work.ports.clockFile, JSON.stringify({ until: CHECK_INTERVAL_MS, notice: {
+    id: "retained", at: 0, version: "0.164.0", failed: false, line: "retained report",
+  } }));
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  work.ports.report = async () => { entered(); await hold; };
+  const requests: boolean[] = [];
+  let updating!: () => void, finish!: () => void;
+  const prepared = new Promise<void>(resolve => { updating = resolve; });
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  work.ports.update = async requested => { requests.push(requested); updating(); await pending; };
+  const tick = createCodexUpdateTicker(work.ports), run = tick();
+  await ready; await tick(true); release(); await prepared;
+  await tick(true); await tick(true); expect(requests).toEqual([true]);
+  finish(); await run;
+});
+
+test.each([false, true])("an explicit request survives failed report delivery until update entry (initial explicit: %s)", async initialExplicit => {
+  const work = fixture();
+  const notice: UpdateNotice = { id: "retained", at: 0, version: "0.164.0", failed: false, line: "retained report" };
+  const clock = JSON.stringify({ until: CHECK_INTERVAL_MS, notice });
+  fs.writeFileSync(work.ports.clockFile, clock);
+  let entered!: () => void, reject!: (error: Error) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const hold = new Promise<void>((_, refuse) => { reject = refuse; });
+  work.ports.report = async () => { entered(); await hold; };
+  const requests: boolean[] = [];
+  work.ports.update = async requested => { requests.push(requested); };
+  const tick = createCodexUpdateTicker(work.ports);
+  const run = tick(initialExplicit);
+  const failed = run.then(() => null, (error: unknown) => error);
+  await ready; await tick(true); await tick(true);
+  reject(new Error("journal busy"));
+  expect(await failed).toMatchObject({ message: "journal busy" });
+  expect(requests).toEqual([]);
+  expect(fs.readFileSync(work.ports.clockFile, "utf8")).toBe(clock);
+
+  // Repeated delivery failures and ticks without authority cannot consume it.
+  work.ports.report = async () => { throw new Error("journal busy"); };
+  await expect(tick()).rejects.toThrow("journal busy");
+  work.ports.current = () => false;
+  await tick(); expect(requests).toEqual([]);
+  expect(fs.readFileSync(work.ports.clockFile, "utf8")).toBe(clock);
+
+  work.ports.current = () => true;
+  work.ports.report = async delivered => { work.reports.push(delivered); };
+  await tick();
+  expect(requests).toEqual([true]);
+  expect(work.reports).toEqual([notice]);
+  expect(JSON.parse(fs.readFileSync(work.ports.clockFile, "utf8"))).toEqual({ until: CHECK_INTERVAL_MS, notice: null });
+  await tick(); expect(requests).toEqual([true]);
+});
+
+test("demotion while delivering a report refuses even an explicit request", async () => {
+  const work = fixture(); let current = true;
+  work.ports.current = () => current;
+  fs.writeFileSync(work.ports.clockFile, JSON.stringify({ until: 0, notice: {
+    id: "retained", at: 0, version: "0.164.0", failed: false, line: "retained report",
+  } }));
+  work.ports.report = async () => { current = false; };
+  await createCodexUpdateTicker(work.ports)(true);
+  expect(work.updates()).toBe(0);
+});
+
+test("a request after automatic preparation starts gets one explicit follow-up", async () => {
+  const work = fixture();
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const requests: boolean[] = [];
+  const tick = createCodexUpdateTicker(work.ports);
+  work.ports.update = async requested => {
+    requests.push(requested);
+    if (!requested) { entered(); await hold; }
+    else { await tick(true); await tick(true); }
+  };
+  const run = tick(); await ready;
+  await tick(true); await tick(true); release(); await run;
+  expect(requests).toEqual([false, true]);
+});
+
+test("explicit location requests retain the daily wait across real process replacement", async () => {
+  const work = fixture();
+  for (const mode of ["scheduler-fail", "scheduler-request", "scheduler-fail"]) {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "update.fixture.ts"), work.root, mode, "0"], { stdout: "pipe", stderr: "pipe" });
+    const [exit, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()]); expect(exit, diagnostic).toBe(0);
+  }
+  const lines = fs.readFileSync(path.join(work.root, "calls"), "utf8").trim().split("\n");
+  expect(lines.filter(line => line.startsWith("scheduler update"))).toEqual(["scheduler update", "scheduler update requested"]);
+});
 test("an unavailable install's daily budget survives real process replacement", async () => {
   const work = fixture();
   for (const now of [0, 1, CHECK_INTERVAL_MS]) {

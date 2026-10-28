@@ -3,10 +3,500 @@
 All notable changes to Delegatus (`delegatus-cli`, published as
 `agent-log-viewer` before 1.3.0) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versions follow [SemVer](https://semver.org/), including its compatibility
-guarantees for the 1.x series.
+versions follow [SemVer](https://semver.org/): a change that breaks
+compatibility raises the major version.
 
 ## [Unreleased]
+
+## [2.0.0] — 2026-10-27
+
+### Breaking change
+- **MCP `create_task` requires `dueAt`.** In 1.16.0 the date was
+  optional. A `create_task` call without `dueAt` (or with an empty or null
+  one) is now refused with `TASK_DUE_REQUIRED`, and a date in the past is
+  refused too. Agents that read the tool schema adapt on their own; a
+  script or integration that creates tasks without a date must now pass a
+  future `dueAt` ([#3269]).
+
+### Added
+- **Due dates on tasks.** Tasks that agents and people create carry a
+  date. An agent that creates a task must give `dueAt` (see Breaking
+  change above). A task you create in the composer gets a date 72 hours
+  ahead, rounded up to the hour, shown in the composer; you can pick
+  another date or clear it back to the default. Cards Delegatus creates
+  itself, such as release, maintenance and system-run cards, can have no
+  date. Moving a date that has already passed needs a reason and is
+  recorded as a slip. The seat is woken about overdue tasks, ordered by
+  priority and then age, once per date and again every 24 hours. Tasks
+  from before this release that have no date stay undated and never
+  become overdue; older tasks that already have a date keep it and become
+  overdue once it passes while they are open ([#3256], [#3267], [#3269]).
+- **Review a lane's changed files with line comments.** Comment on lines
+  of the files a lane changed and send all comments to the responsible
+  agent as one message. The review sheet reads the send receipt in the
+  composer's own words: delivered, not delivered (with Retry), or delivery
+  unconfirmed (with Re-check delivery) ([#3257]).
+- **Workspaces restrict what team members see.** Every route a signed-in
+  person uses checks the workspace of the project it touches, and lists,
+  usage totals and spawn suggestions only include the projects that
+  person can read. The owner keeps full access. Owners place existing
+  members, change their roles and remove them; owners and workspace
+  managers invite a person straight into a workspace. A person with no
+  workspace opens the Team page ([#3255]).
+- **Delegatus memory reaches seats and operator conversations.** Seats
+  and conversations you hold directly remember through Delegatus rules,
+  with project and machine rules and `leave_lesson`. When the memory
+  source is set to Claude and Codex notes, new engine notes are imported
+  periodically (every 24 hours by default, 0 turns it off). A weekly
+  metrics script measures how the rules are used ([#3227]). The memory
+  source switch has its own row in Settings with its four states (off,
+  importing, draining, on), the guide explains them, and the rules window
+  points to the row when the engines setting pauses the rules ([#3249]).
+- **Move memory and settings to a new installation.** `delegatus export`
+  writes a checksummed bundle, sealed by default with a passphrase shown
+  once (`--plain` for a pipe); `delegatus import` first shows a dry run
+  with a diff, then applies it with a checkpoint. Accounts arrive signed
+  out with their bindings and become active after you sign in; the
+  accounts panel shows a checklist. No credential is read or copied
+  ([#3233]).
+- **Shared role rules, first slice.** Releases can ship a reviewed pack of
+  shared role rules. An installation renders them only after you tick
+  the swarm option in the telemetry settings; it is off by default, and
+  the pack in this release is empty ([#3262]).
+- **Choose the microphone and the speakers for voice mode** inside
+  Delegatus, remembered per browser. The voice status shows the
+  microphone in use, and a notice appears when a chosen device is gone
+  and the default takes over ([#3243]).
+- **Approved MCP tools join a new voice call** on both voice backends
+  without rebuilding the app. A tool that acts runs only after a yes that
+  names the action, at most one send per operator turn ([#3251]). A dry
+  run of a stdio voice tool also works on macOS, Windows and Linux
+  without bubblewrap after an explicit owner confirmation shown in
+  English or Ukrainian ([#3258]).
+- **Sound captions.** Each Delegatus sound shows a short toast on the
+  right, beside the panel of things that need you, that says what the
+  sound means. Toasts last two seconds, at most four at a time; the phone
+  layout has none ([#3228]).
+- **Codex CLI updates itself.** Once a day Delegatus checks for a new
+  stable Codex CLI, installs it into a private location, checks that its
+  app-server protocol and the native message queue still work, and
+  switches only while no Codex agent runs. A failed check rolls back,
+  and a seat notice reports success or the failing check ([#3254]).
+- **Pipeline checks and review stages can run in Codex Cloud.** For a
+  project with a Codex Cloud environment configured, a lane's checks run
+  there by default and the result is decisive; when Cloud is unreachable
+  the checks fall back to local ones. A Checks row on the lane menu
+  (board and phone) chooses per stage, lane or project ([#3330]). A
+  read-only Codex review or verify stage can run in Codex Cloud on the
+  lane branch with an explicit model; the setting is off until a project
+  names an environment ([#3302]).
+- **`delegatus doctor [--json] [--port <n>]`** prints read-only onboarding
+  diagnostics in English or Ukrainian, with no paths, credentials or raw
+  errors in its output ([#3295]). The installer wizard notices old state,
+  searches the project picker, and offers clearer newcomer defaults
+  ([#3304]).
+- **Worktree drilldown.** The resources footer opens a read-only list of
+  every retained worktree with its task, size, the reason it was kept and
+  when it was observed ([#3264]).
+- **Scheduled board maintenance can be limited to weekdays and hours** in
+  a time zone you choose. It stays off by default ([#3321]).
+- **The memory cap of an agent can be set per project, role and stage.**
+  The effective cap and where it came from show on conversation and stage
+  cards and in the launch reply; a request above the machine budget is
+  clamped ([#3212]).
+- **Orchestrator report log shows who wrote each report** and links to the
+  source conversation ([#3283]).
+- **A Telegram post can go out through a paired Celestia clone,** with no
+  bot token for that path. The clone is tried first for plain messages,
+  the bot takes over when it cannot send, and a rate-limit answer says
+  when to retry. It takes effect once the paired clone supports the send
+  endpoint ([#3223]).
+
+### Changed
+- **Unpinned work prefers the account whose quota window resets soonest**
+  when its balance is above 25 %; smaller balances stay fallbacks. Claude
+  windows are read fresh and shown beside Codex ([#3241]).
+- **Codex service-tier refusals name the model,** the accounts checked
+  and the tiers and alternative models each offers ([#3356]).
+- **The worktree sweep removes only worktrees Delegatus created.** Others
+  are kept as not created by Delegatus unless you set
+  `LLV_WORKTREE_SWEEP_FOREIGN=1` (or the `DELEGATUS_` alias) ([#3246]).
+- **The seat prepares a bug report draft without asking first** and asks
+  only before anything is published, for the exact text ([#3379]).
+- **Seat wakes list every lane waiting on the seat,** oldest first, and
+  keep waking at the project's cadence while one stays parked ([#3351]).
+- **Every operator correction leaves a lesson.** The seat and every stage
+  role record it the same turn, and the curator reviews corrections
+  first ([#3200]). A new lesson never evicts an existing one: scopes keep
+  headroom, the curator integrates and restores guidance before archiving
+  for budget, and a one-time recovery restores earlier budget archives
+  ([#3340]).
+- **Opening a conversation animates without a jump:** the desktop window
+  fades in together with its field, and on the phone the transcript fades
+  in where it rests and the skeleton waits 200 ms. Reduced motion has
+  no fades ([#3305]).
+- **The memory profile opens promptly,** shows "Reading…" until it has
+  answered, and shows the Delegatus role icon beside each role ([#3358]).
+- **The merge queue refreshes only the PR it is about to merge,** once
+  when its red check predates a newer main. A lane held in waiting-checks
+  with settled green required checks releases the repository slot and
+  merges; a branch that is behind main is refreshed through Delegatus's
+  own lane and no longer through GitHub's update-branch. Classic and
+  inherited ruleset checks are validated, and a merge counts only once
+  landing is confirmed. Refresh lanes run as a merger on Sol with
+  ultrafast reviews, falling back to priority ([#3238], [#3301], [#3337],
+  [#3346], [#3370]).
+- **Local check gates run below the Viewer** in CPU priority and are
+  capped by measured load; old work gets a bounded turn in the queue
+  ([#3338], [#3353]). A gate runner that is overloaded falls back to the
+  local machine ([#3306]).
+- **A briefly locked database no longer parks work.** Check-queue
+  admission ([#3315]), stage spawns ([#3342]) and the file scanner
+  ([#3271]) wait for the lock inside one deadline instead of parking or
+  exiting.
+
+### Fixed
+- **Viewer startup after a deploy finishes in minutes** and no longer
+  stalls the event loop for 0.5 to 0.9 s while the agent registry is
+  read: on a 9,190-host registry three measured boots were ready in 211
+  to 498 s, where the deployed build was not ready after 600 s
+  ([#3236]). The conversation catalog answers its first request before
+  refinement (a median of 2.9 s to 2.1 s on a 183-transcript corpus)
+  ([#3281]). A successor Viewer activates during a release handover
+  without SQLITE_BUSY ([#3378]). History projection reads finish under a
+  steady pipeline write rate ([#3341]). Dev startup survives a truncated
+  `tsc --showConfig` answer ([#3312]).
+- **Messages are delivered across restarts.** A delivered operator message
+  leaves the pending queue and no longer waits for Codex confirmation
+  ([#3357]); explicit messages are delivered while a restart still
+  reconciles unrelated sessions ([#3334]); a seat wake keeps its progress
+  after uncertain delivery, expiry and orchestrator succession ([#3361]).
+  Owner relay turns have no two-minute cap, retry once after a restart,
+  keep the real failure cause, and send late answers through the clone
+  route ([#3210], [#3332]).
+- **The seat is woken reliably.** A deploy-settled wake is not starved by
+  a seat tick pass that outlasts its interval ([#3231]); a tick finishes
+  while lanes keep moving, without cancelling its evidence refresh
+  endlessly ([#3372]); seat auto-rotation works from the seat tick
+  ([#3270]). With no owner relay paired, wakes stop asking to resend a
+  decision-form Telegram post ([#3285], [#3324]).
+- **Pipelines recover on their own.** A stage held by an account usage
+  guard waits for the reset without about seventy restarts and its one
+  replacement settles ([#3215]). A stage never waits forever on an idle
+  earlier host whose stop captured running processes ([#3219]), and a
+  finished lane retires its agents' hosts on every terminal path
+  ([#3268]). Startup recovery replaces a stage attempt whose recorded host
+  process is gone ([#3303]); a passed stage on an already published head
+  advances without publishing again ([#3328]); settlement stages tracked
+  deletions under ignored directories ([#3248]); a passed stage parks
+  after 15 minutes when settlement admission stalls ([#3323]); a stale
+  or abandoned producer repair turn no longer blocks resolve-decision and
+  retry-stage ([#3261]); skip-stage republishes a settled publication
+  failure ([#3322]). A fresh pipeline worktree has usable dependencies
+  before its first commit ([#3311]).
+- **A lost agent host names its cause.** Every host's exit code, signal
+  and sender are recorded ([#3354]); a Codex callback-listener failure
+  shows its real cause and retries when nothing was dispatched ([#3214],
+  [#3266]).
+- **Containers and other platforms.** Test runs and gates work on a Linux
+  host without a user systemd manager ([#3278]); a structured Claude
+  launch as root in a container passes `IS_SANDBOX` and shows the real
+  cause when refused ([#3280]); an unreadable credential store, such as the
+  macOS Keychain, is no longer reported as an absent login ([#3307]); a terminal Codex launch
+  gets the Viewer tools over HTTP, also when Delegatus runs with an access
+  key ([#3235], [#3240]); a stdio MCP process never leaves a half-created
+  receipts database ([#3242]); a dead owner from another PID namespace no
+  longer holds the head of the CPU admission queue ([#3325]).
+- **Interface fixes.** The board header fits a 640 to 700 px window
+  ([#3279]); the phone conversation bar never cuts a word without an
+  ellipsis ([#3344]); phone links wrap at words and full paths fit
+  ([#3276]); an open conversation of a retired orchestrator shows a
+  "Previous orchestrator" banner with a link to the current seat and
+  keeps drafts and failed messages without sending them to the retired
+  recipient ([#3336]); the issue-report preview quotes marker-like lines,
+  including lookalike letters and bidirectional controls, and renders
+  backticks correctly ([#3352]).
+- **Voice.** The call holds orchestrator reports while you speak or a
+  request is in flight ([#3229]); harmless creative requests are answered
+  instead of refused ([#3291]); reading orchestrator messages with an
+  unlisted `since` argument no longer fails ([#3284]).
+- **Releases and links.** The automatic release settles a stale record for
+  a done task and reads the real latest tag ([#3230]); release
+  verification reads exact image manifests and dist-tags ([#3322]). A
+  scanned conversation row regains its task and stage, and a pending
+  question reaches liveness and activity with consistent option numbers
+  ([#3316]). Explicit pipeline ids read from the hot or archive store, and
+  a completed lane keeps unresolved task-finish marks until receipts
+  exist ([#3313]).
+
+### Security
+- **Local file previews are limited to projects, their worktrees and stage
+  scratch.** A home folder is no longer a preview root ([#3207]).
+- **Operator authority comes from a verified credential,** not from
+  `Sec-Fetch-Site`. A keyless solo page gets a signed, HttpOnly session
+  cookie; claiming a team turns solo sessions off ([#3207]).
+- **npm update archives are verified against their provenance** before they
+  install ([#3207]).
+- **Telemetry opt-outs accept `false`, `off` and `no`,** and the notices
+  stay hidden while telemetry is locked off ([#3207]).
+- **Three high dependency advisories are cleared:** body-parser 2.4.0,
+  Happy DOM 21 and Zod 4.6. The local braces patch stays, and its
+  allowlist entry is revalidated until 2026-11-02 ([#3350]).
+- **The privacy publication gate inspects from the merge base** when the
+  given base is not an ancestor of the candidate ([#3253]).
+
+### Maintainer notes
+- Proactive mode inside full autonomy, groundwork only: the episode flag
+  and authority, a bounded allowance and provenance, and authority checks
+  after waits. Starting it remains disabled ([#3244], [#3318]).
+- Agent-run pre-push hooks and the touched-test comparator go to the remote
+  gate runner when one is configured ([#3272]). An offline park and
+  restore round-trip proof exists for a stopped, clean pipeline checkout
+  ([#3296]).
+- Duplicate mechanisms (database identity, durable JSON, null-only
+  transport, recorded identity, capped backoff) merged into one
+  implementation each ([#3347]). Lifecycle digest cursors are keyed
+  SQLite reads ([#3274]). The retired SchemeBoard and an ambiguous privacy
+  fingerprint are removed ([#3282]). Fixes written in Codex Cloud: a
+  board re-render when one reader gains focus, MCP titles in both
+  languages, narrow-shelf card controls and several test harness repairs
+  ([#3320]).
+- Tests that only asserted phrases in prompts and instructions are removed
+  and the rule is recorded in `AGENTS.md` ([#3329]). Reviewer and builder
+  scaffolds carry a persisted-records-and-recovery check ([#3365]).
+- Already-fixed issues are pinned with regression tests written in Codex
+  Cloud ([#3275], [#3277], [#3286], [#3292], [#3310], [#3317], [#3319]).
+- Test repairs: red-on-main fixes ([#3259], [#3294], [#3300]), voice
+  `liveSession` ([#3239]), `limits.test.ts` ([#3247]), the minimum macOS
+  SQLite job ([#3234]), `bindings.test.ts` ([#3237]), the real-Codex
+  queue compaction tests ([#3309], [#3339]) and the
+  `parkedPublication.test.ts` typecheck ([#3343]).
+- Swarm usage stats on the landing site have a verification matrix
+  ([#3288]).
+- Design and research documents: Git-first pipelines with GitHub as an
+  optional adapter ([#3376]), checks and stages in Codex Cloud and Claude
+  Code cloud sessions ([#3299], [#3349]), due dates ([#3256]), remote gate
+  runner ([#3196]), pipeline from a conversation and task timeline
+  prototypes ([#3327], [#3331]), relay trusted requesters and bug report
+  offer ([#3293], [#3326]), and card progress, task size, Copilot stage
+  engine and worker browser control ([#3297]). A merge queue research
+  report accompanies the queue fix ([#3301]).
+- The 1.16.0 changelog, version and README pictures reached main after
+  that release was tagged ([#3232]).
+
+## [1.16.0] — 2026-10-23
+
+### Added
+- **Turbo («Форсаж») for a project's Codex work.** A switch beside Full
+  autonomy in the seat tick panel raises every running Codex conversation
+  of the project to the fastest tier its account offers (Ultrafast where
+  listed, otherwise Fast). Running turns stop at the next step boundary
+  and continue, at most three switches at a time. Turning it on needs a
+  confirmation, and it runs for the 1, 2, 4 or 8 hours you choose, or
+  until you turn it off. The seat is told when Turbo starts and ends, and each wake carries
+  a Turbo line while it is on. Without a separate paid-credits approval,
+  given only from your own browser, Turbo never spends purchased credits:
+  an account that holds credits returns to its previous tier at 90 % of
+  its session or weekly window. Turbo off puts every switched conversation
+  and stage back on its previous tier. Claude is not affected ([#3194]).
+- **Workspaces, first slice.** The owner can group projects into named,
+  coloured workspaces from the new Team → Workspaces tab and from a page
+  per workspace: create, rename, delete an empty one, add and remove
+  projects, and move a project out of Unassigned. A switcher in the rail
+  header (and in the phone's Projects sheet) filters the board to one
+  workspace or shows all of them grouped. A workspace restricts nothing
+  yet; members, access and per-workspace settings come in later releases
+  ([#3133]).
+- **Task cards show the provider limit a task has spent.** A small scale on
+  the card's state line estimates the share of each account's weekly
+  window the task's conversations used; the popover breaks it down per
+  account and shows Claude's five-hour window while the task runs. The
+  figures are approximate ([#3151]). Codex limit history now records only
+  each account's own readings, so another account's usage no longer leaks
+  into a chart or an estimate; older Codex history whose account cannot be
+  proved is set aside ([#3155]).
+- **Several Telegram bots.** Beside the bot that receives messages you can
+  add bots that only post («Add another bot»), and choose per chat which
+  bot posts there («Posts as»). A post goes out through a bot that is a
+  member of the target chat and moves to the next bot only when Telegram
+  refuses it, so a message is delivered by one bot at most ([#3139]).
+- **A refused Telegram file can still go out with your confirmation.**
+  When a document or media send is refused by a content check, the refusal
+  carries a ten-minute confirmation link. You review the file, its hash,
+  the destination chat and the reasons, and approve exactly that send.
+  Any change to the file or the chat, a replay or an expired link refuses
+  it ([#3204]).
+- **Voice tools, first slice.** An agent can propose a tool for the voice
+  companion; you approve it in the new Tools section of the voice
+  settings, store its secrets separately, and try it with a dry run before
+  anything uses it ([#3157]). Only you can approve, from a signed-in
+  browser session, and a tool receives only the secrets it names
+  ([#3188]).
+- **A dropped voice call can be resumed.** When the connection drops, the
+  call offers Reconnect for 30 minutes, also after a page reload or a
+  Delegatus restart. The resumed call keeps the same conversation, the
+  dictation history stays, and the earlier part of the call returns into
+  the call's context ([#3197]).
+- **Past voice calls can be reopened.** After a call, also after a page
+  reload, the character opens the newest retained call with its actions:
+  when each happened, the project, whether a request was sent and
+  delivered and, if not, why in your language, with a link to the
+  orchestrator conversation it went to. With more than one call, a
+  picker opens any of them. The list carries no words of the call
+  ([#3218]).
+- **New sounds.** The sound map uses the «Wood» palette for asks, finished
+  work, pipelines, failures and launches; the original typing sound stays,
+  and an «Agent typing» checkbox turns it off. Mute, volume and call music
+  are unchanged ([#3193]).
+- **Composer attachments up to 100 MB per file** (200 MB per message, was
+  20 MB). Large files upload with progress and retry in place on desktop
+  and phone, and the agent receives a file only once it is complete
+  ([#3179]).
+- **Decision forms fold and list newest first.** The header of the open
+  form folds it back to its row, and the desktop column and phone sheet
+  show the newest form first ([#3160]).
+- **A setting for what leaves your machine.** Memory profiles and voice-call
+  summaries now run through Claude Code, and limits are read through
+  Claude Code's `/usage` first. A direct Anthropic usage request made with
+  your subscription needs the new «What leaves my machine» switch in
+  Settings: off on new installations, kept on where direct usage already
+  worked ([#3177]).
+
+### Changed
+- **Stages wait in CPU admission by task priority**: high before normal
+  before low, first come first served within a level. The queue shows the
+  priority ([#3129]).
+- **Phone composer.** The model chip and Context toggle sit at the left of
+  the tools row, attach, call, dictate and send at the right, and only the
+  left group gives up width ([#3162]).
+- **Owner relay requests get ten minutes end to end**, and a ready answer
+  goes out at once. A request that runs out of time gets a plain timeout
+  reply ([#3209]). Owner relay turns fetch the attachment of the message
+  the owner replied to ([#3178]).
+- **Learned rules are fixed for an attempt.** A stage reads the same rule
+  block on every start of one attempt. A report can say which delivered
+  rules applied or misled, and only delivered rules are accepted
+  ([#3191]).
+- **The orchestrator's instructions describe maintenance work**: report
+  first, widen in steps, compare models on the same snapshot, and keep
+  deletions to small lanes ([#3143]).
+- **A pull request is refreshed after its last fix.** When a review budget
+  ends on a fix, the PR body gets the fixed head, that fix's checks and a
+  line saying the fix was not reviewed again ([#3199]).
+- **Finished lanes free their space sooner.** A clean finished checkout
+  whose commits are all on the remote is removed after one hour ([#3173]);
+  a checkout held only by conversations that are all gone is freed
+  ([#3154]); a stage's scratch, export and temp folders are removed when
+  its attempt settles, with a size cap and a bounded sweep ([#3217]).
+- **Quieter logs.** Repeated state-lock deferrals and «still scanning»
+  lines are summed every five seconds with counts ([#3201]).
+- **Fewer pauses in the Viewer.** Page renders stopped decoding the agent
+  registry tens of thousands of times a minute; on a copy of a large
+  installation the share of loop gaps over 500 ms fell from about 9 % to
+  zero ([#3140]). Role memory refresh, the seat tick check, registry reads
+  and auto-merge work in bounded steps ([#3125]), and pipeline history
+  reads keep progress across retries and share one read between
+  concurrent callers ([#3166]). The worktree sweep and the controller's
+  jobs work in small slices that scale with what changed instead of with
+  the number of worktrees, and a kept worktree is rechecked when its
+  retention ends ([#3208]).
+- **Agents run in a signal sandbox where Linux allows it.** A managed
+  agent cannot signal processes outside its own tree; where the boundary
+  cannot be set up, the agent starts as before and its launch reports the
+  boundary off ([#3152]).
+
+### Removed
+- **Flows and workflows are retired; use pipelines.** Creating, changing or
+  running a flow, a workflow or a `review-loop` stage now answers 410
+  (`FLOW_RETIRED`, `STAGE_KIND_RETIRED`) and points to `/api/pipelines`.
+  Flow history stays readable, accepted requests still replay their
+  receipts, and stored legacy definitions convert explicitly. The flow
+  read tools and routes stay for at least two releases and 30 days
+  ([#3181]).
+
+### Fixed
+- **Delegatus starts on the SQLite that macOS ships again.** Releases
+  1.13.0 to 1.15.0 could not start on macOS because of SQL that the
+  system SQLite cannot compile. A schema statement the running SQLite
+  cannot compile is no longer treated as a corrupt database, so your
+  state is never set aside for it ([#3171]).
+- **npm installs ship the complete MCP server and UI assets.** Missing
+  agent tools and missing sounds in npm installs are fixed; publication
+  now smoke-tests the packed package ([#3168]).
+- **Spawned agents always get the Delegatus tools** on the real state
+  directory, and a start with no tools fails visibly instead of running
+  without them ([#3164]). HTTP MCP no longer answers 503 at thread start
+  on an older migrated state ([#3172]). An MCP call cut by its process
+  ending is retryable under the same key ([#3126]).
+- **Pipelines recover on their own** when a stage's first message was
+  fenced as never executed ([#3138]), a recovered stage had no launch
+  ([#3213]), a captured agent process is a zombie ([#3211]), a producer
+  repair turn failed or its producer is gone ([#3130], [#3186]), a Viewer
+  restart cut a publication ([#3190]), or a transient Git probe failed at
+  launch ([#3110]).
+- **Stage publication accepts legitimate work**: every commit an attempt
+  made in its worktree, including merge commits and commits made just
+  before an out-of-memory kill ([#3156]); a successor lane that merged
+  current main ([#3184]); a PR branch whose tip is an ancestor of the lane
+  base ([#3137]). A PR body refresh no longer fails on repositories with
+  classic projects ([#3221]).
+- **The seat tick accounts for every spawned child** again, so finished
+  children no longer show as unplaced ([#3148]). A seat created with a
+  project's display name uses its canonical key ([#3189]). A stale scan
+  error no longer stops the controller's independent sweeps ([#3165]).
+- **Owner relay answers again** after the relay service lost a lease, and
+  a stop request no longer stays pending ([#3192]). Relay owner answers
+  keep slash commands and plain text; only real file paths and secrets
+  are redacted ([#3174]).
+- **Telegram refusals name their cause.** A refused media or document send
+  reports its real reason (for example a file outside the allowed folders)
+  ([#3135]), and a form that finds no Telegram destination says why
+  ([#3136]).
+- **Self-update removes old releases again** instead of failing on a
+  partial process scan ([#3150]). The release build gets CPU admission
+  ahead of agent test runs and no longer times out on a fixed 20-minute
+  timer; a failed deploy keeps its phase and cause ([#3175]).
+
+### Security
+- **Next.js 16.4.1**, the first release that fixes three advisories
+  published on 2026-10-22: two critical (GHSA-2464-fhr4-w9xw,
+  GHSA-673q-mjm6-r5xr) and one high (GHSA-p3m5-59mp-jv5r) ([#3220]).
+- **Every route checks the Host header** against the configured names
+  (loopback, the launch hostname, the Tailscale name, the saved public
+  address), streams included, so a DNS-rebinding page cannot read
+  Delegatus. A first-time public address is set from loopback or a
+  configured hostname ([#3169]).
+- **Messaging a Claude session you started keeps its permission mode**; it
+  is never resumed with permission checks skipped ([#3170]).
+- **The Codex memory hook is set per Delegatus launch** and no longer
+  written to the shared Codex hooks file; the hook file holds no access
+  key, and older global hooks are removed ([#3187]).
+- **MCP SDK 1.32.0** with its input-element and request-body limits
+  enabled on the HTTP MCP server ([#3149], [#3153]).
+
+### Maintainer notes
+- `scripts/gate-slot.sh` moves a sandboxed stage agent's heavy command into
+  the 8 GB gate scope again ([#3159]). The pre-push touched-test gate
+  finishes at high load: a 60-second test timeout and the largest engine
+  test files split ([#3128]). Pre-push and publication reuse a passed
+  step's verdict for an identical tree, base and toolchain, and skip
+  checks a change cannot affect ([#3203]).
+- A launched merger explains the GitHub App setup when the batch principal
+  check is refused ([#3182]).
+- Test repairs: native Codex runtime timing ([#3147]), the minimum macOS
+  SQLite job ([#3183]), harness fixtures ([#3185]), the merge-batch scanner
+  fixture ([#3161]), `engine.creation.test.ts` ([#3134]) and
+  `parkedPublication.test.ts` ([#3198]).
+- Unused board scheme code removed ([#3141], [#3142], [#3144], [#3145],
+  [#3146]).
+- The landing site shows full autonomy, per-task usage and agent memory
+  ([#3176]).
+- Design and research documents: role memory layers ([#3180]), moving
+  memory and settings to a new installation ([#3195]), proactive mode
+  ([#3202]), open-source competitors ([#3206]) and shared role memory
+  across installations ([#3216]).
+- The 1.15.0 changelog, version and README pictures reached main after
+  that release was tagged ([#3132]).
 
 ## [1.15.0] — 2026-10-20
 
@@ -4031,7 +4521,9 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
+[1.16.0]: https://github.com/Latand/delegatus/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/Latand/delegatus/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Latand/delegatus/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Latand/delegatus/compare/v1.12.0...v1.13.0
@@ -4786,3 +5278,217 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3123]: https://github.com/Latand/delegatus/pull/3123
 [#3124]: https://github.com/Latand/delegatus/pull/3124
 [#3127]: https://github.com/Latand/delegatus/pull/3127
+[#3110]: https://github.com/Latand/delegatus/pull/3110
+[#3125]: https://github.com/Latand/delegatus/pull/3125
+[#3126]: https://github.com/Latand/delegatus/pull/3126
+[#3128]: https://github.com/Latand/delegatus/pull/3128
+[#3129]: https://github.com/Latand/delegatus/pull/3129
+[#3130]: https://github.com/Latand/delegatus/pull/3130
+[#3132]: https://github.com/Latand/delegatus/pull/3132
+[#3133]: https://github.com/Latand/delegatus/pull/3133
+[#3134]: https://github.com/Latand/delegatus/pull/3134
+[#3135]: https://github.com/Latand/delegatus/pull/3135
+[#3136]: https://github.com/Latand/delegatus/pull/3136
+[#3137]: https://github.com/Latand/delegatus/pull/3137
+[#3138]: https://github.com/Latand/delegatus/pull/3138
+[#3139]: https://github.com/Latand/delegatus/pull/3139
+[#3140]: https://github.com/Latand/delegatus/pull/3140
+[#3141]: https://github.com/Latand/delegatus/pull/3141
+[#3142]: https://github.com/Latand/delegatus/pull/3142
+[#3143]: https://github.com/Latand/delegatus/pull/3143
+[#3144]: https://github.com/Latand/delegatus/pull/3144
+[#3145]: https://github.com/Latand/delegatus/pull/3145
+[#3146]: https://github.com/Latand/delegatus/pull/3146
+[#3147]: https://github.com/Latand/delegatus/pull/3147
+[#3148]: https://github.com/Latand/delegatus/pull/3148
+[#3149]: https://github.com/Latand/delegatus/pull/3149
+[#3150]: https://github.com/Latand/delegatus/pull/3150
+[#3151]: https://github.com/Latand/delegatus/pull/3151
+[#3152]: https://github.com/Latand/delegatus/pull/3152
+[#3153]: https://github.com/Latand/delegatus/pull/3153
+[#3154]: https://github.com/Latand/delegatus/pull/3154
+[#3155]: https://github.com/Latand/delegatus/pull/3155
+[#3156]: https://github.com/Latand/delegatus/pull/3156
+[#3157]: https://github.com/Latand/delegatus/pull/3157
+[#3159]: https://github.com/Latand/delegatus/pull/3159
+[#3160]: https://github.com/Latand/delegatus/pull/3160
+[#3161]: https://github.com/Latand/delegatus/pull/3161
+[#3162]: https://github.com/Latand/delegatus/pull/3162
+[#3164]: https://github.com/Latand/delegatus/pull/3164
+[#3165]: https://github.com/Latand/delegatus/pull/3165
+[#3166]: https://github.com/Latand/delegatus/pull/3166
+[#3168]: https://github.com/Latand/delegatus/pull/3168
+[#3169]: https://github.com/Latand/delegatus/pull/3169
+[#3170]: https://github.com/Latand/delegatus/pull/3170
+[#3171]: https://github.com/Latand/delegatus/pull/3171
+[#3172]: https://github.com/Latand/delegatus/pull/3172
+[#3173]: https://github.com/Latand/delegatus/pull/3173
+[#3174]: https://github.com/Latand/delegatus/pull/3174
+[#3175]: https://github.com/Latand/delegatus/pull/3175
+[#3176]: https://github.com/Latand/delegatus/pull/3176
+[#3177]: https://github.com/Latand/delegatus/pull/3177
+[#3178]: https://github.com/Latand/delegatus/pull/3178
+[#3179]: https://github.com/Latand/delegatus/pull/3179
+[#3180]: https://github.com/Latand/delegatus/pull/3180
+[#3181]: https://github.com/Latand/delegatus/pull/3181
+[#3182]: https://github.com/Latand/delegatus/pull/3182
+[#3183]: https://github.com/Latand/delegatus/pull/3183
+[#3184]: https://github.com/Latand/delegatus/pull/3184
+[#3185]: https://github.com/Latand/delegatus/pull/3185
+[#3186]: https://github.com/Latand/delegatus/pull/3186
+[#3187]: https://github.com/Latand/delegatus/pull/3187
+[#3188]: https://github.com/Latand/delegatus/pull/3188
+[#3189]: https://github.com/Latand/delegatus/pull/3189
+[#3190]: https://github.com/Latand/delegatus/pull/3190
+[#3191]: https://github.com/Latand/delegatus/pull/3191
+[#3192]: https://github.com/Latand/delegatus/pull/3192
+[#3193]: https://github.com/Latand/delegatus/pull/3193
+[#3194]: https://github.com/Latand/delegatus/pull/3194
+[#3195]: https://github.com/Latand/delegatus/pull/3195
+[#3197]: https://github.com/Latand/delegatus/pull/3197
+[#3198]: https://github.com/Latand/delegatus/pull/3198
+[#3199]: https://github.com/Latand/delegatus/pull/3199
+[#3201]: https://github.com/Latand/delegatus/pull/3201
+[#3202]: https://github.com/Latand/delegatus/pull/3202
+[#3203]: https://github.com/Latand/delegatus/pull/3203
+[#3204]: https://github.com/Latand/delegatus/pull/3204
+[#3206]: https://github.com/Latand/delegatus/pull/3206
+[#3208]: https://github.com/Latand/delegatus/pull/3208
+[#3209]: https://github.com/Latand/delegatus/pull/3209
+[#3211]: https://github.com/Latand/delegatus/pull/3211
+[#3213]: https://github.com/Latand/delegatus/pull/3213
+[#3216]: https://github.com/Latand/delegatus/pull/3216
+[#3217]: https://github.com/Latand/delegatus/pull/3217
+[#3218]: https://github.com/Latand/delegatus/pull/3218
+[#3220]: https://github.com/Latand/delegatus/pull/3220
+[#3221]: https://github.com/Latand/delegatus/pull/3221
+[#3196]: https://github.com/Latand/delegatus/pull/3196
+[#3200]: https://github.com/Latand/delegatus/pull/3200
+[#3207]: https://github.com/Latand/delegatus/pull/3207
+[#3210]: https://github.com/Latand/delegatus/pull/3210
+[#3212]: https://github.com/Latand/delegatus/pull/3212
+[#3214]: https://github.com/Latand/delegatus/pull/3214
+[#3215]: https://github.com/Latand/delegatus/pull/3215
+[#3219]: https://github.com/Latand/delegatus/pull/3219
+[#3223]: https://github.com/Latand/delegatus/pull/3223
+[#3227]: https://github.com/Latand/delegatus/pull/3227
+[#3228]: https://github.com/Latand/delegatus/pull/3228
+[#3229]: https://github.com/Latand/delegatus/pull/3229
+[#3230]: https://github.com/Latand/delegatus/pull/3230
+[#3231]: https://github.com/Latand/delegatus/pull/3231
+[#3232]: https://github.com/Latand/delegatus/pull/3232
+[#3233]: https://github.com/Latand/delegatus/pull/3233
+[#3234]: https://github.com/Latand/delegatus/pull/3234
+[#3235]: https://github.com/Latand/delegatus/pull/3235
+[#3236]: https://github.com/Latand/delegatus/pull/3236
+[#3237]: https://github.com/Latand/delegatus/pull/3237
+[#3238]: https://github.com/Latand/delegatus/pull/3238
+[#3239]: https://github.com/Latand/delegatus/pull/3239
+[#3240]: https://github.com/Latand/delegatus/pull/3240
+[#3241]: https://github.com/Latand/delegatus/pull/3241
+[#3242]: https://github.com/Latand/delegatus/pull/3242
+[#3243]: https://github.com/Latand/delegatus/pull/3243
+[#3244]: https://github.com/Latand/delegatus/pull/3244
+[#3246]: https://github.com/Latand/delegatus/pull/3246
+[#3247]: https://github.com/Latand/delegatus/pull/3247
+[#3248]: https://github.com/Latand/delegatus/pull/3248
+[#3249]: https://github.com/Latand/delegatus/pull/3249
+[#3251]: https://github.com/Latand/delegatus/pull/3251
+[#3253]: https://github.com/Latand/delegatus/pull/3253
+[#3254]: https://github.com/Latand/delegatus/pull/3254
+[#3255]: https://github.com/Latand/delegatus/pull/3255
+[#3256]: https://github.com/Latand/delegatus/pull/3256
+[#3257]: https://github.com/Latand/delegatus/pull/3257
+[#3258]: https://github.com/Latand/delegatus/pull/3258
+[#3259]: https://github.com/Latand/delegatus/pull/3259
+[#3261]: https://github.com/Latand/delegatus/pull/3261
+[#3262]: https://github.com/Latand/delegatus/pull/3262
+[#3264]: https://github.com/Latand/delegatus/pull/3264
+[#3266]: https://github.com/Latand/delegatus/pull/3266
+[#3267]: https://github.com/Latand/delegatus/pull/3267
+[#3268]: https://github.com/Latand/delegatus/pull/3268
+[#3269]: https://github.com/Latand/delegatus/pull/3269
+[#3270]: https://github.com/Latand/delegatus/pull/3270
+[#3271]: https://github.com/Latand/delegatus/pull/3271
+[#3272]: https://github.com/Latand/delegatus/pull/3272
+[#3274]: https://github.com/Latand/delegatus/pull/3274
+[#3275]: https://github.com/Latand/delegatus/pull/3275
+[#3276]: https://github.com/Latand/delegatus/pull/3276
+[#3277]: https://github.com/Latand/delegatus/pull/3277
+[#3278]: https://github.com/Latand/delegatus/pull/3278
+[#3279]: https://github.com/Latand/delegatus/pull/3279
+[#3280]: https://github.com/Latand/delegatus/pull/3280
+[#3281]: https://github.com/Latand/delegatus/pull/3281
+[#3282]: https://github.com/Latand/delegatus/pull/3282
+[#3283]: https://github.com/Latand/delegatus/pull/3283
+[#3284]: https://github.com/Latand/delegatus/pull/3284
+[#3285]: https://github.com/Latand/delegatus/pull/3285
+[#3286]: https://github.com/Latand/delegatus/pull/3286
+[#3288]: https://github.com/Latand/delegatus/pull/3288
+[#3291]: https://github.com/Latand/delegatus/pull/3291
+[#3292]: https://github.com/Latand/delegatus/pull/3292
+[#3293]: https://github.com/Latand/delegatus/pull/3293
+[#3294]: https://github.com/Latand/delegatus/pull/3294
+[#3295]: https://github.com/Latand/delegatus/pull/3295
+[#3296]: https://github.com/Latand/delegatus/pull/3296
+[#3297]: https://github.com/Latand/delegatus/pull/3297
+[#3299]: https://github.com/Latand/delegatus/pull/3299
+[#3300]: https://github.com/Latand/delegatus/pull/3300
+[#3301]: https://github.com/Latand/delegatus/pull/3301
+[#3302]: https://github.com/Latand/delegatus/pull/3302
+[#3303]: https://github.com/Latand/delegatus/pull/3303
+[#3304]: https://github.com/Latand/delegatus/pull/3304
+[#3305]: https://github.com/Latand/delegatus/pull/3305
+[#3306]: https://github.com/Latand/delegatus/pull/3306
+[#3307]: https://github.com/Latand/delegatus/pull/3307
+[#3309]: https://github.com/Latand/delegatus/pull/3309
+[#3310]: https://github.com/Latand/delegatus/pull/3310
+[#3311]: https://github.com/Latand/delegatus/pull/3311
+[#3312]: https://github.com/Latand/delegatus/pull/3312
+[#3313]: https://github.com/Latand/delegatus/pull/3313
+[#3315]: https://github.com/Latand/delegatus/pull/3315
+[#3316]: https://github.com/Latand/delegatus/pull/3316
+[#3317]: https://github.com/Latand/delegatus/pull/3317
+[#3318]: https://github.com/Latand/delegatus/pull/3318
+[#3319]: https://github.com/Latand/delegatus/pull/3319
+[#3320]: https://github.com/Latand/delegatus/pull/3320
+[#3321]: https://github.com/Latand/delegatus/pull/3321
+[#3322]: https://github.com/Latand/delegatus/pull/3322
+[#3323]: https://github.com/Latand/delegatus/pull/3323
+[#3324]: https://github.com/Latand/delegatus/pull/3324
+[#3325]: https://github.com/Latand/delegatus/pull/3325
+[#3326]: https://github.com/Latand/delegatus/pull/3326
+[#3327]: https://github.com/Latand/delegatus/pull/3327
+[#3328]: https://github.com/Latand/delegatus/pull/3328
+[#3329]: https://github.com/Latand/delegatus/pull/3329
+[#3330]: https://github.com/Latand/delegatus/pull/3330
+[#3331]: https://github.com/Latand/delegatus/pull/3331
+[#3332]: https://github.com/Latand/delegatus/pull/3332
+[#3334]: https://github.com/Latand/delegatus/pull/3334
+[#3336]: https://github.com/Latand/delegatus/pull/3336
+[#3337]: https://github.com/Latand/delegatus/pull/3337
+[#3338]: https://github.com/Latand/delegatus/pull/3338
+[#3339]: https://github.com/Latand/delegatus/pull/3339
+[#3340]: https://github.com/Latand/delegatus/pull/3340
+[#3341]: https://github.com/Latand/delegatus/pull/3341
+[#3342]: https://github.com/Latand/delegatus/pull/3342
+[#3343]: https://github.com/Latand/delegatus/pull/3343
+[#3344]: https://github.com/Latand/delegatus/pull/3344
+[#3346]: https://github.com/Latand/delegatus/pull/3346
+[#3347]: https://github.com/Latand/delegatus/pull/3347
+[#3349]: https://github.com/Latand/delegatus/pull/3349
+[#3350]: https://github.com/Latand/delegatus/pull/3350
+[#3351]: https://github.com/Latand/delegatus/pull/3351
+[#3352]: https://github.com/Latand/delegatus/pull/3352
+[#3353]: https://github.com/Latand/delegatus/pull/3353
+[#3354]: https://github.com/Latand/delegatus/pull/3354
+[#3356]: https://github.com/Latand/delegatus/pull/3356
+[#3357]: https://github.com/Latand/delegatus/pull/3357
+[#3358]: https://github.com/Latand/delegatus/pull/3358
+[#3361]: https://github.com/Latand/delegatus/pull/3361
+[#3365]: https://github.com/Latand/delegatus/pull/3365
+[#3370]: https://github.com/Latand/delegatus/pull/3370
+[#3372]: https://github.com/Latand/delegatus/pull/3372
+[#3376]: https://github.com/Latand/delegatus/pull/3376
+[#3378]: https://github.com/Latand/delegatus/pull/3378
+[#3379]: https://github.com/Latand/delegatus/pull/3379

@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
+import { engineFiles, engineInjectionFiles } from "./verify-native-codex-runtime";
 
 /* The job in `bun-runtime.yml` is the answer to "nobody here can reproduce
    that": it runs the runtime verification at the pull request's own commit so
@@ -118,7 +120,7 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   expect(workflow.jobs["bun-runtime"].if).toBe("github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign");
 });
 
-test("the native Codex matrix covers the documented installed CLI and every pinned host version", () => {
+test("the native Codex matrix and recorded local follow-up cover every pinned host version", () => {
   const document = fs.readFileSync(path.join(repositoryRoot, "docs/design/codex-pinned-protocol.md"), "utf8");
   const installed = [...document.matchAll(/^Installed CLI pin: `(\d+\.\d+\.\d+)`\.$/gm)];
   expect(installed).toHaveLength(1);
@@ -127,7 +129,26 @@ test("the native Codex matrix covers the documented installed CLI and every pinn
   const protocolRoot = path.join(repositoryRoot, "src/lib/accounts/protocol");
   const supported = fs.readdirSync(protocolRoot).filter(version => /^\d+\.\d+\.\d+$/.test(version));
   expect(supported.length).toBeGreaterThan(0);
-  expect(versions?.toSorted()).toEqual(supported.toSorted());
+  // The 0.164.0 workflow entry is a separate publication follow-up. Keep
+  // every existing matrix pin and require the complete local engine campaign
+  // for this one additional pin until the workflow can carry it.
+  const localOnly = versions?.includes("0.164.0") ? [] : ["0.164.0"];
+  expect(versions?.toSorted()).toEqual(supported.filter(version => !localOnly.includes(version)).toSorted());
+  if (localOnly.length) {
+    const checks = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "evidence/codex-compatibility/checks.json"), "utf8"));
+    expect(checks.deferredWorkflowVersions).toEqual(localOnly);
+    const runs = checks.native.fileVersionRuns.filter((run: { version: string }) => run.version === "0.164.0");
+    expect(runs.map((run: { file: string }) => run.file).toSorted()).toEqual([...engineFiles, ...engineInjectionFiles].toSorted());
+    for (const run of runs) {
+      expect(run.exit).toBe(0);
+      expect(run.failed).toBe(0);
+      expect(run.passed).toBeGreaterThan(0);
+    }
+    for (const mode of ["stable", "experimental"]) {
+      const digest = createHash("sha256").update(fs.readFileSync(path.join(protocolRoot, "0.164.0", `${mode}.json`))).digest("hex");
+      expect(checks.candidateSchemas.sha256[mode]).toBe(digest);
+    }
+  }
   // Keeping the declaration and alias wired prevents a second list drifting.
   expect(workflowSource.match(/&native-codex-versions/g)).toHaveLength(1);
   expect(workflowSource.match(/\*native-codex-versions/g)).toHaveLength(1);
@@ -155,9 +176,10 @@ test("supported Codex CLIs run the full native contracts at the proposed commit"
   }
 });
 
-test("runtime CI runs on every PR and supports dispatch", () => {
+test("runtime CI checks main pushes as well as PRs and supports dispatch", () => {
   const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
-  expect(Object.keys(triggers.on)).toEqual(["pull_request", "workflow_dispatch"]);
+  expect(Object.keys(triggers.on)).toEqual(["pull_request", "push", "workflow_dispatch"]);
+  expect(triggers.on.push).toEqual({ branches: ["main"] });
 });
 
 test("runtime CI requires installed-package MCP and audio smoke after prepack", () => {

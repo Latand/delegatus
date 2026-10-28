@@ -54,6 +54,16 @@ class ClaudeRecoveryFixture extends EventEmitter {
 
   private acceptFrame(line: string): void {
     const frame = record(JSON.parse(line));
+    const control = record(frame?.request);
+    if (frame?.type === "control_request" && ["initialize", "mcp_status"].includes(String(control?.subtype))) {
+      this.emitJson({ type: "control_response", response: {
+        subtype: "success", request_id: frame.request_id,
+        response: control?.subtype === "mcp_status"
+          ? { mcpServers: [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }] }
+          : {},
+      } });
+      return;
+    }
     const message = record(frame?.message);
     const content = message?.content;
     if (frame?.type !== "user"

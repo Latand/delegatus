@@ -1159,6 +1159,7 @@ export async function runStructuredHostRetirementSweep(
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
     const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
     return terminateStructuredHostTree(ref, {
+    stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
     graceMs,
     deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
     persistCapturedTree: identities => ref.sessionId !== null

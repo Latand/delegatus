@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
+import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+
+import { productionPorts, readGhApiArgs } from "../../../bin/forge-app-token.mjs";
+
 import type { GithubEvidenceRow } from "./evidence";
 
 /**
@@ -29,12 +35,70 @@ export interface GithubEvidenceOptions {
   timeoutMs?: number;
 }
 
-/** The one `gh` seam. Shared with the seat tick's proposal source (#1245), so
-    there is a single place a command, a timeout or a buffer bound is chosen. */
-export function githubRunner(cwd: string, timeoutMs: number): GithubRunner {
-  return async (args) => {
+export interface GithubRunnerOptions {
+  exec?: GithubRunner;
+  asApp?: ForgeAppWriter;
+  declared?: (repository: string) => boolean;
+}
+
+/** Resolve reads before requesting a token; writes retain their existing gate. */
+async function readRepository(args: string[], cwd: string): Promise<{ repository: string; args: string[] } | null> {
+  const readCommand = (["pr", "issue"].includes(args[0] ?? "") && ["list", "view"].includes(args[1] ?? ""))
+    || (args[0] === "repo" && args[1] === "view");
+  const api = args[0] === "api";
+  const query = args.find(arg => arg.startsWith("query="))?.slice(6);
+  if (!readCommand && !api) return null;
+  if (api) {
+    // Use gh's accepted flag spellings and skip flag values before choosing
+    // read credentials. Body flags imply POST unless GET was explicit.
+    const { last } = readGhApiArgs(args);
+    const method = last("-X", "--method");
+    if (method && method.toUpperCase() !== "GET") return null;
+    if (last("--input") !== null) return null;
+    if (args[1] === "graphql") {
+      if (!query || /\bmutation\b/.test(query)) return null;
+    } else {
+      const body = ["-f", "-F", "--field", "--raw-field"].some(flag => last(flag) !== null);
+      if ((method ?? (body ? "POST" : "GET")).toUpperCase() !== "GET") return null;
+    }
+  }
+  const index = args.findIndex(arg => arg === "--repo" || arg === "-R");
+  const explicit = index >= 0 ? args[index + 1] : args.find(arg => arg.startsWith("--repo="))?.slice(7);
+  const endpoint = api ? /^\/?repos\/([^/]+\/[^/?]+)/.exec(args[1] ?? "")?.[1] : null;
+  const owner = args.find(arg => arg.startsWith("owner="))?.slice(6);
+  const name = args.find(arg => arg.startsWith("name="))?.slice(5);
+  const literal = query ? /repository\(owner:\s*"([^"\n]+)",\s*name:\s*"([^"\n]+)"/.exec(query) : null;
+  const positional = args[0] === "repo" && args[1] === "view" && args[2] && !args[2].startsWith("-") ? args[2] : null;
+  const url = args[1] === "view" && args[2]?.startsWith("https://")
+    ? /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/\d+(?:[/?#]|$)/i.exec(args[2])?.[1] ?? args[2]
+    : null;
+  const repository = explicit ?? positional ?? url ?? endpoint ?? (owner && name ? `${owner}/${name}` : literal ? `${literal[1]}/${literal[2]}` : null);
+  if (repository !== null) {
+    const resolved = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository) ? repository.toLowerCase() : githubRepositoryOfRemote(repository);
+    return resolved ? { repository: resolved, args } : null;
+  }
+  if (!readCommand || index >= 0) return null;
+  const context = process.env.GH_REPO || (await productionPorts(process.env, cwd).checkoutRepositories())[0];
+  if (!context) return null;
+  const resolved = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(context) ? context.toLowerCase() : githubRepositoryOfRemote(context);
+  if (!resolved) return null;
+  // Pin the context used to mint the token so gh cannot choose another remote.
+  return { repository: resolved, args: args[0] === "repo" ? ["repo", "view", resolved, ...args.slice(2)] : [...args, "--repo", resolved] };
+}
+
+/** Reads of declared repositories use the App token helper, including
+    in Docker where the local gh has no account configuration. Writes keep their
+    existing routing, and a refused App read never falls back to another identity. */
+export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunnerOptions = {}): GithubRunner {
+  const exec = options.exec ?? (async (args: string[]) => {
     const { stdout } = await execFileAsync("gh", args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
     return stdout;
+  });
+  const asApp = options.asApp ?? forgeAppWriter(cwd, timeoutMs);
+  const declared = options.declared ?? isForgeAppRepository;
+  return async (args) => {
+    const target = await readRepository(args, cwd);
+    return target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args);
   };
 }
 

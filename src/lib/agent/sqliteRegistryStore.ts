@@ -1,3 +1,4 @@
+import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -23,6 +24,20 @@ import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, Seat
 import { sessionKeyId } from "./sessionKey";
 import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+
+/** Startup owns these transactions. Explicit statements also pass through the
+ * writer observer; Bun's transaction callback API bypasses Database.exec. */
+function withStartupTransaction<T>(db: BunDatabase, write: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = write();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* preserve the migration failure */ }
+    throw error;
+  }
+}
 
 /** The collections the MCP grant decision reads and writes. Touching any one of
     them requires the decision to have run over ALL of them, because an entry or
@@ -396,6 +411,12 @@ export function registryConversationsForEntryKey(file: RegistryFile, entryKey: s
     row.generations.some(generation => `${row.engine}:${generation.id}` === entryKey));
 }
 
+/** Physical row keys from the same generation index and transaction overlay.
+    Plain files keep the existing conversation-reader fallback. */
+export function registryConversationKeysForEntryKey(file: RegistryFile, entryKey: string): string[] | undefined {
+  return entryKeyReaders.get(file)?.(entryKey);
+}
+
 /**
  * The rows of one collection that are not archived, in collection order. An
  * archive version is terminal by the archive's own rules (a dead entry with no
@@ -439,8 +460,9 @@ function startupSelectionFacts(collection: string, row: unknown): string {
   const value = row as Record<string, unknown>;
   if (collection === "entries") {
     const host = value.structuredHost as { kind?: unknown } | null;
+    const legacyHost = value.host as { kind?: unknown } | null;
     const key = value.key as { engine?: unknown; sessionId?: unknown } | null;
-    return JSON.stringify([host?.kind, key?.engine, key?.sessionId]);
+    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId]);
   }
   if (collection === "conversations") return JSON.stringify([value.id, value.engine,
     (value.generations as Array<{ id: unknown }> | undefined)?.map(generation => generation.id)]);
@@ -1098,7 +1120,7 @@ export class SqliteAgentRegistryStore {
     /* Bound to the file at its name: a registry the activation fallback
        replaced is reopened, never written through the moved handle. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = observeSqlite(new Database(filename, { create: true, strict: true }), "registry");
+      const db = observeRegistryWriter(observeSqlite(new Database(filename, { create: true, strict: true }), "registry"), filename);
       try {
         db.exec(`PRAGMA busy_timeout = ${options.deferColdKeyInitialization ? 0 : 5000}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;`);
         db.exec(`
@@ -1138,7 +1160,7 @@ export class SqliteAgentRegistryStore {
         `);
         if (options.allowArchiveMigration !== false) {
           assertStateStartupMutation(path.dirname(filename),"agent registry archive schema");
-          db.transaction(() => {
+          withStartupTransaction(db, () => {
             installRegistryArchive(db);
             // Older normalizers omit this field. Keep active namespace authority
             // until a current writer has proved and recorded its retirement.
@@ -1153,7 +1175,7 @@ export class SqliteAgentRegistryStore {
               AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
               AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
             BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
-          }).immediate();
+          });
         }
         return db;
       } catch (error) {
@@ -1778,6 +1800,13 @@ export class SqliteAgentRegistryStore {
                 // lifetime to the view; the finalizer closes it after the last
                 // caller releases that immutable view.
                 previousReader.readOnlyCache = null;
+                previousReader.writerSnapshotCache = null;
+                // The finalizer holds this reader until the view and its
+                // collections are released. Drop the reader's own references
+                // to those objects, otherwise it keeps its own lease alive.
+                previousReader.readOnlyHotFile = null;
+                previousReader.coldViewCache = null;
+                previousReader.readerViews.clear();
                 registerRetiredPreparedReader(previousView.file, previousReader);
               } else previousReader.close();
             }
@@ -2149,7 +2178,6 @@ export class SqliteAgentRegistryStore {
     for (const [collection,keys] of named) {
       const kept = this.collectionOrders.get(collection)!;
       const position = this.db.query<{ row_order: number }, [string, string]>("SELECT row_order FROM registry_rows WHERE collection=? AND row_key=?");
-      if (keys.length > 256) { this.collectionOrders.delete(collection); continue; }
       for (const key of keys) {
         yield;
         if (position.get(collection,key)?.row_order !== kept.orders.get(key)) {
@@ -2465,8 +2493,15 @@ export class SqliteAgentRegistryStore {
          holds the archived version it held, or none as before. */
       const kept = this.coldViewCache;
       const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
-      const archiveUnchanged = kept !== null && changes.length <= 256 && changes.every(change => !ROW_COLLECTION_KEYS.has(change.collection)
-        || version.get(change.collection,change.row_key)?.archive_id === kept.coldIds.get(change.collection as RowCollection)?.get(change.row_key));
+      let archiveUnchanged = kept !== null;
+      if (kept) for (const change of changes) {
+        if (ROW_COLLECTION_KEYS.has(change.collection)
+          && version.get(change.collection,change.row_key)?.archive_id !== kept.coldIds.get(change.collection as RowCollection)?.get(change.row_key)) {
+          archiveUnchanged = false;
+          break;
+        }
+        yield;
+      }
       const ownersUnchanged = archiveUnchanged && !ownersChanged;
       const remembered = yield* this.rememberReadOnlySteps({ file,revision,stamp },false,false,{ archiveUnchanged,ownersUnchanged });
       this.snapshotChangeId = this.changeId();
@@ -3133,16 +3168,14 @@ export class SqliteAgentRegistryStore {
           const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
           if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return false;
           if (last === startupSelectionChecked) return true;
+          // Progress can rewrite one host many times while a view prepares.
+          // Bound the rows to revalidate after deduplicating their journal events.
           const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
-            "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq LIMIT 129").all(startupSelectionChecked);
+            "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? LIMIT 129").all(startupSelectionChecked);
           if (changes.length > 128) return false;
           const read = this.db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`);
-          const seen = new Set<string>();
           for (const change of changes) {
             if (!startupSelectionCollections.has(change.collection)) continue;
-            const key = JSON.stringify([change.collection, change.row_key]);
-            if (seen.has(key)) continue;
-            seen.add(key);
             const raw = read.get(change.collection,change.row_key);
             this.onRowPayloadRead?.(change.collection,raw ? 1 : 0);
             const current = raw ? parseSqliteJson(raw.value_json,this.db) : undefined;
@@ -5188,9 +5221,9 @@ export class SqliteAgentRegistryStore {
       fault and keeps running the statements after it (#1974), so a block
       written that way could commit half a migration and its marker. */
   private runAtomically(statements: readonly string[]): void {
-    this.db.transaction(() => {
+    withStartupTransaction(this.db, () => {
       for (const statement of statements) this.db.run(statement);
-    }).immediate();
+    });
   }
 
   private meta(key: string): string | null {

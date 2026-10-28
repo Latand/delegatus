@@ -5,6 +5,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { leaveLessons, projectView, recordLessonRequest } from "@/lib/memory/roleStore";
 import { applyCuration } from "@/lib/memory/curation/apply";
 import { claimPass, patchPass } from "@/lib/memory/curation/store";
@@ -28,7 +29,7 @@ test("Undo pass refuses live passes and agents, then restores the whole complete
   const scope = projectView(source.project).scopes.find(s => s.scope === rule.scope)!;
   applyCuration(pass, { scopes: [{ scope: scope.scope, revision: scope.revision, order: [rule.id] }], rewrite: [{ id: rule.id, rule: original + " Inspect its revision.", note: "The revision binds the write to its reading." }] });
   const request = (ruleId: string, agent = false) => new NextRequest("http://127.0.0.1/api/role-memory", {
-    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "content-type": "application/json", ...(agent ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: Array(43).fill("x").join("") } : {}) },
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "content-type": "application/json", ...(agent ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: Array(43).fill("x").join("") } : { cookie: `llv_operator=${soloBrowserSession()}` }) },
     body: JSON.stringify({ project: source.project, action: "revert-pass", ruleId }),
   });
   expect((await POST(request(pass.id))).status).toBe(409);

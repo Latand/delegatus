@@ -41,3 +41,10 @@ test("live tier refusal names the selected model, account and other models offer
     .toThrow(`selected account "${account.id}": account "account A" (${account.id}): gpt-6-luna offered: priority; ultrafast offered for other models on this account: gpt-6.1-sol`);
   expect(() => assertCatalogOffersTier(catalog, "gpt-6.1-sol", "ultrafast", account.home)).not.toThrow();
 });
+
+test("a message profile does not mutate the next message defaults", () => {
+  const defaults = { model: "model-a", effort: "high" };
+  expect(codexTurnProfile({ model: "model-a", effort: "high", serviceTierForTurn: "priority" }, defaults, catalog)).toMatchObject({ serviceTierForTurn: "priority" });
+  expect(codexTurnProfile(undefined, defaults, catalog)).toEqual({ effort: "high" });
+  expect(defaults).toEqual({ model: "model-a", effort: "high" });
+});

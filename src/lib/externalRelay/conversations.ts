@@ -345,7 +345,7 @@ function reservation(relay: PairedRelay, target: RelayTargetSettings, request: E
       const id = randomUUID(); const now = new Date().toISOString();
       const temporary = path.resolve(os.tmpdir()); const home = path.resolve(os.homedir());
       record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
-        authority, anchors: [], conversationId: null, engine: target.engine!, sessionId: null, accountId: null,
+        authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
         cwd: authority === "owner-tier" ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
       rows.push(record);
@@ -374,7 +374,7 @@ function reservationAsync(relay: PairedRelay, target: RelayTargetSettings, reque
       const id = randomUUID(); const now = new Date().toISOString();
       const temporary = path.resolve(os.tmpdir()); const home = path.resolve(os.homedir());
       record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
-        authority, anchors: [], conversationId: null, engine: target.engine!, sessionId: null, accountId: null,
+        authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
         cwd: authority === "owner-tier" ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
       rows.push(record); changed = true;
@@ -490,7 +490,7 @@ export async function sweepConversationsAsync(relays: PairedRelay[], now: number
         record.state = "idle"; record.runningRequestId = null; changed = true;
       }
       if (record.state === "running") continue;
-      const expired = record.relayId === removeRelayId || !target || target.engine !== record.engine ||
+      const expired = record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine ||
         now - Date.parse(record.lastTurnAt) > 3 * 86400000 || await transcriptBytesAsync(record) > 32 * 1024 * 1024;
       if (expired) { await deleteConversationFilesAsync(record); rows.splice(i, 1); changed = true; }
     }
@@ -503,7 +503,7 @@ function sweepAction(relays: PairedRelay[], runs: RunRecord[], now: number, remo
       const record = rows[i]!; if (onlyRelayId && record.relayId !== onlyRelayId) continue; const relay = relays.find((r) => r.id === record.relayId); const target = relay?.targets.find((t) => t.id === record.targetId);
       if (record.state === "running" && !runs.some((r) => r.requestId === record.runningRequestId)) { record.state = "idle"; record.runningRequestId = null; }
       if (record.state === "running") continue;
-      if (record.relayId === removeRelayId || !target || target.engine !== record.engine || now - Date.parse(record.lastTurnAt) > 3 * 86400000 || sizes && transcriptBytes(record) > 32 * 1024 * 1024) {
+      if (record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine || now - Date.parse(record.lastTurnAt) > 3 * 86400000 || sizes && transcriptBytes(record) > 32 * 1024 * 1024) {
         deleteConversationFiles(record); rows.splice(i, 1);
       }
     }

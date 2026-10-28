@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,7 +17,7 @@ const { leaveLessons, projectView, recordLessonRequest } = await import("@/lib/m
 const PROJECT = "route-trial";
 const post = (body: Record<string, unknown>) => POST(new NextRequest("http://127.0.0.1/api/role-memory", {
   method: "POST",
-  headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "content-type": "application/json" },
+  headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", origin: "http://127.0.0.1", "content-type": "application/json" },
   body: JSON.stringify(body),
 }));
 

@@ -20,12 +20,13 @@ const HANDOFF_HEADINGS = ["## Handoff from your predecessor", "## Rotation histo
     the next begins. */
 const SECTION_HEADING = /^#{1,2} /;
 
-/** The one directive delivery appends WITHOUT a heading
-    (`ORCHESTRATOR_PROTOTYPE_DIRECTIVE` in `prompt.ts`, #2658), as v55 opens
-    it and as earlier versions did. It is the mandate's, and it lands right
-    after a bespoke rotation's handoff, so it closes the handoff the way a
-    heading does. */
-const DELIVERED_PARAGRAPHS = ["Decisions. Every operator decision is a form", "Prototype review: "] as const;
+/** Delivery appends these mandate directives without headings, after a
+    bespoke rotation's handoff. Each closes the handoff the way a heading does. */
+const DELIVERED_PARAGRAPHS = [
+  "When an operator corrects a result or task misread,",
+  "Decisions. Every operator decision is a form",
+  "Prototype review: ",
+] as const;
 
 export interface MandateMessage {
   /** Lines of the WHOLE delivered message, sections included — the size the

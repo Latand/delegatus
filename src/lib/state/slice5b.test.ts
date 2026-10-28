@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { slice5bCases } from "./slice5b.fixture";
+import { assertStateChildSuccess } from "./stateChildResult.fixture";
 import { presetStore } from "@/lib/flows/store";
 import { initializeStateCollections, readStateImport } from "./sqliteStateStore";
 import { resetLegacyDocumentStoresForTests, setLegacyDocumentWriteHookForTests } from "./legacyDocumentStore";
@@ -105,8 +106,7 @@ test("every store reopens in a fresh process using the root database", async () 
     env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect(stderr).toBe("");
-  expect(code).toBe(0);
+  assertStateChildSuccess(code, stderr);
   expect(JSON.parse(stdout)).toEqual(expected);
 });
 
@@ -122,7 +122,7 @@ test("a restart finishes all nine imports interrupted after COMMIT", async () =>
     env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect(stderr).toBe(""); expect(code).toBe(0); expect(JSON.parse(stdout)).toEqual(expected);
+  assertStateChildSuccess(code, stderr); expect(JSON.parse(stdout)).toEqual(expected);
   for (const [name] of slice5bCases) expect(fs.statSync(path.join(root, name)).isDirectory()).toBe(true);
 });
 
@@ -206,8 +206,7 @@ test("a prior atomic preset writer that lands after COMMIT is reconciled before 
     env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect(stderr).toBe("");
-  expect(code).toBe(0);
+  assertStateChildSuccess(code, stderr);
   expect(JSON.parse(stdout)).toEqual(expected);
 });
 
@@ -250,7 +249,7 @@ test("consumed retired preset snapshots do not restore later SQLite deletions af
         env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      expect(stderr).toBe(""); expect(code).toBe(0);
+      assertStateChildSuccess(code, stderr);
       const reopened = JSON.parse(stdout) as { name: string; value: { name: string }[] }[];
       expect(reopened.find(item => item.name === "review-loop-presets.json")?.value.map(item => item.name)).toEqual(["A"]);
     }
@@ -278,7 +277,7 @@ test("a valid predecessor write replacing torn preset JSON is reconciled and sur
     env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect(stderr).toBe(""); expect(code).toBe(0);
+  assertStateChildSuccess(code, stderr);
   const reopened = JSON.parse(stdout) as { name: string; value: { name: string }[] }[];
   expect(reopened.find(item => item.name === "review-loop-presets.json")?.value.map(item => item.name)).toEqual(["A", "B"]);
 });

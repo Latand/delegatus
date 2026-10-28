@@ -1,8 +1,9 @@
+import { withoutOperatorCredentials } from "./operatorCredentials";
 import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipeline } from "node:stream/promises";
-import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
+import { AgentMemoryCell, planAgentMemory, wrapAgentLaunch } from "@/lib/runtime/agentMemory";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -68,8 +69,7 @@ export interface LiveRun {
 export const headlessRuns = new Map<string, LiveRun>();
 
 export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string, omitKeys: readonly string[] = []): NodeJS.ProcessEnv {
-  const env = withoutUnsupportedApiCredentials(base);
-  delete env.LLV_TOKEN;
+  const env = withoutUnsupportedApiCredentials(withoutOperatorCredentials(base));
   /* A headless reviewer is no owner of the operator's state. The Viewer's own
      claim (the image sets it for the whole container) used to ride along, so a
      reviewer's `NODE_ENV=test bun -e` fixture resolved the live task store and
@@ -436,8 +436,8 @@ export function launchDetached(input: {
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     const fixture = headlessFixtureTransport();
     const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
-      const wrapped = wrapAgentCommand(plan, command, args);
-      return (fixture ?? spawn)(wrapped.command, wrapped.args, options);
+      const wrapped = wrapAgentLaunch(plan, command, args, options?.env ?? process.env);
+      return (fixture ?? spawn)(wrapped.command, wrapped.args, { ...options, env: wrapped.env });
     }) as typeof spawn;
     const launchOptions = {
       cwd: input.cwd,

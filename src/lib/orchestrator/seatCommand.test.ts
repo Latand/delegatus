@@ -8,12 +8,14 @@ import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
-import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { procBackend } from "@/lib/proc";
 import { drainFile, writeDrain } from "@/lib/selfUpdate/drain";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { changeConversationSpeed } from "@/lib/runtime/conversationSpeed";
+import type { EngineHost, RuntimeTierRequest } from "@/lib/runtime/engineHost";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
@@ -150,6 +152,15 @@ test("seat command publishes pre-admission evidence for validation and target re
     expect(recorded.deliveries).toEqual([]);
     expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });
   }
+});
+
+test.each([undefined, "", " ", "\n\t"])("a missing or blank mandate %j is refused before the correction upgrade", async (mandate) => {
+  const { deps, recorded } = dependencies();
+  const result = await executeOrchestratorSeatRequest({ ...spawnRequest(), mandate }, deps);
+  expect(result).toEqual({ status: 400, body: { error: "mandate is required", admission: "refused" } });
+  expect(recorded.spawns).toEqual([]);
+  expect(recorded.deliveries).toEqual([]);
+  expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null, history: [] });
 });
 
 interface Recorded {
@@ -291,7 +302,7 @@ test("spawn mode designates and injects together: mandate rides the spawn prompt
   expect(String(recorded.spawns[0]!.prompt)).toStartWith("own the board");
   const { active, pending } = orchestratorSeatFor("proj-a");
   expect(active?.conversationId).toBe(NEW_ID);
-  expect(active?.mandate).toBe("own the board");
+  expect(active?.mandate).toBe(`own the board\n\n${OPERATOR_CORRECTION_RULE}`);
   expect(pending).toBeNull();
 });
 
@@ -450,7 +461,7 @@ test("a completed seat replay repairs a failed registry stamp without revalidati
   expect(recorded.deliveries).toHaveLength(1);
 });
 
-test("a caller-edited current-version mandate receives the status directive without changing stored text", async () => {
+test("a caller-edited current-version mandate stores the correction duty and receives the status directive once", async () => {
   const { deps, recorded } = dependencies();
   const mandate = "custom current-version mandate";
   const result = await executeOrchestratorSeatRequest({
@@ -463,8 +474,9 @@ test("a caller-edited current-version mandate receives the status directive with
   const delivered = String(recorded.spawns[0]!.prompt);
   expect(delivered).toStartWith(mandate);
   expect(delivered.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
+  expect(delivered.split(OPERATOR_CORRECTION_RULE)).toHaveLength(2);
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({
-    mandate,
+    mandate: `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
   });
 });
@@ -647,9 +659,10 @@ test("selecting an EXISTING conversation delivers a caller-edited current-versio
   });
   expect(recorded.deliveries[0]!.text).toStartWith("updated mandate");
   expect(recorded.deliveries[0]!.text.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
+  expect(recorded.deliveries[0]!.text.split(OPERATOR_CORRECTION_RULE)).toHaveLength(2);
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({
     conversationId: OLD_ID,
-    mandate: "updated mandate",
+    mandate: `updated mandate\n\n${OPERATOR_CORRECTION_RULE}`,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
   });
 });
@@ -2917,4 +2930,99 @@ test("an exhausted admission revision replay keeps its own safe cause", async ()
   expect(result.status).toBe(503);
   expect(result.body).toMatchObject({ code: "account_admission_changed", retryable: true, error: new AccountAdmissionChangedError().message });
   expect(recorded.spawns).toHaveLength(1);
+});
+
+
+test("tier roundtrip: create and rotate forward an explicit tier", async () => {
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast" }, deps);
+  expect(recorded.spawns[0]).toMatchObject({ serviceTier: "ultrafast" });
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-rotation", serviceTier: "priority" }, deps);
+  expect(result.status).toBe(200);
+  expect(recorded.spawns[1]).toMatchObject({ serviceTier: "priority" });
+  expect(recorded.spawns[1]).not.toHaveProperty("inheritedServiceTier");
+});
+
+for (const offline of [false, true]) test.each([
+  { selected: "ultrafast", applied: "ultrafast", fast: true },
+  { selected: "priority", applied: "priority", fast: true },
+  { selected: "standard", applied: "default", fast: false },
+  { selected: "default", applied: "default", fast: false },
+])(`selected $selected survives resume and rotation (offline=${offline})`, async ({ selected, applied, fast }) => {
+  const filename = path.join(sandbox, "registry.json");
+  let registry = new AgentRegistry(filename);
+  const transcript = path.join(sandbox, "incumbent.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: true, serviceTier: "priority" });
+  fs.writeFileSync(path.join(sandbox, "models_cache.json"), JSON.stringify({ models: [
+    { slug: "gpt-6.1-sol", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] },
+  ] }));
+  const calls: RuntimeTierRequest[] = [];
+  const host = { setTier: async (request: RuntimeTierRequest) => {
+    request.authorizeDispatch?.();
+    calls.push(request);
+    return { appliedTier: request.serviceTier, echoed: true, cut: "none" as const };
+  } } as unknown as EngineHost;
+  const { deps, recorded } = dependencies({ spawn: async body => {
+    recorded.spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: recorded.spawns.length === 1 ? conversation.id : NEW_ID, path: null } };
+  } });
+  try {
+    expect((await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol" }, deps)).status).toBe(200);
+    const selection = await changeConversationSpeed(conversation.id, selected, "selected-speed", {
+      registry, host: async () => offline ? null : host,
+      accounts: () => [{ id: "account-a", label: "Account A", home: sandbox, kind: "managed", sessionsDir: sandbox,
+        authPresent: true, loginPane: null, createdAt: 0 }],
+    });
+    expect(selection).toMatchObject({ status: 200, body: { appliedTier: applied, echoed: !offline } });
+    expect(calls.map(call => [call.serviceTier, call.cut])).toEqual(offline ? [] : [[applied, "none"]]);
+    registry.close();
+    registry = new AgentRegistry(filename);
+    const generation = registry.conversation(conversation.id)!.generations.at(-1)!;
+    const resumed = await registry.beginSpawnRequestAsync({
+      engine: "codex", cwd: sandbox, accountId: "account-a", conversationId: conversation.id,
+      purpose: "resume-successor", transport: "structured", expectedArtifactPath: transcript,
+      launchProfile: { ...generation.launchProfile, title: "Resume selected speed" },
+    });
+    // The host replaces its input with this receipt before forwarding the tier.
+    expect(resumed.receipt.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    expect(registry.settleSpawn(resumed.receipt.launchId, {
+      key: { engine: "codex", sessionId: generation.id }, artifactPath: transcript, cwd: sandbox,
+      accountId: "account-a", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }).kind).toBe("settled");
+    registry.close();
+    registry = new AgentRegistry(filename);
+    expect(registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    setAgentRegistryForTests(registry);
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "selected-speed-rotation" }, deps)).status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: applied });
+    expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
+    expect(recorded.spawns[1]).not.toHaveProperty("fast");
+  } finally { registry.close(); }
+});
+
+test.each([false, true])("tier roundtrip: rotation inherits the explicit profile, excluding Turbo (turbo=%s)", async turbo => {
+  const { writeSeatTickSettings, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", path.join(sandbox, "incumbent.jsonl"), "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: false, serviceTier: "ultrafast" });
+  const { deps, recorded } = dependencies({ spawn: async body => {
+    recorded.spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: recorded.spawns.length === 1 ? conversation.id : NEW_ID, path: null } };
+  } });
+  try {
+    await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol" }, deps);
+    if (turbo) writeSeatTickSettings("proj-a", { ...defaultSeatTickSettings("proj-a"), turbo: {
+      enabled: true, startedAt: AT, until: null, endedAt: null, endReason: null, updatedAt: AT,
+      setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, why: null, plan: [],
+      credits: { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+      switches: [{ conversationId: conversation.id, accountId: "account-a", model: "gpt-6.1-sol", from: "priority", to: "ultrafast", state: "switched", at: AT }],
+    } });
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-inherited" }, deps);
+    expect(result.status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: turbo ? "priority" : "ultrafast" });
+    expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
+    expect(recorded.spawns[1]).not.toHaveProperty("fast");
+  } finally { registry.close(); }
 });

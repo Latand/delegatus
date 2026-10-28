@@ -373,6 +373,10 @@ interface Props {
   follow: boolean;
   setFollow: (follow: boolean) => void;
   compact?: boolean;
+  /** Archive and relay readers expose no host or delivery actions. */
+  readOnly?: boolean;
+  /** A known retired recipient keeps its messages readable without offering another send. */
+  sendBlockedReason?: string | null;
   /** Opens a fresh editable draft from a terminal structured launch receipt —
       wired through so the launch chips keep their retry inside the window. */
   onLaunchRetry?: () => void;
@@ -391,7 +395,7 @@ interface Props {
 export const JUMP_FADE_PX = 44;
 const JUMP_FADE = `linear-gradient(to bottom, #000 calc(100% - ${JUMP_FADE_PX}px), transparent)`;
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, readOnly = false, sendBlockedReason = null, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -1428,6 +1432,29 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   /* Anything the window shows below the transcript. While it is present an
      empty transcript is not "no output" — it is a conversation mid-launch. */
   const windowTail = assistantHandoff.pending.length > 0 || visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
+  const feedState = !file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty";
+  /* What a first read settles on, after this file's feed showed its
+     skeleton: the phone's chat screen fades it in where it rests
+     (globals.css). A tail read before paints at once and never loads here. */
+  const [loadedFile, setLoadedFile] = useState<string | null>(null);
+  const feedPath = file?.path ?? null;
+  if (feedState === "loading" && loadedFile !== feedPath) setLoadedFile(feedPath);
+  else if (loadedFile !== null && loadedFile !== feedPath) setLoadedFile(null);
+  const feedArrived = loadedFile !== null && loadedFile === feedPath && feedState !== "loading";
+  /* Only what arrives fades in: a child the feed already drew beside its
+     skeleton (the reveal control) stays as it was, and rows
+     that come later are not part of the arrival. Marked before the arrival
+     paints; the stylesheet's fade clears the mark when it ends. */
+  const drawnWhileLoading = useRef<WeakSet<Element>>(new WeakSet());
+  const arrivalMarked = useRef(false);
+  useLayoutEffect(() => {
+    const el = content.current;
+    if (el && feedState === "loading") drawnWhileLoading.current = new WeakSet([...el.children].filter((child) => !child.matches('[data-skeleton="feed"]')));
+    if (el && feedArrived && !arrivalMarked.current) {
+      for (const child of el.children) if (!drawnWhileLoading.current.has(child)) child.setAttribute("data-feed-enter", "");
+    }
+    arrivalMarked.current = feedArrived;
+  });
 
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
@@ -1453,7 +1480,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     ? { label: migrationTargetName(liveMigration) }
     : null;
   const outboxSession = runtimeSession ? { host: runtimeSession.host, turn: runtimeSession.turn } : null;
-  const outboxActions = useOutboxRowActions(memoryKey ?? "", pendingOutbox);
+  const outboxActions = useOutboxRowActions(memoryKey ?? "", pendingOutbox, sendBlockedReason);
   /* The whole window, in one keyed list, in the canonical chronological order
      `orderedConversationTail` owns (round-1 P1#3): the transcript, then the
      launch/delivery chips, then the operator's own unconfirmed messages, then
@@ -2039,7 +2066,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            proves an arrival structurally (#1695) waits for rows, or for the
            empty state an empty transcript settles on. A read that failed is
            neither: it says `error`, and nothing arrives on it. */
-        data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty"}
+        data-feed-state={feedState}
+        data-feed-arrived={feedArrived ? "" : undefined}
+        onAnimationEnd={(event) => {
+          if (event.animationName === "feed-enter") (event.target as Element).removeAttribute("data-feed-enter");
+        }}
         className={compact ? `px-3 ${liveTailPill ? "pb-8" : "pb-3"} text-body` : `mx-auto w-full max-w-[1060px] px-6 ${liveTailPill ? "pb-8" : "pb-4"}`}
       >
         {!file ? (
@@ -2093,7 +2124,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     {mandateCard ? (
                       <MandateCard item={{ kind: "mandate", ts: mandateCard.ts, text: mandateCard.text, mandate: mandateCard.mandate }} />
                     ) : null}
-                    {launchSettled ? null : <LaunchChips launch={launch!} onRetry={onLaunchRetry} />}
+                    {launchSettled ? null : <LaunchChips launch={launch!} onRetry={readOnly ? undefined : onLaunchRetry} />}
                   </div>
                 );
               }
@@ -2105,7 +2136,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   : row.leads && deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
                 return <LiveTurnRows key={row.key} items={row.items} lead={lead} />;
               }
-              if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
+              if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} readOnly={readOnly} />;
               if (row.kind === "message") {
                 /* The operator's own message, in the one shape it ever has.
                    `entry` is the local submission while it is unresolved,
@@ -2127,7 +2158,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                       canonical={row.canonical}
                       switchHold={outboxSwitchHold}
                       session={outboxSession}
-                      actions={outboxActions}
+                      actions={readOnly ? undefined : outboxActions}
+                      readOnly={readOnly}
                     />
                     {row.responseDurationMs !== undefined ? <ResponseDuration durationMs={row.responseDurationMs} /> : null}
                   </div>
@@ -2236,7 +2268,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 ) : null}
               </div>
             )}
-            <ConversationAttention file={file} />
+            {/* Held while a compact feed loads: the card sits under the rows, so
+                it would be drawn below the skeleton and step up to the
+                transcript's end when the read lands. It arrives with the rows,
+                already where it rests. */}
+            {readOnly || (compact && feedState === "loading") ? null : <ConversationAttention file={file} />}
             {feed.items.length && !file.pendingQuestion && !file.waitingInput && endedQuestion ? (
               <div className="my-4 rounded-[8px] border border-border bg-sunken px-4 py-3 text-[13px] font-semibold text-muted">{endedQuestion}</div>
             ) : null}

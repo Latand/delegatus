@@ -38,6 +38,9 @@ import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { captureSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
+import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
+import { readTurboSettings } from "@/lib/monitor/seatTickSettings";
+import { turboActive } from "@/lib/monitor/turbo";
 import { automaticReplacementHold } from "./seatTurnFence";
 
 import {
@@ -1086,8 +1089,9 @@ async function runOrchestratorSeatRequest(
   const project = canonicalOrchestratorProject(namedProject);
   /* Upgraded before preflight and before the durable begin, so a new intent
      records the text it delivers; a replay delivers what its intent recorded. */
-  const mandate = orchestratorMandateUpgraded(typeof rawBody.mandate === "string" ? rawBody.mandate : "");
-  if (!mandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
+  const rawMandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
+  if (!rawMandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
+  const mandate = orchestratorMandateUpgraded(rawMandate);
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
     return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters", admission: "refused" } };
@@ -1329,7 +1333,7 @@ async function runOrchestratorSeatRequest(
      otherwise conflict with its own first attempt. */
   const spawnMandate = orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null);
 
-  const spawnFields = ["cwd", "effort", "fast", "accountId", "images", "roleParams", "allowSubagents"] as const;
+  const spawnFields = ["cwd", "effort", "fast", "serviceTier", "inheritedServiceTier", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
     ? {
         ...(begun.seat.engine ? { engine: begun.seat.engine } : {}),
@@ -1737,6 +1741,21 @@ async function runOrchestratorRotation(
   }
   if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, admission: "refused", rotatedFrom, triggeredBy } };
 
+  let inheritedServiceTier: string | undefined;
+  if (rawBody.fast === undefined && rawBody.serviceTier === undefined && incumbent.engine === "codex"
+    && (rawBody.engine === undefined || rawBody.engine === "codex")
+    && (rawBody.model === undefined || rawBody.model === incumbent.model)) {
+    const generation = agentRegistry().conversation(incumbent.conversationId as `conversation_${string}`)?.generations.at(-1);
+    if (generation && generation.launchProfile.model === incumbent.model) {
+      inheritedServiceTier = launchServiceTier(generation.launchProfile);
+      const turbo = readTurboSettings(project).turbo;
+      const row = turboActive(turbo, Date.now()) ? turbo?.switches.find(row => row.conversationId === incumbent.conversationId
+        && row.accountId === generation.accountId && row.model === generation.launchProfile.model
+        && row.state !== "reverted" && row.state !== "skipped" && row.state !== "failed"
+        && (row.appliedTier === undefined ? row.to : row.appliedTier) === inheritedServiceTier) : undefined;
+      if (row) inheritedServiceTier = row.from ?? undefined;
+    }
+  }
   const outcome = await executeOrchestratorSeatRequest({
     project,
     mandate: composed.mandate,
@@ -1757,6 +1776,8 @@ async function runOrchestratorRotation(
         ? { model: incumbent.model } : {}),
     ...(rawBody.effort !== undefined ? { effort: rawBody.effort } : {}),
     ...(rawBody.fast !== undefined ? { fast: rawBody.fast } : {}),
+    ...(rawBody.serviceTier !== undefined ? { serviceTier: rawBody.serviceTier } : {}),
+    ...(inheritedServiceTier !== undefined ? { inheritedServiceTier } : {}),
     /* Issue #903: a rotation without an explicit cwd continues in the
        predecessor's checkout rather than falling through to the generic
        resolver — the successor inherits the incumbent's mandate, so it

@@ -5,9 +5,11 @@ import path from "node:path";
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
-import { pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
+import { adoptStructuredHostsAtStartup, pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
 import { demoteSkippedStructuredRegistryHosts, reconcileDeadStructuredRegistryHostsOffLoop } from "./registry";
 import { determined } from "./determinable";
+import { handOverHostForDemotion } from "./structuredDeliveryController";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
 const CREATED = new Date(NOW).toISOString();
@@ -201,10 +203,448 @@ test("selection validation covers every membership input and refuses a lost or c
       db.run("DELETE FROM registry_changes");
       expect(registryStartupSelectionUnchanged(view)).toBe(false);
       view=(await store.prepareReadOnlySnapshot()).file;
-      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta','selection-fixture')"); })();
+      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta',?)", [`selection-fixture-${i}`]); })();
       expect(registryStartupSelectionUnchanged(view)).toBe(false);
     } finally {db.close();store.close();}
   } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("repeated host progress keeps the startup selection valid while a later membership change still refuses it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-progress-selection-"));
+  const filename = path.join(root, "registry.sqlite");
+  const initial = seeded(root, 8);
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  try {
+    const view = (await store.prepareReadOnlySnapshot()).file;
+    for (let index = 0; index < 192; index++) peer.mutate(file => {
+      file.entries["codex:reader-0"]!.updatedAt = new Date(Date.UTC(2026, 9, 22) + index * 1000).toISOString();
+    }, false);
+    expect(registryStartupSelectionUnchanged(view)).toBe(true);
+    for (let index = 0; index < 192; index++) peer.mutate(file => {
+      file.entries["codex:reader-0"]!.updatedAt = new Date(Date.UTC(2026, 9, 23) + index * 1000).toISOString();
+    }, false);
+    peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "new-owner"; }, false);
+    expect(registryStartupSelectionUnchanged(view)).toBe(false);
+  } finally { peer.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a prepared membership selection is reused only while its native revision proof stands", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-prepared-memberships-"));
+  const filename = path.join(root, "registry.sqlite");
+  const initial = seeded(root, 8);
+  const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+  try {
+    const selected = await pipelineStartupMembershipsAsync(registry, {}, snapshot);
+    expect(selected.byPipeline.has("lane-0")).toBe(true);
+    expect(preparations).toBe(0);
+    setImmediate(() => peer.mutate(file => { file.memberships.conversation_reader_0![0]!.containerId = "replacement-owner"; }, false));
+    await expect(pipelineStartupMembershipsAsync(registry, {}, snapshot)).rejects.toThrow("changed");
+    const current = await pipelineStartupMembershipsAsync(registry, {}, snapshot);
+    expect(current.byPipeline.has("replacement-owner")).toBe(true);
+    expect(current.byPipeline.get("lane-0")).toEqual(["conversation_reader_alias"]);
+    expect(preparations).toBe(1);
+    // A copied or submitted object has no native proof and cannot choose its
+    // own memberships for admission.
+    const copied = { ...current.snapshot, memberships: {} };
+    expect((await pipelineStartupMembershipsAsync(registry, {}, copied)).byPipeline.has("replacement-owner")).toBe(true);
+    expect(preparations).toBe(2);
+  } finally { observed.mockRestore(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("startup does not prepare an unused snapshot before asking for pipeline evidence", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-evidence-preparation-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let refreshed = false, unrelatedPreparations = 0, initialPreparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
+    if (refreshed) unrelatedPreparations++;
+    else initialPreparations++;
+    return prepare(...args);
+  });
+  const boundary = new Error("pipeline evidence boundary reached");
+  try {
+    await expect(adoptStructuredHostsAtStartup({
+      registry, client: null, orchestratorSeats: () => [],
+      refreshTranscriptState: async () => { refreshed = true; },
+      pipelineEvidence: () => { throw boundary; },
+    })).rejects.toBe(boundary);
+    expect(refreshed).toBe(true);
+    expect(initialPreparations).toBe(1);
+    expect(unrelatedPreparations).toBe(0);
+  } finally { observed.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function emptyJournalClient(journal: import("@/runtime-host/journal").RuntimeJournal) {
+  return {
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    waitEvents: async (after: number) => journal.replay(after),
+    operation: async (event: Parameters<typeof journal.append>[0]) => journal.append(event),
+    command: async (command: Parameters<typeof journal.executeOperation>[0]) => journal.executeOperation(command),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    effectBatch: async () => [],
+  } as unknown as import("./client").RuntimeHostClient;
+}
+
+for (const mode of ["current", "copied", "other-registry", "changed-before-completion", "marker-changed-before-completion", "legacy-changed-before-completion"] as const) test(`startup publication validates its prepared selection (${mode})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-publication-selection-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const other = new AgentRegistry(path.join(root, "other.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), {
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), normalize: normalizeRegistry,
+  });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const client = emptyJournalClient(journal);
+  let preparations = 0;
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let observed: ReturnType<typeof spyOn> | undefined;
+  const repaired: string[] = [];
+  const repair = spyOn(registry, "repairCompletedStructuredSpawnMarkers").mockImplementation(key => {
+    repaired.push(`${key!.engine}:${key!.sessionId}`);
+    return 0;
+  });
+  try {
+    if (mode === "marker-changed-before-completion") registry.upsert(seeded(root, 0).entries["codex:reader-0"]!);
+    if (mode === "legacy-changed-before-completion") {
+      registry.upsert({ ...seeded(root, 0).entries["codex:reader-0"]!, status: "dead", structuredHost: null });
+      while (peer.archiveInactive(1000)) { /* The later host must leave cold storage. */ }
+    }
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+    const snapshot = await prepare();
+    observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+    const completion = completeStructuredDeliveryQueueStartup([], undefined, undefined, undefined, {
+      registry: mode === "other-registry" ? other : registry,
+      snapshot: mode === "copied" ? { ...snapshot } : snapshot,
+    });
+    // The completion starts on its queued turn. A peer can change the facts
+    // after its caller captured the selection and before reuse is admitted.
+    if (mode === "changed-before-completion") peer.mutate(file => {
+      file.memberships.conversation_fixture = [{ conversationId: "conversation_fixture", kind: "pipeline", containerId: "lane-fixture",
+        role: "builder", slot: "build", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null, createdAt: CREATED }];
+    }, false);
+    if (mode === "marker-changed-before-completion") peer.mutate(file => {
+      file.entries["codex:reader-0"]!.pendingAction = "spawn";
+    }, false);
+    if (mode === "legacy-changed-before-completion") peer.mutate(file => {
+      const identity = { pid: 990002, startIdentity: "legacy-fixture", bootEpoch: "fixture" };
+      file.entries["codex:reader-0"]!.host = { kind: "tmux", endpoint: "fixture", server: identity,
+        paneId: "%1", panePid: identity, windowName: "Fixture", agent: identity, argv: [] };
+    }, false);
+    await completion;
+    expect(preparations).toBe(mode === "current" || mode === "marker-changed-before-completion" ? 0 : 1);
+    expect(repaired).toEqual(mode === "marker-changed-before-completion" ? ["codex:reader-0"] : []);
+  } finally {
+    observed?.mockRestore(); repair.mockRestore();
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); peer.close(); other.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const retainedHost of [false, true]) test(`startup finalization reads selected retry rows and captures open receipts before its evidence fence (host=${retainedHost})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+  const { structuredStartupStatus } = await import("./startupStatus");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-empty-finalization-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const client = emptyJournalClient(journal);
+  const preparations: string[] = [];
+  let initialPreparation = true;
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
+    // The initial read precedes this pass's first phase report. Its status
+    // still belongs to the preceding pass, including the previous test case.
+    if (initialPreparation) initialPreparation = false;
+    else preparations.push(structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.phase ?? "initial");
+    return prepare(...args);
+  });
+  let capturedReceipts = false, fencedAfterCapture = false;
+  const open = registry.openSpawnReceipts.bind(registry);
+  const receipts = spyOn(registry, "openSpawnReceipts").mockImplementation(() => {
+    capturedReceipts = true;
+    return open();
+  });
+  try {
+    if (retainedHost) registry.upsert(seeded(root, 0).entries["codex:reader-0"]!);
+    expect(await adoptStructuredHostsAtStartup({
+      registry, client, orchestratorSeats: () => [], adopt: async () => [], adoptClaude: async () => [], schedule: () => ({}),
+      pipelineEvidence: () => {
+        if (capturedReceipts) fencedAfterCapture = true;
+        return { settled: new Set(), deferred: new Set() };
+      },
+    })).toEqual([]);
+    // Publication reuses its validated selection. There is no contested host
+    // or continuation selection to prepare beside it.
+    expect(preparations).not.toContain("finalizing structured delivery");
+    expect(preparations).not.toContain("recovering orchestrator deliveries");
+    expect(preparations).not.toContain("kicking recovered deliveries");
+    expect(preparations).not.toContain("recovering pending spawns");
+    expect(preparations).not.toContain("adopting Claude hosts");
+    // After runtime reads, adoption needs one current view. The identity-only
+    // selectors before it share the validated initial selection.
+    expect(preparations.filter(phase => phase === "refreshing transcripts")).toHaveLength(1);
+    expect(capturedReceipts).toBe(true);
+    expect(fencedAfterCapture).toBe(true);
+  } finally {
+    observed.mockRestore(); receipts.mockRestore();
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restart recognition, transcript refresh and adoption selection read only current hosted conversations", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-hosted-readers-"));
+  const results: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const filename = path.join(directory, "registry.sqlite");
+      const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: seeded(directory, history), normalize: normalizeRegistry });
+      while (store.archiveInactive(1000)) { /* Retained history is deliberately cold. */ }
+      store.close();
+      let reads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
+      });
+      const boundary = new Error("adoption selection reached");
+      try {
+        reads = 0;
+        await expect(adoptStructuredHostsAtStartup({
+          registry, client: null, orchestratorSeats: () => [],
+          pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+          adopt: async () => { throw boundary; },
+        })).rejects.toBe(boundary);
+        results.push(reads);
+      } finally { registry.close(); }
+    }
+    expect(results[0]).toBeGreaterThan(0);
+    expect(results[1]).toBe(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("demotion reads only its own host while a peer advances registry progress", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "demotion-hosted-readers-"));
+  const results: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const filename = path.join(directory, "registry.sqlite");
+      const initial = seeded(directory, history);
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+      let reads = 0, healthReads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
+      });
+      const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      const owner = captureProcessIdentity(process.pid);
+      const current = { status: "idle" as const, sessionKey: "reader-0", endpoint: "fixture", pid: owner.pid,
+        processStartIdentity: owner.startIdentity, eventCursor: 0, protocolVersion: null,
+        activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null };
+      try {
+        reads = 0;
+        expect(await handOverHostForDemotion(registry, { engine: "codex", sessionId: "reader-0" }, current, { seats: () => [] }, async () => {
+          await Promise.resolve();
+          peer.mutate(file => { file.entries["codex:reader-0"]!.updatedAt = "2026-10-25T00:00:00.000Z"; }, false);
+          healthReads++;
+          return current;
+        })).toBe(false);
+        expect(healthReads).toBe(1);
+        results.push(reads);
+      } finally { peer.close(); registry.close(); }
+    }
+    expect(results[0]).toBeGreaterThan(0);
+    expect(results[1]).toBe(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("startup terminal selection reads current uncertain and failed deliveries without retained delivered payloads", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-terminal-readers-"));
+  const reads: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const initial = seeded(directory, 1);
+      for (let index = 0; index < history + 2; index++) {
+        const id = `terminal-fixture-${index}`;
+        initial.heldDeliveries[id] = {
+          id, conversationId: "conversation_reader_0", runtimeConversationId: "conversation_reader_0", text: "Fixture",
+          createdAt: CREATED, clientMessageId: id, payloadKind: "text", runtimeImages: [], contentDigest: null, artifactPaths: [],
+          command: { operationId: `terminal-operation-${index}`, kind: "send", policy: "queue" }, requestDigest: null,
+          state: index === 0 ? "failed" : index === 1 ? "delivery-uncertain" : "delivered", generationId: "reader-0",
+          attempts: 1, assignedAt: CREATED, deliveredAt: index > 1 ? CREATED : null, error: index === 0 ? "fixture failure" : null,
+        };
+      }
+      const filename = path.join(directory, "registry.sqlite");
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      while (seed.archiveInactive(1000)) { /* Keep delivered history cold. */ } seed.close();
+      let payloads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (_collection, count) => { payloads += count; },
+      });
+      const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      const select = () => typeof registry.terminalDeliveryCandidates === "function" ? registry.terminalDeliveryCandidates()
+        : Object.values(registry.readOnlySnapshot().heldDeliveries).filter(row => row.state === "failed" || row.state === "delivery-uncertain");
+      try {
+        payloads = 0;
+        expect(select().map(row => row.id).sort()).toEqual(["terminal-fixture-0", "terminal-fixture-1"]);
+        expect(registry.deadSupersededHeldDeliveryCandidates()).toEqual([]);
+        reads.push(payloads);
+        peer.mutate(file => {
+          file.heldDeliveries["terminal-fixture-0"]!.state = "delivered";
+          file.heldDeliveries["terminal-fixture-2"]!.state = "failed";
+        }, false);
+        expect(select().map(row => row.id).sort()).toEqual(["terminal-fixture-1", "terminal-fixture-2"]);
+      } finally { peer.close(); registry.close(); }
+    }
+    expect(reads[0]).toBeGreaterThan(0);
+    expect(reads[1]).toBe(reads[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("historical fallback publication selects current structured and legacy hosts without decoding retained conversations", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-fallback-readers-"));
+  const reads: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const initial = seeded(directory, history);
+      initial.receipts = {}; initial.memberships = {}; initial.conversationAliases = {};
+      const identity = { pid: 990002, startIdentity: "legacy-fixture", bootEpoch: "fixture" };
+      initial.entries["codex:reader-1"]!.host = { kind: "tmux", endpoint: "fixture", server: identity,
+        paneId: "%1", panePid: identity, windowName: "Fixture", agent: identity, argv: [] };
+      // An old generation's structured row is retained, while the current
+      // generation has no host and must receive no fallback publication.
+      initial.entries["codex:reader-2"]!.structuredHost = { ...initial.entries["codex:reader-0"]!.structuredHost!, process: null };
+      const conversation = initial.conversations.conversation_reader_2!;
+      conversation.generations.push({ ...conversation.generations[0]!, id: "reader-2-current", path: "/fixture/2-current.jsonl" });
+      const shared = initial.conversations.conversation_reader_4!;
+      shared.generations.push({ ...shared.generations[0]!, id: "reader-4-current", path: "/fixture/4-current.jsonl" });
+      initial.entries["codex:reader-4"]!.structuredHost = { ...initial.entries["codex:reader-0"]!.structuredHost!, process: null };
+      initial.entries["codex:reader-4-current"] = { ...initial.entries["codex:reader-4"]!,
+        key: { engine: "codex", sessionId: "reader-4-current" }, artifactPath: "/fixture/4-current.jsonl", status: "idle" };
+      const seed = new SqliteAgentRegistryStore(path.join(directory, "registry.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry });
+      while (seed.archiveInactive(1000)) { /* Retain hostless history cold. */ } seed.close();
+      let inPublication = false, payloads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", now: () => NOW, onSqliteRowPayloadRead: (collection, count) => {
+          if (inPublication && (collection === "entries" || collection === "conversations")) payloads += count;
+        },
+      });
+      const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { now: () => NOW });
+      const published: string[] = [];
+      const client = { ...emptyJournalClient(journal),
+        append: async (event: Parameters<typeof journal.append>[0]) => {
+          if (event.kind === "session-status") published.push(String(event.payload.conversationId));
+          return journal.append(event);
+        },
+      } as import("./client").RuntimeHostClient;
+      try {
+        await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+          watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+        await completeStructuredDeliveryQueueStartup([], phase => {
+          inPublication = phase === "publishing historical host fallbacks";
+        });
+        expect(published.sort()).toEqual(["conversation_reader_0", "conversation_reader_1", "conversation_reader_4"]);
+        reads.push(payloads);
+      } finally {
+        await bindStructuredDeliveryQueue([]);
+        journal.close(); registry.close();
+      }
+    }
+    expect(reads[0]).toBeGreaterThan(0);
+    expect(reads[1]).toBe(reads[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const confirmed of [false, true]) test(`startup terminal reconciliation retains operation-bound recipient evidence (confirmed=${confirmed})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
+  const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-terminal-evidence-"));
+  const initial = seeded(root, 0);
+  const conversation = initial.conversations.conversation_reader_0!;
+  conversation.engine = "claude";
+  const generationId = `terminal-evidence-${confirmed}`;
+  conversation.generations[0]!.id = generationId;
+  const entry = initial.entries["codex:reader-0"]!;
+  entry.key = { engine: "claude", sessionId: generationId };
+  entry.structuredHost = { ...entry.structuredHost!, kind: "claude-broker", process: null };
+  initial.entries = { [`claude:${generationId}`]: entry };
+  fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(initial));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", now: () => NOW });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true, now: () => NOW });
+  const operationId = `terminal-evidence-operation-${confirmed}`;
+  const text = "Retain the confirmed delivery";
+  try {
+    const delivery = registry.holdDelivery(conversation.id, text, operationId, "text", [], null,
+      { operationId, kind: "send", policy: "queue" });
+    registry.beginDeliveryAttempt(delivery.id, generationId);
+    journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: entry.key, hostKind: "claude-broker", host: "hosted", turn: "idle", provenance: "structured",
+    } });
+    journal.executeOperation({ kind: "send", operationId, conversationId: conversation.id, idempotencyKey: operationId, text, policy: "queue" });
+    journal.transitionOperation(operationId, "delivering");
+    journal.transitionOperation(operationId, "uncertain", { reason: "fixture delivery uncertain" });
+    registry.recordDeliveryOutcome(delivery.id, "failed", "fixture delivery uncertain", "unverified");
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(generationId, { id: operationId, text }, "turn-started");
+    if (confirmed) expect(ledger.confirmDelivered(generationId, operationId, "terminal-evidence-user", "operation-bound")).toBe("accepted");
+    const client = { ...emptyJournalClient(journal),
+      append: async (event: Parameters<typeof journal.append>[0]) => journal.append(event),
+      transitionOperation: async (id: string, status: Parameters<typeof journal.transitionOperation>[1], details: Parameters<typeof journal.transitionOperation>[2], options: Parameters<typeof journal.transitionOperation>[3]) => journal.transitionOperation(id, status, details, options),
+    } as import("./client").RuntimeHostClient;
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(registry.deliverySnapshotForOperation(operationId).heldDeliveries[delivery.id]!.state).toBe(confirmed ? "delivered" : "failed");
+    expect(journal.operationResult(operationId)!.receipt.status).toBe(confirmed ? "delivered" : "uncertain");
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime startup evidence reads hosted aliases and owed conversations without expanding retained history", async () => {
+  const { structuredStartupSignals } = await import("./startup");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-hosted-readers-"));
+  const results: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const initial = seeded(directory, history);
+      initial.conversations.conversation_reader_alias = { ...initial.conversations.conversation_reader_1!, id: "conversation_reader_alias" };
+      const filename = path.join(directory, "registry.sqlite");
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      while (seed.archiveInactive(1000)) { /* Keep unrelated payloads cold. */ } seed.close();
+      let reads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
+      });
+      const selected: string[] = [];
+      const client = { readSession: async (identity: { conversationId: string }) => { selected.push(identity.conversationId); return null; },
+        effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
+      try {
+        reads = 0;
+        const signals = await structuredStartupSignals(registry, client, new Set(["conversation_reader_7"]));
+        expect(selected.sort()).toEqual(["conversation_reader_0", "conversation_reader_7", "conversation_reader_alias"]);
+        expect(signals.pendingOperationConversationIds.size).toBe(0);
+        results.push(reads);
+      } finally { registry.close(); }
+    }
+    expect(results[0]).toBeGreaterThan(0);
+    expect(results[1]).toBe(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 
@@ -451,32 +891,37 @@ test("spawn recovery selection services timers between keyed batches without los
 });
 
 
-for (const engine of ["codex", "claude"] as const) test(`${engine} adoption prepares selection once and checks each admission with keyed evidence`, async () => {
+for (const engine of ["codex", "claude"] as const) for (const prepared of [false, true]) for (const revoked of [false, true]) test(`${engine} adoption prepares selection once and checks each admission with keyed evidence (prepared=${prepared}, revoked=${revoked})`, async () => {
   const { adoptCodexRegistryHosts, adoptClaudeRegistryHosts } = await import("./registry");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-admission-selection-"));
   try {
     const file = seeded(root, 1);
     const rows = Object.values(file.entries).map(entry => ({ ...entry, key: { ...entry.key, engine },
-      status: "idle" as const, claimOwner: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" }, claimEpoch: 1,
+      status: "idle" as const, claimOwner: JSON.stringify({ pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" }), claimEpoch: 1,
       structuredHost: { ...file.entries["codex:reader-0"]!.structuredHost!, kind: engine === "codex" ? "codex-app-server" as const : "claude-broker" as const,
         process: null, endpoint: "stdio:released" } }));
-    const view = { ...file, entries: Object.fromEntries(rows.map(entry => [`${engine}:${entry.key.sessionId}`, entry])) };
+    const view: RegistryFile = { ...file, entries: Object.fromEntries(rows.map(entry => [`${engine}:${entry.key.sessionId}`, entry])) };
     let preparations = 0, admissions = 0;
     const registry = {
       prepareReadOnlySnapshot: async () => { if (++preparations > 1) throw new Error("admission repeated the registry preparation"); return view; },
       structuredHostEntries: () => rows,
       startupHostSnapshot: () => view,
-      withOperationLock: async (_key: unknown, _owner: unknown, work: () => Promise<void>) => work(),
+      withOperationLock: async (key: { sessionId: string }, _owner: unknown, work: () => Promise<void>) => {
+        await Promise.resolve();
+        if (revoked) view.entries[`${engine}:${key.sessionId}`]!.structuredHost = null;
+        return work();
+      },
       deliveryWriteOrBusy: async (_options: unknown, work: () => unknown) => work(),
       setStructuredHostClaimed: () => null,
     } as unknown as AgentRegistry;
     const adopt = engine === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
     await adopt(registry, async () => { throw new Error("refused admission reached options"); }, { NODE_ENV: "test" }, () => true, undefined, {
+      ...(prepared ? { preparedSnapshot: view } : {}),
       claimHost: async entry => entry,
       admit: () => { admissions++; return { error: "fixture admission refused" }; },
     });
-    expect(preparations).toBe(1);
-    expect(admissions).toBe(rows.length);
+    expect(preparations).toBe(prepared ? 0 : 1);
+    expect(admissions).toBe(revoked ? 0 : rows.length);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -545,7 +990,7 @@ test("startup connector admission rereads only its keyed host and still refuses 
 });
 
 
-test("startup signal selection and post-RPC evidence prepare snapshots instead of refreshing synchronously", async () => {
+for (const outcome of ["none", "delivered", "safe", "uncertain"] as const) test(`startup signals prepare settlement evidence only for an ambiguous failure (${outcome})`, async () => {
   const { structuredStartupSignals } = await import("./startup");
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   let preparations = 0;
@@ -554,12 +999,81 @@ test("startup signal selection and post-RPC evidence prepare snapshots instead o
     prepareReadOnlySnapshot: async () => { preparations++; return file; },
     canonicalConversationId: (id: string) => id,
   } as unknown as AgentRegistry;
-  const client = { readSession: async () => null, effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
+  const client = { snapshot: async () => ({ sessions: [], recentOperations: outcome === "none" ? [] : [{
+    kind: "send", status: outcome === "delivered" ? "delivered" : "failed", resend: outcome === "safe" ? "safe" : outcome === "delivered" ? "not-needed" : "verify-first",
+    operationId: "signal-fixture-operation", idempotencyKey: "signal-fixture-message", conversationId: "conversation_signal_fixture", at: CREATED,
+  }] }), effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
   const signals = await structuredStartupSignals(registry, client);
   expect(signals.pendingOperationConversationIds.size).toBe(0);
-  expect(preparations).toBe(2);
+  expect(preparations).toBe(outcome === "uncertain" ? 2 : 1);
+  expect(signals.admittedMessages.get("conversation_signal_fixture")?.[0]?.pending).toBe(outcome === "none" ? undefined : outcome === "uncertain");
+  if (outcome === "uncertain") {
+    preparations = 0;
+    registry.prepareReadOnlySnapshot = async () => {
+      if (++preparations === 2) throw new Error("settlement evidence refused");
+      return file;
+    };
+    await expect(structuredStartupSignals(registry, client)).rejects.toThrow("settlement evidence refused");
+  }
   registry.prepareReadOnlySnapshot = async () => { throw new Error("phase snapshot refused"); };
   await expect(structuredStartupSignals(registry, client)).rejects.toThrow("phase snapshot refused");
+});
+
+test("startup signal identity selection reuses a validated view and refreshes moved membership", async () => {
+  const { structuredStartupSignals } = await import("./startup");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-signal-selection-"));
+  const initial = seeded(root, 32);
+  const filename = path.join(root, "registry.sqlite");
+  const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+  try {
+    peer.mutate(file => { file.entries["codex:reader-0"]!.updatedAt = "2026-10-25T00:00:00.000Z"; }, false);
+    await structuredStartupSignals(registry, emptyJournalClient(journal), new Set(), null, snapshot);
+    expect(preparations).toBe(0);
+    peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-lane"; }, false);
+    await structuredStartupSignals(registry, emptyJournalClient(journal), new Set(), null, snapshot);
+    expect(preparations).toBe(1);
+    observed.mockImplementation(async () => { throw new Error("selection refresh refused"); });
+    await expect(structuredStartupSignals(registry, emptyJournalClient(journal), new Set(), null, snapshot))
+      .rejects.toThrow("selection refresh refused");
+  } finally {
+    observed.mockRestore(); journal.close(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const mode of ["dead", "demote"] as const) test(`startup ${mode} selection reuses its view and refuses an unavailable refresh`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-reconcile-selection-"));
+  const initial = seeded(root, 8);
+  const filename = path.join(root, "registry.sqlite");
+  const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+  const run = () => mode === "dead"
+    ? reconcileDeadStructuredRegistryHostsOffLoop(registry, () => true, () => {}, snapshot)
+    : demoteSkippedStructuredRegistryHosts(registry, () => true, undefined, undefined, undefined, undefined, snapshot);
+  try {
+    await run();
+    expect(preparations).toBe(0);
+    expect(registry.startupHostSnapshot({ engine: "codex", sessionId: "reader-0" }).entries["codex:reader-0"]?.status).toBe("idle");
+    peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-lane"; }, false);
+    await run();
+    expect(preparations).toBe(1);
+    observed.mockImplementation(async () => { throw new Error("reconciliation selection refused"); });
+    await expect(run()).rejects.toThrow("reconciliation selection refused");
+  } finally {
+    observed.mockRestore(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("startup host selection yields while materializing rows before its mutation loop", async () => {

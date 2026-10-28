@@ -27,7 +27,7 @@ Implementation notes for [`../task-centered-board.md`](../task-centered-board.md
 
 ## Evidence
 
-`evidence.json` is written by `scripts/capture-issue-1586-task-bands.ts`, which serves the production build against a synthetic home under the temp root, seeds one project with 25 invented tasks and 100 Claude transcripts (a 24-member band, a conversation shared by two tasks, working and idle turns), and drives the real board with the locally cached Chromium.
+`evidence.json` was written by a one-shot capture script (`scripts/capture-issue-1586-task-bands.ts`, since removed with no caller), which served the production build against a synthetic home under the temp root, seeded one project with 25 invented tasks and 100 Claude transcripts (a 24-member band, a conversation shared by two tasks, working and idle turns), and drove the real board with the locally cached Chromium.
 
 | Check | Result |
 | --- | --- |
@@ -40,15 +40,7 @@ Implementation notes for [`../task-centered-board.md`](../task-centered-board.md
 | Draft pane on the dock-narrowed board | opened from the dense band's «+ Agent» at 100%: on the 752px board the 600px pane fits at natural size inside its 720px band; after resizing the window to 1024px (board 416px, band 384px) the pane is scaled to 0.59 (352px) and stays inside the band |
 | Phone viewports | the mobile focus view renders; the band board is a desktop surface |
 
-The PNG frames stay local: the publication gate accepts only rasters it can reproduce from a deterministic generator, and browser screenshots are not that. Reproduce with:
-
-```
-bun run build
-bun scripts/capture-issue-1586-task-bands.ts            # dense: 25 tasks / 100 conversations
-BANDS_DENSITY=six bun scripts/capture-issue-1586-task-bands.ts
-```
-
-Frames land in `<tmp>/llv-issue-1586-*/out`; the evidence JSON is rewritten in this directory.
+The PNG frames stayed local: the publication gate accepts only rasters it can reproduce from a deterministic generator, and browser screenshots are not that. The committed `evidence.json` is the record; new band evidence is a case in the kanban board browser test (`src/components/kanban/kanbanBoard.browser.test.tsx`).
 
 Unit and DOM coverage: `src/lib/tasks/membership.test.ts` (placeholder, replay, identity fill, explicit targets, limit exemption, admission planning, 1,000 imports in batches, interrupted durable pass), `src/lib/tasks/launchMembership.test.ts` (attempt/launch keys, explicit project, bound pipeline tasks, container fallbacks, failure retires the receipt), `src/lib/tasks/launchMembership.registry.test.ts` (the membership committed inside the reservation, a deleted target refused, a queued launch rebound before actuation, an unwritable store failing the receipt), `src/app/api/spawn/membership.test.ts` (the body's task is the reservation's explicit target, a blank one is no target, cross-site rejected before any reservation), `taskBands.test.ts` (membership, provenance, mirrors, host overrides, continuations, ranking, hysteresis, wrapping at 375–1920, +Agent placement, 350 tasks / 1,000 conversations), `SchemeBoard.bands.dom.test.tsx` (mounted ranking, chip mode, both-axes anchor through wheel/toolbar/mode crossings, zoom without a selection, band-local add-agent), and the adjusted camera suite.
 
