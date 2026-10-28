@@ -887,10 +887,7 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   expect(result.status).toBe(200);
   expect(result.body.rotatedFrom).toMatchObject({ conversationId: NEW_ID });
   const spawnedPrompt = String(recorded2[0]!.prompt);
-  /* Successor mandate = incumbent mandate + bounded handoff naming the
-     predecessor, its MCP read, where the board report comes from and the
-     caller's notes. */
-  expect(spawnedPrompt).toStartWith("own the board");
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(ORCHESTRATOR_PROMPT_VERSION);
   expect(spawnedPrompt).toContain(NEW_ID);
   expect(spawnedPrompt).toContain(`conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${NEW_ID}","conversationId":"${NEW_ID}","roles":["user","assistant"],"limit":40})`);
   expect(spawnedPrompt).not.toContain(`/tmp/${NEW_ID.slice(-4)}.jsonl`);
@@ -2123,7 +2120,7 @@ test("AC3: a throwing summarizer never blocks the rotation", async () => {
     summarizeHandoffs: async () => { throw new Error("headless runner is unreachable"); },
   });
 
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001026" }, deps);
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001026", mandate: stackedMandate("own the board", 2) }, deps);
 
   expect(rotated.status).toBe(200);
   expect(rotated.body.handoff).toMatchObject({ history: "fallback", reason: "error" });
@@ -2292,6 +2289,7 @@ test("AC5: retrying a failed rotation with its OWN key delivers the recomposed m
   const failed = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00001061",
+    mandate: stackedMandate("own the board", 3),
     handoffNotes: "first attempt",
   }, failing.deps);
 
@@ -2308,6 +2306,7 @@ test("AC5: retrying a failed rotation with its OWN key delivers the recomposed m
   const rotated = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00001061",
+    mandate: stackedMandate("own the board", 3),
     handoffNotes: "second attempt",
   }, retry.deps);
 
@@ -2483,7 +2482,7 @@ test("a rotation whose summarizer is slow cannot revoke the designation that set
   });
   const second = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001203" }, retried.deps);
   expect(second.status).toBe(200);
-  expect(String(retried.recorded.spawns[0]!.prompt)).toStartWith("own the board, freshly designated");
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(ORCHESTRATOR_PROMPT_VERSION);
   expect(orchestratorSeatFor("proj-a").active!.conversationId).toBe(successorId(22));
 });
 
