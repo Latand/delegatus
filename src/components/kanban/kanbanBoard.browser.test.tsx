@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import type { Browser, LaunchOptions, Page } from "playwright-core";
+import type { Browser, LaunchOptions, Locator, Page } from "playwright-core";
 
 import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
 import { translate } from "@/lib/i18n";
@@ -7797,6 +7797,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     activity: { desktop: "[data-rail-menu-activity]", phone: "[data-mobile2-menu-row='activity']" },
     team: { desktop: "[data-rail-menu-team]", phone: "[data-mobile2-menu-row='team']" },
     signOut: { desktop: "[data-rail-menu-sign-out]", phone: null },
+    stop: { desktop: "[data-rail-menu-stop-all]", phone: "[data-mobile2-menu-row='stop-all']" },
   };
 
   const caption = (text: string, width: number, height = 26, size = 13) => Buffer.from(
@@ -7862,6 +7863,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       },
       "/api/team": { mode: "team", me: { id: "member-1", name: "Fixture member", role: "owner", telegram: null }, members: [], methods: {} },
       "/api/telemetry": { enabled: true, locked: false, noticeDismissed: true },
+      /* «Stop Delegatus» as the route answers a confirmed stop; nothing is stopped here. */
+      "/api/stop-all": () => Response.json({ started: true, report: "stop-all.log" }, { status: 202 }),
       /* The installation's memory source row (memory-source-switch.md §3.4), before any choice: its longest resting line. */
       "/api/memory/source": { choice: null, phase: null },
     });
@@ -7967,6 +7970,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             if (!await page.locator(`${PANEL} [data-rail-menu-sign-out]`).count()) failures.push(`${tag}: no Sign out for a signed-in member`);
             await capture(page, at, "desktop", "help-member", now);
             await page.locator("[data-rail-menu-help]").click();
+            /* «Stop Delegatus» asks under its own row, and its answer stays there. */
+            await page.locator("[data-rail-menu-stop-all]").click();
+            await page.locator("[data-stop-all-go]").waitFor();
+            await capture(page, at, "desktop", "stop-ask", now);
+            await page.locator("[data-stop-all-go]").click();
+            await page.locator("[data-stop-all-text][role=status]").waitFor();
+            if ((await page.locator("[data-stop-all-text]").textContent())?.trim() !== translate(lang, "headerMenu.stopAll.started")) failures.push(`${tag}: the started stop is not told in words`);
+            await capture(page, at, "desktop", "stop-started", now);
           } else await capture(page, at, "desktop", `rest-${now}`, now);
           await page.locator("[data-rail-menu-settings]").click();
           await page.locator("[data-rail-menu-back]").waitFor();
@@ -8060,6 +8071,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          if (now === "working") {
+            /* On the phone the question is a page of Settings; Cancel returns to it. */
+            await page.locator(`${SHEET} [data-mobile2-menu-row="stop-all"]`).click();
+            await page.locator(`${SHEET} [data-stop-all-go]`).waitFor();
+            await capture(page, at, "phone", "stop-ask", now);
+            await page.locator(`${SHEET} [data-stop-all-cancel]`).click();
+            await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).waitFor();
+          }
           await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
@@ -8108,7 +8127,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         states.find((entry) => entry.surface === surface && entry.frame === frame && entry.lang === lang && entry.state === state && entry.scheme === scheme);
       for (const lang of ["en", "uk"] as const) {
         const uk = lang === "uk";
-        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-keys", "keys-invalid", "memory-capped", "keys", "keys-replace", "keys-missing"];
+        const order = ["rest", "help-member", "stop-ask", "stop-started", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-keys", "keys-invalid", "memory-capped", "keys", "keys-replace", "keys-missing"];
         const cells = [];
         for (const state of order) {
           const entry = of("desktop", "1440", lang, state);
@@ -8116,7 +8135,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         }
         await sheet(path.join(out, `sheet-built-desktop-${lang}.png`), uk ? "Меню заголовка, зібране: стани · 1440×900 · світла" : "The header's menu, built: its states · 1440×900 · light", 6, cells);
         const phoneCells = [];
-        for (const state of ["rest", "help", "settings", "memory-working", "memory-noKey-keys", "memory-capped", "keys", "rules"]) {
+        for (const state of ["rest", "help", "settings", "stop-ask", "memory-working", "memory-noKey-keys", "memory-capped", "keys", "rules"]) {
           const entry = of("phone", "390", lang, state);
           if (entry) phoneCells.push({ label: `${state} · ${Math.round(entry.box[3])} px`, ...(await crop(path.join(out, entry.file), [0, 0, 390, 844], 0)) });
         }
@@ -19659,6 +19678,183 @@ describe("fast TTS header", () => {
   }, 120_000);
 });
 
+/* Ultra on the seat's speed control (2026-10-26), at 1280, 768 and 390 in both
+   languages and themes: S1 offered, S2 just picked (pending on its row in the phone's
+   sheet), S3 applied (named on the phone's face and sheet summary), S4 unavailable on a
+   priority-only account with its reason as visible text and reached by the arrow keys,
+   S5 refused and rolled back with the localized reason beside the rows it was picked in, S6 the
+   create (Ultrafast in its Runs on line) and rotate drafts with Ultra chosen and a rotation left on the inherited tier. Every changed string is
+   measured as whole text inside the window and its popover or sheet. */
+async function captureUltraSpeedStates(browser: Browser, base: string, out: string) {
+  const frames: Record<string, unknown>[] = [];
+  const HEIGHT = 844;
+  for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) for (const width of [1280, 768, 390]) {
+    const phone = width === 390;
+    const ultraText = translate(locale, "composer.speedUltraTier");
+    const shot = async (page: Page, state: string, facts: Record<string, unknown>, measured: string[]) => {
+      const whole = await page.evaluate((selectors) => selectors.map((selector) => {
+        const element = document.querySelector(selector);
+        if (!element || !element.textContent?.trim()) return { selector, whole: false, reason: "missing" };
+        const range = document.createRange(); range.selectNodeContents(element);
+        const box = element.closest("[data-runtime-sheet], [data-runtime-popover]")?.getBoundingClientRect() ?? null;
+        const cut = [...range.getClientRects()].filter((rect) => rect.width > 0).find((rect) => rect.left < 0 || rect.top < 0 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5
+          || (box && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)));
+        /* An ellipsis keeps every rect inside the box and still drops the end of the text. */
+        const clipped = [element, ...element.querySelectorAll("*")].some((node) => getComputedStyle(node).textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 0.5);
+        return { selector, whole: !cut && !clipped, text: element.textContent };
+      }), measured);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+      const popover = await page.locator("[data-runtime-popover]").count() ? await page.locator("[data-runtime-popover]").boundingBox() : null;
+      const file = `ultra-${state}-${locale}-${theme}-${width}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      for (const item of whole) expect(item, `${state} ${locale} ${theme} ${width}`).toMatchObject({ whole: true });
+      expect(overflow).toBeFalse();
+      if (popover) { expect(popover.y).toBeGreaterThanOrEqual(0); expect(popover.y + popover.height).toBeLessThanOrEqual(HEIGHT); expect(popover.x + popover.width).toBeLessThanOrEqual(width); }
+      frames.push({ state, locale, theme, width, frame: file, ...facts, measured: whole.map(({ selector, text }) => ({ selector, text })) });
+    };
+    const seat = async (query: string) => openFixture(browser, `${base}?scenario=service-tier&speed=1${query}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+    const ultraRow = phone ? '[data-runtime-sheet-value="ultrafast"]' : '[data-runtime-row="speed"][data-runtime-value="ultrafast"]';
+    const openSpeed = async (page: Page) => {
+      await page.locator("[data-runtime-pill]").click();
+      if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
+      await page.locator(ultraRow).waitFor();
+      /* Settled: the catalog answered, so Ultra is enabled or carries its reason. */
+      await page.waitForFunction((selector) => document.querySelector(selector)!.getAttribute("aria-disabled") !== "true" || !!document.querySelector("[data-runtime-row-note]") || document.querySelector(selector)!.getAttribute("aria-checked") === "true", ultraRow);
+      if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
+    };
+    const facts = async (page: Page) => ({
+      face: await page.locator("[data-runtime-pill]").getAttribute("aria-label"),
+      ultra: await page.locator(ultraRow).count() ? await page.locator(ultraRow).evaluate((row) => ({ text: row.textContent, disabled: row.getAttribute("aria-disabled") === "true", checked: row.getAttribute("aria-checked") })) : null,
+      note: await page.locator("[data-runtime-row-note]").count() ? await page.locator("[data-runtime-row-note]").textContent() : null,
+    });
+    const label = `${ultraRow} [data-runtime-row-label], ${ultraRow} > span`;
+
+    { // S1: standard applied on Account B, whose catalog lists ultrafast.
+      const { context, page, pageErrors } = await seat("");
+      try {
+        await openSpeed(page);
+        const read = await facts(page);
+        expect(read.ultra).toEqual({ text: ultraText, disabled: false, checked: "false" });
+        expect(read.note).toBeNull();
+        await shot(page, "s1-offered", read, [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S2: Ultra just picked, the speed action still answering: checked at once, the face names it.
+      const { context, page, pageErrors } = await seat("&speedanswer=hold");
+      try {
+        await openSpeed(page);
+        await page.locator(ultraRow).click();
+        await page.locator("[data-runtime-switch-pending]").waitFor();
+        expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).toContain("Ultrafast");
+        /* The rows stay open until the action answers, with Ultra checked. */
+        expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("true");
+        /* The sheet covers the face's «switch pending», so the tapped row says it. */
+        if (phone) expect(await page.locator(`${ultraRow} [data-runtime-sheet-pending]`).textContent()).toBe(translate(locale, "runtimeConfig.pending"));
+        await shot(page, "s2-picked", await facts(page), phone ? [label, `${ultraRow} [data-runtime-sheet-pending]`] : [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S3: Ultra applied, as the conversation reports it.
+      const { context, page, pageErrors } = await seat("&tier=ultrafast");
+      try {
+        expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+        /* The phone's face, before its sheet covers it. */
+        if (phone) await shot(page, "s3-face", { faceText: await page.locator("[data-runtime-pill]").textContent() }, ["[data-runtime-pill]"]);
+        await openSpeed(page);
+        const read = await facts(page);
+        expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
+        expect(await page.locator("[data-runtime-sheet-pending]").count()).toBe(0);
+        /* The phone's sheet says the applied tier in the line it opens with, as the face does. */
+        const summary = phone ? await page.locator("[data-mobile2-next-message]").textContent() : null;
+        if (phone) expect(summary).toContain("· Ultrafast");
+        await shot(page, "s3-applied", { ...read, summary, faceText: await page.locator("[data-runtime-pill]").textContent() }, phone ? [label, "[data-mobile2-next-message]", "[data-runtime-pill]"] : [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S4: Account D lists only priority: disabled, with its reason as visible text.
+      const { context, page, pageErrors } = await seat("&account=d");
+      try {
+        await openSpeed(page);
+        await page.locator("[data-runtime-row-note]").scrollIntoViewIfNeeded();
+        /* The keyboard reaches it too: Standard is focused, two steps down is Ultra, and its reason is its description. */
+        if (!phone) {
+          await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+          expect(await page.evaluate((selector) => document.activeElement === document.querySelector(selector), ultraRow)).toBeTrue();
+          expect(await page.evaluate(() => document.getElementById(document.activeElement!.getAttribute("aria-describedby")!)?.textContent ?? null))
+            .toBe(await page.locator("[data-runtime-row-note]").textContent());
+        }
+        const read = await facts(page);
+        expect(read.ultra).toMatchObject({ disabled: true, checked: "false" });
+        /* The offers are named by the words the rows use. */
+        expect(read.note).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account D", model: "GPT\u20116.1\u2011Sol", offers: translate(locale, "composer.speedFastShort") }));
+        await shot(page, "s4-unavailable", read, [label, "[data-runtime-row-note]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S5: refused: back on Standard, the reason where the choice was made.
+      const { context, page, pageErrors } = await seat("&speedanswer=refuse");
+      try {
+        await openSpeed(page);
+        /* On the phone the operator scrolls the sheet to its end to reach Ultra, as far as it goes. */
+        if (phone) await page.locator("[data-runtime-sheet]").evaluate((sheet) => { sheet.scrollTop = sheet.scrollHeight; });
+        await page.locator(ultraRow).click();
+        /* Said where the choice was made, on the desktop too: no second click on the pill,
+           and no scroll after the tap: the sheet brings the whole reason into view itself. */
+        await page.locator("[data-runtime-speed-error]").waitFor();
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
+        const error = await page.locator("[data-runtime-speed-error]").textContent();
+        /* The server's refusal, said as the Ultra row's own reason says it, in the page's language. */
+        expect(error).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account B", model: "GPT\u20116.1\u2011Sol", offers: translate(locale, "composer.speedFastShort") }));
+        const lines = await page.locator("[data-runtime-speed-error]").evaluate((element) => {
+          const range = document.createRange(); range.selectNodeContents(element);
+          return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
+        });
+        expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).not.toContain("Ultrafast");
+        await shot(page, "s5-refused", { ...await facts(page), error, lines }, ["[data-runtime-speed-error]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    for (const mode of ["create", "rotate", "rotate-inherited"] as const) { // S6: launch drafts with Ultra chosen, and a rotation left untouched.
+      const inherited = mode === "rotate-inherited";
+      const draft = inherited ? "rotate" : mode;
+      const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=service-tier&draft=${draft}${inherited ? "&inherit=1" : ""}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+      try {
+        await page.locator(`[data-speed-draft="${draft}"]`).waitFor();
+        if (mode === "create") await page.locator("[data-orchestrator-runs-on-change]").click();
+        const select = page.locator('select[aria-label]').filter({ has: page.locator('option[value="ultrafast"]') });
+        await select.waitFor();
+        await page.waitForFunction(() => !(document.querySelector('option[value="ultrafast"]') as HTMLOptionElement).disabled);
+        expect(await select.inputValue()).toBe(inherited ? "" : "ultrafast");
+        const shown = await select.evaluate((element) => (element as HTMLSelectElement).selectedOptions[0]?.textContent);
+        expect(shown).toBe(translate(locale, inherited ? "draft.speedInherited" : "draft.speedUltra"));
+        /* The speed choice never reads like a reasoning choice in the select beside it. */
+        const efforts = await page.locator('select[aria-label]').filter({ has: page.locator('option[value="high"]') }).evaluate((element) => [...(element as HTMLSelectElement).options].map((option) => option.textContent));
+        expect(efforts).not.toContain(translate(locale, "draft.speedUltra"));
+        await select.scrollIntoViewIfNeeded();
+        /* The Runs on line the operator confirms names the chosen speed too. */
+        const runsOn = mode === "create" ? await page.locator("[data-orchestrator-runs-on-value]").textContent() : null;
+        if (mode === "create") expect(runsOn).toContain("· Ultrafast");
+        await shot(page, `s6-${mode}-select`, { select: shown, efforts, runsOn }, mode === "create" ? ["[data-orchestrator-runs-on-value]"] : []);
+        if (mode === "create") {
+          await page.locator("[data-runtime-pill]").click();
+          if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
+          await page.locator(ultraRow).waitFor();
+          await page.waitForFunction((selector) => !(document.querySelector(selector) as HTMLButtonElement).disabled, ultraRow);
+          if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
+          const read = await facts(page);
+          expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
+          if (!phone) expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+          await shot(page, "s6-create-pill", read, phone ? [label] : [label, "[data-runtime-pill]"]);
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+  }
+  return frames;
+}
+
 describe("Codex service tier rendered evidence", () => {
   browserTest("ultrafast appears on desktop and in the phone speed sheet in both locales", async () => {
     const out = path.resolve(".artifacts/codex-service-tier");
@@ -19674,7 +19870,8 @@ describe("Codex service tier rendered evidence", () => {
           await pill.waitFor();
           if (width > 390) expect(await pill.textContent()).toContain("Ultrafast");
           await pill.click();
-          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.getByText(translate(locale, "composer.speedTierNamed", { tier: "Ultrafast" }), { exact: true });
+          /* The phone's sheet names the tier in its own checked Ultra row. */
+          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.locator('[data-runtime-sheet-value="ultrafast"][aria-checked="true"]');
           await detail.waitFor();
           if (width === 390) await detail.scrollIntoViewIfNeeded();
           expect(await detail.textContent()).toContain("Ultrafast");
@@ -19695,10 +19892,11 @@ describe("Codex service tier rendered evidence", () => {
           evidence.push({ ...runtimeEvidence, mappingTier: await mapping.textContent() });
         } finally { await context.close(); }
       }
+      const ultra = await captureUltraSpeedStates(browser, server.base, out);
       fs.mkdirSync("evidence/codex-service-tier", { recursive: true });
-      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence }, null, 2) + "\n");
+      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence, ultra }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 1_500_000);
 });
 
 describe("linked board sync health", () => {
@@ -38580,6 +38778,566 @@ describe("sound captions", () => {
       failures,
     }, null, 2) + "\n");
   }
+});
+
+describe("retired review history", () => {
+  // Defining text is required even when it is wholly outside the scrollport.
+  // Hit-test the whole line: a pinned bar can cover only its top or bottom.
+  function requiredVisibility(el: Element) {
+    const failures: string[] = [];
+    const ranges: { text: string; left: number; right: number; top: number; bottom: number; clip: { left: number; right: number; top: number; bottom: number } }[] = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode, owner = node.parentElement!;
+      if (!node.textContent?.trim() || owner.closest("option, .sr-only, [hidden]")) continue;
+      let visibleOwner: Element | null = owner;
+      while (visibleOwner && getComputedStyle(visibleOwner).display === "contents") visibleOwner = visibleOwner.parentElement;
+      if (!visibleOwner?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const r of range.getClientRects()) {
+        if (!r.width || !r.height) continue;
+        const text = node.textContent.trim();
+        let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+        for (let parent: Element | null = owner; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+          if (style.overflowX !== "visible") { left = Math.max(left, bounds.left + parent.clientLeft); right = Math.min(right, bounds.left + parent.clientLeft + parent.clientWidth); }
+          if (style.overflowY !== "visible") { top = Math.max(top, bounds.top + parent.clientTop); bottom = Math.min(bottom, bounds.top + parent.clientTop + parent.clientHeight); }
+        }
+        ranges.push({ text, left: r.left, right: r.right, top: r.top, bottom: r.bottom, clip: { left, right, top, bottom } });
+        if (r.left < left - 1 || r.right > right + 1 || r.top < top - 1 || r.bottom > bottom + 1) failures.push(`clipped: ${text}`);
+        for (const x of [r.left + Math.min(1, r.width / 2), (r.left + r.right) / 2, r.right - Math.min(1, r.width / 2)]) {
+          for (const y of [r.top + Math.min(1, r.height / 2), (r.top + r.bottom) / 2, r.bottom - Math.min(1, r.height / 2)]) {
+            const hit = document.elementFromPoint(x, y);
+            if (!hit || (!owner.contains(hit) && !hit.contains(owner))) failures.push(`covered: ${text}`);
+          }
+        }
+      }
+    }
+    const scrolls = [];
+    for (let parent: Element | null = el; parent; parent = parent.parentElement) {
+      if (parent.scrollHeight > parent.clientHeight || parent.scrollWidth > parent.clientWidth) scrolls.push({
+        tag: parent.tagName, class: parent.className, top: parent.scrollTop, left: parent.scrollLeft,
+        height: parent.clientHeight, scrollHeight: parent.scrollHeight,
+      });
+    }
+    return { ranges, scrolls, failures: [...new Set(failures)] };
+  }
+
+  browserTest("S6 defining text rejects offscreen, clipped and pinned-bar-covered lines", async () => {
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const page = await browser.newPage({ viewport: { width: 640, height: 320 } });
+      await page.setContent('<main style="position:absolute;top:100px;left:100px"><span>Required review state</span></main>');
+      const marker = page.locator("span");
+      expect((await marker.evaluate(requiredVisibility)).failures).toEqual([]);
+      for (const style of ["top:400px", "top:310px", "top:-100px", "left:700px", "left:630px", "left:-300px"]) {
+        await page.locator("main").evaluate((el, style) => el.setAttribute("style", `position:absolute;${style}`), style);
+        expect((await marker.evaluate(requiredVisibility)).failures.length).toBeGreaterThan(0);
+      }
+      for (const clip of ["height:8px", "width:12px"]) {
+        await page.locator("main").evaluate((el, clip) => el.setAttribute("style", `position:absolute;top:100px;left:100px;overflow:hidden;${clip}`), clip);
+        expect((await marker.evaluate(requiredVisibility)).failures.length).toBeGreaterThan(0);
+      }
+      await page.locator("main").evaluate(el => el.setAttribute("style", "position:absolute;top:100px;left:100px"));
+      const r = await marker.boundingBox();
+      await page.evaluate(r => {
+        const bar = document.createElement("div");
+        bar.id = "pinned";
+        bar.style.cssText = `position:fixed;z-index:2;left:0;right:0;top:${r!.y}px;height:4px;background:white`;
+        document.body.append(bar);
+      }, r);
+      expect((await marker.evaluate(requiredVisibility)).failures).toContain("covered: Required review state");
+      await page.locator("#pinned").evaluate(el => el.remove());
+      expect((await marker.evaluate(requiredVisibility)).failures).toEqual([]);
+    } finally { await browser.close(); }
+  });
+
+  async function openRetiredFixture(...args: Parameters<typeof openFixture>) {
+    const [browser, url, ...settings] = args;
+    const opened = await openFixture(browser, "about:blank", ...settings);
+    await opened.page.clock.setFixedTime("2026-10-24T00:00:00Z");
+    await opened.page.goto(url);
+    return opened;
+  }
+  browserTest("S6 real creation entries, retained decks and legacy round navigation", async () => {
+    const out = path.resolve(".artifacts/review-history-integration");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const sources = ["src/components/flows/ReviewHistory.tsx", "src/components/flows/RoundDeck.tsx", "src/components/flows/directReviewGroups.ts", "src/components/mobile/MobilePipelineScreen.tsx", "src/components/kanban/KanbanBoard.tsx", "src/components/scheme/taskBands.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/BranchPane.tsx", "src/components/LogFeed.tsx",
+      "src/components/conversation/DeputyBlock.tsx", "src/components/conversation/OutboxBubbles.tsx", "src/components/kanban/StagesSheet.tsx",
+      "src/components/pipelines/PipelineTemplatePicker.tsx", "src/components/kanban/PipelineSection.tsx", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+    async function capture(page: Page, name: string, selector: string, defining?: Locator) {
+      const element = page.locator(selector).filter({ visible: true }).first();
+      await element.waitFor();
+      // Admit a content-visibility:auto card before resolving its child's
+      // scroll position. Its intrinsic placeholder can have different bounds.
+      await element.scrollIntoViewIfNeeded();
+      await element.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      // Keep the defining state in view; scrolling its taller lane afterward
+      // would put the state below the pinned footer again on a short phone.
+      if (defining) {
+        await defining.first().scrollIntoViewIfNeeded();
+        await element.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      }
+      // Screenshot completion proves a paint; measure that rendered state.
+      await page.screenshot({ path: path.join(out, name + ".png") });
+      const measurement = await element.evaluate(el => {
+        const box = el.getBoundingClientRect();
+        const clipped: string[] = [];
+        const covered: string[] = [];
+        let textRanges = 0;
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (!node.textContent?.trim() || node.parentElement?.closest("option, .sr-only, [hidden]")) continue;
+          const closed = node.parentElement?.closest("details:not([open])");
+          if (closed && !closed.querySelector("summary")?.contains(node)) continue;
+          let visibleOwner = node.parentElement;
+          while (visibleOwner && getComputedStyle(visibleOwner).display === "contents") visibleOwner = visibleOwner.parentElement;
+          if (!visibleOwner?.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) continue;
+          let left = Math.max(0, box.left), right = Math.min(innerWidth, box.right);
+          let top = Math.max(0, box.top), bottom = Math.min(innerHeight, box.bottom);
+          for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+            if (style.visibility === "hidden" || style.display === "none") { right = left; break; }
+            if (style.overflowX !== "visible") { left = Math.max(left, bounds.left + parent.clientLeft); right = Math.min(right, bounds.left + parent.clientLeft + parent.clientWidth); }
+            if (style.overflowY !== "visible") { top = Math.max(top, bounds.top + parent.clientTop); bottom = Math.min(bottom, bounds.top + parent.clientTop + parent.clientHeight); }
+          }
+          const range = document.createRange(); range.selectNodeContents(node);
+          for (const r of range.getClientRects()) {
+            if (r.right <= left || r.left >= right || r.bottom <= top || r.top >= bottom) continue;
+            textRanges++;
+            if (r.width && (r.left < left - 1 || r.right > right + 1)) {
+              const parent = node.parentElement!;
+              if (getComputedStyle(parent).textOverflow !== "ellipsis" && !parent.closest(".truncate, [title]")) clipped.push(node.textContent.slice(0, 60));
+            }
+            if (r.width && r.top >= top && r.bottom <= bottom && r.left >= left && r.right <= right) {
+              const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+              const owner = node.parentElement!.closest("button, a, label") ?? node.parentElement!;
+              if (!hit || (!owner.contains(hit) && !hit.contains(owner))) covered.push(node.textContent.slice(0, 60));
+            }
+          }
+        }
+        return { box: { x: box.x, y: box.y, width: box.width, height: box.height }, clipped, covered, textRanges,
+          overflowX: el.scrollWidth - el.clientWidth, focusInside: el.contains(document.activeElement),
+          scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, viewport: { width: innerWidth, height: innerHeight },
+          controls: [...el.querySelectorAll<HTMLElement>("button, input, select")].filter(control => control.checkVisibility({ opacityProperty: true, visibilityProperty: true })).map(control => {
+            const r = control.getBoundingClientRect();
+            return { tag: control.tagName, label: control.getAttribute("aria-label") ?? control.textContent?.trim(), title: control.title,
+              value: "value" in control ? String(control.value) : null, disabled: control.hasAttribute("disabled"),
+              x: r.x, y: r.y, width: r.width, height: r.height };
+          }) };
+      });
+      const required = [];
+      if (defining) {
+        expect(await defining.count()).toBeGreaterThan(0);
+        for (const marker of await defining.all()) required.push(await marker.evaluate(requiredVisibility));
+      }
+      readings.push({ name, ...measurement, required });
+      fs.writeFileSync(path.join(out, name + ".json"), JSON.stringify({ ...measurement, required }, null, 2) + "\n");
+      expect(measurement.box.x).toBeGreaterThanOrEqual(-1);
+      expect(measurement.box.x + measurement.box.width).toBeLessThanOrEqual(measurement.viewport.width + 1);
+      expect(measurement.textRanges).toBeGreaterThan(0);
+      expect(measurement.clipped).toEqual([]);
+      expect(measurement.covered).toEqual([]);
+      for (const marker of required) {
+        expect(marker.ranges.length).toBeGreaterThan(0);
+        expect(marker.failures).toEqual([]);
+      }
+    }
+    try {
+      for (const lang of (process.env.LLV_S6_RENDER_SMOKE === "1" ? ["en"] : ["en", "uk"]) as ("en" | "uk")[]) for (const theme of (process.env.LLV_S6_RENDER_SMOKE === "1" ? ["light"] : ["light", "dark"]) as ("light" | "dark")[])
+      for (const width of process.env.LLV_S6_RENDER_SMOKE === "1" ? [390, 640, 1280] : [320, 390, 640, 1280, 1440]) {
+        const height = width === 640 ? 320 : width < 500 ? 844 : 900;
+        const tag = `${lang}-${theme}-${width}`;
+        const phone = width < 640 || height < 600;
+        const opened = await openRetiredFixture(browser, `${server.base}?scenario=retired-review`, { width, height }, theme, lang, "reduce", phone);
+        const { page, context, pageErrors } = opened;
+        page.setDefaultTimeout(10_000);
+        async function check(name: string, work: () => Promise<void>) {
+          try { await work(); }
+          catch (error) {
+            failures.push(`${tag} ${name}: ${String(error).split("\n")[0]}`); console.error(`${tag} ${name}`, error);
+            await page.screenshot({ path: path.join(out, `${tag}-${name.replaceAll(" ", "-")}-failure.png`) });
+          }
+        }
+        try {
+          const writes: { url: string; body: Record<string, unknown> }[] = [];
+          await page.evaluate(() => {
+            const original = window.fetch;
+            const writes: unknown[] = [];
+            Object.assign(window, { retiredWrites: writes });
+            window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+              if (String(input) === "/api/pipelines" && init?.method === "POST") {
+                const body = JSON.parse(String(init.body));
+                writes.push({ url: String(input), body });
+                const seed = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence.storedPipeline("p-search");
+                const stages = body.stages.map((stage: Pipeline["stages"][number]) => ({ ...stage,
+                  effectiveRole: seed.stages.find(item => item.role?.roleId === stage.role?.roleId)?.effectiveRole ?? seed.stages[0]!.effectiveRole }));
+                return Response.json({ pipeline: { ...seed, id: "retained-draft", task: body.task, state: "draft", taskIds: [],
+                  stages, runs: stages.map((stage: Pipeline["stages"][number]) => ({ stageId: stage.id, attempts: [] })), cursor: null } });
+              }
+              return original(input, init);
+            }) as typeof window.fetch;
+          });
+          await check("supported creation entry", async () => {
+            if (!phone) {
+              // Desktop creation belongs to agents; the supported board has no creation entry.
+              await page.locator("[data-kanban-board]").waitFor();
+              expect(await page.getByRole("button", { name: translate(lang, "scheme.pipeline"), exact: true }).count()).toBe(0);
+              return;
+            }
+            await page.locator('[data-mobile2-open="menu"]').click();
+            await page.locator('[data-mobile2-menu-row="new-pipeline"]').click();
+            const picker = page.locator('[data-pipeline-picker-state="ready"]');
+            await picker.waitFor();
+            const dialog = picker.getByRole("dialog");
+            const box = (await dialog.boundingBox())!;
+            expect(box.y).toBeGreaterThanOrEqual(0);
+            expect(box.y + box.height).toBeLessThanOrEqual(height + 1);
+            expect(await picker.evaluate(el => { const r = el.getBoundingClientRect(); return r.width === innerWidth && r.height === innerHeight; })).toBe(true);
+            expect(await dialog.evaluate(el => el.matches(":modal"))).toBe(true);
+            await capture(page, tag + "-phone-creation", '[data-pipeline-picker-state] dialog');
+            const blank = dialog.getByRole("button", { name: new RegExp(translate(lang, "pipelineTemplates.blank")) });
+            await blank.scrollIntoViewIfNeeded();
+            expect(await blank.isVisible()).toBe(true);
+            await capture(page, tag + "-phone-creation-last", '[data-pipeline-picker-state] dialog');
+            const choice = dialog.getByRole("button", { name: translate(lang, "pipelineTemplates.buildReview"), exact: true });
+            await choice.click();
+            await page.locator("[data-pipeline-picker-state]").waitFor({ state: "detached" });
+            writes.push(...await page.evaluate(() => (window as unknown as { retiredWrites: typeof writes }).retiredWrites));
+            expect(writes).toHaveLength(1);
+            expect(writes[0]!.body.autoStart).toBe(false);
+            expect(writes[0]!.body.taskIds).toBeUndefined();
+            expect(writes[0]!.body.src).toBeUndefined();
+            expect((writes[0]!.body.stages as { kind: string }[]).every(stage => stage.kind === "run")).toBe(true);
+          });
+
+          await check("retained decks", async () => {
+            await page.goto(`${server.base}?scenario=retired-review&surface=decks`);
+            for (const kind of ["archive", "direct"]) {
+              const deck = page.locator(`[data-retained-deck="${kind}"]`);
+              await deck.waitFor();
+              // An unresolved archive starts expanded; a terminal direct group
+              // starts folded. Exercise the fold/open control from either state.
+              if (!await deck.locator("[data-review-deck-collapsed]").count()) {
+                await deck.locator("[data-review-deck-collapse]").click();
+                await deck.locator("[data-review-deck-collapsed]").waitFor();
+              }
+              await deck.locator("[data-review-deck-collapsed]").click();
+              const select = deck.getByRole("combobox");
+              await select.waitFor();
+              expect(await select.locator("option").count()).toBe(2);
+              await select.selectOption("r1");
+              await deck.scrollIntoViewIfNeeded();
+              expect(await deck.locator("textarea, [data-agent-control-strip]").count()).toBe(0);
+              expect(await deck.getByRole("button", { name: /Delete the conversation|Stop the|Restart the/ }).count()).toBe(0);
+              await capture(page, tag + "-" + kind + "-deck", `[data-retained-deck="${kind}"]`);
+              if (kind === "archive") {
+                await page.evaluate(() => {
+                  const original = window.fetch;
+                  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/review-history/")
+                    ? new Response(null, { status: 404 }) : original(input, init)) as typeof window.fetch;
+                });
+                const opener = deck.getByRole("button", { name: translate(lang, "reviewHistory.open"), exact: true });
+                await capture(page, tag + "-archive-deck-history", `[data-retained-deck="${kind}"]`, opener);
+                await opener.click();
+                await page.getByRole("status").filter({ hasText: translate(lang, "reviewHistory.missing") }).waitFor();
+                await capture(page, tag + "-missing-deck-history", "[data-review-history]");
+                await page.keyboard.press("Escape");
+                expect(await opener.evaluate(el => el === document.activeElement)).toBe(true);
+              }
+              await deck.locator("[data-review-deck-collapse]").click();
+              await deck.locator("[data-review-deck-collapsed]").waitFor();
+            }
+          });
+
+          await check("direct board", async () => {
+            if (width >= 1280) {
+              await page.goto(`${server.base}?scenario=retired-review&surface=direct-board`);
+              const board = page.locator("[data-kanban-board]");
+              await board.waitFor();
+              await board.locator(".card[data-id]").first().scrollIntoViewIfNeeded();
+              expect(await board.locator('.card[data-id*="direct-review-1"], .card[data-id*="direct-review-2"], .card[data-id*="old-direct-review-2"]').count()).toBe(0);
+              await capture(page, tag + "-direct-viewer", "[data-kanban-board] .card[data-id]");
+              // Inspect the shared direct-review deck independently after proving
+              // the supported board suppresses duplicate reviewer cards.
+              await page.goto(`${server.base}?scenario=retired-review&surface=decks`);
+              const deck = page.locator('[data-retained-deck="direct"]');
+              await deck.waitFor();
+              if (!await deck.locator("[data-review-deck-collapsed]").count()) {
+                await deck.locator("[data-review-deck-collapse]").click();
+                await deck.locator("[data-review-deck-collapsed]").waitFor();
+              }
+              await deck.locator("[data-review-deck-collapsed]").click();
+              await deck.getByRole("combobox").waitFor();
+              expect(await deck.getByRole("combobox").locator("option").count()).toBe(2);
+              await deck.getByRole("combobox").selectOption({ index: 0 });
+              await capture(page, tag + "-direct-deck", '[data-retained-deck="direct"]');
+              await deck.locator("[data-review-deck-collapse]").click();
+              await deck.locator("[data-review-deck-collapsed]").waitFor();
+            }
+          });
+
+          await check("legacy rounds", async () => {
+            // A retained legacy stage with no reviewer on the board still opens
+            // its durable archive id and the exact round, by click and keyboard.
+            await page.goto(`${server.base}?scenario=retired-review`);
+            const task = page.locator(phone ? '[data-phone-card="task:t-upload"]' : '.card[data-id="task:t-upload"]');
+            await task.waitFor();
+            if (phone) await task.locator("[data-phone-card-title]").click();
+            const lane = page.locator(phone ? '[data-phone-task-lane="p-upload"]' : '.card[data-id="task:t-upload"]');
+            await lane.locator('[data-open-stages="p-upload"]').click();
+            const sheet = page.locator(phone ? '[data-mobile2-screen="pipeline"]' : '[data-stages-sheet="p-upload"]');
+            await sheet.waitFor();
+            if (phone) {
+              await sheet.locator("[data-mobile2-past-toggle]").click();
+            } else {
+              if (await sheet.locator('[data-sheet-graph][aria-pressed="true"]').count()) await sheet.locator('[data-sheet-graph]').click();
+              await sheet.locator('[data-nav-stage="review-api"]').click();
+            }
+            const review = sheet.locator(phone ? "[data-mobile2-past]" : '.pane[data-stage="review-api"][data-collapsed="0"]');
+            await review.waitFor();
+            const chips = review.locator(phone ? '[data-mobile2-review-history="flow-upload-review-api"]' : '.rounds button');
+            expect(await chips.count()).toBe(2);
+            const targets = await chips.evaluateAll(buttons => buttons.map(button => {
+              const r = button.getBoundingClientRect(); return { width: r.width, height: r.height };
+            }));
+            expect(targets.every(target => target.height >= (phone ? 44 : 24) && target.width >= 24)).toBe(true);
+            await page.evaluate(() => {
+              const original = window.fetch;
+              window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                if (!String(input).startsWith("/api/review-history/")) return original(input, init);
+                const rounds = [1, 2].map(n => ({ n, verdict: n === 1 ? "REQUEST_CHANGES" : "APPROVE", reviewerPath: null,
+                  startedAt: "2026-09-19T00:00:00Z", reviewedAt: "2026-09-20T00:00:00Z", reviewHeadSha: "a".repeat(40) }));
+                return Response.json({ row: { id: "flow-upload-review-api", state: "closed", rounds, roles: {} },
+                  artifacts: rounds.map(round => ({ round: round.n, artifacts: { findings: { status: "missing" } } })) });
+              }) as typeof window.fetch;
+            });
+            for (const n of [1, 2]) {
+              const chip = phone ? chips.and(page.locator(`[data-review-round="${n}"]`)) : chips.nth(n - 1);
+              // Each source control gets its own scroll position; the phone's
+              // retained rounds need not fit together in a short scrollport.
+              await capture(page, tag + `-legacy-round-${n}-source`, phone ? "[data-mobile2-past]" : '.pane[data-stage="review-api"][data-collapsed="0"]', chip);
+              if (n === 1) await chip.click(); else { await chip.focus(); await page.keyboard.press("Enter"); }
+              const archive = page.locator("[data-review-history]");
+              await archive.locator('nav button[aria-pressed="true"]').filter({ hasText: `R${n}` }).waitFor();
+              expect(await archive.innerText()).toContain(n === 1 ? "REQUEST_CHANGES" : "APPROVE");
+              await capture(page, tag + `-legacy-round-${n}`, "[data-review-history]", archive.locator('nav button[aria-pressed="true"]'));
+              await page.keyboard.press("Escape");
+              expect(await chip.evaluate(el => el === document.activeElement)).toBe(true);
+              expect(await sheet.isVisible()).toBe(true);
+            }
+            await sheet.locator(phone ? "[data-mobile2-back]" : "[data-sheet-close]").click();
+          });
+
+          await check("missing archive from supported stages", async () => {
+            await page.goto(`${server.base}?scenario=retired-review`);
+            const task = page.locator(phone ? '[data-phone-card="task:t-upload"]' : '.card[data-id="task:t-upload"]');
+            await task.waitFor();
+            if (phone) await task.locator("[data-phone-card-title]").click();
+            const lane = page.locator(phone ? '[data-phone-task-lane="p-upload"]' : '.card[data-id="task:t-upload"]');
+            await lane.locator('[data-open-stages="p-upload"]').click();
+            const sheet = page.locator(phone ? '[data-mobile2-screen="pipeline"]' : '[data-stages-sheet="p-upload"]');
+            await sheet.waitFor();
+            if (phone) await sheet.locator("[data-mobile2-past-toggle]").click();
+            else {
+              if (await sheet.locator('[data-sheet-graph][aria-pressed="true"]').count()) await sheet.locator('[data-sheet-graph]').click();
+              await sheet.locator('[data-nav-stage="review-api"]').click();
+            }
+            const review = sheet.locator(phone ? "[data-mobile2-past]" : '.pane[data-stage="review-api"][data-collapsed="0"]');
+            const history = review.locator(phone ? '[data-mobile2-review-history="flow-upload-review-api"]' : '.rounds button').first();
+            await page.evaluate(() => {
+              const original = window.fetch;
+              window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/review-history/")
+                ? new Response(null, { status: 404 }) : original(input, init)) as typeof window.fetch;
+            });
+            await capture(page, tag + "-missing-archive-source", phone ? "[data-mobile2-past]" : '.pane[data-stage="review-api"][data-collapsed="0"]', history);
+            await history.click();
+            await page.locator("[data-review-history]").getByRole("status").filter({ hasText: translate(lang, "reviewHistory.missing") }).waitFor();
+            await capture(page, tag + "-stages-missing", "[data-review-history]");
+            await page.keyboard.press("Escape");
+            expect(await history.evaluate(el => el === document.activeElement)).toBe(true);
+            expect(await sheet.isVisible()).toBe(true);
+          });
+
+          await check("current attempts", async () => {
+            // Current run attempts, fail/fix provenance and the completed graph.
+            for (const id of ["search", "compact"]) {
+              await page.goto(`${server.base}?scenario=retired-review`);
+              if (phone && id === "compact") await page.locator('[data-phone-kanban-tab="done"]').click();
+              const card = page.locator(phone ? `[data-phone-card="task:t-${id}"]` : `.card[data-id="task:t-${id}"]`);
+              await card.waitFor();
+              if (phone) await card.locator("[data-phone-card-title]").click();
+              if (phone && id === "compact") await page.locator("[data-phone-task-ended]").click();
+              const target = phone ? `[data-phone-task-lane="p-${id}"]` : `.card[data-id="task:t-${id}"]`;
+              await page.locator(target).scrollIntoViewIfNeeded();
+              await capture(page, tag + `-current-${id}`, target);
+            }
+          });
+
+          await check("fresh review", async () => {
+            await page.goto(`${server.base}?scenario=graph-loops`);
+            const freshCard = page.locator(phone ? '[data-phone-card="task:t-loops-review"]' : '.card[data-id="task:t-loops-review"]');
+            await freshCard.waitFor();
+            if (phone) await freshCard.locator("[data-phone-card-title]").click();
+            const fresh = phone ? '[data-phone-task-lane="p-loops-review"]' : '.card[data-id="task:t-loops-review"]';
+            const activeReview = page.locator(fresh).locator(phone ? '.pb-stage[data-stage="review"] > .pb-stage-row' : '[data-stage="review"]');
+            expect(await page.evaluate(() => {
+              const record = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence.storedPipeline("p-loops-review");
+              const review = record.runs.find(run => run.stageId === "review")!;
+              return review.attempts.length > 1 && review.attempts.at(-1)!.state === "running"
+                && record.stages.every(stage => stage.kind === "run");
+            })).toBe(true);
+            await capture(page, tag + "-fresh-review-after-fix", fresh, activeReview);
+          });
+
+          await check("answered question", async () => {
+            await page.goto(`${server.base}?scenario=retired-review`);
+            await page.waitForFunction(() => Boolean((window as unknown as { evidence?: unknown }).evidence));
+            await page.evaluate(() => {
+              const pipeline = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence.storedPipeline("p-links");
+              const run = pipeline.runs.find(run => run.stageId === "implement")!;
+              const previous = run.attempts[0]!;
+              pipeline.decisionAnswers = [{ clientRequestId: "retained-answer", expectedRevision: "retained-revision", stageId: "implement",
+                attempt: 1, nextAttempt: 2, question: "Which links should remain?", answer: "Keep the published release links.",
+                actor: { kind: "operator" }, at: "2026-10-23T23:00:00Z" }];
+              run.attempts.push({ ...previous, n: 2, state: "running", startedAt: "2026-10-23T23:01:00Z", completedAt: null, decisionAnswerId: "retained-answer" });
+              pipeline.state = "running";
+              window.dispatchEvent(new Event("llv:pipelines-changed"));
+            });
+            const answeredCard = page.locator(phone ? '[data-phone-card="task:t-links"]' : '.card[data-id="task:t-links"]');
+            await answeredCard.waitFor();
+            if (phone) await answeredCard.locator("[data-phone-card-title]").click();
+            const answered = phone ? '[data-phone-task-body]' : '.card[data-id="task:t-links"]';
+            const chronology = page.locator(answered).locator('[data-chronology-kind="decision-answered"]');
+            await chronology.waitFor();
+            await chronology.scrollIntoViewIfNeeded();
+            await capture(page, tag + "-resolved-question", answered, chronology);
+          });
+
+          await check("spent budget", async () => {
+            await page.goto(`${server.base}?scenario=review-stops`);
+            const stoppedCard = page.locator(phone ? '[data-phone-card="task:t-stop-fix"]' : '.card[data-id="task:t-stop-fix"]');
+            await stoppedCard.waitFor();
+            if (phone) await stoppedCard.locator("[data-phone-card-title]").click();
+            const stopped = phone ? '[data-phone-task-lane="p-stop-fix"]' : '.card[data-id="task:t-stop-fix"]';
+            const reason = page.locator(stopped).locator("[data-review-stop]");
+            expect(await reason.count()).toBe(1);
+            await capture(page, tag + "-spent-budget", stopped, reason);
+          });
+
+          // Main retired PipelineEditor and its conversion surface. Retained
+          // legacy rounds remain navigable through the supported stage views above.
+
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/review-history", { recursive: true });
+      fs.writeFileSync("evidence/review-history/integration.json", JSON.stringify({ capturedAt: new Date().toISOString(),
+        command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'S6 real creation' (scripts/gate-slot.sh, isolated roots)",
+        sourceDigests: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+        failures, frameDigests: Object.fromEntries(readings.map(reading => { const { name } = reading as { name: string }; return [name, createHash("sha256").update(fs.readFileSync(path.join(out, name + ".png"))).digest("hex")]; })), readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+
+  browserTest("S6 archive is read-only at desktop and phone widths in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/review-history");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of (process.env.LLV_S6_RENDER_SMOKE === "1" ? ["en"] : ["en", "uk"]) as ("en" | "uk")[]) for (const theme of (process.env.LLV_S6_RENDER_SMOKE === "1" ? ["light"] : ["light", "dark"]) as ("light" | "dark")[])
+      for (const width of process.env.LLV_S6_RENDER_SMOKE === "1" ? [390, 640, 1280] : [320, 390, 640, 1280, 1440]) {
+        const height = width === 640 ? 320 : width < 500 ? 844 : 900;
+        const phone = width < 640 || height < 600;
+        const { context, page, pageErrors } = await openRetiredFixture(browser, server.base, { width, height }, theme, lang, "reduce", phone);
+        const writes: string[] = [];
+        try {
+          const archive = {
+            row: { id: "archive-evidence", project: "atlas", implementerPath: "/reviewed.jsonl", state: "paused",
+              stateDetail: lang === "uk" ? "Доставку останнього раунду не зʼясовано. Оригінальні записи збережено." : "The last delivery remains unresolved. Original records are preserved.",
+              roles: { reviewer: { engine: "codex" } },
+              rounds: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, reviewerPath: null,
+                verdict: index === 8 ? "APPROVE" : "REQUEST_CHANGES", findingsCount: 2,
+                reviewHeadSha: "a".repeat(40), reviewedAt: "2026-09-20T00:00:00Z", startedAt: "2026-09-19T00:00:00Z", error: null })) },
+            currentHead: "unknown",
+            artifacts: Array.from({ length: 9 }, (_, index) => ({ round: index + 1, artifacts: {
+              findings: index === 0 ? { status: "available", text: (lang === "uk" ? "Збережене зауваження з довгим поясненням. " : "Recorded finding with a long explanation. ").repeat(60) } : { status: "missing" },
+            } })),
+          };
+          await page.evaluate(archive => {
+            const previous = window.fetch.bind(window);
+            window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/review-history/")
+              ? Response.json(archive) : String(input).startsWith("/api/review-history?")
+              ? Response.json({ rows: [{ id: archive.row.id, title: "Retained review", state: archive.row.state, roundCount: 9, createdAt: "2026-09-20" }], nextCursor: null }) : previous(input, init)) as unknown as typeof window.fetch;
+          }, archive);
+          page.on("request", request => { if (request.url().includes("/api/flows") && request.method() !== "GET") writes.push(request.method()); });
+          if (phone) {
+            await page.locator('[data-mobile2-open="menu"]').click();
+            await page.locator('[data-mobile2-menu-row="review-history"]').click();
+          } else {
+            await openBoardMenu(page);
+            await page.locator('[data-bar-more-menu]').getByRole("button", { name: translate(lang, "reviewHistory.title"), exact: true }).click();
+          }
+          await page.getByRole("button", { name: /Retained review/ }).click();
+          const dialog = page.getByRole("dialog", { name: translate(lang, "reviewHistory.title") });
+          await dialog.getByText(translate(lang, "reviewHistory.unresolved"), { exact: true }).waitFor();
+          expect(await dialog.locator("nav button").count()).toBe(9);
+          await dialog.locator("nav button").first().click();
+          await dialog.focus();
+          for (const key of ["/", "n", "f", "b", "ArrowRight", "F2", "Alt+j"]) await page.keyboard.press(key);
+          expect(await page.getByRole("dialog").count()).toBe(1);
+          expect(await dialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
+          await page.mouse.click(1, 1);
+          expect(await dialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
+          const rect = await dialog.boundingBox();
+          expect(rect!.x).toBeGreaterThanOrEqual(0);
+          expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+          expect(rect!.y + rect!.height).toBeLessThanOrEqual(height);
+          expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+          const clipped = await dialog.evaluate(element => {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            const failures: string[] = [];
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.left < 0 || rect.right > window.innerWidth + 1)) failures.push(node.textContent.slice(0, 60));
+            }
+            return failures;
+          });
+          expect(clipped).toEqual([]);
+          const close = dialog.getByRole("button", { name: translate(lang, "common.close"), exact: true });
+          await close.focus();
+          await page.keyboard.press("Tab");
+          expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true);
+          const frame = lang + "-" + theme + "-" + width + ".png";
+          await page.screenshot({ path: path.join(out, frame) });
+          await dialog.locator("nav button").last().click();
+          await dialog.getByText(translate(lang, "reviewHistory.artifactMissing"), { exact: true }).waitFor();
+          expect(await dialog.innerText()).toContain("APPROVE");
+          await dialog.getByText(translate(lang, "reviewHistory.artifactMissing"), { exact: true }).scrollIntoViewIfNeeded();
+          expect(await dialog.locator("textarea").count()).toBe(0);
+          expect(writes).toEqual([]);
+          await page.screenshot({ path: path.join(out, "last-" + frame) });
+          await page.keyboard.press("Escape");
+          expect(await dialog.count()).toBe(0);
+          const opener = page.locator(phone ? '[data-mobile2-open="menu"]' : '[data-kanban-board] [data-bar-more]').first();
+          expect(await opener.evaluate(el => el === document.activeElement)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height, rect, rounds: 9, writes: writes.length, frame });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/review-history", { recursive: true });
+      fs.writeFileSync("evidence/review-history/rendered.json", JSON.stringify({ command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'retired review history' (isolated state)", sourceDigests: Object.fromEntries(["src/components/flows/ReviewHistory.tsx", "src/components/flows/RoundDeck.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"].map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), frameDigests: Object.fromEntries(readings.flatMap(item => { const { frame } = item as { frame: string }; return [frame, "last-" + frame].map(name => [name, createHash("sha256").update(fs.readFileSync(path.join(out, name))).digest("hex")]); })), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 /*

@@ -1,0 +1,8 @@
+{
+  "version": "0.164.0",
+  "generator": "codex app-server generate-json-schema",
+  "sha256": {
+    "stable": "5f633ad1f0a07459a5f63ed5604f8a61e0366ac5c36a15d648b44c8de4ffafb1",
+    "experimental": "92fe055424a3709999a05baae615be9e1e1e0b127e033cace6849b2ea785ea07"
+  }
+}

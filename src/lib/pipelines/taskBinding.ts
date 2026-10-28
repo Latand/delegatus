@@ -1,6 +1,7 @@
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
+import { BEARER_TOKEN, hardenedRedact } from "@/lib/view/compactText";
 
 import { MAX_TASK_LENGTH } from "./limits";
 import type { CreatePipelineRequest, Pipeline } from "./types";
@@ -55,7 +56,7 @@ export function projectTaskPipelineIds(
   }));
 }
 
-/** Pure assignment-time decision. Persistence repeats it under the store lock. */
+/** Assignment-time decision. Persistence repeats it under the store lock. */
 export function ensurePipelineForTask(
   task: BoardTask,
   pipelines: readonly Pipeline[],
@@ -71,6 +72,11 @@ export function ensurePipelineForTask(
     taskIds: [task.id],
     repoDir: spawnParams.repoDir,
     ...(spawnParams.srcPath ? { src: spawnParams.srcPath } : {}),
+    inputContext: {
+      handoffDigest: hardenedRedact(
+        [task.text, task.details].filter(Boolean).join("\n\n").replace(BEARER_TOKEN, "[redacted]"),
+      ),
+    },
     autoStart: false,
     stages: [{
       id: "run",

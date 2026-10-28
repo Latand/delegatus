@@ -14,6 +14,7 @@ import type { MessageOrigin } from "./messageOrigin";
 /** Delivery authorship of a recovery notice: the Viewer, never the operator.
     A send with no origin is stamped operator by the Codex host. */
 export const RECOVERY_NOTICE_ORIGIN: MessageOrigin = { kind: "agent", role: "startup-recovery" };
+export const SEAT_QUOTA_RECOVERY_ROLE = "seat-quota-recovery";
 
 /** The prefix of the deterministic operation id (and key) of that prompt. */
 export const INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX = "recovery-continuation";

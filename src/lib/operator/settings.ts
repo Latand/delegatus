@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { cachedJsonFile } from "@/lib/state/cachedJsonFile";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { statePath } from "@/lib/configDir";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
@@ -17,7 +18,7 @@ import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/f
  * The time zone rides along because report headers print the operator's local
  * time, and the host's zone is not necessarily theirs.
  *
- * Same shape as `src/lib/projects/settings.ts`: an mtime-cached read and an
+ * Same shape as `src/lib/projects/settings.ts`: a file snapshot read and an
  * atomic write. An absent or malformed file reads as nothing set.
  */
 
@@ -49,9 +50,7 @@ interface OperatorSettingsFile {
   timeZone?: OperatorTimeZoneSetting;
 }
 
-type Cache = { file: string; mtimeMs: number; size: number; settings: OperatorSettings };
-
-let cache: Cache | null = null;
+const cache = cachedJsonFile(decodeSettings);
 
 function settingsFile(): string {
   return statePath("operator-settings.json");
@@ -87,25 +86,19 @@ function timeZoneOf(value: unknown): OperatorTimeZoneSetting | null {
   return { value: record.value, changedAt: record.changedAt };
 }
 
-export function readOperatorSettings(): OperatorSettings {
-  const file = settingsFile();
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    cache = { file, mtimeMs: -1, size: -1, settings: { locale: null, timeZone: null } };
-    return { ...cache.settings };
-  }
-  if (cache && cache.file === file && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) return { ...cache.settings };
+function decodeSettings(raw: string | null): OperatorSettings {
   let settings: OperatorSettings = { locale: null, timeZone: null };
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<OperatorSettingsFile>;
+    const parsed = JSON.parse(raw ?? "") as Partial<OperatorSettingsFile>;
     if (parsed.schemaVersion === 1) settings = { locale: localeOf(parsed.locale), timeZone: timeZoneOf(parsed.timeZone) };
   } catch {
     settings = { locale: null, timeZone: null };
   }
-  cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, settings };
-  return { ...settings };
+  return settings;
+}
+
+export function readOperatorSettings(): OperatorSettings {
+  return { ...cache.read(settingsFile()) };
 }
 
 /** The operator's interface language, or null until a client has reported it. */
@@ -136,7 +129,7 @@ function write(settings: OperatorSettings): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     writeJsonDurably(file, body);
-    cache = null;
+    cache.invalidate();
     return true;
   } catch {
     return false;
@@ -158,7 +151,7 @@ export interface OperatorSettingsUpdate {
 export function updateOperatorSettings(update: OperatorSettingsUpdate, now: string = new Date().toISOString()): OperatorSettings | null {
   /* Under the file's lock, which an install transfer holds while it writes
      the same file, so neither loses the other's value. */
-  try { return withFileTransactionSync(settingsFile(), "operator settings are busy", () => { cache = null; return updateLocked(update, now); }); }
+  try { return withFileTransactionSync(settingsFile(), "operator settings are busy", () => { cache.invalidate(); return updateLocked(update, now); }); }
   catch (error) { if (error instanceof FileTransactionBusyError) return null; throw error; }
 }
 
@@ -184,5 +177,5 @@ function updateLocked(update: OperatorSettingsUpdate, now: string): OperatorSett
 }
 
 export function resetOperatorSettingsForTests(): void {
-  cache = null;
+  cache.invalidate();
 }

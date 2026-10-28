@@ -17,6 +17,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { spyOn } from "bun:test";
 import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 import type { PipelineStageInput, PatchPipelineRequest } from "./types";
+import type { BoardTask } from "@/lib/tasks/types";
 
 async function create(...args: Parameters<typeof fixtureCreate>) {
   const result = await fixtureCreate(...args);
@@ -1339,3 +1340,48 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
     }
   }, 180_000);
 }
+
+for (const pendingSource of [false, true]) test(pendingSource
+  ? "task spawn drafts inherit a launchable Cloud stage before their source transcript exists"
+  : "task assignment drafts inherit a launchable Cloud stage", async () => {
+  const { ensurePipelineForTask } = await import("./taskBinding");
+  const { createPipelineFromRequest: rawCreate, ensureTaskPipelineForAssignment } = await import("./engine");
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const { h, submits } = await fixture();
+  const project = lane().project;
+  const secret = "gh" + "p_" + "fixture".repeat(6);
+  const boardTask: BoardTask = {
+    id: "assignment-cloud-task", project,
+    text: "Implement the accepted API and preserve its response",
+    details: `Keep the accepted response fields.\nAuthorization: Bearer ${secret}`,
+    status: "inbox", placement: "unplaced", assignments: [],
+    createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z",
+  };
+  const previousTasks = loadTasks();
+  saveTasks([...previousTasks, boardTask]);
+  savePipelines([]);
+  setPipelineStageRuntime(project, "codex-cloud");
+  try {
+    const params = { repoDir: "/repo", engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", srcPath: "/codex/creator.jsonl" };
+    const created = pendingSource
+      ? await ensureTaskPipelineForAssignment(boardTask, { ...params, srcPath: null, launchId: "launch-assignment-cloud", conversationId: "conversation_creator" }, h.ports)
+      : await rawCreate(ensurePipelineForTask(boardTask, [], params)!, h.ports);
+    expect({ error: created.error, code: created.code }).toMatchObject({ error: undefined });
+    expect(created.pipeline!.state).toBe("draft");
+    expect(created.pipeline!.stages[0]!.runtime).toBe("codex-cloud");
+    if (pendingSource) expect(created.pipeline!.srcPath).toBeNull();
+    const persisted = loadPipelines()[0]!;
+    expect(persisted.inputContext?.handoffDigest).toContain(boardTask.text);
+    expect(persisted.inputContext?.handoffDigest).toContain("Keep the accepted response fields.");
+    expect(persisted.inputContext?.handoffDigest).not.toContain(secret);
+    const started = await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+    expect(started.error).toBeUndefined();
+    await submitted(h);
+    expect(submits).toHaveLength(1);
+    expect(submits[0]!.prompt).toContain(persisted.inputContext!.handoffDigest!);
+    expect(submits[0]!.prompt).not.toContain(secret);
+  } finally {
+    setPipelineStageRuntime(project, "local");
+    saveTasks(previousTasks);
+  }
+});

@@ -13,7 +13,7 @@ import { MobileBarTitle, MobileShell, type MobileShellHost } from "@/components/
 import { mobileRowState, type MobileRowDot } from "@/components/mobile/mobileBoardModel";
 import { QuietFileRow } from "@/components/ProjectTrash";
 import { RoleFrameMark } from "@/components/RoleFrameMark";
-import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
+import { cleanTitle, conversationModelLabel, fmtAge } from "@/components/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import { relayChatsProject, shortChatKey, type RelayAnswerRow, type RelayChatRow, type RelayChatsPayload } from "@/lib/externalRelay/relayChats";
@@ -132,7 +132,7 @@ function RelayChatReader({ file, now, onLeave }: { file: FileEntry; now: number;
   const phone = useIsMobile();
   const row = mobileRowState(file, now);
   const title = cleanTitle(file.title, 90);
-  const header = <ReaderHeader title={title} dot={row.dot} live={row.key === "working"} state={t(`kanban.memberState.${row.key}`)} at={file.mtime} engine={file.engine ?? null} model={file.model ? fileModelLabel(file) : null} onLeave={onLeave} />;
+  const header = <ReaderHeader title={title} dot={row.dot} live={row.key === "working"} state={t(`kanban.memberState.${row.key}`)} at={file.mtime} engine={file.engine ?? null} model={conversationModelLabel(file)} onLeave={onLeave} />;
   const region = {
     "data-relay-chat-reader": file.path,
     "data-reader-path": file.path,

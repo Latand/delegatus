@@ -37,8 +37,15 @@ const KEYS = { staging: false, owner: true, keys: [
 ] };
 const working = { enabled: true, reasons: [], keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
   counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } };
-globalThis.fetch = (async (input: unknown) => {
+/* What «Stop Delegatus» posted, and how the route answers it. */
+const stopPosts: unknown[] = [];
+let stopAnswer: () => Response = () => Response.json({ started: true, report: "stop-all.log" }, { status: 202 });
+globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
   const url = String(input);
+  if (url.endsWith("/api/stop-all")) {
+    stopPosts.push({ method: init?.method, body: JSON.parse(String(init?.body)) });
+    return stopAnswer();
+  }
   if (url.includes("/api/memory/settings")) return Response.json(working);
   if (url.endsWith("/api/keys")) return Response.json(KEYS);
   if (url.includes("/api/memory/source")) return Response.json({ choice: null, phase: null });
@@ -51,11 +58,14 @@ const { RailHeaderMenu } = await import("@/components/ProjectRail");
 const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
 const { openKeys } = await import("@/components/keys/openKeys");
 const { hidePhoneVoice, readPhoneVoice, resetPhoneVoiceForTests, setPhoneVoiceAvailable } = await import("@/components/voiceCompanion/phoneVoiceStore");
+const { setTeamViewForTests } = await import("@/components/team/teamClient");
 
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined;
   document.body.innerHTML = ""; localStorage.clear(); setLocale("en"); resetPhoneVoiceForTests();
+  stopPosts.length = 0; stopAnswer = () => Response.json({ started: true, report: "stop-all.log" }, { status: 202 });
+  setTeamViewForTests(null);
 });
 process.on("exit", () => { globalThis.fetch = originalFetch; });
 
@@ -290,7 +300,7 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
   await click(sheet.querySelector("[data-mobile2-menu-row='settings']"));
   const page = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
-  expect(page).toEqual(["back", "memory", "keys", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping"]);
+  expect(page).toEqual(["back", "memory", "keys", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping", "stop-all"]);
   /* The memory source row is drawn by the sheet as its own row, between Shared memory and Keys. */
   const sourceRow = sheet.querySelector("[data-header-menu-memory-source]")!;
   expect(sourceRow.querySelector("[data-memory-source-switch]")!.className).toContain("h-11");
@@ -348,4 +358,98 @@ test("phone: a page takes focus on its back row, and back returns it to the row 
       expect([key, document.activeElement === row(key)]).toEqual([key, true]);
     }
   }
+});
+
+/* «Stop Delegatus» (`delegatus stop --all`): the row asks first, posts only on
+   the confirming press, and keeps the answer in place. */
+for (const lang of ["en", "uk"] as const) test(`${lang}: Stop Delegatus asks, posts the confirmation once, and says the stop has started`, async () => {
+  setLocale(lang);
+  let closed = 0;
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => { closed += 1; }} />);
+  const row = host.querySelector("[data-rail-menu-stop-all]")!;
+  expect(row.textContent).toBe(translate(lang, "headerMenu.stopAll"));
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(host.querySelector("[data-stop-all-go]")).toBeNull();
+
+  await click(row);
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.confirm"));
+  await click(host.querySelector("[data-stop-all-cancel]"));
+  expect(host.querySelector("[data-stop-all-text]")).toBeNull();
+  expect(stopPosts).toEqual([]);
+
+  await click(row);
+  expect(host.querySelector("[data-stop-all-go]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.go"));
+  await click(host.querySelector("[data-stop-all-go]"));
+  expect(stopPosts).toEqual([{ method: "POST", body: { confirm: true, lang } }]);
+  const answer = host.querySelector("[data-stop-all-text]")!;
+  expect(answer.textContent).toBe(translate(lang, "headerMenu.stopAll.started"));
+  expect(answer.getAttribute("role")).toBe("status");
+  expect(host.querySelector("[data-stop-all-go]")).toBeNull();
+  /* A second press on the row changes nothing once the stop has started. */
+  await click(row);
+  expect(host.querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.started"));
+  expect(stopPosts).toHaveLength(1);
+  expect(closed).toBe(0);
+});
+
+for (const [code, status, key] of [
+  ["no-launcher", 409, "headerMenu.stopAll.noLauncher"],
+  ["unavailable", 409, "headerMenu.stopAll.unavailable"],
+  ["owner_required", 403, "headerMenu.stopAll.ownerOnly"],
+  ["failed", 500, "headerMenu.stopAll.failed"],
+  ["something-new", 500, "headerMenu.stopAll.failed"],
+] as const) test(`a refused stop (${code}) is told in words, never as its code`, async () => {
+  stopAnswer = () => Response.json({ error: "refused", code }, { status });
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  await click(host.querySelector("[data-rail-menu-stop-all]"));
+  await click(host.querySelector("[data-stop-all-go]"));
+  const answer = host.querySelector("[data-stop-all-text]")!;
+  expect(answer.textContent).toBe(translate("en", key));
+  expect(answer.textContent).not.toContain(code);
+});
+
+test("a stop the network never answers is told as not started", async () => {
+  stopAnswer = () => { throw new TypeError("network down"); };
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  await click(host.querySelector("[data-rail-menu-stop-all]"));
+  await click(host.querySelector("[data-stop-all-go]"));
+  expect(host.querySelector("[data-stop-all-text]")!.textContent).toBe(translate("en", "headerMenu.stopAll.failed"));
+});
+
+test("on a team install only the owner is offered Stop Delegatus", async () => {
+  const view = (role: "owner" | "member") => ({ mode: "team", me: { id: "m1", name: "Ada", color: "blue", initials: "A", role, status: "active", telegram: null },
+    members: [], methods: {} }) as unknown as Parameters<typeof setTeamViewForTests>[0];
+  setTeamViewForTests(view("member"));
+  let host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  expect(host.querySelector("[data-rail-menu-stop-all]")).toBeNull();
+  act(() => root?.unmount()); root = undefined; document.body.innerHTML = "";
+  setTeamViewForTests(view("owner"));
+  host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  expect(host.querySelector("[data-rail-menu-stop-all]")).not.toBeNull();
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang} phone: Stop Delegatus is the last row of Settings, asks on a page of its own and posts the same confirmation`, async () => {
+  setLocale(lang);
+  dom.innerWidth = 390;
+  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+  await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => {}} />);
+  expect(document.querySelector('[data-mobile2-menu-row="stop-all"]')).toBeNull();
+  await click(document.querySelector('[data-mobile2-menu-row="settings"]'));
+  const rows = [...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
+  expect(rows.at(-1)).toBe("stop-all");
+  expect(document.querySelector('[data-mobile2-menu-row="stop-all"]')!.textContent).toBe(translate(lang, "headerMenu.stopAll"));
+  await click(document.querySelector('[data-mobile2-menu-row="stop-all"]'));
+  expect([...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"))).toEqual(["back"]);
+  expect(document.querySelector('[data-mobile2-menu-row="back"]')!.textContent).toContain(translate(lang, "headerMenu.stopAll"));
+  expect(document.querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.confirm"));
+  /* Cancel returns to Settings, onto the row that opened the question. */
+  await click(document.querySelector("[data-stop-all-cancel]"));
+  expect(document.querySelector("[data-stop-all-text]")).toBeNull();
+  expect(document.activeElement).toBe(document.querySelector('[data-mobile2-menu-row="stop-all"]'));
+  expect(stopPosts).toEqual([]);
+  await click(document.querySelector('[data-mobile2-menu-row="stop-all"]'));
+  await click(document.querySelector("[data-stop-all-go]"));
+  expect(stopPosts).toEqual([{ method: "POST", body: { confirm: true, lang } }]);
+  expect(document.querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.started"));
 });

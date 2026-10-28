@@ -1,0 +1,2161 @@
+{
+  "manifest": [
+    "scripts/memory-selection.test.ts",
+    "src/components/BoardSearchEntry.dom.test.tsx",
+    "src/components/BootShell.dom.test.tsx",
+    "src/components/EffortPills.slot.dom.test.tsx",
+    "src/components/OverviewBoard.catalog.render.test.tsx",
+    "src/components/OverviewBoard.firstRun.dom.test.tsx",
+    "src/components/OverviewBoard.kanban.dom.test.tsx",
+    "src/components/OverviewBoard.loading.dom.test.tsx",
+    "src/components/OverviewBoard.render.test.tsx",
+    "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+    "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+    "src/components/ProjectDashboard.empty.dom.test.tsx",
+    "src/components/ProjectDashboard.flash.dom.test.tsx",
+    "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+    "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+    "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+    "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+    "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+    "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+    "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+    "src/components/ProjectDashboard.selection.dom.test.tsx",
+    "src/components/ProjectDashboard.shelf.dom.test.tsx",
+    "src/components/ProjectDashboard.test.ts",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+    "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+    "src/components/ProjectRail.firstRun.dom.test.tsx",
+    "src/components/TaskHeader.killConfirm.dom.test.tsx",
+    "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+    "src/components/Viewer.catalogFailure.dom.test.tsx",
+    "src/components/Viewer.deepLink.dom.test.tsx",
+    "src/components/Viewer.mobileSwipe.dom.test.tsx",
+    "src/components/Viewer.needsYou.dom.test.tsx",
+    "src/components/Viewer.orchestratorDock.dom.test.tsx",
+    "src/components/Viewer.overviewPhone.dom.test.tsx",
+    "src/components/Viewer.railHidden.dom.test.tsx",
+    "src/components/Viewer.switching.dom.test.tsx",
+    "src/components/Viewer.test.ts",
+    "src/components/attention/AttentionHost.dom.test.tsx",
+    "src/components/attention/AttentionHost.phoneNotice.dom.test.tsx",
+    "src/components/attention/PermissionActions.dom.test.tsx",
+    "src/components/attention/arrivalPulse.dom.test.tsx",
+    "src/components/attention/navigate.test.ts",
+    "src/components/feed/FeedItem.mobile.dom.test.tsx",
+    "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+    "src/components/feed/QuestionCard.dismiss.dom.test.tsx",
+    "src/components/feed/QuestionCard.mobile.dom.test.tsx",
+    "src/components/feed/processingError.test.ts",
+    "src/components/flows/FlowDialog.dom.test.tsx",
+    "src/components/flows/ReviewHistory.dom.test.tsx",
+    "src/components/flows/RoundDeck.dom.test.tsx",
+    "src/components/flows/RoundDeck.strip.dom.test.tsx",
+    "src/components/flows/directReviewGroups.test.ts",
+    "src/components/flows/flowModel.test.ts",
+    "src/components/flows/reviewDeckDisclosure.test.ts",
+    "src/components/kanban/KanbanAccounts.dom.test.tsx",
+    "src/components/kanban/KanbanAccountsRuntime.dom.test.tsx",
+    "src/components/kanban/KanbanAskOrchestrator.dom.test.tsx",
+    "src/components/kanban/KanbanBoard.dom.test.tsx",
+    "src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+    "src/components/kanban/KanbanCardDrag.dom.test.tsx",
+    "src/components/kanban/KanbanDetails.dom.test.tsx",
+    "src/components/kanban/KanbanDismiss.dom.test.tsx",
+    "src/components/kanban/KanbanDrafts.dom.test.tsx",
+    "src/components/kanban/KanbanEditing.dom.test.tsx",
+    "src/components/kanban/KanbanNeedsFilter.dom.test.tsx",
+    "src/components/kanban/KanbanOpenAgents.dom.test.tsx",
+    "src/components/kanban/KanbanOpenableConversations.dom.test.tsx",
+    "src/components/kanban/KanbanPipelines.dom.test.tsx",
+    "src/components/kanban/KanbanPresence.dom.test.tsx",
+    "src/components/kanban/KanbanReaders.dom.test.tsx",
+    "src/components/kanban/KanbanStages.dom.test.tsx",
+    "src/components/kanban/KanbanTickNotice.dom.test.tsx",
+    "src/components/kanban/KanbanUndo.dom.test.tsx",
+    "src/components/kanban/RemoteCard.dom.test.tsx",
+    "src/components/kanban/cardState.test.ts",
+    "src/components/kanban/kanbanModel.test.ts",
+    "src/components/kanban/overviewBands.test.ts",
+    "src/components/kanban/pipelineGraph.test.ts",
+    "src/components/kanban/reuseKanbanModel.test.ts",
+    "src/components/kanban/seatAgentWindow.dom.test.tsx",
+    "src/components/kanban/stageDisplayName.test.ts",
+    "src/components/kanban/stagesModel.test.ts",
+    "src/components/kanban/taskChronologyModel.test.ts",
+    "src/components/mobile/MobileBoard.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.badges.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.conversation.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.seen.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.superseded.dom.test.tsx",
+    "src/components/mobile/MobileFocusView.viewport.dom.test.tsx",
+    "src/components/mobile/MobileKanban.dom.test.tsx",
+    "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+    "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+    "src/components/mobile/MobilePipelinesScreen.dom.test.tsx",
+    "src/components/mobile/MobileRemoteTask.dom.test.tsx",
+    "src/components/mobile/MobileShell.board.dom.test.tsx",
+    "src/components/mobile/MobileTaskScreen.dom.test.tsx",
+    "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+    "src/components/mobile/directReviewDeck.dom.test.tsx",
+    "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+    "src/components/mobile/mobileOrchestratorControls.dom.test.tsx",
+    "src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx",
+    "src/components/mobile/mobileSeatCard.dom.test.tsx",
+    "src/components/mobile/phoneKanbanModel.test.ts",
+    "src/components/orchestrator/dockOpenState.dom.test.tsx",
+    "src/components/orchestrator/seatComposerHoist.dom.test.tsx",
+    "src/components/overlay/useAttentionOffers.dom.test.tsx",
+    "src/components/pipelines/PipelineBlock.dom.test.tsx",
+    "src/components/pipelines/PipelineEditor.legacyReview.dom.test.tsx",
+    "src/components/pipelines/PipelineHub.dom.test.tsx",
+    "src/components/pipelines/PipelineStrip.dom.test.tsx",
+    "src/components/pipelines/PipelineStrip.render.test.tsx",
+    "src/components/pipelines/PipelineStrip.test.ts",
+    "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
+    "src/components/pipelines/StagePlaceholderPane.dom.test.tsx",
+    "src/components/pipelines/VerdictPopover.render.test.tsx",
+    "src/components/pipelines/cpuQueue.test.ts",
+    "src/components/pipelines/createDraftPipeline.dom.test.tsx",
+    "src/components/pipelines/pipelineBlockModel.test.ts",
+    "src/components/pipelines/pipelineModel.test.ts",
+    "src/components/pipelines/pipelinePlaceholderStages.test.ts",
+    "src/components/pipelines/remoteLaneSummary.dom.test.tsx",
+    "src/components/pipelines/stageCardAria.render.test.tsx",
+    "src/components/projectDashboardDerivation.test.ts",
+    "src/components/resources/AttachControls.render.test.tsx",
+    "src/components/reviewerAutoClose.test.ts",
+    "src/components/runtime/AttentionCard.dismiss.dom.test.tsx",
+    "src/components/runtime/ConversationAttention.dom.test.tsx",
+    "src/components/scheme/AgentLinksLayer.render.test.tsx",
+    "src/components/scheme/GroupOverridePanel.dom.test.tsx",
+    "src/components/scheme/GroupOverridePanel.render.test.tsx",
+    "src/components/scheme/GroupsLayer.render.test.tsx",
+    "src/components/scheme/Minimap.render.test.tsx",
+    "src/components/scheme/SchemeBoard.bands.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.builderReveal.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.camera.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.catalogFocus.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.lineage.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.mapFraming.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.mapStacks.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.pipelineComposition.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.pipelineRegions.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.selection.dom.test.tsx",
+    "src/components/scheme/SchemeBoard.stageOverlay.dom.test.tsx",
+    "src/components/scheme/SubagentBadgeAnchors.render.test.tsx",
+    "src/components/scheme/TaskCard.dom.test.tsx",
+    "src/components/scheme/agentLinks.test.ts",
+    "src/components/scheme/bulkActions.test.ts",
+    "src/components/scheme/currentWork.test.ts",
+    "src/components/scheme/directReviewBoardComposition.test.ts",
+    "src/components/scheme/findFreeSlot.test.ts",
+    "src/components/scheme/focusFrames.test.ts",
+    "src/components/scheme/lasso.test.ts",
+    "src/components/scheme/layout.lineage.test.ts",
+    "src/components/scheme/layout.test.ts",
+    "src/components/scheme/nodes.anatomy.render.test.tsx",
+    "src/components/scheme/nodes.dom.test.tsx",
+    "src/components/scheme/nodes.stageRow.dom.test.tsx",
+    "src/components/scheme/nodes.strip.dom.test.tsx",
+    "src/components/scheme/offscreenClusters.test.ts",
+    "src/components/scheme/pipelineRegionGeometry.test.ts",
+    "src/components/scheme/pipelineStageSurfaces.test.ts",
+    "src/components/scheme/placementHorizon.test.ts",
+    "src/components/scheme/spatialNav.test.ts",
+    "src/components/scheme/taskBands.test.ts",
+    "src/components/scheme/taskGeometry.test.ts",
+    "src/components/scheme/taskPlacement.test.ts",
+    "src/components/scheme/useSchemeCamera.focus.dom.test.tsx",
+    "src/components/scheme/useSchemeCamera.test.ts",
+    "src/components/scheme/useSpatialNav.test.ts",
+    "src/components/scheme/workerCollapse.test.ts",
+    "src/components/session/SessionTitle.mobile.dom.test.tsx",
+    "src/components/skeletons.dom.test.tsx",
+    "src/components/tasks/TaskWorkflowPanel.dom.test.tsx",
+    "src/components/tasks/taskWorkflowModel.test.ts",
+    "src/components/workLinks/workLinks.dom.test.tsx",
+    "src/components/workflows/legacyDraftPurge.dom.test.tsx",
+    "src/components/workingAgents.test.ts",
+    "src/hooks/serverReach.dom.test.tsx",
+    "src/hooks/useFiles.dom.test.tsx",
+    "src/hooks/useSwitchboardData.dom.test.tsx",
+    "src/hooks/viewPresenceBus.test.ts",
+    "src/lib/attention/landing.test.ts",
+    "src/lib/attention/machine.test.ts",
+    "src/lib/attention/readerArrival.test.ts",
+    "src/lib/attention/resolve.test.ts",
+    "src/lib/attention/service.test.ts",
+    "src/lib/attention/store.sqlite.test.ts",
+    "src/lib/attention/store.test.ts",
+    "src/lib/i18n/i18n.test.ts",
+    "src/lib/i18n/spawnCopy.test.ts",
+    "src/lib/links/laneFeed.test.ts",
+    "src/lib/mcp/requestAttention.immediate.test.ts",
+    "src/lib/mcp/requestAttention.targets.test.ts",
+    "src/lib/mcp/schemaParity.test.ts",
+    "src/lib/memory/context.test.ts",
+    "src/lib/memory/selection.test.ts",
+    "src/lib/orchestrator/prompt.test.ts",
+    "src/lib/pipelines/engine.routing.test.ts",
+    "src/lib/pipelines/stageCompletion.test.ts",
+    "src/lib/pipelines/visibility.test.ts",
+    "src/lib/reviewHistory/reader.test.ts",
+    "src/lib/reviewHistory/redaction.test.ts",
+    "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+    "src/lib/scanner/settledTurnProjection.test.ts",
+    "src/lib/tasks/systemRun.test.ts",
+    "src/lib/telegram/reportRunner.test.ts"
+  ],
+  "observations": [
+    {
+      "sample": "head",
+      "file": "src/components/OverviewBoard.catalog.render.test.tsx",
+      "wallMs": 2547,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/OverviewBoard.firstRun.dom.test.tsx",
+      "wallMs": 3047,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+      "wallMs": 3814,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/OverviewBoard.loading.dom.test.tsx",
+      "wallMs": 4005,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/BoardSearchEntry.dom.test.tsx",
+      "wallMs": 4186,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/EffortPills.slot.dom.test.tsx",
+      "wallMs": 4408,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/BootShell.dom.test.tsx",
+      "wallMs": 4653,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/OverviewBoard.render.test.tsx",
+      "wallMs": 2746,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+      "wallMs": 2202,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+      "wallMs": 3533,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "scripts/memory-selection.test.ts",
+      "wallMs": 6842,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.flash.dom.test.tsx",
+      "wallMs": 2902,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.empty.dom.test.tsx",
+      "wallMs": 3347,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+      "wallMs": 4676,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+      "wallMs": 3585,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+      "wallMs": 3762,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+      "wallMs": 4199,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+      "wallMs": 4926,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.selection.dom.test.tsx",
+      "wallMs": 3456,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.test.ts",
+      "wallMs": 2238,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.shelf.dom.test.tsx",
+      "wallMs": 2806,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/TaskHeader.killConfirm.dom.test.tsx",
+      "wallMs": 1799,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectRail.firstRun.dom.test.tsx",
+      "wallMs": 2567,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+      "wallMs": 3436,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+      "wallMs": 11443,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "wallMs": 2512,
+      "failures": 5,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+      "wallMs": 9019,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.catalogFailure.dom.test.tsx",
+      "wallMs": 3825,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.orchestratorDock.dom.test.tsx",
+      "wallMs": 3887,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.mobileSwipe.dom.test.tsx",
+      "wallMs": 6100,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.needsYou.dom.test.tsx",
+      "wallMs": 5903,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.overviewPhone.dom.test.tsx",
+      "wallMs": 5776,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.railHidden.dom.test.tsx",
+      "wallMs": 3566,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.test.ts",
+      "wallMs": 2081,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+      "wallMs": 22176,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/attention/PermissionActions.dom.test.tsx",
+      "wallMs": 1510,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/attention/arrivalPulse.dom.test.tsx",
+      "wallMs": 1753,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/attention/navigate.test.ts",
+      "wallMs": 1555,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/attention/AttentionHost.phoneNotice.dom.test.tsx",
+      "wallMs": 4557,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/feed/FeedItem.mobile.dom.test.tsx",
+      "wallMs": 1714,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+      "wallMs": 1429,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/feed/QuestionCard.dismiss.dom.test.tsx",
+      "wallMs": 1554,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/feed/processingError.test.ts",
+      "wallMs": 1495,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/feed/QuestionCard.mobile.dom.test.tsx",
+      "wallMs": 1713,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.switching.dom.test.tsx",
+      "wallMs": 10087,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/FlowDialog.dom.test.tsx",
+      "wallMs": 1830,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/ReviewHistory.dom.test.tsx",
+      "wallMs": 1641,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/flowModel.test.ts",
+      "wallMs": 763,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/directReviewGroups.test.ts",
+      "wallMs": 1022,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/RoundDeck.strip.dom.test.tsx",
+      "wallMs": 2079,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/RoundDeck.dom.test.tsx",
+      "wallMs": 3140,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/flows/reviewDeckDisclosure.test.ts",
+      "wallMs": 850,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanAskOrchestrator.dom.test.tsx",
+      "wallMs": 3404,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "wallMs": 4041,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanAccountsRuntime.dom.test.tsx",
+      "wallMs": 5017,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+      "wallMs": 3636,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanAccounts.dom.test.tsx",
+      "wallMs": 7855,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "wallMs": 36034,
+      "failures": 8,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanDetails.dom.test.tsx",
+      "wallMs": 2786,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanCardDrag.dom.test.tsx",
+      "wallMs": 3691,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanNeedsFilter.dom.test.tsx",
+      "wallMs": 2699,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanDismiss.dom.test.tsx",
+      "wallMs": 3517,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanDrafts.dom.test.tsx",
+      "wallMs": 3817,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanEditing.dom.test.tsx",
+      "wallMs": 4732,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanOpenAgents.dom.test.tsx",
+      "wallMs": 5013,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanOpenableConversations.dom.test.tsx",
+      "wallMs": 3158,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanPresence.dom.test.tsx",
+      "wallMs": 5263,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanTickNotice.dom.test.tsx",
+      "wallMs": 2905,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanPipelines.dom.test.tsx",
+      "wallMs": 7805,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanReaders.dom.test.tsx",
+      "wallMs": 6334,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/RemoteCard.dom.test.tsx",
+      "wallMs": 3210,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/cardState.test.ts",
+      "wallMs": 1601,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "wallMs": 44146,
+      "failures": 10,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/pipelineGraph.test.ts",
+      "wallMs": 1614,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/overviewBands.test.ts",
+      "wallMs": 2100,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "wallMs": 5711,
+      "failures": 5,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/reuseKanbanModel.test.ts",
+      "wallMs": 1308,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/stagesModel.test.ts",
+      "wallMs": 1147,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/stageDisplayName.test.ts",
+      "wallMs": 1500,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/taskChronologyModel.test.ts",
+      "wallMs": 831,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/kanbanModel.test.ts",
+      "wallMs": 4961,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/seatAgentWindow.dom.test.tsx",
+      "wallMs": 4272,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.badges.dom.test.tsx",
+      "wallMs": 3185,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "wallMs": 3073,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.conversation.dom.test.tsx",
+      "wallMs": 4069,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx",
+      "wallMs": 2993,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+      "wallMs": 2753,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.seen.dom.test.tsx",
+      "wallMs": 3039,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.superseded.dom.test.tsx",
+      "wallMs": 2284,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileBoard.dom.test.tsx",
+      "wallMs": 7353,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileFocusView.viewport.dom.test.tsx",
+      "wallMs": 2802,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "wallMs": 2360,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+      "wallMs": 2632,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobilePipelinesScreen.dom.test.tsx",
+      "wallMs": 2443,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileRemoteTask.dom.test.tsx",
+      "wallMs": 2858,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+      "wallMs": 3027,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileTaskScreen.dom.test.tsx",
+      "wallMs": 3141,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/attention/AttentionHost.dom.test.tsx",
+      "wallMs": 45995,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/directReviewDeck.dom.test.tsx",
+      "wallMs": 2344,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+      "wallMs": 9175,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/mobileOrchestratorControls.dom.test.tsx",
+      "wallMs": 3051,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx",
+      "wallMs": 2474,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/phoneKanbanModel.test.ts",
+      "wallMs": 1144,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/overlay/useAttentionOffers.dom.test.tsx",
+      "wallMs": 1934,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/orchestrator/dockOpenState.dom.test.tsx",
+      "wallMs": 3261,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+      "wallMs": 29190,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/orchestrator/seatComposerHoist.dom.test.tsx",
+      "wallMs": 3490,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/Viewer.deepLink.dom.test.tsx",
+      "wallMs": 61496,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineEditor.legacyReview.dom.test.tsx",
+      "wallMs": 1299,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineHub.dom.test.tsx",
+      "wallMs": 1426,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineBlock.dom.test.tsx",
+      "wallMs": 1917,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineStrip.test.ts",
+      "wallMs": 1110,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineStrip.render.test.tsx",
+      "wallMs": 1495,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineStrip.dom.test.tsx",
+      "wallMs": 2218,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
+      "wallMs": 1660,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/VerdictPopover.render.test.tsx",
+      "wallMs": 1160,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/cpuQueue.test.ts",
+      "wallMs": 1145,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/StagePlaceholderPane.dom.test.tsx",
+      "wallMs": 2146,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/createDraftPipeline.dom.test.tsx",
+      "wallMs": 1446,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/pipelineBlockModel.test.ts",
+      "wallMs": 1123,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/pipelineModel.test.ts",
+      "wallMs": 1155,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/pipelinePlaceholderStages.test.ts",
+      "wallMs": 1190,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/stageCardAria.render.test.tsx",
+      "wallMs": 1453,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/pipelines/remoteLaneSummary.dom.test.tsx",
+      "wallMs": 1945,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/resources/AttachControls.render.test.tsx",
+      "wallMs": 1191,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/reviewerAutoClose.test.ts",
+      "wallMs": 1169,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/projectDashboardDerivation.test.ts",
+      "wallMs": 1825,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+      "wallMs": 15413,
+      "failures": 3,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/runtime/AttentionCard.dismiss.dom.test.tsx",
+      "wallMs": 1717,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/GroupOverridePanel.render.test.tsx",
+      "wallMs": 1328,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/runtime/ConversationAttention.dom.test.tsx",
+      "wallMs": 1903,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/AgentLinksLayer.render.test.tsx",
+      "wallMs": 1856,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/GroupsLayer.render.test.tsx",
+      "wallMs": 1953,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/mobileSeatCard.dom.test.tsx",
+      "wallMs": 13629,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/GroupOverridePanel.dom.test.tsx",
+      "wallMs": 2810,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/Minimap.render.test.tsx",
+      "wallMs": 1770,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.builderReveal.dom.test.tsx",
+      "wallMs": 2612,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.mapStacks.dom.test.tsx",
+      "wallMs": 2025,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.catalogFocus.dom.test.tsx",
+      "wallMs": 3368,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.bands.dom.test.tsx",
+      "wallMs": 4492,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.lineage.dom.test.tsx",
+      "wallMs": 3521,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.mapFraming.dom.test.tsx",
+      "wallMs": 3472,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.camera.dom.test.tsx",
+      "wallMs": 4593,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.pipelineComposition.dom.test.tsx",
+      "wallMs": 2384,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/agentLinks.test.ts",
+      "wallMs": 1074,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SubagentBadgeAnchors.render.test.tsx",
+      "wallMs": 1633,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/bulkActions.test.ts",
+      "wallMs": 1259,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.pipelineRegions.dom.test.tsx",
+      "wallMs": 2986,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/currentWork.test.ts",
+      "wallMs": 889,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.stageOverlay.dom.test.tsx",
+      "wallMs": 2641,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/findFreeSlot.test.ts",
+      "wallMs": 890,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/TaskCard.dom.test.tsx",
+      "wallMs": 2672,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/SchemeBoard.selection.dom.test.tsx",
+      "wallMs": 3248,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/focusFrames.test.ts",
+      "wallMs": 1109,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/lasso.test.ts",
+      "wallMs": 856,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/directReviewBoardComposition.test.ts",
+      "wallMs": 1650,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "wallMs": 22693,
+      "failures": 5,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/layout.lineage.test.ts",
+      "wallMs": 1699,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/offscreenClusters.test.ts",
+      "wallMs": 1221,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/layout.test.ts",
+      "wallMs": 1945,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/nodes.anatomy.render.test.tsx",
+      "wallMs": 1968,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/pipelineRegionGeometry.test.ts",
+      "wallMs": 1497,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/pipelineStageSurfaces.test.ts",
+      "wallMs": 1510,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/nodes.stageRow.dom.test.tsx",
+      "wallMs": 2853,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/nodes.strip.dom.test.tsx",
+      "wallMs": 2891,
+      "failures": 3,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/placementHorizon.test.ts",
+      "wallMs": 1483,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/nodes.dom.test.tsx",
+      "wallMs": 3211,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/spatialNav.test.ts",
+      "wallMs": 1670,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/taskBands.test.ts",
+      "wallMs": 1814,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/taskGeometry.test.ts",
+      "wallMs": 1596,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/taskPlacement.test.ts",
+      "wallMs": 1236,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/workerCollapse.test.ts",
+      "wallMs": 883,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/useSchemeCamera.test.ts",
+      "wallMs": 1498,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/useSpatialNav.test.ts",
+      "wallMs": 1648,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/scheme/useSchemeCamera.focus.dom.test.tsx",
+      "wallMs": 2216,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/tasks/taskWorkflowModel.test.ts",
+      "wallMs": 1220,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/skeletons.dom.test.tsx",
+      "wallMs": 1898,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/tasks/TaskWorkflowPanel.dom.test.tsx",
+      "wallMs": 2063,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/workingAgents.test.ts",
+      "wallMs": 1400,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/session/SessionTitle.mobile.dom.test.tsx",
+      "wallMs": 2962,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/hooks/viewPresenceBus.test.ts",
+      "wallMs": 973,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/workLinks/workLinks.dom.test.tsx",
+      "wallMs": 3043,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/machine.test.ts",
+      "wallMs": 970,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/hooks/useSwitchboardData.dom.test.tsx",
+      "wallMs": 1818,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/readerArrival.test.ts",
+      "wallMs": 837,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/resolve.test.ts",
+      "wallMs": 1051,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/i18n/i18n.test.ts",
+      "wallMs": 817,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/i18n/spawnCopy.test.ts",
+      "wallMs": 704,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/links/laneFeed.test.ts",
+      "wallMs": 1379,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/hooks/serverReach.dom.test.tsx",
+      "wallMs": 6758,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/store.sqlite.test.ts",
+      "wallMs": 4914,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/landing.test.ts",
+      "wallMs": 6762,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/store.test.ts",
+      "wallMs": 6143,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/mcp/schemaParity.test.ts",
+      "wallMs": 2398,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/memory/selection.test.ts",
+      "wallMs": 1278,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/memory/context.test.ts",
+      "wallMs": 2160,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/orchestrator/prompt.test.ts",
+      "wallMs": 1041,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/pipelines/visibility.test.ts",
+      "wallMs": 1362,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/mcp/requestAttention.targets.test.ts",
+      "wallMs": 5842,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/hooks/useFiles.dom.test.tsx",
+      "wallMs": 17295,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/mcp/requestAttention.immediate.test.ts",
+      "wallMs": 12968,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+      "wallMs": 2172,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/scanner/settledTurnProjection.test.ts",
+      "wallMs": 2750,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/reviewHistory/redaction.test.ts",
+      "wallMs": 9776,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/tasks/systemRun.test.ts",
+      "wallMs": 3031,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/attention/service.test.ts",
+      "wallMs": 20550,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/components/workflows/legacyDraftPurge.dom.test.tsx",
+      "wallMs": 44374,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/telegram/reportRunner.test.ts",
+      "wallMs": 24764,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "wallMs": 54250,
+      "failures": 25,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/reviewHistory/reader.test.ts",
+      "wallMs": 86009,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head",
+      "file": "src/lib/pipelines/engine.routing.test.ts",
+      "wallMs": 104790,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+      "wallMs": 1524,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+      "wallMs": 9427,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "wallMs": 1396,
+      "failures": 5,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/Viewer.switching.dom.test.tsx",
+      "wallMs": 2122,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/attention/AttentionHost.dom.test.tsx",
+      "wallMs": 1403,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "wallMs": 1397,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/kanban/KanbanOpenableConversations.dom.test.tsx",
+      "wallMs": 1047,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/kanban/KanbanPipelines.dom.test.tsx",
+      "wallMs": 952,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+      "wallMs": 1049,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "wallMs": 1282,
+      "failures": 5,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/kanban/RemoteCard.dom.test.tsx",
+      "wallMs": 1087,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "wallMs": 860,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+      "wallMs": 908,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+      "wallMs": 855,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "wallMs": 792,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+      "wallMs": 696,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+      "wallMs": 984,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "wallMs": 33845,
+      "failures": 8,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+      "wallMs": 13464,
+      "failures": 3,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/scheme/nodes.stageRow.dom.test.tsx",
+      "wallMs": 950,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/scheme/nodes.strip.dom.test.tsx",
+      "wallMs": 1437,
+      "failures": 3,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/lib/mcp/schemaParity.test.ts",
+      "wallMs": 778,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "wallMs": 41550,
+      "failures": 10,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/lib/pipelines/engine.routing.test.ts",
+      "wallMs": 2870,
+      "failures": 2,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/lib/reviewHistory/reader.test.ts",
+      "wallMs": 744,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/lib/telegram/reportRunner.test.ts",
+      "wallMs": 1087,
+      "failures": 1,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "wallMs": 21075,
+      "failures": 5,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "baseline",
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "wallMs": 18535,
+      "failures": 25,
+      "complete": true,
+      "exitCode": 1
+    },
+    {
+      "sample": "head rerun",
+      "file": "src/components/kanban/RemoteCard.dom.test.tsx",
+      "wallMs": 2281,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "base rerun",
+      "file": "src/components/kanban/RemoteCard.dom.test.tsx",
+      "wallMs": 2376,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "base rerun",
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "wallMs": 2454,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    },
+    {
+      "sample": "head rerun",
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "wallMs": 2527,
+      "failures": 0,
+      "complete": true,
+      "exitCode": 0
+    }
+  ]
+}

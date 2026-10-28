@@ -1,0 +1,1919 @@
+{
+  "recordedAt": "2026-10-26T08:56:49.252659+00:00",
+  "reviewedInput": "b7be33a2c3ae2a0fc760316fac6ef5dff1805e6f",
+  "previousIncomingMain": "e250bba6a14bb699b4b058e289ccb49e17d3d9c7",
+  "comparisonBase": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+  "testedSnapshotTree": "e57e28c54a0092bfc2e858e41a4e08152cbee4b1",
+  "commands": {
+    "comparison": "provided gate-slot.sh: serial setsid --wait bun scripts/local-gate-tests.ts --base <comparisonBase> <explicit path>",
+    "wholeFileRepeats": "provided gate-slot.sh: serial setsid --wait bun run test <explicit path> --reporter=junit --reporter-outfile=<private report>; three fresh samples per side",
+    "guards": "provided gate-slot.sh: setsid --wait bun run test ./src/components/LogFeed.mobileChrome.dom.test.tsx -t \"reply controls preserve archive\"; remove each guard in scratch, restore, rerun",
+    "retiredRecipient": "provided gate-slot.sh: setsid --wait bun run test ./src/components/orchestrator/RetiredOrchestratorBanner.test.ts",
+    "typecheck": "provided gate-slot.sh: bun x --no-install tsc --noEmit",
+    "browser": "provided gate-slot.sh: setsid --wait bun run test ./src/components/kanban/kanbanBoard.browser.test.tsx -t \"retired review history|conversation open motion|the board header fits a narrow\""
+  },
+  "environment": {
+    "preparation": "checkEnvironment followed by isolatedEnvironment; frozen dependency installs without lifecycle scripts",
+    "isolated": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "controlEndpoint": "closed loopback port; connection refused",
+    "heavyChecks": "serial under the supplied gate wrapper",
+    "runtime": "Bun 1.4.0"
+  },
+  "comparisonResults": [
+    {
+      "file": "./src/components/ProjectDashboard.shelf.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/attention/navigate.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/conversation/DeputyBlock.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/conversation/OutboxBubbles.delivery.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/flows/ReviewHistory.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/flows/RoundDeck.strip.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/flows/directReviewGroups.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/flows/flowModel.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/kanban/KanbanStages.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/pipelines/createDraftPipeline.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/pipelines/pipelineModel.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/reviewerAutoClose.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/agentLinks.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/layout.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/kanban/kanbanModel.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/retiredSchemeBoard.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.liveness.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.mobileChrome.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.paneTones.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.spawn.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.stageTitle.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.lineage.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.superseded.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.relations.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/BranchPane.spawn.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.refusedSend.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.startingWindow.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.spawnPathFlip.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.prependAnchor.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.liveToolRows.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.launchReceiptChip.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.oneMessageOneRow.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.imageViewer.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.outboxTailOrder.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.followScroll.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/LogFeed.mobileChrome.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/OverviewBoard.kanban.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/OverviewBoard.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/OverviewBoard.loading.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/OverviewBoard.catalog.render.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/OverviewBoard.firstRun.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.flash.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.selection.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.headerBar.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.empty.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.attentionMount.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.needsYou.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.mobileSwipe.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.switching.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.railHidden.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.orchestratorDock.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.overviewPhone.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.catalogFailure.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/Viewer.deepLink.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/conversation/OutboxBubbles.switchHold.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/flows/RoundDeck.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/flows/reviewDeckDisclosure.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/kanban/KanbanBoard.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/kanban/overviewBands.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/kanban/pipelineGraph.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileBoard.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.seen.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.badges.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.viewport.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.conversation.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.superseded.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelinesScreen.dom.test.tsx",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/layout.lineage.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/placementHorizon.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/taskGeometry.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/scheme/workerCollapse.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/components/tasks/taskWorkflowModel.test.ts",
+      "code": 0
+    },
+    {
+      "file": "./src/hooks/useSwitchboardData.dom.test.tsx",
+      "code": 0
+    }
+  ],
+  "introducedFailures": 0,
+  "comparatorReported": [
+    {
+      "file": "./src/components/kanban/KanbanStages.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/kanban/KanbanStages.dom.test.tsx: a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)",
+        "PRE-EXISTING src/components/kanban/KanbanStages.dom.test.tsx: a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)"
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/mobile/MobilePipelineScreen.dom.test.tsx: a spent review budget is answered inside the review stage: its heads, Close lane and One more round"
+      ]
+    },
+    {
+      "file": "./src/components/BranchPane.spawn.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/BranchPane.spawn.dom.test.tsx: a never-started launch offers dismissal and no resume control (#1972)"
+      ]
+    },
+    {
+      "file": "./src/components/LogFeed.imageViewer.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/LogFeed.imageViewer.dom.test.tsx: the edge buttons step like the arrows, and every move resets zoom and pan",
+        "PRE-EXISTING src/components/LogFeed.imageViewer.dom.test.tsx: a click on the dimmed area around the picture closes the viewer, and a click on the picture does not",
+        "PRE-EXISTING src/components/LogFeed.imageViewer.dom.test.tsx: a pan that ends off the picture keeps the viewer open, and a still click there then closes it",
+        "PRE-EXISTING src/components/LogFeed.imageViewer.dom.test.tsx: <between-tests error> TypeError: null is not an object (evaluating 'viewer().querySelector') (the base run of this file is broken the same way)",
+        "PRE-EXISTING src/components/LogFeed.imageViewer.dom.test.tsx: <between-tests error> error: expect(received).toBe(expected) (the base run of this file is broken the same way)",
+        "PRE-EXISTING src/components/LogFeed.imageViewer.dom.test.tsx: <between-tests error> error: expect(received).toBe(expected) (the base run of this file is broken the same way)"
+      ]
+    },
+    {
+      "file": "./src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: textless failed receipt polling and remount retain unknown history, announcement and original controls",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: textless uncertain receipt polling and remount retain unknown history, announcement and original controls",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: each original operation keeps one recovery row through polling and remount ({\"text\":\"Check the release status\",\"terminal\":\"delivered\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: each original operation keeps one recovery row through polling and remount ({\"text\":\"Check the release status\",\"terminal\":\"discarded\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: each original operation keeps one recovery row through polling and remount ({\"text\":\"\",\"terminal\":\"delivered\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: each original operation keeps one recovery row through polling and remount ({\"text\":\"\",\"terminal\":\"discarded\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: each original operation keeps one recovery row through polling and remount ({\"terminal\":\"delivered\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: each original operation keeps one recovery row through polling and remount ({\"terminal\":\"discarded\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: uncertainty survives reload, conversation switches, and late errors; actions use the original operation",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: authoritative failed/safe resolves unknown without dispatch",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: authoritative rejected/safe resolves unknown without dispatch",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: authoritative failed/not-needed resolves unknown without dispatch",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: authoritative delivered/not-needed resolves unknown without dispatch",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: real runtime bus ingestion refuses an older receipt after authoritative delivery",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: late queued send callback cannot reverse authoritative success",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: late failed send callback cannot reverse authoritative success",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: late network send callback cannot reverse authoritative success",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: accepted held response persists identity and settles by original operation without resend",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"conversation\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"key\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"operation\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"envelope\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"conversation\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"key\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"operation\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"envelope\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer settlement delivered survives real journal ingestion and remount",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer settlement discarded survives real journal ingestion and remount",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer recovery persists across journal polling, switches and remount ({\"outcome\":\"delivered\",\"local\":false})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer recovery persists across journal polling, switches and remount ({\"outcome\":\"discarded\",\"local\":false,\"text\":\"\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer recovery persists across journal polling, switches and remount ({\"outcome\":\"delivered\",\"local\":false,\"churn\":true})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer recovery persists across journal polling, switches and remount ({\"outcome\":\"safe\",\"local\":false})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer recovery persists across journal polling, switches and remount ({\"outcome\":\"safe\",\"local\":true,\"text\":\"Check the release status\"})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: producer recovery persists across journal polling, switches and remount ({\"outcome\":\"safe\",\"local\":false,\"newerJournal\":true})",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: issue 1538: producer-admitted none send with its response still on the wire hydrates as unknown, sends once and settles by its receipt",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: issue 1538: producer-admitted image send with its response still on the wire hydrates as unknown, sends once and settles by its receipt",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: issue 1538: producer-admitted document send with its response still on the wire hydrates as unknown, sends once and settles by its receipt",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: receiptless safe retry preserves selected context empty=false remount=%s",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: receiptless safe retry preserves selected context empty=false remount=%s",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: receiptless safe retry preserves selected context empty=true remount=%s",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: receiptless safe retry preserves selected context empty=true remount=%s",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: restored incomplete context fences safe local retry: undefined",
+        "PRE-EXISTING src/components/LogFeed.deliveryUncertainty.dom.test.tsx: restored incomplete context fences safe local retry: {\"version\":1,\"state\":\"selected\",\"conversationId\":\"invalid\"}"
+      ]
+    },
+    {
+      "file": "./src/components/OverviewBoard.kanban.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/OverviewBoard.kanban.dom.test.tsx: what needs one project to write into is absent, never faked"
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/ProjectDashboard.seatTasks.dom.test.tsx: a dock open beside the dashboard adds no second seat request (#1841)"
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: a switch to a project the Board is already showing files for leaves the reader behind, and it is not back on return",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: an attention jump to a conversation a card holds brings it into the same window, never into its card",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: a `#c=` landing on a conversation a card holds brings it into the same window, never into its card",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: another conversation no card holds comes into the window after the first, which stays in its list",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: a focus handoff `show` to a card does not report arrival under the window, and leaves the window",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: a focus handoff `open` to a card does not report arrival under the window, and brings the conversation into it",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: a pipeline link on this project leaves the window and focuses the card that holds the pipeline",
+        "PRE-EXISTING src/components/ProjectDashboard.looseReader.dom.test.tsx: a pipeline link to another project switches to it with no window, and focuses the card that holds the pipeline there"
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx: opening a provisional seat without a draft retains its identity across a scan gap and transcript adoption"
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: an attention jump opens the same reader",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: an attention jump opens the same reader",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: an attention jump opens the same reader",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+        "PRE-EXISTING src/components/ProjectDashboard.unownedConversations.dom.test.tsx: under a standing landing, a card's link to Conversations opens the project's list over the Board"
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/mobile/MobileFocusView.strip.dom.test.tsx: the phone renders no inline control strip: every control is a labelled 44 px row in the conversation menu"
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx: integrated, portrait keyboard: long draft caps at 160px and the chrome fits (#983 round 2)",
+        "PRE-EXISTING src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx: integrated, a 280px visible viewport: the whole composer unit still fits it (#983 round 2, #1483)"
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "classifications": [
+        "PRE-EXISTING src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx: One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does"
+      ]
+    }
+  ],
+  "wholeFileComparisons": [
+    {
+      "file": "./src/components/kanban/KanbanStages.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+          "suite": "",
+          "name": "a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+          "suite": "",
+          "name": "a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)",
+          "kind": "test",
+          "occurrence": 1
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 44
+        }
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+          "suite": "",
+          "name": "a spent review budget is answered inside the review stage: its heads, Close lane and One more round",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 18
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 21
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 18
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 21
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 18
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 21
+        }
+      ]
+    },
+    {
+      "file": "./src/components/BranchPane.spawn.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/BranchPane.spawn.dom.test.tsx",
+          "suite": "",
+          "name": "a never-started launch offers dismissal and no resume control (#1972)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        }
+      ]
+    },
+    {
+      "file": "./src/components/LogFeed.imageViewer.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/LogFeed.imageViewer.dom.test.tsx",
+          "suite": "",
+          "name": "the edge buttons step like the arrows, and every move resets zoom and pan",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.imageViewer.dom.test.tsx",
+          "suite": "",
+          "name": "a click on the dimmed area around the picture closes the viewer, and a click on the picture does not",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.imageViewer.dom.test.tsx",
+          "suite": "",
+          "name": "a pan that ends off the picture keeps the viewer open, and a still click there then closes it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.imageViewer.dom.test.tsx",
+          "suite": "",
+          "name": "<between-tests error> TypeError: null is not an object (evaluating 'viewer().querySelector')",
+          "kind": "error"
+        },
+        {
+          "file": "src/components/LogFeed.imageViewer.dom.test.tsx",
+          "suite": "",
+          "name": "<between-tests error> error: expect(received).toBe(expected)",
+          "kind": "error"
+        },
+        {
+          "file": "src/components/LogFeed.imageViewer.dom.test.tsx",
+          "suite": "",
+          "name": "<between-tests error> error: expect(received).toBe(expected)",
+          "kind": "error"
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 13
+        }
+      ]
+    },
+    {
+      "file": "./src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "textless failed receipt polling and remount retain unknown history, announcement and original controls",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "textless uncertain receipt polling and remount retain unknown history, announcement and original controls",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "each original operation keeps one recovery row through polling and remount ({\"text\":\"Check the release status\",\"terminal\":\"delivered\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "each original operation keeps one recovery row through polling and remount ({\"text\":\"Check the release status\",\"terminal\":\"discarded\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "each original operation keeps one recovery row through polling and remount ({\"text\":\"\",\"terminal\":\"delivered\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "each original operation keeps one recovery row through polling and remount ({\"text\":\"\",\"terminal\":\"discarded\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "each original operation keeps one recovery row through polling and remount ({\"terminal\":\"delivered\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "each original operation keeps one recovery row through polling and remount ({\"terminal\":\"discarded\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "uncertainty survives reload, conversation switches, and late errors; actions use the original operation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "authoritative failed/safe resolves unknown without dispatch",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "authoritative rejected/safe resolves unknown without dispatch",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "authoritative failed/not-needed resolves unknown without dispatch",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "authoritative delivered/not-needed resolves unknown without dispatch",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "real runtime bus ingestion refuses an older receipt after authoritative delivery",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "late queued send callback cannot reverse authoritative success",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "late failed send callback cannot reverse authoritative success",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "late network send callback cannot reverse authoritative success",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "accepted held response persists identity and settles by original operation without resend",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"conversation\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"key\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"operation\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"POST\",\"mismatch\":\"envelope\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"conversation\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"key\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"operation\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "recovery response must name the original operation ({\"method\":\"DELETE\",\"mismatch\":\"envelope\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer settlement delivered survives real journal ingestion and remount",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer settlement discarded survives real journal ingestion and remount",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer recovery persists across journal polling, switches and remount ({\"outcome\":\"delivered\",\"local\":false})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer recovery persists across journal polling, switches and remount ({\"outcome\":\"discarded\",\"local\":false,\"text\":\"\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer recovery persists across journal polling, switches and remount ({\"outcome\":\"delivered\",\"local\":false,\"churn\":true})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer recovery persists across journal polling, switches and remount ({\"outcome\":\"safe\",\"local\":false})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer recovery persists across journal polling, switches and remount ({\"outcome\":\"safe\",\"local\":true,\"text\":\"Check the release status\"})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "producer recovery persists across journal polling, switches and remount ({\"outcome\":\"safe\",\"local\":false,\"newerJournal\":true})",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "issue 1538: producer-admitted none send with its response still on the wire hydrates as unknown, sends once and settles by its receipt",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "issue 1538: producer-admitted image send with its response still on the wire hydrates as unknown, sends once and settles by its receipt",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "issue 1538: producer-admitted document send with its response still on the wire hydrates as unknown, sends once and settles by its receipt",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "receiptless safe retry preserves selected context empty=false remount=%s",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "receiptless safe retry preserves selected context empty=false remount=%s",
+          "kind": "test",
+          "occurrence": 1
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "receiptless safe retry preserves selected context empty=true remount=%s",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "receiptless safe retry preserves selected context empty=true remount=%s",
+          "kind": "test",
+          "occurrence": 1
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "restored incomplete context fences safe local retry: undefined",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx",
+          "suite": "",
+          "name": "restored incomplete context fences safe local retry: {\"version\":1,\"state\":\"selected\",\"conversationId\":\"invalid\"}",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 44
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 44
+        }
+      ]
+    },
+    {
+      "file": "./src/components/OverviewBoard.kanban.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+          "suite": "",
+          "name": "what needs one project to write into is absent, never faked",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 13
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 13
+        }
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+          "suite": "",
+          "name": "a dock open beside the dashboard adds no second seat request (#1841)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 2
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 2
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 2
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 2
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 2
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 2
+        }
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "a switch to a project the Board is already showing files for leaves the reader behind, and it is not back on return",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "an attention jump to a conversation a card holds brings it into the same window, never into its card",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "a `#c=` landing on a conversation a card holds brings it into the same window, never into its card",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "another conversation no card holds comes into the window after the first, which stays in its list",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "a focus handoff `show` to a card does not report arrival under the window, and leaves the window",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "a focus handoff `open` to a card does not report arrival under the window, and brings the conversation into it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "a pipeline link on this project leaves the window and focuses the card that holds the pipeline",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "suite": "",
+          "name": "a pipeline link to another project switches to it with no window, and focuses the card that holds the pipeline there",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        }
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+          "suite": "",
+          "name": "opening a provisional seat without a draft retains its identity across a scan gap and transcript adoption",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 4
+        }
+      ]
+    },
+    {
+      "file": "./src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "an active flow's reviewer round: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "an active flow's reviewer round: an attention jump opens the same reader",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "an active flow's reviewer round: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "a collapsed worker: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "a collapsed worker: an attention jump opens the same reader",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "a collapsed worker: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "an engine's own subagent: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "an engine's own subagent: an attention jump opens the same reader",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "suite": "",
+          "name": "under a standing landing, a card's link to Conversations opens the project's list over the Board",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        }
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+          "suite": "",
+          "name": "the phone renders no inline control strip: every control is a labelled 44 px row in the conversation menu",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 0
+        }
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+          "suite": "",
+          "name": "integrated, portrait keyboard: long draft caps at 160px and the chrome fits (#983 round 2)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+          "suite": "",
+          "name": "integrated, a 280px visible viewport: the whole composer unit still fits it (#983 round 2, #1483)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 4
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 4
+        }
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "identicalFailureOccurrences": true,
+      "failures": [
+        {
+          "file": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+          "suite": "",
+          "name": "One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "samples": [
+        {
+          "side": "base",
+          "round": 1,
+          "code": 1,
+          "passed": 8
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "code": 1,
+          "passed": 8
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "code": 1,
+          "passed": 8
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "code": 1,
+          "passed": 8
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "code": 1,
+          "passed": 8
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "code": 1,
+          "passed": 8
+        }
+      ]
+    }
+  ],
+  "wholeFileSampleCount": 78,
+  "wholeFileFailureOccurrences": 78,
+  "wholeFileHeadOnlyFailureOccurrences": 0,
+  "guards": {
+    "sourceDigest": "34f0e04a08bca71c9b96374ae0efa0ca138f76c71259061a5862d365866751e6",
+    "results": [
+      {
+        "name": "retired-recipient",
+        "files": [
+          "./src/components/orchestrator/RetiredOrchestratorBanner.test.ts"
+        ],
+        "exit": 0,
+        "expected": 0
+      },
+      {
+        "name": "without-archive",
+        "files": [
+          "./src/components/LogFeed.mobileChrome.dom.test.tsx",
+          "-t",
+          "reply controls preserve archive"
+        ],
+        "exit": 1,
+        "expected": 1
+      },
+      {
+        "name": "without-loading",
+        "files": [
+          "./src/components/LogFeed.mobileChrome.dom.test.tsx",
+          "-t",
+          "reply controls preserve archive"
+        ],
+        "exit": 1,
+        "expected": 1
+      },
+      {
+        "name": "combined",
+        "files": [
+          "./src/components/LogFeed.mobileChrome.dom.test.tsx",
+          "-t",
+          "reply controls preserve archive"
+        ],
+        "exit": 0,
+        "expected": 0
+      }
+    ]
+  },
+  "typecheck": {
+    "exitCode": 0
+  },
+  "sourceDigests": {
+    "src/components/BranchPane.tsx": "be8733cae971347bf8eaefa17ca2a1b2feeb7e876312bf12d0c13a1edb300142",
+    "src/components/LogFeed.mobileChrome.dom.test.tsx": "8f19e6d5794f4b88bfcaf21deb4136cc1d82bc77010f4011c33d247a29e73df4",
+    "src/components/LogFeed.tsx": "34f0e04a08bca71c9b96374ae0efa0ca138f76c71259061a5862d365866751e6",
+    "src/components/OverviewBoard.tsx": "9f2b00aec644137c601f6a6f22695ce2a305bf4e7314cb19206e33182f056520",
+    "src/components/OverviewKanban.tsx": "1fa3dfb5cd0bd7477289719ea930dba88d705e08e2209a052e38de1a44175d66",
+    "src/components/ProjectDashboard.shelf.dom.test.tsx": "02ccb6f31983e99bdd6eea3a8720cdc695c2120de5883b3c32b6777a94ebd235",
+    "src/components/ProjectDashboard.tsx": "5b13f433c890125c1b84f9e2a8258b04aef8913e9f25954c24319ef0ce49d637",
+    "src/components/Switchboard.tsx": "2cf394816e7258feb0901daeaaae104989fd61d0278bccf4d6bd8edba87ae7b4",
+    "src/components/Viewer.tsx": "de6f52e7022784d75851f3b02afce66dafa80f60e9e0b1904900e2f5d1d55108",
+    "src/components/attention/navigate.test.ts": "5f95bb73c057d268656cc8d05d0c7355ed9abafb3fffe9ce706788f3c3481137",
+    "src/components/attention/navigate.ts": "790bf98dddc8bc22eaebc234cdcb31b84b5c5f1bfc4c44f86e4656fa494c77be",
+    "src/components/conversation/DeputyBlock.dom.test.tsx": "e91ae6730850892a8d59fcc5517317252219dd644e53717b60a6031ba8a5dfd5",
+    "src/components/conversation/DeputyBlock.tsx": "b1a7647f3e23b126cc06d2192c9e5dec316114240e20812958f5726bc84a8ea3",
+    "src/components/conversation/OutboxBubbles.delivery.dom.test.tsx": "4c37a45584ff7d9cad5bcff2607924a833c9d02661b103805ca85bbcf25ad1d1",
+    "src/components/conversation/OutboxBubbles.tsx": "8036098122cc06b0def878ec2bf36190a0c1bd72ea9eea643d614643b7151977",
+    "src/components/flows/ReviewHistory.dom.test.tsx": "3de51768cc3fbb67e571ae8515c51390953add551b8848b8fc8f566d2f0e7196",
+    "src/components/flows/ReviewHistory.tsx": "fc5c09b9be2ab3a3d5c0cc7ccda7a0f9ec3f585864fff36b6a408b60c83c191b",
+    "src/components/flows/RoundDeck.strip.dom.test.tsx": "8be77cde11f3126089eeb2acc9da832a568a1cc5c1878f5c701d16887b158cc1",
+    "src/components/flows/RoundDeck.tsx": "4994bf5f561a253c157ee77197b4696f6400095e578978f009c3bc151e3aae7f",
+    "src/components/flows/directReviewGroups.test.ts": "596f9b7390cc718fc449aaf5f2b58898970d4193a183fd58d1f878fbd9b8bb26",
+    "src/components/flows/directReviewGroups.ts": "1f2808f91e30ffccd65f1435b3c5a3cbf83d1b01256fe9d65a3d2069e772c146",
+    "src/components/flows/flowModel.test.ts": "57029c6f2e1cf1e2e7cdf3ceb4ba38a4a9ae962412d96903aa518565e3c200f5",
+    "src/components/flows/flowModel.ts": "caa65a6b9aac10de75c0c69ab8c209a9bc9d4b8a742c66564437db47e1b7528c",
+    "src/components/flows/reviewDeckDisclosure.ts": "6142d4ff6735d9b41f4fb088b39a2a0677972400d0aa3d048e5ed975d71cfa61",
+    "src/components/flows/reviewGroup.ts": "4bf78f586f12e77a08031beb7309811421343f17813343f41407a451e41e49a1",
+    "src/components/flows/useEffectiveFlows.ts": "3293a2488e31e5c9e71bc13438d816d136c540fd74a03093629365b84e4f84b0",
+    "src/components/kanban/KanbanBoard.tsx": "36814c64ec4ddc6e71657cc64169d45090e988c1f936d7eeacff72a5002929f1",
+    "src/components/kanban/KanbanStages.dom.test.tsx": "a2ea728750b92b65d8047abbfe5525f45fee8f4953f56c245f57db551192d06b",
+    "src/components/kanban/StagesSheet.tsx": "c8d923b07364fe21ff7be3585230e0972228504ef0dd827ade220fe3d7ffff51",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "96e19f92b426bf4fc86470f5a750d40d145964f97c3df863b2eec96f82aef432",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "51bb7805fef979f67efb1d125d2b1cacbac02f37f7d929a286d5e4aef43e00e0",
+    "src/components/kanban/kanbanModel.test.ts": "48975d5bce67ee04bc20bb30019a9653a3023c4b20307d5c07115bff51ee36b1",
+    "src/components/kanban/kanbanModel.ts": "7f82c57c113adf0817fb132737a401b0602c8cbcf190fab98b59710595cab1ae",
+    "src/components/kanban/overviewBands.ts": "75b42926a72c431432a5f72c5f50644bbdac1982b2109f291fe18614473bf3f8",
+    "src/components/kanban/pipelineGraph.ts": "0b4153a9549429b2e063f87037322751e4324ee913311688feda14fb9a24b600",
+    "src/components/kanban/pipelineSummary.ts": "4b7f47ea243f9ad6e3b0fbcebfe7330b4d0bef1ca79ac94117be4dd8c2e1dd20",
+    "src/components/kanban/useBands.ts": "2515bc655ca26ed365ee64354a361be1e9e20ed28069db32bd4b665c1b9ce528",
+    "src/components/mobile/MobileBoard.tsx": "a5cb10c4bbc7abb72fae05d81a313849b06ed7639d58236b46074bf0c57f8e55",
+    "src/components/mobile/MobileFocusView.tsx": "39a4ccb2094ff2a2890d7a2814dd40f5e7ff84eb440e92cff5faa64887cc7c46",
+    "src/components/mobile/MobilePipelineCard.tsx": "c945ea9f69048142b7226c1fe8bef6c13dde2b4deade2b63c689ec76d99c7b2b",
+    "src/components/mobile/MobilePipelineScreen.dom.test.tsx": "dce7ba9c76d45c417ea9a05ae361a07ff81fb5b5a7661110f8e23d14754ba2e3",
+    "src/components/mobile/MobilePipelineScreen.tsx": "b0a0b24ab77b8514c67a2668906dce55344ba440c08d60176abe8e6e2f78add4",
+    "src/components/mobile/MobilePipelinesScreen.tsx": "f11e179d17792fce85e8ecd5c9ddf5063822766a71789abeab5c499615a8b80c",
+    "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx": "382010bad511ac11932fc70ce23360a54f1684bab751759fe8f6a900d9e2829e",
+    "src/components/pipelines/PipelineTemplatePicker.tsx": "e3c0f36a45099a1e64cabf40b40bff984f607ecb00d695d6dd43e55aabefbb45",
+    "src/components/pipelines/createDraftPipeline.dom.test.tsx": "1370ad6d0a2c10701542f2e6df2ee413334a2c7dcf9e1540ebb9eed1a8bd9eae",
+    "src/components/pipelines/pipelineModel.test.ts": "ff3d67d94be15790f572d46aaa8b20be711cf3ca1aa325ea01d864fdd124979e",
+    "src/components/pipelines/pipelineModel.ts": "f3d6fad253f3ac8133d120ba9a159aca664c5127fb426a13fe38da433edf4afe",
+    "src/components/reviewerAutoClose.test.ts": "4be4f45ebebf2ed486e1fd178b6c5d07954994fc9d34514d88ab5232923cd55d",
+    "src/components/reviewerAutoClose.ts": "451bed61c46fcc3d6c7386e0413358ce59b4f6b507cdea0393dacdc382990dd6",
+    "src/components/scheme/agentLinks.test.ts": "c0974fe77596a35e751cacba8523c1e9269061c41ffc0dacfed18f84e250e7a7",
+    "src/components/scheme/agentLinks.ts": "527236c62ec86680cb158dd0473756a14ef97c7ab11a3f10b5b675bec2b7b111",
+    "src/components/scheme/boardPresentation.ts": "de82702190cf166cfac7d01ea9bc7cd327730c50bc3aba4f44e8c3b183314a3f",
+    "src/components/scheme/layout.test.ts": "50de9dd83b025d5470421e823c53a38ffaa984e18d4587da0234f2b01963a0d9",
+    "src/components/scheme/layout.ts": "4c76dd088ee0103cc111d6a87cee19fe4acd7f1e75409b7aeb8dbc01e9f77d2f",
+    "src/components/scheme/placementHorizon.ts": "81ad729f0e65b75f15fb3787cd90a57ebbe0be2c3c5ce1dd58d802940249117f",
+    "src/components/scheme/taskBands.ts": "747f94f301d772722fbf74751ed127458d7fd9a16d7a975dec1207b1ff4a9330",
+    "src/components/scheme/taskGeometry.ts": "0e412b7ef701c13c2469d36dac5480582ac3fb34bb2c0d22ca5aec93557d8476",
+    "src/components/scheme/workerCollapse.ts": "3a028b01d0c4796160e64843d0cd826cec02b7a6b79f307f1ed6d7631880e1e3",
+    "src/components/tasks/taskWorkflowModel.ts": "f12efa980927210379fb369fcaa410e29a9f182582cda95c9a9c87a5bee872c7",
+    "src/hooks/useSwitchboardData.ts": "12dadc0f25f7f9ee3e4219213b1a9bc1435772f9a81f87f8d0e7741e71dd5149",
+    "src/lib/attention/targets.ts": "9343a70532347b0964e3bd36791026c3e4aeda2c07708352f90aeda821cda9e7",
+    "src/lib/attention/types.ts": "2f776f050e57187d4bffc84368c3c6db4986387ad5d758a96309e9a1bb6efca3",
+    "src/lib/i18n/en.ts": "35bc00c643f4f53d2ca069b4d8185e56772e2f364963a377b0c3d704a0906f9a",
+    "src/lib/i18n/uk.ts": "7c6b47b7c9c958449bc0271d2182c6bc4196f26972be9b276d9e475ae6ac0fb9"
+  },
+  "testSourceDigests": {
+    "src/components/ProjectDashboard.shelf.dom.test.tsx": "02ccb6f31983e99bdd6eea3a8720cdc695c2120de5883b3c32b6777a94ebd235",
+    "src/components/attention/navigate.test.ts": "5f95bb73c057d268656cc8d05d0c7355ed9abafb3fffe9ce706788f3c3481137",
+    "src/components/conversation/DeputyBlock.dom.test.tsx": "e91ae6730850892a8d59fcc5517317252219dd644e53717b60a6031ba8a5dfd5",
+    "src/components/conversation/OutboxBubbles.delivery.dom.test.tsx": "4c37a45584ff7d9cad5bcff2607924a833c9d02661b103805ca85bbcf25ad1d1",
+    "src/components/flows/ReviewHistory.dom.test.tsx": "3de51768cc3fbb67e571ae8515c51390953add551b8848b8fc8f566d2f0e7196",
+    "src/components/flows/RoundDeck.strip.dom.test.tsx": "8be77cde11f3126089eeb2acc9da832a568a1cc5c1878f5c701d16887b158cc1",
+    "src/components/flows/directReviewGroups.test.ts": "596f9b7390cc718fc449aaf5f2b58898970d4193a183fd58d1f878fbd9b8bb26",
+    "src/components/flows/flowModel.test.ts": "57029c6f2e1cf1e2e7cdf3ceb4ba38a4a9ae962412d96903aa518565e3c200f5",
+    "src/components/kanban/KanbanStages.dom.test.tsx": "a2ea728750b92b65d8047abbfe5525f45fee8f4953f56c245f57db551192d06b",
+    "src/components/mobile/MobilePipelineScreen.dom.test.tsx": "dce7ba9c76d45c417ea9a05ae361a07ff81fb5b5a7661110f8e23d14754ba2e3",
+    "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx": "382010bad511ac11932fc70ce23360a54f1684bab751759fe8f6a900d9e2829e",
+    "src/components/pipelines/createDraftPipeline.dom.test.tsx": "1370ad6d0a2c10701542f2e6df2ee413334a2c7dcf9e1540ebb9eed1a8bd9eae",
+    "src/components/pipelines/pipelineModel.test.ts": "ff3d67d94be15790f572d46aaa8b20be711cf3ca1aa325ea01d864fdd124979e",
+    "src/components/reviewerAutoClose.test.ts": "4be4f45ebebf2ed486e1fd178b6c5d07954994fc9d34514d88ab5232923cd55d",
+    "src/components/scheme/agentLinks.test.ts": "c0974fe77596a35e751cacba8523c1e9269061c41ffc0dacfed18f84e250e7a7",
+    "src/components/scheme/layout.test.ts": "50de9dd83b025d5470421e823c53a38ffaa984e18d4587da0234f2b01963a0d9",
+    "src/components/kanban/kanbanModel.test.ts": "48975d5bce67ee04bc20bb30019a9653a3023c4b20307d5c07115bff51ee36b1",
+    "src/components/scheme/retiredSchemeBoard.test.ts": "32554841d6924827761ab911c032384f02073a2518c4de88dc33a78ef88029a8",
+    "src/components/BranchPane.liveness.dom.test.tsx": "0d6e25a9b58d3cd53496db3ff841e26b896f32be719f0c2141c71fdd50370634",
+    "src/components/BranchPane.render.test.tsx": "3588e69c341f503bfb80ec71b78c62c2864ac5bf19590275f7f10cf9281a83cd",
+    "src/components/BranchPane.mobileChrome.dom.test.tsx": "79f769f45c493752e2b69916cffe05907b638230deaabb18083133345fc06d5f",
+    "src/components/BranchPane.paneTones.test.ts": "0fb21f0b30e9be9174947b37d463db910402194fb26e4183829e49e68afb281b",
+    "src/components/BranchPane.spawn.render.test.tsx": "6b0cab1b1834ebf36f0979f3a57955fdf94a241913308282e4be1da96471c162",
+    "src/components/BranchPane.stageTitle.render.test.tsx": "f90201f81368f7bd7e4d240a7db596d5502e29c073fe3c8442b6bd019044442b",
+    "src/components/BranchPane.lineage.render.test.tsx": "d44fbd627d9556547c0f9f989a1dd8ddb7ec25da53b2fc66221361b69665cf2b",
+    "src/components/BranchPane.superseded.render.test.tsx": "d5ca2a10f2a128024c8377844a48f5982c64e12c01af66653ca35d87d56d0621",
+    "src/components/BranchPane.relations.dom.test.tsx": "1025b2b5eb496d93e6329af0e73fdc0ac8c198e1822c40835a5346564c76efaa",
+    "src/components/BranchPane.spawn.dom.test.tsx": "b9d211e34c27df3881be04548a1276af3659379ced521b5598d676ae0c0e09ec",
+    "src/components/LogFeed.refusedSend.dom.test.tsx": "f3ba7d63d75eddf4ddf197b0012bcd7b90256e05a2f2b927d5584c26118cd4f1",
+    "src/components/LogFeed.startingWindow.dom.test.tsx": "7b78cc993b277a792c8277383d2fb719915259fc3d04520138e766377d68320c",
+    "src/components/LogFeed.spawnPathFlip.dom.test.tsx": "520246be2ed91cb15ae31d252cdbf94d31936d325ae60d7e13274b4661de0060",
+    "src/components/LogFeed.prependAnchor.dom.test.tsx": "91ad1d7521c77fa63d8def2f80d77c70322275aaef2737b861b58280a39a08de",
+    "src/components/LogFeed.liveToolRows.dom.test.tsx": "60caf1d1aa43d4ac239e89ed1e22c8d5900da26e1635186a5ebc31f1361cc691",
+    "src/components/LogFeed.launchReceiptChip.dom.test.tsx": "5e984e5efc0e515ae29cdb39cb9c5fdf2f114ca78643ae94051297d95919b2fd",
+    "src/components/LogFeed.oneMessageOneRow.dom.test.tsx": "a7810e42f25c4a278405afec32cffd70d3432ca615d9f890a2528ea330e43889",
+    "src/components/LogFeed.imageViewer.dom.test.tsx": "c7d31524f3828aada1ce8d27d7866bfe6b2ca31ce90515a61806437deefaa3e1",
+    "src/components/LogFeed.outboxTailOrder.dom.test.tsx": "bfd675e4fc1309756567ad87f49e9dabe5e26b8de1afb740fc4f4d08225a3c29",
+    "src/components/LogFeed.deliveryUncertainty.dom.test.tsx": "82370bc116f38e6f7a4f30b95fccce1cf1d7e9efd3eb1c52d88b9d7aa39f139f",
+    "src/components/LogFeed.followScroll.dom.test.tsx": "e0e76650c91406c7277d677fb8a1a047801c03c5b256cc6249e5ae2dc3eae5cc",
+    "src/components/LogFeed.mobileChrome.dom.test.tsx": "8f19e6d5794f4b88bfcaf21deb4136cc1d82bc77010f4011c33d247a29e73df4",
+    "src/components/OverviewBoard.kanban.dom.test.tsx": "d650f342c111b407153744041b1e62ba5322e7f23e02e58f3b608f887ca8e719",
+    "src/components/OverviewBoard.render.test.tsx": "528d1361ed5f9b9ae29978635c10d81b36b345495ed839dd034757cebfaa973a",
+    "src/components/OverviewBoard.loading.dom.test.tsx": "78bd0f92e5b4b67dce396e06a7935a2c079e03db9063ff7278506f91b2fa7a35",
+    "src/components/OverviewBoard.catalog.render.test.tsx": "08e0427862528a1d045aa3886efc003ef20e1b7db3817c5e4d535e68b19e25fb",
+    "src/components/OverviewBoard.firstRun.dom.test.tsx": "bfaa5696dfea26c82c73303dbe9f785537583e68a74f0627c54bc4c4d366a043",
+    "src/components/ProjectDashboard.loadingStates.dom.test.tsx": "d0386daf6be39a0854b26d65323944efa05996bf995e4acea80168381aa3c035",
+    "src/components/ProjectDashboard.searchLanding.dom.test.tsx": "9ebd1f90b2efacadd35129fbbc3c0e6b7442b116e2231fc5689da516ed2cf39f",
+    "src/components/ProjectDashboard.flash.dom.test.tsx": "37fcab810138169591ddef72a82e502dcf06063c5338e65b8a9e0e6a79b64635",
+    "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx": "c9d98badc5a6f7dae824b6def6b3111b235f9d649460437f728e6e64afa1b244",
+    "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx": "26a0bb25d853cb0b63b137cf4e46967348fa1e0f22520a638c21c8f1ebb6e8fb",
+    "src/components/ProjectDashboard.catalogFailure.dom.test.tsx": "4ccd37e67246ecf821ba84ef19dab0f7bb8950ca8362a96d14b476c3542041d1",
+    "src/components/ProjectDashboard.test.ts": "3adb9d73ef4a1b6b1331633a39a056ca15d873200a55a78671c431ed4050018e",
+    "src/components/ProjectDashboard.selection.dom.test.tsx": "487e0e82d002e9d99d0e0486bd62d3a87f62a5b84dcfeb22e4d3e07267ba5174",
+    "src/components/ProjectDashboard.viewSwitch.dom.test.tsx": "6ff630640ddff6fd423e392bb2606576a589db5bd0e2b2967ff010852db2643c",
+    "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx": "dba05d85b0c50e020d27110e5ae4e3185154add4ccbf31bd8fc4c360aa4d4937",
+    "src/components/ProjectDashboard.seatTasks.dom.test.tsx": "1e6f1be51a96f42d866e6d4cfdd493310c05214ed5f6050325a89585b31a9777",
+    "src/components/ProjectDashboard.headerBar.dom.test.tsx": "de4facd8ca68ee5894435da384124d7745f10aa2d52a0c3447c4ff33321cd530",
+    "src/components/ProjectDashboard.empty.dom.test.tsx": "8ca203773dcf9e4d246073520b3f6f8ab32c37a044c61e1d26fe26cf5565a55e",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx": "4330448d283a1cdd2c4d903dcb17832ed160b5d719876e73fc72c8782639a914",
+    "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx": "3afb83389f2e8195e2a483658c9bbb0c83a3550895326ff639641782af92e55c",
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx": "6e6160074f141ffd9f9a2d8dc56323a9eff837fadd646fc3898af5772844b72d",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx": "1ade6303a5077887d3cbdb36fedf1218f7cf70ae4aba643cd426cd275b8227a3",
+    "src/components/Viewer.test.ts": "789cbc0613a338177eb650bcb3df9dc218a52efcf367c05a94005b9cb4c9cf2f",
+    "src/components/Viewer.attentionMount.test.ts": "97b06234cc861a8fa5f4e6981a1deb3ae08a3d668e66567fd9985b7e9ee3c5d0",
+    "src/components/Viewer.needsYou.dom.test.tsx": "4be5154453b466f9d7182b600e4e97cfc53730dfa41fdae2fba7826cabd5356f",
+    "src/components/Viewer.mobileSwipe.dom.test.tsx": "fb1e2160fc01748b43b35b5b946142dc78d41e419b277f0eaf225fce3171920e",
+    "src/components/Viewer.switching.dom.test.tsx": "142da1182531530a13589cc410764d749d15da5605988fb72c9976a6421231cf",
+    "src/components/Viewer.railHidden.dom.test.tsx": "1665aef6b27f5e496bfc104917f98ddf703b149cc378208c1de21b1990f9d013",
+    "src/components/Viewer.orchestratorDock.dom.test.tsx": "6bbd3a912cf0f0ee8acd7da51a78ad89d67ec0459671b0efbe42f2aa740ffa6e",
+    "src/components/Viewer.overviewPhone.dom.test.tsx": "bfe77a8cdf4819ca91ff4730fe1c6cc75a8ed66e1fa5ed95fc52a3b52c6458be",
+    "src/components/Viewer.catalogFailure.dom.test.tsx": "d8a76bbd106ffa3eec45094ca91cdee6155eef1b172e75180bb7db7ee7faf1b5",
+    "src/components/Viewer.deepLink.dom.test.tsx": "c0b6537b706b2595b1c286bd0d13e00fe3d59b0e2d13ac80071bf816cde0300c",
+    "src/components/conversation/OutboxBubbles.switchHold.dom.test.tsx": "1240444836f2c437e1ea087b461c98df9cfb66c687d3ca6418ad6239e53332ad",
+    "src/components/flows/RoundDeck.dom.test.tsx": "2f35424e7383aaa16b26b038761217064f6b751996811745be47700a996b3d7f",
+    "src/components/flows/reviewDeckDisclosure.test.ts": "390e6581411d64b0778a2134f1bd493afc052553c3228acdc388540d37ec2f20",
+    "src/components/kanban/KanbanBoard.renders.dom.test.tsx": "91c11b59ced5c311481c995014600239e188d6f1aaf8330f93d07c7f69f9aef8",
+    "src/components/kanban/KanbanBoard.dom.test.tsx": "60c9019bbe4575eb07d33543651c2519744687830686f8033a514b51fe1a361e",
+    "src/components/kanban/overviewBands.test.ts": "7b344d9ff903463dc251c90793bf509d234ee283476c7005b02e90dcd2dcfe40",
+    "src/components/kanban/pipelineGraph.test.ts": "6b0fa40b9978a2c5fabb09951f06cafedee57d986dcbaea473c956fd6b369d82",
+    "src/components/mobile/MobileBoard.dom.test.tsx": "e02cdd61a118288dff2cec73058243170aaf51f4f80edf8f38ad512a26907236",
+    "src/components/mobile/MobileFocusView.seen.dom.test.tsx": "62d06e0587d8943662cebaa3091b83ad11c9ed4c2bd34747e8e3659d355e1123",
+    "src/components/mobile/MobileFocusView.badges.dom.test.tsx": "4210f087f40170087909b8921ca372868aadb7162dc9ebc8e1ddf25e4f819f25",
+    "src/components/mobile/MobileFocusView.viewport.dom.test.tsx": "0069199b1a7343b81d504c583c8793ac8b1baf01b7342107ed3fd39a82c1bc51",
+    "src/components/mobile/MobileFocusView.strip.dom.test.tsx": "4122f98a8ab35833d2afd2a91cbbb92fbf19eb6c48ad42ae752e0826d150417b",
+    "src/components/mobile/MobileFocusView.conversation.dom.test.tsx": "855354f04a0fdb2d34da4f03880af1a4627cc66c6705941f0a9dbb502e13be86",
+    "src/components/mobile/MobileFocusView.superseded.dom.test.tsx": "a2d3162af9645215875537b88c955df2f0e9ddae5059f035f7ead5d7985c07a5",
+    "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx": "c7b6739131b155633c4f1a82188164e7eeb9644d820cafdc2d90385c8567098b",
+    "src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx": "68c5f7045840ea365666c7091b7fb7385f0c8844f243d6cedbe6074ee98f14a2",
+    "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx": "77825bf77f18d0ecf19d7e0fdb864b9e5147e4f9598f2d938d9b480280a8adf4",
+    "src/components/mobile/MobilePipelinesScreen.dom.test.tsx": "7ed92f15bd5517f68f962a633fbc8fccce0b127f44eec6563a0f6d97ea249d58",
+    "src/components/scheme/layout.lineage.test.ts": "f1fbb5be9ab70cbc2c4fa9e0bf42a6cb43fe24655e57e413732c56964a9547ed",
+    "src/components/scheme/placementHorizon.test.ts": "1bcda4d9d7974166905039e60316e4e6d08c709bd7c907ed77bc35e8b08348ba",
+    "src/components/scheme/taskGeometry.test.ts": "ca1395ee42a2aa396e89033ecfb0e50d938145ff4ec97b28e467f934d95b32f0",
+    "src/components/scheme/workerCollapse.test.ts": "49d0d80c10ba9274ec75a8363e87c5f3a21c04c5b158f7cee4b4f47683313c7f",
+    "src/components/tasks/taskWorkflowModel.test.ts": "4edd86b73ece655d08724919325d3529e0691dad27d92fb24494b2005165aee5",
+    "src/hooks/useSwitchboardData.dom.test.tsx": "e0e8b3f7c9a1883be800c39222ae29aedd177d8ac4298ff1428c90dbbbc53a4a"
+  },
+  "dependencyInputDigests": {
+    "package.json": "f6cc732ad0ef551cda326c4da10dec9e0b733d477b426faea9a5d5fc3b086f48",
+    "bun.lock": "e3ad801d7768e26665cc4d223aad77581d5682caceec4b7c300797293f94d0af",
+    "tsconfig.json": "231fb483461672b9fb52cf588f14e0cd8dcec0e64229b630848c787a56c7c4eb"
+  },
+  "pending": [],
+  "admissionRetry": {
+    "firstAttempt": "CPU admission refused before browser checks started after the default cumulative SQLite lock-wait budget was exhausted; no frames were produced",
+    "retry": "same supplied gate wrapper with supported LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS=300000; CPU admission and execution limits remain enforced"
+  },
+  "browser": {
+    "passed": 5,
+    "failed": 0,
+    "assertions": 3118,
+    "integrationMeasurements": 340,
+    "integrationFrames": 332,
+    "archiveReaderFrames": 40,
+    "preservedMainSuites": [
+      "conversation open motion",
+      "the board header fits a narrow 640\u2013700 px window"
+    ]
+  },
+  "renderedEvidence": "current-main-rendered.json",
+  "verifiedAt": "2026-10-26T09:30:02.638815+00:00",
+  "commitHooks": "The normal merge commit executes publication hooks after this test record is staged; the stage report records their outcome.",
+  "baseRecheck": {
+    "observedOriginMain": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+    "mergedSnapshot": "0728b67c411f29e65b446cf6f4fd591a0c0bb819"
+  }
+}
