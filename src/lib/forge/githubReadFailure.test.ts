@@ -1,0 +1,38 @@
+import { expect, test } from "bun:test";
+import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+
+test.each([
+  [Object.assign(new Error("request ended"), { code: "ETIMEDOUT" }), "timed out", true],
+  [new Error("HTTP 403: secondary rate limit"), "rate limited", true],
+  [new Error("HTTP 503: Service Unavailable"), "temporarily unavailable", true],
+  [Object.assign(new Error("socket ended"), { code: "ECONNRESET" }), "temporarily unavailable", true],
+  [new Error("HTTP 403: Resource not accessible by integration"), "authentication failed", false],
+  [Object.assign(new Error("CLI needs login"), { code: 4 }), "authentication failed", false],
+  [new Error("HTTP 404: Not Found"), "not found", false],
+  [new SyntaxError("Unexpected end of JSON input"), "invalid response", false],
+  [null, "failed", false],
+] as const)("classifies %s", (error, category, transient) => {
+  expect(githubReadFailure(error)).toMatchObject({ reason: expect.stringContaining(`GitHub read ${category}:`), transient });
+});
+
+test("redacts before bounding a diagnostic and never retains the command line", () => {
+  const credential = ["ghp", "x".repeat(36)].join("_");
+  const address = ["fixture", "example.invalid"].join("@");
+  const privatePath = pathFromParts();
+  const error = Object.assign(new Error(`Command failed: gh --credential ${credential}`), {
+    stderr: `HTTP 401: ${credential} ${address} ${privatePath} ${"detail ".repeat(200)}`,
+  });
+  const result = githubReadFailure(error);
+  expect(result.reason).toStartWith("GitHub read authentication failed:");
+  expect(result.reason.length).toBeLessThanOrEqual(400);
+  for (const value of [credential, address, privatePath, "Command failed"]) expect(result.reason).not.toContain(value);
+  expect(githubReadFailure(new Error(`Command failed: gh --credential ${credential}`)).reason).toBe("GitHub read failed: no diagnostic returned");
+});
+
+function pathFromParts(): string {
+  return ["", "home", "fixture", "private", "config"].join("/");
+}
+
+test("retry backoff starts at one minute and remains capped", () => {
+  expect([1, 2, 3, 4, 5, 100].map(githubReadBackoff)).toEqual([60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
+});

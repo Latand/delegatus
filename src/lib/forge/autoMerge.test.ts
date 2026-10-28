@@ -16,7 +16,7 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const {
-  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
+  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, productionAutoMergePorts, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
 const { ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter } = await import("./appWrite");
 const { pipelineGraphError } = await import("../pipelines/store");
@@ -246,6 +246,154 @@ function retainedUpdate(h: ReturnType<typeof harness>, head: string, extra: Part
 
 beforeEach(() => resetAutoMergeForTests());
 
+describe("GitHub read failure recovery through production ports", () => {
+  const timeout = () => Object.assign(new Error("Command failed: gh"), { killed: true, signal: "SIGTERM" });
+  const cliError = (stderr: string, code = 1) => Object.assign(new Error("Command failed: gh"), { stderr, code });
+
+  test("a real gh child timeout reaches the persisted reason", async () => {
+    const bin = fs.mkdtempSync(path.join(sandbox, "gh-bin-"));
+    const executable = path.join(bin, "gh");
+    fs.writeFileSync(executable, "#!/usr/bin/env bun\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      const { githubRunner } = await import("../monitor/githubEvidence");
+      const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+      const ports = productionAutoMergePorts({ ...h.ports, run: githubRunner(os.tmpdir(), 100, { declared: () => false }) });
+      await sweepAutoMerge(ports);
+      expect(h.merge("L1")).toMatchObject({ state: "queued", readFailures: 1, reason: expect.stringMatching(/^GitHub read timed out:/) });
+      expect(h.writes).toEqual([]);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused App read never falls back to the CLI identity", async () => {
+    const { githubRunner } = await import("../monitor/githubEvidence");
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    let cliReads = 0;
+    const run = githubRunner(os.tmpdir(), 30_000, {
+      declared: () => true,
+      asApp: async () => { throw new ForgeAppWriteRefused("Delegatus refused this GitHub write: App credential unavailable"); },
+      exec: async () => { cliReads++; throw new Error("forbidden fallback"); },
+    });
+    await sweepAutoMerge(productionAutoMergePorts({ ...h.ports, run }));
+    expect(h.merge("L1")?.reason).toStartWith("GitHub App read refused:");
+    expect(cliReads).toBe(0);
+    expect(h.writes).toEqual([]);
+  });
+
+  test("a queued follower keeps its read diagnostic while backoff is pending", async () => {
+    const h = harness({ lanes: [lane("L1"), lane("L2")], prs: [openPr(11, { checks: [pending("ci")] }), openPr(12)] });
+    const run = h.ports.run;
+    const ports = productionAutoMergePorts({ ...h.ports, refreshConcurrency: 2, run: async args => {
+      if (args[0] === "pr" && args[2] === "12") throw timeout();
+      return run(args);
+    } });
+    await sweepAutoMerge(ports);
+    expect(h.merge("L2")?.reason).toStartWith("GitHub read timed out:");
+    await sweepAutoMerge(ports);
+    expect(h.merge("L2")?.reason).toStartWith("GitHub read timed out:");
+    expect(h.writes).toEqual([]);
+  });
+
+  test.each([
+    ["timeout", timeout, "GitHub read timed out:", true],
+    ["rate limit", () => cliError("HTTP 429: API rate limit exceeded"), "GitHub read rate limited:", true],
+    ["auth", () => cliError("HTTP 401: Bad credentials"), "GitHub read authentication failed:", false],
+    ["not found", () => cliError("HTTP 404: Not Found"), "GitHub read not found:", false],
+    ["exit 2", () => cliError("CLI invocation refused", 2), "GitHub read failed (exit 2): CLI invocation refused", false],
+    ["malformed JSON", () => new SyntaxError("Unexpected token in JSON"), "GitHub read invalid response:", false],
+    ["App credential", () => new ForgeAppWriteRefused("Delegatus refused this GitHub write: App credential unavailable"), "GitHub App read refused:", false],
+  ] as const)("%s retains its cause after three failed reads", async (_name, error, prefix, transient) => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    const { githubRunner } = await import("../monitor/githubEvidence");
+    const run = githubRunner(os.tmpdir(), 30_000, { declared: () => false, exec: async () => {
+      if (_name === "malformed JSON") return "not-json";
+      throw error();
+    } });
+    const ports = productionAutoMergePorts({ ...h.ports, run });
+    for (let failure = 1; failure <= 3; failure++) {
+      await sweepAutoMerge(ports);
+      expect(h.merge("L1")?.readFailures).toBe(failure);
+      expect(h.merge("L1")?.reason?.startsWith(prefix)).toBe(true);
+      if (failure < 3) h.advance(Date.parse(h.merge("L1")!.nextReadAt!) - h.now());
+    }
+    expect(h.merge("L1")?.state).toBe(transient ? "queued" : "blocked");
+    expect(h.writes).toEqual([]);
+  });
+
+  test.each([1, 6])("recovers after %s timeouts with capped backoff and one merge", async failures => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    const original = h.ports.run;
+    let unavailable = true;
+    let reads = 0;
+    const ports = productionAutoMergePorts({ ...h.ports, run: async args => {
+      reads++;
+      if (unavailable) throw timeout();
+      return original(args);
+    } });
+    for (let index = 0; index < failures; index++) {
+      await sweepAutoMerge(ports);
+      expect(h.merge("L1")?.readFailures).toBe(index + 1);
+      const delay = Math.min(600_000, 60_000 * 2 ** index);
+      expect(Date.parse(h.merge("L1")!.nextReadAt!) - h.now()).toBe(delay);
+      h.advance(delay - 1);
+      await sweepAutoMerge(ports);
+      expect(reads).toBe(index + 1);
+      h.advance(1);
+    }
+    unavailable = false;
+    await sweepAutoMerge(ports);
+    expect(h.merge("L1")?.readFailures).toBe(0);
+    expect(h.merge("L1")?.reason).toBe("waiting for checks to settle");
+    h.advance(MERGE_SETTLE_MS);
+    await sweepAutoMerge(ports);
+    expect(h.merge("L1")).toMatchObject({ state: "merged", by: "auto-merge", readFailures: 0 });
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merges()[0]).toContain("--match-head-commit");
+    expect(h.merges()[0]).toContain(HEAD_A);
+  });
+
+  test("a clean reviewed lane recovers after its third transient read failure", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    const ports = productionAutoMergePorts({ ...h.ports, run: async () => { throw timeout(); } });
+    for (let n = 0; n < 3; n++) {
+      await sweepAutoMerge(ports);
+      const due = Date.parse(h.merge("L1")?.nextReadAt ?? "");
+      h.advance(Number.isFinite(due) ? due - h.now() : MERGE_POLL_MS);
+    }
+    ports.run = h.ports.run;
+    await sweepAutoMerge(ports);
+    h.advance(MERGE_SETTLE_MS);
+    await sweepAutoMerge(ports);
+    expect(h.merge("L1")).toMatchObject({ state: "merged", readFailures: 0 });
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test("an expired checks wait retains the read cause and honors backoff", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, { checks: [pending("ci")] })] });
+    const original = h.ports.run;
+    const ports = productionAutoMergePorts({ ...h.ports });
+    await sweepAutoMerge(ports);
+    h.advance(MERGE_WAIT_LIMIT_MS);
+    let reads = 0;
+    ports.run = async () => { reads++; throw timeout(); };
+    await sweepAutoMerge(ports);
+    expect(h.merge("L1")?.reason).toMatch(/^GitHub read timed out:/);
+    expect(h.merge("L1")?.state).toBe("waiting-checks");
+    await sweepAutoMerge(ports);
+    expect(reads).toBe(1);
+    h.advance(MERGE_POLL_MS);
+    ports.run = original;
+    await sweepAutoMerge(ports);
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout, readFailures: 0 });
+    expect(h.writes).toEqual([]);
+  });
+});
+
 test("regression: task finishes continue while the optional post-merge forge read is held", async () => {
   const completed = lane("L1");
   completed.taskIds = ["task-1", "task-2"];
@@ -440,7 +588,7 @@ describe("outstanding human reviews (#2866)", () => {
   test.each(["refused", "{}", "[[{}]]"])("an unreadable review history (%s) never authorizes a merge", async (reviewRead) => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { reviewRead })] });
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
-    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: expect.stringMatching(/^GitHub read /) });
     expect(h.writes).toEqual([]);
   });
 
@@ -854,7 +1002,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       const brokenRun = broken.ports.run;
       broken.ports.run = args => args[1]?.includes("/rules/branches/") ? h.ports.run(args) : brokenRun(args);
       await broken.run(MERGE_SETTLE_MS * 2);
-      expect(broken.merge("L3")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+      expect(broken.merge("L3")).toMatchObject({ state: "blocked", reason: expect.stringMatching(/^GitHub read /) });
       expect(broken.merges()).toEqual([]);
     } finally {
       await server.stop(true);
@@ -893,7 +1041,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       const h = harness({ ...invalid, lanes: [lane("L1")], prs: [openPr(11)] });
       await h.run(MERGE_SETTLE_MS * 2);
       expect(h.merges()).toEqual([]);
-      expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+      expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: expect.stringMatching(/^GitHub read /) });
     });
   }
 
@@ -1065,12 +1213,12 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     });
   });
 
-  test("gh failing three reads in a row blocks as unreachable", async () => {
+  test("three unclassified read failures block with their diagnostic", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     h.prs.delete(11);
     await h.run(MERGE_POLL_MS * 2);
     expect(h.merge("L1")?.state).toBe("blocked");
-    expect(h.merge("L1")?.reason).toBe(MERGE_REASONS.unreachable);
+    expect(h.merge("L1")?.reason).toMatch(/^GitHub read failed:/);
     expect(h.merges()).toEqual([]);
   });
 });
@@ -1376,8 +1524,11 @@ test.each(["CLEAN", "BEHIND", "unreadable"])("an overdue hold reconciles %s befo
   if (status === "unreadable") h.ports.run = async () => { throw new Error("fixture read unavailable"); };
   else h.prs.get(11)!.mergeStateStatus = status;
   await h.sweep();
-  expect(h.merge("overdue")?.state).toBe(status === "CLEAN" ? "merged" : "blocked");
-  if (status !== "CLEAN") expect(h.merge("overdue")?.reason).toBe(MERGE_REASONS.checksTimeout);
+  expect(h.merge("overdue")?.state).toBe(status === "CLEAN" ? "merged" : status === "unreadable" ? "waiting-checks" : "blocked");
+  if (status === "BEHIND") expect(h.merge("overdue")?.reason).toBe(MERGE_REASONS.checksTimeout);
+  if (status === "unreadable") expect(h.merge("overdue")).toMatchObject({
+    reason: "GitHub read failed: fixture read unavailable", readFailures: 1, nextReadAt: iso(T0 + MERGE_POLL_MS),
+  });
   expect(h.updates()).toHaveLength(0);
   expect(h.merges()).toHaveLength(status === "CLEAN" ? 1 : 0);
 });

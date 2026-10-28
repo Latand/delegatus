@@ -23,6 +23,7 @@ import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding } from "./batchLanding";
+import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -47,7 +48,7 @@ export const MERGE_POLL_MS = 60_000;
 export const MERGE_SETTLE_MS = 3 * 60_000;
 /** The most time a head may take to settle, from its first read. */
 export const MERGE_WAIT_LIMIT_MS = 90 * 60_000;
-/** Reads in a row `gh` may fail before the merge blocks. */
+/** Nontransient reads (and refresh creation) may fail this many times. */
 export const MERGE_READ_FAILURE_LIMIT = 3;
 const MERGE_SCHEDULE_DEBOUNCE_MS = 15_000;
 const REPOSITORY_FACTS_TTL_MS = 30 * 60_000;
@@ -611,13 +612,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
     const failures = (merge.readFailures ?? 0) + 1;
-    ports.log?.(`[auto merge] ${read.id}: read failed (${failures})`, error);
+    const failure = githubReadFailure(error);
+    ports.log?.(`[auto merge] ${read.id}: read failed (${failures}): ${failure.reason}`);
     await commit(ports, read, (live) => {
       live.readFailures = failures;
       live.readAt = iso(now);
-      if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
-      else if (failures >= MERGE_READ_FAILURE_LIMIT) block(live, MERGE_REASONS.unreachable, now);
-      else live.nextReadAt = iso(now + MERGE_POLL_MS);
+      live.reason = failure.reason;
+      if (!failure.transient && failures >= MERGE_READ_FAILURE_LIMIT) block(live, failure.reason, now);
+      else live.nextReadAt = iso(now + (failure.transient ? githubReadBackoff(failures) : MERGE_POLL_MS));
     });
     return;
   }
@@ -817,7 +819,7 @@ function mergeStatus(merge: PipelineMerge, hidden = false): string {
 /** Followers outside the read window still expose their FIFO blocker. Keep
  * their check clock untouched and avoid writing the same explanation again. */
 async function retainQueueReason(ports: AutoMergePorts, read: Pipeline, reason: string): Promise<void> {
-  if (read.merge?.state !== "queued" || read.merge.reason === reason) return;
+  if (read.merge?.state !== "queued" || read.merge.readFailures || read.merge.reason === reason) return;
   await commit(ports, read, live => { live.reason = reason; });
 }
 
@@ -1087,7 +1089,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
         continue;
       }
       const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
-      if (Number.isFinite(due) && due > now && !mergeWaitExpired(head.merge!, now)) {
+      if (Number.isFinite(due) && due > now && (head.merge!.readFailures || !mergeWaitExpired(head.merge!, now))) {
         if (index > 0 && !head.hiddenAt) await retainQueueReason(ports, head, queueReason);
         if (!head.hiddenAt) laneStatus(ports, head.id, mergeStatus(head.merge!));
         continue;

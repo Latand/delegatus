@@ -545,7 +545,7 @@ test("an unavailable refresh receipt lookup starts no work and takes the bounded
   h.setBase(MAIN_2);
   h.ports.loadRefreshByKey = () => { throw new Error("receipt lookup unavailable"); };
   await h.run(3 * MERGE_POLL_MS);
-  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable, readFailures: 3 });
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: expect.stringMatching(/^GitHub read .*:/), readFailures: 3 });
   expect(h.merge("finished")!.refresh).toBeUndefined();
   expect(h.creates).toEqual([]);
   expect(h.writes).toEqual([]);
@@ -561,7 +561,7 @@ test.each(["unreadable", "malformed"])("a %s ancestry comparison takes the bound
     return "null";
   };
   await h.run(3 * MERGE_POLL_MS);
-  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable, readFailures: 3 });
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: expect.stringMatching(/^GitHub read .*:/), readFailures: 3 });
   expect(h.creates).toEqual([]);
   expect(h.writes).toEqual([]);
 });
@@ -1460,7 +1460,7 @@ test.each([false, true])("an out-of-window refresh permits an expired failed rea
   expect(read).toBe(true);
   expect(h.merge("queued-1")).toMatchObject(retry
     ? { state: "queued", attempts: 1, headSeenAt: null, readFailures: 0 }
-    : { state: "blocked", reason: MERGE_REASONS.checksTimeout, nextReadAt: null, readFailures: 1 });
+    : { state: "queued", reason: "GitHub read failed: fixture forge unavailable", nextReadAt: iso(T0 + MERGE_POLL_MS), readFailures: 1 });
   expect(h.creates).toHaveLength(1);
   expect(h.writes).toEqual([]);
   expect(h.merges()).toEqual([]);

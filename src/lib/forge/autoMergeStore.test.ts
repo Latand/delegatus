@@ -387,6 +387,89 @@ test("the setting defaults off, and turning it on keeps its first changedAt on a
   expect(stored).toEqual({ schemaVersion: 1, projects: { [PROJECT]: { mergeOnReview: on } } });
 });
 
+test("retry-merge clears the persisted read failure and its counter", async () => {
+  resetAutoMergeForTests();
+  setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+  const id = "read-auth-retry";
+  savePipelines([completedLane(id)]);
+  let clock = T0;
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, cachedState: () => null, log: () => {},
+    pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    run: async () => { throw Object.assign(new Error("Command failed: gh"), { stderr: "HTTP 401: Bad credentials" }); },
+    write: async () => { throw new Error("forbidden write"); },
+  });
+  for (let n = 0; n < 3; n++, clock += MERGE_POLL_MS) await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+  const retried = await patchPipeline(id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
+  expect(retried.error).toBeUndefined();
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", readFailures: 0, reason: null, nextReadAt: null });
+  await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge).toMatchObject({ readFailures: 1, nextReadAt: iso(clock + MERGE_POLL_MS) });
+});
+
+test("transient read backoff survives fresh processes and recovery merges once", async () => {
+  const id = "read-recovery";
+  savePipelines([completedLane(id)]);
+  const script = `
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
+    const clock = Number(process.env.FIXTURE_CLOCK);
+    const recovering = process.env.FIXTURE_RECOVER === "yes";
+    let merged = false, reads = 0, writes = 0;
+    const head = "a".repeat(40);
+    const ports = productionAutoMergePorts({
+      loadPipelines, now: () => clock,
+      setting: () => ({ enabled: true, changedAt: "2026-09-25T08:00:00Z", changedBy: "operator" }),
+      pullRequestOf: () => ({ repository: "acme/widgets", number: 7 }),
+      cachedState: () => null, log: () => {},
+      run: async args => {
+        reads++;
+        if (!recovering) throw Object.assign(new Error("Command failed: gh"), { killed: true, signal: "SIGTERM" });
+        if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+          state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: head, baseRefName: "main",
+          mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
+        });
+        if (args[1]?.includes("/pulls/")) return "";
+        if (args[0] === "api") return "[]";
+        if (args[0] === "repo") return '{"squashMergeAllowed":true}';
+        throw new Error("unexpected read");
+      },
+      write: async (args, repository, beforeDispatch) => {
+        beforeDispatch?.();
+        if (args.join(" ") !== ["pr", "merge", "7", "--repo", "acme/widgets", "--squash", "--match-head-commit", head].join(" ")) throw new Error("unexpected write");
+        writes++; merged = true; return "";
+      },
+    });
+    await sweepAutoMerge(ports);
+    console.log(JSON.stringify({ merge: loadPipelines().find(lane => lane.id === "read-recovery").merge, reads, writes }));
+  `;
+  const run = async (clock: number, recover = false) => {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox, FIXTURE_CLOCK: String(clock), FIXTURE_RECOVER: recover ? "yes" : "no" },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expectMergeChildSuccess(code, error);
+    return JSON.parse(output.trim()) as { merge: NonNullable<Pipeline["merge"]>; reads: number; writes: number };
+  };
+  let clock = T0;
+  for (let failure = 1; failure <= 6; failure++) {
+    const result = await run(clock);
+    expect(result).toMatchObject({ reads: 1, writes: 0, merge: { state: "queued", readFailures: failure, reason: expect.stringMatching(/^GitHub read timed out:/) } });
+    const due = Date.parse(result.merge.nextReadAt!);
+    expect(due - clock).toBe(Math.min(600_000, 60_000 * 2 ** (failure - 1)));
+    expect((await run(due - 1)).reads).toBe(0);
+    clock = due;
+  }
+  expect((await run(clock, true)).merge).toMatchObject({ state: "waiting-checks", readFailures: 0, reason: "waiting for checks to settle" });
+  const merged = await run(clock + MERGE_SETTLE_MS, true);
+  expect(merged).toMatchObject({ writes: 1, merge: { state: "merged", readFailures: 0, reason: null } });
+  expect(await run(clock + MERGE_SETTLE_MS + MERGE_POLL_MS, true)).toMatchObject({ writes: 0, merge: { state: "merged" } });
+});
+
 test("a stopped merge is stored, raises lane-merge with its two answers, and retry-merge requeues it; a merge is journaled", async () => {
   resetAutoMergeForTests();
   savePipelines([completedLane("pipe-merge")]);
