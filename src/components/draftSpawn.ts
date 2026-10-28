@@ -42,6 +42,8 @@ export interface RecoverableSpawnRequest {
   cwd: string;
   effort: string;
   fast: boolean | null;
+  /** A named Codex tier `fast` cannot carry (ultrafast); absent on every other launch. */
+  serviceTier?: string;
   accountId: string;
   /* Quoted key: keeps the `prompt` field identical at runtime while keeping the
      token off a line start, which the privacy publication gate's transcript
@@ -147,6 +149,7 @@ export function hasRecoverableRequest(attempt: SpawnAttempt): attempt is SpawnAt
     typeof request.cwd === "string" && request.cwd.length > 0 &&
     typeof request.effort === "string" &&
     (request.fast === null || typeof request.fast === "boolean") &&
+    (request.serviceTier === undefined || (typeof request.serviceTier === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(request.serviceTier))) &&
     typeof request.accountId === "string" &&
     typeof request.prompt === "string" &&
     typeof request.src === "string" && request.src === attempt.src &&
@@ -170,6 +173,7 @@ export function spawnRequestBody(attempt: SpawnAttempt & { request: PersistedSpa
     cwd: request.cwd,
     ...(request.effort ? { effort: request.effort } : {}),
     ...(request.fast === null ? {} : { fast: request.fast }),
+    ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}),
     ...(request.accountId ? { accountId: request.accountId } : {}),
     ["prompt"]: request.prompt,
     images: request.images,
@@ -459,6 +463,7 @@ export function provisionalSpawnFile(
     ...(attempt.request?.model ? { launchModel: attempt.request.model } : {}),
     ...(attempt.request?.effort ? { effort: attempt.request.effort } : {}),
     ...(typeof attempt.request?.fast === "boolean" ? { fast: attempt.request.fast } : {}),
+    ...(attempt.request?.serviceTier ? { fast: true, serviceTier: attempt.request.serviceTier } : {}),
     pendingQuestion: null,
     waitingInput: null,
     conversationId: outcome.conversationId,

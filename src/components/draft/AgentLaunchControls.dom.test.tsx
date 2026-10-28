@@ -42,9 +42,17 @@ const catalog = {
 
 const realFetch = globalThis.fetch;
 const roots = new Set<Root>();
+/** The tiers each Codex account's catalog lists for the draft's model, by account id. */
+let codexTiers: Record<string, Array<{ id: string; name: string }>> = {};
 beforeEach(() => {
+  codexTiers = {};
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input) === "/api/accounts") return { ok: true, status: 200, json: async () => catalog } as Response;
+    const tierRead = /^\/api\/accounts\/codex\/models\?account=(.+)$/.exec(String(input));
+    if (tierRead) {
+      const id = decodeURIComponent(tierRead[1]!);
+      return { ok: true, status: 200, json: async () => ({ accounts: [{ id, label: id, models: [{ slug: "gpt-6.1-sol", tiers: codexTiers[id] ?? [] }] }] }) } as Response;
+    }
     return { ok: true, status: 200, json: async () => ({}) } as Response;
   }) as typeof fetch;
 });
@@ -245,4 +253,42 @@ test("an account is signed out by its reconciled auth state, and an unreadable c
   expect(launchReadiness({ engine: "claude", catalog, launchAccountId: "locked" })).toEqual({ kind: "ready" });
   /* No catalog yet: nothing is known, so nothing is stopped here. */
   expect(launchReadiness({ engine: "claude", catalog: null, launchAccountId: "" })).toEqual({ kind: "ready" });
+});
+
+test("ultrafast is a speed choice where the launch account's catalog lists it, and the launch body names the tier", async () => {
+  const { speedBody } = await import("@/components/ReasoningControls");
+  store.clear();
+  store.set("engine", "codex");
+  store.set("model", "gpt-6.1-sol");
+  codexTiers = { "codex-a": [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] };
+  const { host, draft } = mount();
+  await settle();
+  flushSync(() => undefined);
+  const select = host.querySelector('select[aria-label*="peed"]') as HTMLSelectElement;
+  const ultra = select.querySelector('option[value="ultrafast"]') as HTMLOptionElement;
+  expect(ultra.disabled).toBe(false);
+  expect(ultra.textContent).toBe("ultrafast");
+  flushSync(() => draft().setSpeed("ultrafast"));
+  expect(store.get("speed")).toBe("ultrafast");
+  expect(speedBody(draft().engine, draft().speed)).toEqual({ serviceTier: "ultrafast" });
+  expect(speedBody("codex", "fast")).toEqual({ fast: true });
+  expect(speedBody("codex", "standard")).toEqual({ fast: false });
+  expect(speedBody("codex", "")).toEqual({});
+  expect(speedBody("claude", "ultrafast")).toEqual({});
+});
+
+test("an account whose catalog lacks ultrafast offers it disabled, naming the account and what it offers", async () => {
+  store.clear();
+  store.set("engine", "codex");
+  store.set("model", "gpt-6.1-sol");
+  store.set("speed", "ultrafast");
+  codexTiers = { "codex-a": [{ id: "priority", name: "Fast" }] };
+  const { host } = mount();
+  await settle();
+  flushSync(() => undefined);
+  const select = host.querySelector('select[aria-label*="peed"]') as HTMLSelectElement;
+  const ultra = select.querySelector('option[value="ultrafast"]') as HTMLOptionElement;
+  expect(ultra.disabled).toBe(true);
+  /* A stored choice the account cannot take shows the reason as the select's own text. */
+  expect(ultra.textContent).toBe("ultrafast — codex-a doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
 });

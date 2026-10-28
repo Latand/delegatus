@@ -13,6 +13,8 @@ import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
 import type { PendingQuestion } from "@/lib/types";
 
+import { changeConversationSpeed, type ConversationSpeedResult } from "@/lib/runtime/conversationSpeed";
+
 import { nativeAnswerResolution, type NativeAnswerInput } from "./nativeAnswer";
 
 /* `permission` answers a structured host's pending tool permission request
@@ -20,7 +22,7 @@ import { nativeAnswerResolution, type NativeAnswerInput } from "./nativeAnswer";
    request id the board shows (docs/design/attention-auto-resolve.md).
    `dialog-key` stays the terminal-dialog control: a structured host has no
    terminal to press a key in, so it keeps refusing it. */
-export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer"] as const;
+export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "speed"] as const;
 export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 
 export type ConversationActionRequest = {
@@ -32,6 +34,7 @@ export type ConversationActionRequest = {
   conversationId: string;
   transcriptPath: string;
   action: string;
+  serviceTier?: unknown;
   key?: string;
   label?: unknown;
   question?: unknown;
@@ -45,6 +48,7 @@ export type ConversationActionRequest = {
 };
 
 type ConversationActionBody =
+  | ConversationSpeedResult["body"]
   | Exclude<DeliveryOutcome, { ok: false }>
   | Omit<Extract<DeliveryOutcome, { ok: false }>, "status">
   | { ok: true; structured: true; target: string; outcome: "delivered" | "resumed"; spawned?: boolean }
@@ -67,6 +71,7 @@ export interface ConversationActionDependencies {
   answerDialogKey: typeof answerDialogKey;
   /** The conversation's current native question or plan, read from its
       transcript, or null when none is pending. */
+  changeSpeed?: typeof changeConversationSpeed;
   pendingQuestion?(transcriptPath: string): Promise<PendingQuestion | null>;
 }
 
@@ -152,6 +157,8 @@ export async function applyConversationAction(
       },
     };
   }
+
+  if (request.action === "speed") return await (dependencies.changeSpeed ?? changeConversationSpeed)(conversation?.id ?? request.conversationId, request.serviceTier, request.operationId, { registry });
 
   if (request.action === "answer") return await answerNativeQuestion(request, conversation?.id ?? request.conversationId, transcriptPath, dependencies);
 

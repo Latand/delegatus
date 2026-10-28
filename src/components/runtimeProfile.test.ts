@@ -2,15 +2,21 @@ import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
 import { clampEffortToScale } from "@/lib/agent/efforts";
+import { translate } from "@/lib/i18n/core";
 import type { FileEntry } from "@/lib/types";
 
 import {
   adoptRuntimeProfile,
   defaults,
   effectiveProfile,
+  launchedModelId,
+  listedModelId,
+  modelHoldMessage,
   observedModelId,
+  readDraft,
   readProfile,
   readResumeDraft,
+  runningModelId,
   savedResumeProfile,
   sendRuntimeFrom,
   writeProfile,
@@ -138,9 +144,80 @@ test("adoptRuntimeProfile carries the live reconfigure :phase so pending/confirm
   expect(localStorage.getItem("llvAgentRuntime:prov-3:phase")).toBeNull();
 });
 
-test("defaults synthesize a catalog model and lowest in-scale effort for unknown observed runtimes", () => {
+test("an observed model the catalogue does not list is no catalogue model, and the engine default never stands in", () => {
   const unknown: FileEntry = { ...file, model: "gpt-9-experimental", effort: "warp" };
-  expect(defaults(unknown)).toEqual({ model: "gpt-6.1-sol", effort: "low", fast: false });
+  expect(defaults(unknown)).toEqual({ model: "", effort: "low", fast: false });
+  expect(runningModelId(unknown)).toBe("gpt-9-experimental");
+  /* What the transcript reports wins over what the launch asked for. */
+  expect(defaults({ ...file, model: "gpt-5.5", launchModel: "gpt-6-luna" }).model).toBe("");
+});
+
+test("a Codex stage the transcript has not named yet shows the model its launch asked for", () => {
+  const opening: FileEntry = { ...file, model: null, launchModel: "gpt-6-luna", effort: "high" };
+  expect(defaults(opening)).toEqual({ model: "gpt-6-luna", effort: "high", fast: false });
+  expect(effectiveProfile(opening).model).toBe("gpt-6-luna");
+  expect(readResumeDraft(opening).model).toBe("gpt-6-luna");
+  expect(runningModelId(opening)).toBe("gpt-6-luna");
+  expect(listedModelId({ ...opening, model: "gpt-6.1-sol" })).toBe("gpt-6.1-sol");
+});
+
+test("with no observed and no requested model the draft names none, for every engine", () => {
+  expect(defaults({ ...file, model: null, launchModel: null }).model).toBe("");
+  expect(defaults({ ...file, model: null, launchModel: undefined }).model).toBe("");
+  expect(defaults({ ...claudeFile, model: null, launchModel: null }).model).toBe("");
+  expect(defaults({ ...claudeFile, model: "  ", launchModel: "" }).model).toBe("");
+  expect(defaults({ ...file, engine: "copilot", model: null }).model).toBe("");
+  expect(effectiveProfile({ ...file, model: null, launchModel: null }).model).toBe("");
+  expect(readResumeDraft({ ...file, model: null, launchModel: null }).model).toBe("");
+  expect(sendRuntimeFrom({ ...file, model: null, launchModel: null })).toBeUndefined();
+});
+
+test("a Claude conversation names its observed release, not the family alias a different version would read as", () => {
+  expect(defaults({ ...claudeFile, model: "opus-4-1", launchModel: "opus" }).model).toBe("");
+  expect(runningModelId({ ...claudeFile, model: "opus-4-1", launchModel: "opus" })).toBe("opus-4-1");
+  expect(defaults({ ...claudeFile, model: "qwen3.8-max", launchModel: null }).model).toBe("");
+  /* The observed model wins over the launch alias. */
+  expect(defaults({ ...claudeFile, model: "claude-sonnet-5-5", launchModel: "opus" }).model).toBe("claude-sonnet-5-5");
+  /* Before the transcript names one, the launch alias stands. */
+  expect(defaults({ ...claudeFile, model: null, launchModel: "opus" }).model).toBe("opus");
+});
+
+test("a Fable conversation reads as the fable row whether the launch asked for the alias or recorded nothing", () => {
+  for (const launchModel of ["fable", null, undefined] as const) {
+    const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel };
+    expect(defaults(fable).model).toBe("fable");
+    expect(runningModelId(fable)).toBe("fable");
+    expect(listedModelId(fable)).toBe("fable");
+  }
+  expect(defaults({ ...claudeFile, model: "claude-fable-5-1", launchModel: "fable" }).model).toBe("fable");
+  expect(defaults({ ...claudeFile, model: "fable-5-1[1m]", launchModel: null }).model).toBe("fable");
+  /* A family the catalogue lists a pinned release of keeps another version off its alias row. */
+  expect(defaults({ ...claudeFile, model: "sonnet-4-5", launchModel: "sonnet" }).model).toBe("");
+  expect(defaults({ ...claudeFile, model: "opus-4-1", launchModel: null }).model).toBe("");
+});
+
+test("a held change says why in words that name the change: no model, or one the pickers cannot send", () => {
+  for (const locale of ["en", "uk"] as const) {
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(locale, key, params);
+    const unknown: FileEntry = { ...claudeFile, model: null, launchModel: null };
+    const unlisted: FileEntry = { ...claudeFile, model: "opus-4-1", launchModel: "opus" };
+    expect(modelHoldMessage(t, unknown)).toBe(t("runtimeConfig.modelUnknown"));
+    expect(modelHoldMessage(t, unlisted)).toBe(t("runtimeConfig.modelUnlisted", { model: "Opus 4.1" }));
+    expect(modelHoldMessage(t, unknown, "move")).toBe(t("runtimeConfig.moveModelUnknown"));
+    expect(modelHoldMessage(t, unlisted, "move")).toBe(t("runtimeConfig.moveModelUnlisted", { model: "Opus 4.1" }));
+    expect(new Set([
+      modelHoldMessage(t, unknown), modelHoldMessage(t, unlisted), modelHoldMessage(t, unknown, "move"), modelHoldMessage(t, unlisted, "move"),
+    ]).size).toBe(4);
+    /* A listed model holds nothing, Fable's transcript release included. */
+    expect(modelHoldMessage(t, { ...claudeFile, model: "fable-5-1", launchModel: null }, "move")).toBeNull();
+    expect(modelHoldMessage(t, { ...claudeFile, model: null, launchModel: "gpt-6-luna", engine: "codex" })).toBeNull();
+  }
+});
+
+test("an explicit resume selection with no model sends no model", () => {
+  const unknown: FileEntry = { ...file, model: null, launchModel: null };
+  writeResumeProfile(unknown, { effort: "high" });
+  expect(savedResumeProfile(unknown)).toEqual({ model: "", effort: "high", fast: false });
 });
 
 test("a conversation launched on the pinned Sonnet 5.5 id observes that id, so its runtime pill confirms", () => {
@@ -148,6 +225,40 @@ test("a conversation launched on the pinned Sonnet 5.5 id observes that id, so i
   expect(observedModelId(pinned)).toBe("claude-sonnet-5-5");
   expect(defaults(pinned).model).toBe("claude-sonnet-5-5");
   /* The alias launch and a dated transcript id still read as the family alias. */
-  expect(observedModelId({ ...claudeFile, model: "claude-sonnet-5-5-20260928", launchModel: "sonnet" })).toBe("sonnet");
+  expect(observedModelId({ ...claudeFile, model: "claude-sonnet-5-5-20260928", launchModel: "sonnet" })).toBe("claude-sonnet-5-5");
+  expect(launchedModelId({ ...claudeFile, model: "claude-sonnet-5-5-20260928", launchModel: "sonnet" })).toBe("sonnet");
   expect(observedModelId({ ...claudeFile, model: "claude-opus-5-5", launchModel: undefined })).toBe("opus");
+});
+
+/* Ultra (2026-10-26): ultrafast is a named tier `fast` cannot say, so it rides the
+   draft as `serviceTier` and never becomes a per-turn `fast`, which is priority. */
+const ultraFile: FileEntry = { ...file, model: "gpt-6.1-sol", serviceTier: "ultrafast", fast: null };
+
+test("a thread running ultrafast never gets a per-turn fast that would slow it to priority", () => {
+  writeProfile(ultraFile, { fast: true });
+  expect(sendRuntimeFrom(ultraFile)).toBeUndefined();
+  /* Standard is still a real change, and still goes out. */
+  writeProfile(ultraFile, { fast: false });
+  expect(sendRuntimeFrom(ultraFile)).toEqual({ fast: false });
+  /* On a thread with no named tier the old rule holds. */
+  writeProfile(file, { fast: true });
+  expect(sendRuntimeFrom(file)).toEqual({ fast: true });
+});
+
+test("the face and every stored draft carry the conversation's named tier, and a speed choice replaces it", () => {
+  expect(defaults(ultraFile)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  expect("serviceTier" in defaults(file)).toBe(false);
+  /* A draft stored before tiers existed keeps the conversation's tier while its speed agrees… */
+  localStorage.setItem(key, JSON.stringify({ model: "gpt-6.1-sol", effort: "high", fast: true }));
+  expect(readDraft(ultraFile)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  /* …and names none once its speed says standard. */
+  localStorage.setItem(key, JSON.stringify({ model: "gpt-6.1-sol", effort: "high", fast: false }));
+  expect("serviceTier" in readDraft(ultraFile)).toBe(false);
+  /* A stored tier is its own. */
+  localStorage.setItem(key, JSON.stringify({ model: "gpt-6.1-sol", effort: "high", fast: true, serviceTier: "ultrafast" }));
+  expect(readDraft({ ...ultraFile, serviceTier: null, fast: false })).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  /* The resume profile: an effort edit keeps the tier, a speed choice replaces it. */
+  expect(writeResumeProfile(ultraFile, { effort: "low" })).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  expect(writeResumeProfile(ultraFile, { fast: true })).toEqual({ model: "gpt-6.1-sol", effort: "low", fast: true });
+  expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-6.1-sol", effort: "low", fast: true });
 });
