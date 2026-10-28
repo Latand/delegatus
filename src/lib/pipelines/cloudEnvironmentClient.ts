@@ -26,6 +26,9 @@ export type EnvironmentFailureCode = keyof typeof ENVIRONMENT_REASONS;
 export class CloudEnvironmentError extends HostedCloudError {
   constructor(readonly code: EnvironmentFailureCode, readonly terminalOperationId?: string) { super(`Codex Cloud: ${ENVIRONMENT_REASONS[code]} (${code})`, "cloud-limit"); }
 }
+/** A received authentication/access rejection proves this POST had no effect.
+ * Transport failures, server errors and unreadable success replies keep custody. */
+export class CloudEnvironmentMutationRefused extends CloudEnvironmentError {}
 function fail(code: EnvironmentFailureCode): never { throw new CloudEnvironmentError(code); }
 function check(ok: unknown, code: EnvironmentFailureCode = "configuration_invalid"): asserts ok { if (!ok) fail(code); }
 function providerFailure(value: unknown): EnvironmentFailureCode | null {
@@ -82,9 +85,13 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
           ...(session.auth.account ? { "ChatGPT-Account-Id": session.auth.account } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}) });
     } catch { fail(method === "POST" ? "setup_uncertain" : "catalog_incomplete"); }
+    function responseFailure(code: EnvironmentFailureCode): never {
+      if (method === "POST" && (response.status === 401 || response.status === 403)) throw new CloudEnvironmentMutationRefused(code);
+      fail(code);
+    }
     // Read receipts even when authority was withdrawn while the effect ran.
     const reader = response.body?.getReader();
-    check(reader, response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused" : "catalog_incomplete");
+    if (!reader) responseFailure(response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused" : "catalog_incomplete");
     const chunks: Uint8Array[] = []; let bytes = 0;
     let result: Row;
     try {
@@ -95,12 +102,12 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
         check(bytes <= 1024 * 1024, "catalog_incomplete"); chunks.push(value);
       }
       result = row(JSON.parse(Buffer.concat(chunks).toString()));
-    } catch { fail(response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused"
+    } catch { responseFailure(response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused"
       : method === "POST" ? "setup_uncertain" : "catalog_incomplete"); }
     finally { try { await reader.cancel(); } catch { /* Release the owned reader. */ } reader.releaseLock(); }
     const prerequisite = providerFailure(result);
-    if (prerequisite && !(response.ok && url.startsWith(`${endpoint}/v1/environment-operations/`))) fail(prerequisite);
-    if (!response.ok) fail(response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused"
+    if (prerequisite && !(response.ok && url.startsWith(`${endpoint}/v1/environment-operations/`))) responseFailure(prerequisite);
+    if (!response.ok) responseFailure(response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused"
       : response.status === 404 ? url.includes("/v1/environment-configs/") ? "environment_missing" : "repository_access_missing"
         : method === "POST" ? "setup_uncertain" : "catalog_incomplete");
     if (method !== "POST") guard();

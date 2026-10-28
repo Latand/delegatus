@@ -56,6 +56,11 @@ is followed by a configuration readiness check. Runtime setup failure remains
 decisive even when the operation still says RUNNING. A missing GitHub connector
 therefore reports `github_connector_not_configured` explicitly.
 
+A received HTTP 401 or 403 rejection releases only the refused creation or
+draft dispatch marker, so preparation can retry after access returns. The
+rejection survives process restarts through the existing retry and cooldown
+checkpoints. Failures of later reads never release an earlier mutation's marker.
+
 After a lost creation reply, recovery searches verified catalog metadata for
 the saved creation intent. It refuses another creation if the outcome remains
 uncertain. Draft recovery rereads the saved configuration; approval recovery

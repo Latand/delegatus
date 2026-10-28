@@ -8,7 +8,7 @@ import { canonicalProject, projectAliasKeys, recordedProjectRemote } from "./ali
 import { codexCloudEnvironmentId } from "./settings";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { initializeStateCollectionsAsync, readStateCollectionRevision, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
-import { CloudEnvironmentError, configurationId, ENVIRONMENT_REASONS, openCloudEnvironmentBackend, type EnvironmentConfiguration } from "@/lib/pipelines/cloudEnvironmentClient";
+import { CloudEnvironmentError, CloudEnvironmentMutationRefused, configurationId, ENVIRONMENT_REASONS, openCloudEnvironmentBackend, type EnvironmentConfiguration } from "@/lib/pipelines/cloudEnvironmentClient";
 import type { HostedCloudDependencies } from "@/lib/pipelines/cloudHostedClient";
 import { readCloudRunSetup } from "./cloudRunSetupImport";
 
@@ -287,7 +287,12 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
         .find(prior => prior.state === "ready" && prior.repository === repository && prior.ref === ref && prior.template)?.template; }
       finally { store?.close(); }
       await checkpoint({ state: "creating", setup: { ...saved.setup, createDispatched: true } });
-      const configId = await backend.create(`delegatus-${saved.setup.intent}`, target.id, ref, template);
+      const configId = await backend.create(`delegatus-${saved.setup.intent}`, target.id, ref, template).catch(async error => {
+        // Only this mutation's confirmed refusal releases its dispatch marker.
+        // Record it even if authority changed while the provider was replying.
+        if (error instanceof CloudEnvironmentMutationRefused) await checkpoint({ setup: { ...saved.setup, createDispatched: false } }, true);
+        throw error;
+      });
       await checkpoint({ environmentId: configId, setup: { ...saved.setup, configId } }, true); guard();
     }
     const configId = saved.setup.configId!;
@@ -305,7 +310,10 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     if (!saved.setup.draftId) {
       if (saved.setup.draftDispatched) throw new CloudEnvironmentError("setup_uncertain");
       await checkpoint({ setup: { ...saved.setup, draftDispatched: true } });
-      const draft = await backend.draft(configId);
+      const draft = await backend.draft(configId).catch(async error => {
+        if (error instanceof CloudEnvironmentMutationRefused) await checkpoint({ setup: { ...saved.setup, draftDispatched: false } }, true);
+        throw error;
+      });
       await checkpoint({ state: "approving", setup: { ...saved.setup, ...draft } }, true); guard();
     }
     const draftId = saved.setup.draftId!;
