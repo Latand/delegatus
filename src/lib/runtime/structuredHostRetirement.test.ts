@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import type { RegistryFile } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
@@ -146,6 +146,10 @@ async function sweep(over: StructuredHostRetirementDependencies = {}): Promise<S
     revokedSeatConversations: () => determined(new Set<string>()),
     transcriptStat: () => determined({ mtimeMs: NOW - 24 * 3_600_000 }),
     processIdentity: () => determined(HOST_IDENTITY),
+    pidAlive: () => determined(true),
+    readCursor: () => null,
+    writeCursor: () => {},
+    treePss: () => ({ bytes: null, measuredProcesses: 0 }),
     processMemory: () => new Map([[HOST_PID, { rssBytes: 110 * 1024 * 1024, swapBytes: 332 * 1024 * 1024 }]]),
     ppidMap: () => new Map([[HOST_PID, 1]]),
     owned: () => true,
@@ -280,6 +284,59 @@ test("a settled, quiet, unclaimed host is retired and the audit says why", async
   expect(retired.passed).toContain("transcript-idle");
   expect(retired.reclaimed).toEqual({ rssBytes: 110 * 1024 * 1024, swapBytes: 332 * 1024 * 1024, processes: 1 });
   expect(probe.report.reclaimed.swapBytes).toBe(332 * 1024 * 1024);
+});
+
+test("unknown process liveness refuses and cannot reconcile a gone row", async () => {
+  let reconciled = false;
+  const probe = await sweep({ pidAlive: () => undetermined("kernel unavailable"),
+    reconcileGone: async () => { reconciled = true; return true; } });
+  expect(probe.terminated).toEqual([]);
+  expect(reconciled).toBe(false);
+  expect(probe.report.refused).toMatchObject([{ clause: "process-identity", undetermined: true, reason: "kernel unavailable" }]);
+});
+
+test("a cursor write failure alarms before reconciliation or termination", async () => {
+  let acted = false;
+  await expect(sweep({ writeCursor: () => { throw new Error("cursor disk unavailable"); },
+    terminate: async () => { acted = true; throw new Error("unreachable"); } })).rejects.toThrow("cursor disk unavailable");
+  expect(acted).toBe(false);
+});
+
+test("an asynchronous PSS measurement rechecks a new busy turn before termination", async () => {
+  let busy = false;
+  const probe = await sweep({ snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+    structuredHost: { ...(entry().structuredHost as object), activeTurnRef: busy ? "new-turn" : null },
+  }) } }), treePss: async () => { await Promise.resolve(); busy = true; return { bytes: 60, measuredProcesses: 1 }; } });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "turn-settled", changed: true }]);
+});
+
+test("an asynchronous PSS measurement cannot transfer retirement to a replacement process", async () => {
+  let replaced = false;
+  const probe = await sweep({ snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+    structuredHost: { ...(entry().structuredHost as object), process: {
+      pid: replaced ? HOST_PID + 1 : HOST_PID, startIdentity: HOST_IDENTITY, bootEpoch: BOOT_EPOCH,
+    } },
+  }) } }), treePss: async () => { await Promise.resolve(); replaced = true; return { bytes: 60, measuredProcesses: 1 }; } });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
+});
+
+test("unavailable PSS remains unknown while resident-memory accounting stays separate", async () => {
+  const probe = await sweep({ treePss: undefined, snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+    structuredHost: { ...(entry().structuredHost as object), process: { pid: 2_000_000_000, startIdentity: HOST_IDENTITY, bootEpoch: BOOT_EPOCH } },
+  }) } }) });
+  expect(probe.report.retired[0]!.pss).toEqual({ bytes: null, measuredProcesses: 0 });
+  expect(probe.report.reclaimed.rssBytes).toBe(110 * 1024 * 1024);
+});
+
+test.skipIf(process.platform !== "linux")("PSS includes the real process tree before the termination spy", async () => {
+  const probe = await sweep({ ppidMap: () => new Map(), treePss: undefined,
+    snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({ structuredHost: {
+      ...(entry().structuredHost as object), process: { pid: process.pid, startIdentity: HOST_IDENTITY, bootEpoch: BOOT_EPOCH },
+    } }) } }) });
+  expect(probe.report.retired[0]!.pss!.measuredProcesses).toBe(1);
+  expect(probe.report.retired[0]!.pss!.bytes).toBeGreaterThan(0);
 });
 
 test("a turn in flight blocks retirement", async () => {
@@ -1083,6 +1140,45 @@ test("the sweep runs on its own timer, once per process", async () => {
   } finally {
     stopStructuredHostRetirement();
   }
+});
+
+test("a slow sweep cannot overlap the next timer tick", async () => {
+  let tick: (() => void) | undefined;
+  let finish: (() => void) | undefined;
+  let calls = 0;
+  startStructuredHostRetirement({
+    scheduleInterval: callback => { tick = callback; return { unref() {} } as unknown as ReturnType<typeof setInterval>; },
+    sweep: () => { calls++; return new Promise<void>(resolve => { finish = resolve; }); },
+  });
+  try {
+    tick!();
+    tick!();
+    expect(calls).toBe(1);
+    finish!();
+    await Promise.resolve();
+    tick!();
+    expect(calls).toBe(2);
+    finish!();
+    await Promise.resolve();
+  } finally { stopStructuredHostRetirement(); }
+});
+
+test("a failed sweep releases its timer admission and raises an alarm", async () => {
+  let tick: (() => void) | undefined;
+  let calls = 0;
+  const alarm = spyOn(console, "error").mockImplementation(() => {});
+  startStructuredHostRetirement({
+    scheduleInterval: callback => { tick = callback; return { unref() {} } as unknown as ReturnType<typeof setInterval>; },
+    sweep: async () => { calls++; throw new Error("fixture sweep failure"); },
+  });
+  try {
+    tick!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(alarm).toHaveBeenCalled();
+    tick!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(calls).toBe(2);
+  } finally { stopStructuredHostRetirement(); alarm.mockRestore(); }
 });
 
 /** A subject every clause of the predicate passes, built as a literal so the
