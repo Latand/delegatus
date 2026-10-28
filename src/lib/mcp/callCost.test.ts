@@ -1,5 +1,6 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -625,14 +626,23 @@ test("task notes round-trip through compact and full MCP paths without restoring
   } finally { await mcp.close(); }
 });
 
-test("create source inference pins the authenticated generation, rejects ambiguous/stale lineage and preserves explicit src", async () => {
+test("create sources pin the authenticated generation and reject ambiguous or stale lineage", async () => {
+  setSystemTime(new Date("2026-10-27T10:00:00Z"));
+  let sequence = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `fff${(++sequence).toString(16).padStart(5, "0")}-0000-4000-8000-000000000000`);
+  const directory = path.join(sandbox, "creator-repo");
+  fs.mkdirSync(directory);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8",
+    env: { ...process.env, GIT_AUTHOR_DATE: "2026-10-27T10:00:00Z", GIT_COMMITTER_DATE: "2026-10-27T10:00:00Z" } }).trim();
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture.invalid", "commit", "-q", "--allow-empty", "-m", "Fixture base");
   const store = agentRegistry();
-  const begun = beginLegacySpawnFixture(store, { engine: "codex", cwd: process.cwd(), role: "builder", origin: { kind: "operator" } });
+  const begun = beginLegacySpawnFixture(store, { engine: "codex", cwd: directory, role: "builder", origin: { kind: "operator" } });
   if (begun.kind !== "created") throw new Error("fixture admission failed");
   const transcript = path.join(process.env.LLV_CODEX_HOME!, "sessions", "creator.jsonl");
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: "fixture-creator" } }) + "\n");
-  const settled = store.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: "fixture-creator" }, artifactPath: transcript, cwd: process.cwd(), accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const settled = store.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: "fixture-creator" }, artifactPath: transcript, cwd: directory, accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
   if (settled.kind !== "settled") throw new Error("fixture settlement failed");
   const cid = settled.conversation.id;
   const capability = store.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
@@ -642,7 +652,7 @@ test("create source inference pins the authenticated generation, rejects ambiguo
     callerAttribution: () => ({ kind: "agent" as const, conversationId: cid, role: "builder" }) };
   const receipts = new SqliteMcpReceiptStore(path.join(sandbox, "create.sqlite"));
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
-  const args = { task: "Draft fixture", spec: "Verify admission", repoDir: process.cwd(), baseRef: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), autoStart: false, stages: [{ id: "build", kind: "run", prompt: "Build fixture", next: null }] };
+  const args = { task: "Draft fixture", spec: "Verify admission", repoDir: directory, baseRef: git("rev-parse", "HEAD"), autoStart: false, stages: [{ id: "build", kind: "run", prompt: "Build fixture", next: null }] };
   try {
     const call = (clientRequestId: string, extra = {}) => runAsMcpHttpCaller({ capability }, () => service.callTool("create_pipeline", { ...args, clientRequestId, ...extra }));
     const created = await call("infer");
@@ -650,16 +660,21 @@ test("create source inference pins the authenticated generation, rejects ambiguo
     if (!created.ok) throw new Error(created.error);
     expect(loadPipelines().find(row => row.id === created.pipelineId)?.srcPath).toBe(transcript);
     expect((await call("infer")).replayed).toBe(true);
+    expect((await call("explicit", { src: transcript })).ok).toBe(true);
     const original = structuredClone(snapshot);
     snapshot.conversations[cid]!.generations.push({ ...snapshot.conversations[cid]!.generations[0]!, id: "successor", path: path.join(path.dirname(transcript), "successor.jsonl") });
     const count = loadPipelines().length;
     expect((await call("stale")).ok).toBe(false);
     expect(loadPipelines()).toHaveLength(count);
-    // Existing explicit source behavior survives when automatic inference is unavailable.
-    expect((await call("explicit", { src: transcript })).ok).toBe(true);
+    expect(await call("explicit-stale", { src: transcript })).toMatchObject({ ok: false, code: "caller_source_mismatch" });
+    expect(loadPipelines()).toHaveLength(count);
+    // An admitted result remains recoverable; it creates no stale lineage anew.
+    expect(await call("explicit", { src: transcript, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true });
+    expect(loadPipelines()).toHaveLength(count);
     snapshot = structuredClone(original);
     snapshot.receipts.duplicate = { ...snapshot.receipts[begun.receipt.launchId]!, launchId: "duplicate" };
     expect((await call("ambiguous")).ok).toBe(false);
+    expect(await call("explicit-ambiguous", { src: transcript })).toMatchObject({ ok: false, code: "caller_source_unavailable" });
     snapshot = structuredClone(original);
     snapshot.receipts[begun.receipt.launchId]!.artifactPath = path.join(path.dirname(transcript), "foreign.jsonl");
     expect((await call("foreign")).ok).toBe(false);
@@ -674,5 +689,5 @@ test("create source inference pins the authenticated generation, rejects ambiguo
     const refused = await runAsMcpHttpCaller({ capability: "invalid-capability" }, () => production.callTool("create_pipeline", { ...args, clientRequestId: "production-invalid" }));
     expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
     expect(loadPipelines()).toHaveLength(admittedCount);
-  } finally { receipts.close(); }
+  } finally { receipts.close(); ids.mockRestore(); setSystemTime(); }
 });
