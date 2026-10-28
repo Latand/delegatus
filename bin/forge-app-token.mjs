@@ -171,7 +171,13 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
     } catch {
       throw refuse("GitHub could not be reached to verify the App installation");
     }
-    if (answer.status < 200 || answer.status >= 300) throw refuse(`GitHub answered HTTP ${answer.status} while verifying the App installation`);
+    if (answer.status < 200 || answer.status >= 300) {
+      // Only a fixed discriminator crosses stderr: GitHub's message can carry
+      // credentials or private repository details. Inspect a bounded prefix.
+      const message = typeof answer.body?.message === "string" ? answer.body.message.slice(0, 1024) : "";
+      const rateLimited = answer.status === 403 && /rate.?limit|abuse detection/i.test(message);
+      throw refuse(`GitHub answered HTTP ${answer.status}${rateLimited ? " (rate limited)" : ""} while verifying the App installation`);
+    }
     return answer.body;
   };
   const [owner, name] = slug.split("/");

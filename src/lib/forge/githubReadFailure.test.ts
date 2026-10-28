@@ -5,6 +5,7 @@ import { refusalMessage } from "../../../bin/forge-app-token.mjs";
 
 test.each([
   ["GitHub answered HTTP 429 while verifying the App installation", "rate limited", true],
+  ["GitHub answered HTTP 403 (rate limited) while verifying the App installation", "rate limited", true],
   ["GitHub answered HTTP 500 while verifying the App installation", "temporarily unavailable", true],
   ["GitHub answered HTTP 503 while verifying the App installation", "temporarily unavailable", true],
   ["GitHub could not be reached to verify the App installation", "temporarily unavailable", true],

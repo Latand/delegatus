@@ -10,7 +10,7 @@ export function githubReadFailure(error: unknown): { reason: string; transient: 
   // as unavailable credentials. Classify only its verification cause, keeping
   // repository names and the credential guidance out of the diagnostic.
   const installationFailure = error instanceof ForgeAppWriteRefused
-    ? /^Delegatus refused this GitHub write(?: to [^:\s]+)?: (GitHub answered HTTP \d{3} while verifying the App installation|GitHub could not be reached to verify the App installation)\. /.exec(message)?.[1]
+    ? /^Delegatus refused this GitHub write(?: to [^:\s]+)?: (GitHub answered HTTP \d{3}(?: \(rate limited\))? while verifying the App installation|GitHub could not be reached to verify the App installation)\. /.exec(message)?.[1]
     : undefined;
   // execFile's message repeats argv before stderr. Only diagnostics classify
   // the failure; neither a command wrapper nor a URL path supplies evidence.

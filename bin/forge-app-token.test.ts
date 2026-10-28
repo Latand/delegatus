@@ -114,6 +114,41 @@ describe("minting", () => {
     expect(github.calls.some((call) => call.method === "POST")).toBe(false);
   });
 
+  describe.each([
+    `GET repos/${REPO}/installation`,
+    "POST app/installations/42/access_tokens",
+    "GET installation/repositories?per_page=100",
+  ])("verification failure at %s", target => {
+    test.each([
+      [403, { message: "API rate limit exceeded" }, true],
+      [403, { message: "You have exceeded a secondary rate limit" }, true],
+      [403, { message: "Abuse detection mechanism triggered" }, true],
+      [403, { message: "Resource not accessible by integration" }, false],
+      [403, { message: { detail: "API rate limit exceeded" } }, false],
+      [403, { detail: "API rate limit exceeded" }, false],
+      [403, null, false],
+      [401, { message: "API rate limit exceeded" }, false],
+    ] as const)("HTTP %s with %j keeps only the rate-limit discriminator", async (status, body, rateLimited) => {
+      const github = fakeGitHub({ [target]: { status, body } });
+      const error = await mintInstallationToken(REPO, ports({ github })).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ForgeAppRefusal);
+      expect((error as ForgeAppRefusal).reason).toBe(`GitHub answered HTTP ${status}${rateLimited ? " (rate limited)" : ""} while verifying the App installation`);
+      expect(github.calls.at(-1)!.target).toBe(target.startsWith("GET installation/") ? "installation/token" : target.slice(target.indexOf(" ") + 1));
+    });
+
+    test("a long rate-limit response reveals no body fields or message contents", async () => {
+      const credential = ["ghp", "x".repeat(36)].join("_");
+      const privatePath = ["", "home", "fixture", "private"].join("/");
+      const message = `API rate limit exceeded: ${credential}\n${privatePath} ${"detail ".repeat(2000)}`;
+      const github = fakeGitHub({ [target]: { status: 403, body: { message, token: credential } } });
+      const error = await mintInstallationToken(REPO, ports({ github })).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ForgeAppRefusal);
+      expect((error as ForgeAppRefusal).reason).toBe("GitHub answered HTTP 403 (rate limited) while verifying the App installation");
+      expect((error as Error).message.length).toBeLessThan(600);
+      for (const value of [credential, privatePath, message]) expect((error as Error).message).not.toContain(value);
+    });
+  });
+
   /* #2518: an approved bug report is filed on a token of its own. */
   test("an issue token is asked for issues and metadata alone, and a push token never carries them", async () => {
     const granted = { ...FORGE_APP_PERMISSIONS, issues: "write", workflows: "write" };

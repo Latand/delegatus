@@ -423,8 +423,12 @@ describe("GitHub read failure recovery through production ports", () => {
   });
 
   test.each([
-    ["HTTP 429", 429], ["HTTP 500", 500], ["HTTP 503", 503], ["network", "network"], ["missing credential", "missing credential"],
-  ] as const)("App installation %s retains paced reads and the App identity", async (_name, cause) => {
+    ["HTTP 429", 429, null], ["HTTP 500", 500, null], ["HTTP 503", 503, null],
+    ["HTTP 403 primary rate limit", 403, "API rate limit exceeded"],
+    ["HTTP 403 secondary rate limit", 403, "You have exceeded a secondary rate limit"],
+    ["HTTP 403 permission", 403, "Resource not accessible by integration"],
+    ["network", "network", null], ["missing credential", "missing credential", null],
+  ] as const)("App installation %s retains paced reads and the App identity", async (_name, cause, message) => {
     const { githubRunner } = await import("../monitor/githubEvidence");
     const directory = fs.mkdtempSync(path.join(sandbox, "app-verification-"));
     const recovered = path.join(directory, "recovered");
@@ -446,7 +450,7 @@ describe("GitHub read failure recovery through production ports", () => {
           await mintInstallationToken("${REPO}", {
             now: () => ${T0},
             readCredential: async () => ${cause === "missing credential" ? "null" : "JSON.stringify({ id: 7, installation_id: 42, pem })"},
-            request: async () => { ${cause === "network" ? 'throw new Error("connection reset")' : `return { status: ${typeof cause === "number" ? cause : 503}, body: null }`}; },
+            request: async () => { ${cause === "network" ? 'throw new Error("connection reset")' : `return { status: ${typeof cause === "number" ? cause : 503}, body: ${JSON.stringify(message ? { message } : null)} }`}; },
           });
           throw new Error("fixture unexpectedly minted a token");
         } catch (error) {
@@ -472,13 +476,14 @@ describe("GitHub read failure recovery through production ports", () => {
         exec: async () => { cliReads++; throw new Error("forbidden fallback"); },
       });
       const ports = productionAutoMergePorts({ ...h.ports, run, write: forgeWriter(run, asApp, () => true) });
-      const permanent = cause === "missing credential";
+      const permanent = cause === "missing credential" || _name === "HTTP 403 permission";
       for (let failure = 1; failure <= (permanent ? 3 : 4); failure++) {
         await sweepAutoMerge(ports);
         const delay = permanent ? MERGE_POLL_MS : 60_000 * 2 ** (failure - 1);
         expect(structuredClone(h.merge("L1"))).toMatchObject({
           readFailures: failure, state: permanent && failure === 3 ? "blocked" : "queued",
-          reason: expect.stringContaining(permanent ? "GitHub App read refused:" : cause === 429 ? "GitHub read rate limited:" : "GitHub read temporarily unavailable:"),
+          reason: expect.stringContaining(cause === "missing credential" ? "GitHub App read refused:" : permanent ? "GitHub read authentication failed:"
+            : cause === 429 || cause === 403 ? "GitHub read rate limited:" : "GitHub read temporarily unavailable:"),
           nextReadAt: permanent && failure === 3 ? null : iso(h.now() + delay),
         });
         expect(h.writes).toEqual([]);
