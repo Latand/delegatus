@@ -1575,8 +1575,19 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
             commandReached = whole(element.querySelector("[data-stage-setup-command]"));
             body.scrollTop = at;
           }
+          /* Every control the output draws (its copy button, its reveal) lies whole
+             inside the setup body: a scroller holds one wholly in view or wholly
+             out of it, and none hangs past the body's edge. */
+          const frame = body?.getBoundingClientRect();
+          const controls = frame ? [...body!.querySelectorAll("button")].flatMap(control => {
+            const box = control.getBoundingClientRect();
+            if (box.bottom <= frame.top + 0.5 || box.top >= frame.bottom - 0.5) return [];
+            return box.left < frame.left - 0.5 || box.right > frame.right + 0.5 || box.top < frame.top - 0.5 || box.bottom > frame.bottom + 0.5
+              || box.top < -0.5 || box.bottom > innerHeight + 0.5
+              ? [{ label: control.getAttribute("aria-label") ?? control.textContent, box: [box.left, box.top, box.right, box.bottom].map(Math.round), body: [frame.left, frame.top, frame.right, frame.bottom].map(Math.round) }] : [];
+          }) : [];
           const dot = element.querySelector("[data-stage-setup-dot] > span")!.firstElementChild!.getBoundingClientRect();
-          return { clipped, covered, scrolled: scrolled.length, wide, documentOverflow: document.documentElement.scrollWidth > innerWidth,
+          return { clipped, covered, scrolled: scrolled.length, wide, controls, documentOverflow: document.documentElement.scrollWidth > innerWidth,
             scroller: body ? { height: body.clientHeight, content: body.scrollHeight } : null, lastLine, commandReached,
             dotEdge: Math.round((dot.left - element.getBoundingClientRect().left) * 10) / 10,
             pane: pane && paneBox && conv ? { overflow: pane.scrollHeight - pane.clientHeight, bottom: Math.round(paneBox.bottom),
@@ -1584,7 +1595,7 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
         });
         const paneFails = geometry.pane && (geometry.pane.overflow > 1 || geometry.pane.conversation.bottom > Math.min(geometry.pane.bottom, height)
           || geometry.pane.conversation.bottom - geometry.pane.conversation.top < 48);
-        if (geometry.clipped.length || geometry.covered.length || geometry.wide || geometry.documentOverflow || paneFails
+        if (geometry.clipped.length || geometry.covered.length || geometry.controls.length || geometry.wide || geometry.documentOverflow || paneFails
           || geometry.commandReached === false || Math.abs(geometry.dotEdge) > 1
           || (["failed", "stopped", "long", "passed"].includes(view.kind) && !geometry.lastLine)) throw new Error(`${where}: ${JSON.stringify(geometry)}`);
         if (!opens) frames.push(await shot("-open"));

@@ -1,16 +1,16 @@
 {
-  "capturedAt": "2026-10-27T04:23:01.705Z",
+  "capturedAt": "2026-10-28T19:42:59.271Z",
   "sourceDigests": {
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "730b4ca65b76395764d10d0b7889c1a57246a0c09de615c8574bb25cdb663ab1",
-    "src/components/mobile/issue1671Evidence.browser.test.tsx": "cb325d94f1c5ab7071b68c4e4659ead1b541d7307609eb41e4e14adfa09f5ddd",
-    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "72ec32f698ea17e0cb115b997a95467dc03a3e361b298e229bbb09208dcea767",
-    "src/components/kanban/issue1695BrowserHarness.ts": "bec524f311b492dae303fbb42d10320efd2fa927f2346165391e5c05bf326ba4",
-    "src/components/pipelines/StageSetupResult.tsx": "bbba29ea3f14df90a580037a91c764d20d0613addab2db4a792de29c2600924b",
-    "src/components/feed/cards/OutputPreview.tsx": "bb7d006527edbcbc141b4499161808d245927fb0696b66f646a0227c7fd9cea9",
-    "src/components/kanban/StagesSheet.tsx": "e81ea9322ac7165af6127ca75b0685c1d8b5083fefabfa22431dc6170de976d3",
-    "src/components/mobile/MobilePipelineScreen.tsx": "f7839e6ae62f7093503d1b125afac90e628ccc4f6140072965d9d3e8279058fd",
-    "src/lib/i18n/en.ts": "e874b483c74478e3ba83bdb556ab84a7691771f57fb24886742a1d3f57172a89",
-    "src/lib/i18n/uk.ts": "3369d6fda7f636c0e67a85636a63f85256c2334468712a4959cdc68e0ebf4b40"
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "a76df2664f4b817c40da3b4139a73cd95d0d47617e7dd859e752d09480036c20",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "58fb5ef632a8b7583ba0f01579e64067def392081776e5cb6748d9267ed97d01",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "7da33f154949612647a8020111dade3f502867efa92df01bb12d46aedcd24550",
+    "src/components/kanban/issue1695BrowserHarness.ts": "ccfa2ecc07bff2dee30b832eec4440089fd3d35f65aa53c674d4628ddd8fb632",
+    "src/components/pipelines/StageSetupResult.tsx": "1269886e663f53fdcc9f14cf255d5da56d7409a489c6667778b664d336db687b",
+    "src/components/feed/cards/OutputPreview.tsx": "06104f620eebbbf829083d698e02219ffd2e2be387ff703ab710ef1a1b889a10",
+    "src/components/kanban/StagesSheet.tsx": "eb25b6023da2231787682a47f2ead9e3f50bdec3342f65d9e1df0562c8f021b3",
+    "src/components/mobile/MobilePipelineScreen.tsx": "3cb7d13f4c4db1ee8ab5e32af7f0a51c7b181647ec21f4326acce89453156061",
+    "src/lib/i18n/en.ts": "c55d53444ad56f080655c6b06004cd6f94e1df12d55907b28a08e5295a881e97",
+    "src/lib/i18n/uk.ts": "510eaec3a6c8e794590908096741c2eec141e1b69d893ef7da8460028f15da9f"
   },
   "readings": [
     {
@@ -40,10 +40,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -80,6 +81,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 58,
@@ -120,6 +122,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 410,
@@ -169,13 +172,14 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 60,
-          "content": 90
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
-        "commandReached": true,
+        "commandReached": null,
         "dotEdge": 0,
         "pane": null
       },
@@ -210,6 +214,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 38,
@@ -259,6 +264,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 320,
@@ -299,10 +305,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -339,10 +346,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -379,6 +387,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 58,
@@ -419,6 +428,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 410,
@@ -468,13 +478,14 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 60,
-          "content": 90
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
-        "commandReached": true,
+        "commandReached": null,
         "dotEdge": 0,
         "pane": null
       },
@@ -509,6 +520,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 38,
@@ -558,6 +570,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 320,
@@ -598,10 +611,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -638,10 +652,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -678,6 +693,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 58,
@@ -718,6 +734,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 410,
@@ -767,13 +784,14 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 60,
-          "content": 90
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
-        "commandReached": true,
+        "commandReached": null,
         "dotEdge": 0,
         "pane": null
       },
@@ -808,6 +826,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 38,
@@ -857,6 +876,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 320,
@@ -897,10 +917,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -937,10 +958,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,
@@ -977,6 +999,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 58,
@@ -1017,6 +1040,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 410,
@@ -1066,13 +1090,14 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 60,
-          "content": 90
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
-        "commandReached": true,
+        "commandReached": null,
         "dotEdge": 0,
         "pane": null
       },
@@ -1107,6 +1132,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 38,
@@ -1156,6 +1182,7 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
           "height": 320,
@@ -1196,10 +1223,11 @@
         "covered": [],
         "scrolled": 0,
         "wide": 0,
+        "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 94,
+          "content": 94
         },
         "lastLine": true,
         "commandReached": null,

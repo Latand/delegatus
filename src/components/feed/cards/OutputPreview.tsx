@@ -28,6 +28,7 @@ export function OutputPreview({
   previewLines = PREVIEW_LINES,
   previewChars = PREVIEW_CHARS,
   from = "start",
+  holdControl = false,
 }: {
   output: string;
   truncated: boolean;
@@ -44,6 +45,10 @@ export function OutputPreview({
   previewChars?: number;
   /** `end` keeps the last lines, where a failing command says why it failed. */
   from?: "start" | "end";
+  /** The block is at least as tall as its copy control reaches, so a one-line
+      output keeps the control inside it rather than hanging below, where a
+      scroller around it would cut the control off. */
+  holdControl?: boolean;
 }) {
   const [all, setAll] = useState(false);
   const label = heading ? (
@@ -70,8 +75,11 @@ export function OutputPreview({
      the reader noticing that. */
   const embedded = all && lang ? lang : null;
   const copy = copyLabel ?? tr("tools.copyOutput");
+  /* The control's top offset plus its size at each pointer (ACTION_SIZE_FINE_PX, ACTION_SIZE_COARSE_PX). */
+  const room = !holdControl || embedded ? ""
+    : heading ? "min-h-[42px] [@media(pointer:coarse)]:min-h-[64px]" : "min-h-[28px] [@media(pointer:coarse)]:min-h-[50px]";
   return (
-    <div className="group/out relative mt-1.5">
+    <div className={`group/out relative mt-1.5 ${room}`}>
       {label}
       {embedded ? (
         <CodeBlock code={output} lang={embedded} copyLabel={copy} />

@@ -64,11 +64,13 @@ before execution, with a three-minute execution limit and 64 KiB output limit.
 The scope launcher dies with its parent; Bubblewrap ends detached descendants
 with its PID namespace. Success, exit code, working directory and redacted output
 are retained on the stage attempt. Each output stream is displayed up to 16,000
-characters, with an ellipsis when shortened. Expand **Project setup** on the
-stage, in the board's **Stages** sheet or on the phone pipeline screen to inspect
-it. Each entry names its stage and attempt, and a failed setup stays beside its
-successful retry; in the **Stages** sheet the attempt buttons switch between
-them.
+characters, with an ellipsis when shortened. The setup is one line with a dot
+and its outcome: in the board's **Stages** sheet for the attempt the pane shows,
+and on the phone pipeline screen for the lane's latest setup. A failure opens on
+the end of its output; select a closed line to see its command and output, and
+hover or tap the dot for when it started and how long it took. A failed setup
+stays on its attempt beside its successful retry; in the **Stages** sheet the
+attempt buttons switch between them.
 
 A failure parks the stage before the builder starts. Inspect the output, repair
 the environment, then use the existing **Retry stage** action. The failed

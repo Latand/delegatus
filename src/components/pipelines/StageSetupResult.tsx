@@ -57,9 +57,9 @@ export function StageSetupResult({ setup, worktreeDir, fit = false }: {
           </code>
           {dir ? <p className="mt-0.5 break-words [overflow-wrap:anywhere] text-muted">{t("projectSetup.inDir", { dir })}</p> : null}
           {stderr ? <OutputPreview output={stderr} truncated={false} tone="err" heading={both ? t("tools.stderr") : undefined}
-            copyLabel={t("tools.copyStderr")} previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" /> : null}
+            copyLabel={t("tools.copyStderr")} previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" holdControl /> : null}
           {stdout ? <OutputPreview output={stdout} truncated={false} heading={both ? t("tools.stdout") : undefined}
-            previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" /> : null}
+            previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" holdControl /> : null}
           {!stderr && !stdout && setup.state !== "running" ? <p className="mt-1 text-muted">{t("projectSetup.noOutput")}</p> : null}
         </SetupBody>
       </details>
