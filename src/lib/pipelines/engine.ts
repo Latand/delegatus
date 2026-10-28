@@ -8310,6 +8310,10 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
         assertProactiveTaskExecution(reader.read()?.taskIds ?? []);
+        if (!cloud.taskId) {
+          const setupError = cloudProjectSetupError(pipeline, bound);
+          if (setupError) throw new Error(setupError);
+        }
       };
       const guardAccount = (account: AccountContext) => () => {
         assertLane();
@@ -8529,6 +8533,11 @@ async function holdForPriorStageWriters(pipeline: Pipeline, stage: PipelineStage
   return false;
 }
 
+function cloudProjectSetupError(pipeline: Pipeline, stage: PipelineStage): string | null {
+  if (![null, "builder"].includes(stage.effectiveRole.roleId) || !projectSetupRecipe(pipeline.project)) return null;
+  return "project setup requires a local builder so the recipe prepares its execution worktree";
+}
+
 async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
   const bound = attemptStage(stage, attempt);
@@ -8570,6 +8579,16 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   const environmentId = codexCloudEnvironmentId(pipeline.project);
   if (attempt.cloud && environmentId !== attempt.cloud.environmentId) return reject("Codex Cloud project environment changed during the stage");
   if (!environmentId) return fallback("Codex Cloud is disabled: set the project's codexCloudEnvironmentId");
+  // Setup prepares the local worktree. Keep configured builders on that
+  // worktree, and retain custody of any already-dispatched Cloud task.
+  if (!attempt.cloud?.taskId && !attempt.cloud?.submissionUnresolved && attempt.cloud?.phase !== "submitting") {
+    try {
+      const setupError = cloudProjectSetupError(pipeline, bound);
+      if (setupError) return fallback(setupError);
+    } catch (error) {
+      return reject(hardenedRedact(error instanceof Error ? error.message : "project setup settings are unreadable"));
+    }
+  }
   if (!attempt.cloud) {
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);

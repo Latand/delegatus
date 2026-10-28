@@ -1,4 +1,6 @@
-import { expect, test, harness, create, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs } from "./engine.fixture";
+import { afterAll, expect, test, harness, create, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs, os } from "./engine.fixture";
+import { reviewSetupRecipe, setProjectSetupRecipe } from "@/lib/projects/setupRecipe";
+import { afterEach } from "bun:test";
 import { normalizeStages } from "./engine";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
@@ -25,7 +27,7 @@ const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 const lane = () => loadPipelines()[0]!;
 const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 
-async function fixture(options: { enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[] } = {}) {
+async function fixture(options: { enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[]; repoDir?: string } = {}) {
   await settlePipelineControllerJobs();
   const h = harness();
   let clock = Date.UTC(2026, 9, 23);
@@ -44,7 +46,8 @@ async function fixture(options: { enabled?: boolean; publication?: "internal" | 
     readFinalMessage: async () => ({ message: pass, model: "gpt-6.1-sol" }),
     readDiff: async () => { throw new Error("read-only stages must never read a diff"); },
   };
-  await create(h.ports, (options.stages ?? [stage]) as never, { publication: options.publication ?? "remote-branch" });
+  await create(h.ports, (options.stages ?? [stage]) as never, { publication: options.publication ?? "remote-branch",
+    ...(options.repoDir ? { repoDir: options.repoDir } : {}) });
   expect(setCodexCloudEnvironmentId(lane().project, options.enabled === false ? "" : "env-fixture")).toBe(true);
   return { h, submits, reads };
 }
@@ -58,6 +61,108 @@ async function submitted(h: ReturnType<typeof harness>, expectedTaskId = taskId)
   expect({ phase: attempt().cloud?.phase, error: attempt().error, cloudError: attempt().cloud?.error }).toEqual({ phase: "polling", error: null, cloudError: undefined });
   expect(attempt().cloud?.taskId).toBe(expectedTaskId);
 }
+
+const setupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-builder-setup-"));
+afterAll(() => fs.rmSync(setupRoot, { recursive: true, force: true }));
+let setupProject: string | undefined;
+afterEach(async () => {
+  if (setupProject) await setProjectSetupRecipe(setupProject, null);
+  setupProject = undefined;
+});
+const setupRecipe = { command: ["sh", "setup.sh"], cwd: "." };
+async function setupBuilder(name: string, roleId: "builder" | "reviewer" = "builder") {
+  const result = await fixture({ repoDir: path.join(setupRoot, name, "repo"), stages: [{ ...stage, id: "build",
+    role: { roleId }, access: roleId === "builder" ? "read-write" : "read-only", sandbox: "restricted" }] });
+  await step(result.h);
+  fs.mkdirSync(lane().worktreeDir, { recursive: true });
+  fs.writeFileSync(path.join(lane().worktreeDir, "setup.sh"), "echo ready\n");
+  const reviewed = await reviewSetupRecipe(lane().worktreeDir, setupRecipe);
+  setupProject = lane().project;
+  await setProjectSetupRecipe(lane().project, { ...setupRecipe, hash: reviewed.hash, approvedAt: result.h.ports.now() });
+  return result;
+}
+
+for (const outcome of ["failed", "changed", "invalid", "passed"] as const)
+  test(`Cloud builder setup uses its local execution worktree (${outcome})`, async () => {
+    const { h, submits } = await setupBuilder(outcome);
+    if (outcome === "changed") fs.writeFileSync(path.join(lane().worktreeDir, "setup.sh"), "echo changed\n");
+    if (outcome === "invalid") await setProjectSetupRecipe(lane().project, { ...setupRecipe, hash: "unapproved", approvedAt: h.ports.now() });
+    let calls = 0;
+    h.ports.executeProjectSetup = async (cwd, reviewed, sandbox, _signal, authorize) => {
+      authorize!();
+      expect(cwd).toBe(lane().worktreeDir); expect(sandbox).toBe("restricted");
+      expect(reviewed.command).toEqual(setupRecipe.command);
+      expect(submits).toHaveLength(0); expect(h.spawnInputs).toHaveLength(0);
+      calls++;
+      return { code: outcome === "failed" ? 9 : 0, stdout: "setup output", stderr: "" };
+    };
+    for (let i = 0; i < 6 && lane().state === "running" && !h.spawnInputs.length; i++) await step(h);
+    expect(submits).toHaveLength(0);
+    const success = outcome === "passed";
+    expect(calls).toBe(outcome === "changed" || outcome === "invalid" ? 0 : 1);
+    expect(h.spawnInputs).toHaveLength(success ? 1 : 0);
+    if (success) {
+      expect(attempt().cloud?.fallback?.reason).toContain("project setup");
+      expect(attempt().executionRuntime).toBe("cloud-then-local");
+      expect(attempt().setup).toMatchObject({ state: "passed", code: 0, stdout: "setup output" });
+      // A fresh process observes the durable result; a later tick cannot rerun it.
+      const read = `import {findPipelineRecord} from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
+        console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(lane().id)}).runs[0].attempts.at(-1).setup));`;
+      const child = spawnSync(process.execPath, ["-e", read], { env: { ...process.env }, encoding: "utf8" });
+      expect({ status: child.status, error: child.stderr }).toMatchObject({ status: 0 });
+      expect(JSON.parse(child.stdout)).toEqual(attempt().setup);
+      await step(h); expect(calls).toBe(1); expect(h.spawnInputs).toHaveLength(1);
+    } else {
+      expect(lane().state).toBe("needs_decision");
+      expect(attempt().error).toContain(outcome === "failed" ? "exit 9" : outcome === "changed" ? "approve it again" : "approval is invalid");
+    }
+  });
+
+test("Cloud builder setup disabled retains Cloud submission", async () => {
+  const { h, submits } = await setupBuilder("disabled");
+  await setProjectSetupRecipe(lane().project, null);
+  h.ports.executeProjectSetup = async () => { throw new Error("disabled setup executed"); };
+  await submitted(h);
+  expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
+  expect(attempt().setup).toBeUndefined();
+});
+
+test("Cloud builder setup does not redirect a reviewer", async () => {
+  const { h, submits } = await setupBuilder("reviewer", "reviewer");
+  h.ports.executeProjectSetup = async () => { throw new Error("reviewer executed builder setup"); };
+  await submitted(h);
+  expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
+  expect(attempt().setup).toBeUndefined();
+});
+
+test("Cloud builder setup enabled after submission retains remote task custody", async () => {
+  const { h, submits } = await setupBuilder("custody");
+  const reviewed = await reviewSetupRecipe(lane().worktreeDir, setupRecipe);
+  await setProjectSetupRecipe(lane().project, null);
+  await submitted(h);
+  await setProjectSetupRecipe(lane().project, { ...setupRecipe, hash: reviewed.hash, approvedAt: h.ports.now() });
+  h.ports.cloudClient!.poll = async () => ({ state: "pending", model: "gpt-6.1-sol" });
+  await step(h);
+  expect(attempt().cloud?.taskId).toBe(taskId); expect(attempt().cloud?.phase).toBe("polling");
+  expect(attempt().cloud?.fallback).toBeUndefined(); expect(lane().state).toBe("running");
+  expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("Cloud builder setup enabled during catalog admission prevents submission", async () => {
+  const { h, submits } = await setupBuilder("late");
+  const reviewed = await reviewSetupRecipe(lane().worktreeDir, setupRecipe);
+  await setProjectSetupRecipe(lane().project, null);
+  h.ports.cloudClient!.hasEnvironment = async () => {
+    await setProjectSetupRecipe(lane().project, { ...setupRecipe, hash: reviewed.hash, approvedAt: h.ports.now() });
+    return true;
+  };
+  let calls = 0;
+  h.ports.executeProjectSetup = async () => { calls++; return { code: 9, stdout: "", stderr: "failed setup" }; };
+  for (let i = 0; i < 6 && lane().state === "running"; i++) await step(h);
+  expect(submits).toHaveLength(0); expect(h.spawnInputs).toHaveLength(0);
+  expect(calls).toBe(1); expect(attempt().setup?.code).toBe(9);
+  expect(lane().state).toBe("needs_decision");
+});
 
 test("cloud reviewers submit the role scaffold, relay and lane facts, settle through the local verdict path", async () => {
   const { h, submits, reads } = await fixture();
