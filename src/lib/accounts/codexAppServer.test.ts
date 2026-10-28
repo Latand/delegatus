@@ -123,14 +123,14 @@ test("an unsupported executable is refused before spawning an account app-server
     generateProtocolSchemas,
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.999.0 has no pinned schema and is not an additive extension of pin 0.164.0. Pin the CLI");
+  })).rejects.toThrow("CLI 0.999.0; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.164.0");
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
     launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.150.0",
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.150.0 has no pinned schema and no older pin");
+  })).rejects.toThrow("CLI 0.150.0; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
   expect(spawned).toBe(false);
 });
 

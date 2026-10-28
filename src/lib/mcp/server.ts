@@ -3055,7 +3055,9 @@ export function createMcpToolService(
               recovered: true, outcome: "settled", evidence: "mcp-receipt", nextAction: "follow-disposition",
               ...(!previous.recovered ? {
                 original: previous,
-                state: typedTool === "spawn_agent" ? "completed" : "delivered",
+                state: typedTool === "spawn_agent"
+                  ? (previous.state === "settled" ? "completed" : previous.state)
+                  : "delivered",
                 ...(["send_message", "send_message_to_orchestrator"].includes(typedTool) ? { resend: "not-needed", duplicateRisk: false } : {}),
               } : {}),
             } : {}),
@@ -3113,7 +3115,7 @@ export function createMcpToolService(
               outcome = "conflict";
               return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
             }
-            if (record.result && !recoveryOnly) {
+            if (record.result && !recoveryOnly && (typedTool !== "spawn_agent" || terminalResult(record.result))) {
               outcome = "replay";
               return { ...record.result, replayed: true };
             }
@@ -3137,9 +3139,11 @@ export function createMcpToolService(
           // Revalidate it so ordinary same-key replays also close on expiry.
           const remoteAcceptance = typedTool === "send_message_to_orchestrator"
             && recorded.target.identity?.startsWith("machine:") && record.result?.ok && !terminalResult(record.result);
-          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance) {
+          const pendingSpawn = typedTool === "spawn_agent" && record.result?.ok
+            && !terminalResult(record.recoveryResult ?? record.result);
+          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance && !pendingSpawn) {
             outcome = "replay";
-            return { ...record.result, replayed: true };
+            return { ...(typedTool === "spawn_agent" ? record.recoveryResult ?? record.result : record.result), replayed: true };
           }
           if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")) {
             // The sender's fence also closes a stalled pre-dispatch owner.

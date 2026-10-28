@@ -426,7 +426,7 @@ function structuredSpawnFailureReason(error: unknown): string {
     return supervisedRuntimeHostUnavailableReason("structured spawn runtime host");
   }
   const message = error instanceof Error ? error.message : "structured spawn failed";
-  return hardenedRedact(message).replace(/\s+/g, " ").trim().slice(0, 240) || "structured spawn failed";
+  return hardenedRedact(message).replace(/\s+/g, " ").trim().slice(0, 500) || "structured spawn failed";
 }
 
 function admissionTransportReason(error: unknown): string {

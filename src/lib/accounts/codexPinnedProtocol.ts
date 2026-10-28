@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +12,7 @@ import oldestManifest from "./protocol/0.154.0/manifest.json";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
+import { hardenedRedact } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
@@ -39,6 +40,22 @@ export function installedCodexVersion(binary: string, env: NodeJS.ProcessEnv): s
   const version = result.status === 0 && /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(result.stdout)?.[1];
   if (!version) throw new CodexAppServerProtocolError("cannot identify executable version with --version");
   return version;
+}
+
+/** The route checks the same executable before reserving a new launch. */
+export async function preflightCodexProtocol(env: NodeJS.ProcessEnv): Promise<void> {
+  const binary = process.env.LLV_CODEX_BINARY ?? "codex";
+  const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+  await withViewerOperation("codex.protocol-preflight", () => withCodexCliLaunch(binary, async () => {
+    const version = await new Promise<string>((resolve, reject) => {
+      execFile(binary, ["--version"], { env, timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 4096 }, (error, stdout) => {
+        const parsed = !error && /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(stdout)?.[1];
+        if (parsed) resolve(parsed);
+        else reject(protocolAdmissionError("unknown", "cannot identify executable version with --version"));
+      });
+    });
+    await resolveCodexProtocol(version, binary, env);
+  }));
 }
 
 function methodSchema(schema: Schema, kind: string, method: string): Schema | undefined {
@@ -70,6 +87,10 @@ function strictObjects(value: unknown): unknown {
 
 const REMEDY = "Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility";
 const supported = () => pins.map(row => row.manifest.version).join(", ");
+
+function protocolAdmissionError(version: string, cause: string): CodexAppServerProtocolError {
+  return new CodexAppServerProtocolError(`CLI ${version}; Supported: ${supported()}; cause: ${hardenedRedact(cause).replace(/\s+/g, " ").trim().slice(0, 180)}. ${REMEDY}`);
+}
 
 /** An executable whose own generated schema extends `pin` additively. */
 export interface CodexUnpinnedCli {
@@ -293,15 +314,15 @@ async function admitUnpinned(version: string, pin: typeof pins[number], binary: 
     // A comparison verdict is retained; a failed generation is retried by the next launch.
     forget();
     const detail = error instanceof Error ? error.message.replace(/^Codex app-server protocol error: /, "") : "generation failed";
-    throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and its schema could not be compared with pin ${pinned}. ${REMEDY}. Supported: ${supported()}; cause: ${detail}`);
+    throw protocolAdmissionError(version, detail);
   }
   let breaks: string[];
   try {
     breaks = [...codexSchemaBreaks(pin.stable, JSON.parse(generated.stable)).map(row => `stable ${row}`),
       ...codexSchemaBreaks(pin.schema, JSON.parse(generated.experimental)).map(row => `experimental ${row}`)].slice(0, 3);
   } catch { breaks = ["generated schema is not JSON"]; }
-  // The remedy precedes the details: protocol errors are clipped to 500 characters.
-  if (breaks.length) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and is not an additive extension of pin ${pinned}. ${REMEDY}. Supported: ${supported()}; breaks: ${breaks.map(row => row.slice(0, 100)).join("; ")}`);
+  // Keep supported versions and the comparison cause ahead of the remedy.
+  if (breaks.length) throw protocolAdmissionError(version, `not an additive extension of pin ${pinned}; ${breaks.join("; ")}`);
   const cliSchemaDigest = createHash("sha256").update(generated.experimental).digest("hex");
   console.warn(`[codex protocol] CLI ${version} has no pinned schema; admitted under pin ${pinned} because its generated schema (${cliSchemaDigest.slice(0, 12)}) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it`);
   return { cliVersion: version, cliSchemaDigest };
@@ -312,7 +333,7 @@ async function admitUnpinned(version: string, pin: typeof pins[number], binary: 
 export async function resolveCodexProtocol(version: string, binary: string, env: NodeJS.ProcessEnv, generate: CodexSchemaGenerator = generateCodexSchemas): Promise<CodexPinnedProtocol> {
   if (pins.some(row => row.manifest.version === version)) return new CodexPinnedProtocol(version);
   const pin = nearestOlderPin(version);
-  if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and no older pin to compare it with. ${REMEDY}. Supported: ${supported()}`);
+  if (!pin) throw protocolAdmissionError(version, "no older pin to compare it with");
   let admission = admissions.get(version);
   if (!admission) {
     const started: Promise<CodexUnpinnedCli> = withViewerOperation("codex.protocol-admission", () =>

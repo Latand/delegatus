@@ -323,6 +323,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
+import { spawnConversation } from "./spawnConversation";
 import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["set-delivery-remote", "start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
@@ -1796,18 +1797,21 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
     ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
   });
+  const terminalFailure = ["failed", "conflict"].includes(result.state as string);
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
-    || !["starting", "path-pending", "settled"].includes(result.state as string)
-    || !["pending", "queued", "delivered"].includes(result.initialMessage as string)
+    || !["starting", "path-pending", "settled", "failed", "conflict"].includes(result.state as string)
+    || !["pending", "queued", "delivered", "failed"].includes(result.initialMessage as string)
     || (result.ok !== undefined && result.ok !== true)
     || (result.launched !== undefined && typeof result.launched !== "boolean")
-    || (result.retrySafe !== undefined && result.retrySafe !== false)
+    || (result.retrySafe !== undefined && result.retrySafe !== (result.state === "failed"))
     || (result.path !== undefined && result.path !== null && !text(result.path))
     || (result.initialMessage === "delivered" && result.launched === false)
     || (result.state === "starting" && result.initialMessage !== "pending")
-    || (result.state === "settled" && result.initialMessage !== "delivered")) {
+    || (result.state === "settled" && result.initialMessage !== "delivered")
+    || (terminalFailure && (result.initialMessage !== "failed" || result.launched !== false || !text(result.error)))
+    || (!terminalFailure && result.initialMessage === "failed")) {
     throw new McpDispatchUncertainError("the spawn response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
   return {
@@ -1818,6 +1822,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(typeof result.launched === "boolean" ? { launched: result.launched } : {}),
+    ...(terminalFailure ? { outcome: "settled", reason: result.error, error: result.error, retrySafe: result.retrySafe } : {}),
     ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
@@ -3320,9 +3326,30 @@ function conversationTailAnswer(
   };
 }
 
+function spawnConversationAccess(args: McpToolArgs,
+  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "callerProject">) {
+  const caller = attributionOf(dependencies);
+  const project = dependencies.callerProject ? dependencies.callerProject()
+    : caller.conversationId ? callerProjectFromSnapshot(agentRegistry().livenessConversationSnapshot(caller.conversationId), caller.conversationId)
+      : null;
+  return { caller, project, requestedProject: text(args.project) || undefined };
+}
+
+function spawnConversationForCaller(conversationId: string, args: McpToolArgs,
+  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "callerProject">) {
+  return spawnConversation(conversationId, () => spawnConversationAccess(args, dependencies));
+}
+
+async function conversationReadReceiptScope(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+  const { caller, project } = spawnConversationAccess(args, dependencies);
+  // Keyed reads can contain private launch facts. Partition both saved replay
+  // and in-flight joins using the same server-derived access as the fallback.
+  return JSON.stringify({ caller, project: project ? canonicalProject(project) : null });
+}
+
 async function getConversation(
   args: McpToolArgs,
-  dependencies: Pick<ViewerMcpDomainDependencies, "listFiles" | "completedFileScan" | "targetedFileEntry" | "selectedContext">,
+  dependencies: Pick<ViewerMcpDomainDependencies, "listFiles" | "completedFileScan" | "targetedFileEntry" | "selectedContext" | "callerAttribution" | "attentionAuthority" | "callerProject">,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
   throwIfCallEnded(context);
@@ -3345,10 +3372,25 @@ async function getConversation(
      while the corpus scan is degraded. A transcript path continues through the
      root-validated bounded reader below. */
   if (tailLines > 0 && requestedId) {
-    const answer = selectedConversationTail(
-      { conversationId: requestedId, maxLines: Math.max(1, Math.min(tailLines, SELECTED_TAIL_MAX_LINES)) },
-      selectedDependencies,
-    );
+    let answer: ReturnType<typeof selectedConversationTail>;
+    try {
+      answer = selectedConversationTail(
+        { conversationId: requestedId, maxLines: Math.max(1, Math.min(tailLines, SELECTED_TAIL_MAX_LINES)) },
+        selectedDependencies,
+      );
+    } catch (error) {
+      if (error instanceof McpToolRefusal && [
+        "selected_context_unresolved", "selected_conversation_has_no_transcript",
+        "selected_conversation_transcript_absent", "selected_conversation_unreadable",
+      ].includes(text(error.details.code))) {
+        const launch = spawnConversationForCaller(requestedId, args, dependencies);
+        if (launch && (!launch.transcriptPath || !fs.existsSync(launch.transcriptPath))) {
+          throwIfCallEnded(context);
+          return redactPayload({ ...launch, ...selectedContextEcho(selected.target) });
+        }
+      }
+      throw error;
+    }
     throwIfCallEnded(context);
     return redactPayload({
       conversationId: answer.record.conversationId,
@@ -3363,7 +3405,13 @@ async function getConversation(
   const conversation = requestedId
     ? agentRegistry().conversation(requestedId as `conversation_${string}`)
     : agentRegistry().conversationForPath(requestedPath);
-  const transcriptPath = conversation?.generations.at(-1)?.path ?? requestedPath;
+  const pendingLaunch = requestedId && !conversation?.generations.length ? spawnConversationForCaller(requestedId, args, dependencies) : null;
+  const transcriptPath = conversation?.generations.at(-1)?.path ?? pendingLaunch?.transcriptPath ?? requestedPath;
+  if (!transcriptPath && requestedId) {
+    throwIfCallEnded(context);
+    if (pendingLaunch) return redactPayload({ ...pendingLaunch, ...selectedContextEcho(selected.target) });
+    throw new Error("conversation not found");
+  }
   const pathTailLines = tailLines > 0 && !requestedId
     ? Math.max(1, Math.min(tailLines, SELECTED_TAIL_MAX_LINES))
     : undefined;
@@ -3372,6 +3420,13 @@ async function getConversation(
     ...(pathTailLines === undefined ? {} : { tailLines: pathTailLines }),
   });
   const entry = targeted?.entry;
+  if (!entry && requestedId) {
+    const launch = spawnConversationForCaller(requestedId, args, dependencies);
+    if (launch) {
+      throwIfCallEnded(context);
+      return redactPayload({ ...launch, ...selectedContextEcho(selected.target) });
+    }
+  }
   if (!entry || (entry.engine !== "claude" && entry.engine !== "codex")) throw new Error("conversation not found");
   if (pathTailLines !== undefined) {
     if (!targeted?.tail) throw new Error("conversation tail is unavailable");
@@ -7013,6 +7068,14 @@ async function agentActivity(
         ? { evidenceDeadlineMs: Math.min(DEFAULT_EVIDENCE_DEADLINE_MS, remainingMs) }
         : {}),
     }, sources);
+    if (text(args.conversationId) && snapshot.conversations.length === 0) {
+      const launch = spawnConversationForCaller(text(args.conversationId), args, dependencies);
+      throwIfCallEnded(context);
+      if (launch) return redactPayload({
+        ...snapshot, count: 1, conversations: [launch], journaled: 0,
+        selection: { ...snapshot.selection, matched: 1, selected: 1 },
+      });
+    }
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
     const liveOnly = args.liveOnly === true && args.includeGone !== true;
     const conversations = liveOnly ? snapshot.conversations.filter(livenessRecordIsLive) : snapshot.conversations;
@@ -7164,6 +7227,8 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
     const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
     const path = lookup.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path;
     if (!path) {
+      const launch = spawnConversationForCaller(conversationId, {}, dependencies);
+      if (launch) return { kind: "conversation", path: `spawn:${launch.launchId}` };
       const reasonId = text(named?.reasonId);
       const launchPath = reasonId.startsWith("spawn:") && reasonId.endsWith(":launch-failed") ? reasonId.slice(0, -":launch-failed".length) : null;
       throw new McpToolRefusal(
@@ -7175,6 +7240,12 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
       );
     }
     return { kind: "conversation", path };
+  }
+  if (named?.kind === "conversation" && text(named.path).startsWith("spawn:")) {
+    const receipt = dependencies.registrySnapshot().receipts?.[text(named.path).slice(6)];
+    if (!receipt || !spawnConversationForCaller(receipt.conversationId, {}, dependencies)) {
+      throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+    }
   }
   if (!isFocusTarget(value)) throw new Error(describeFocusTargetRejection(value));
   return value;
@@ -7199,6 +7270,14 @@ async function focusTargetProject(
   if (isGeometricTarget(target)) return target.project;
   switch (target.kind) {
     case "conversation": {
+      if (target.path.startsWith("spawn:")) {
+        const receipt = dependencies.registrySnapshot().receipts?.[target.path.slice(6)];
+        const launch = receipt && spawnConversationForCaller(receipt.conversationId, {}, dependencies);
+        if (!receipt || !launch) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        const project = launch.project ?? projectForCwd(receipt.cwd);
+        if (!project) throw new McpToolRefusal("launch project is unavailable", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        return canonicalProject(project);
+      }
       const targeted = await entryForPath(target.path, dependencies, {}, knownTranscript);
       if (!targeted) throw new McpToolRefusal("no conversation on the board has that transcript path; use a registered conversationId, a transcript .jsonl path on the board, or spawn:<launchId> from a failed-launch row", { code: "CONVERSATION_NOT_FOUND", retryable: false });
       return targeted.entry.project;
@@ -8342,7 +8421,10 @@ export function viewerMcpBindings(
       dryRun: args.dryRun !== false, ...(args.project ? { project: args.project } : {}),
     }, {}, context),
     search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
-    get_conversation: (args, context) => getConversation(args, domainDependencies, context),
+    get_conversation: Object.assign(
+      (args: McpToolArgs, context?: McpToolCallContext) => getConversation(args, domainDependencies, context),
+      { receiptScope: (args: McpToolArgs) => conversationReadReceiptScope(args, domainDependencies) },
+    ),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: reads.conversation_messages,
     deploy_exact_sha: Object.assign(
@@ -8374,7 +8456,17 @@ export function viewerMcpBindings(
         return JSON.stringify({ caller, scope });
       },
     }),
-    agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context)),
+    agent_activity: Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
+      if (text(args.conversationId) && !text(args.cursor)) {
+        const payload = await reads.agent_activity(args, context);
+        const rows = payload.conversations as Record<string, unknown>[] | undefined;
+        // One authorized receipt is the complete targeted answer. Its durable
+        // failure reason must survive the ordinary list-page byte budget.
+        if (rows?.length === 1 && rows[0]?.evidence === "spawn-receipt") return payload;
+        return budgeted("agent_activity", args, 24_000, async () => payload);
+      }
+      return budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context));
+    }, { receiptScope: (args: McpToolArgs) => conversationReadReceiptScope(args, domainDependencies) }),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {

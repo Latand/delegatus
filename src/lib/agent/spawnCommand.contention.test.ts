@@ -544,7 +544,9 @@ test.each(["existing", "account-lock"] as const)("scheduled report launch respec
   const originalDependencies = { ...productionSpawnCommandDependencies };
   const oldCodexBinary = process.env.LLV_CODEX_BINARY;
   const codexBinary = path.join(cwd, "codex-list-stub");
-  fs.writeFileSync(codexBinary, "#!/bin/sh\nprintf '[]'\n", { mode: 0o700 });
+  fs.writeFileSync(codexBinary, `#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'codex-cli 0.164.0\\n'; else printf '[]'; fi
+`, { mode: 0o700 });
   process.env.LLV_CODEX_BINARY = codexBinary;
   const fixture = structuredRouteDependencies(cwd);
   const resolveAccount = fixture.resolveSpawnAccount;

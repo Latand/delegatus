@@ -29,7 +29,7 @@ let registry: AgentRegistry;
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   fs.mkdirSync(path.join(sandbox, "account"));
   const binary = path.join(sandbox, "codex-fixture");
-  fs.writeFileSync(binary, '#!/bin/sh\nif [ "$3 $4" = "mcp list" ]; then echo "[]"; else exit 1; fi\n', { mode: 0o700 });
+  fs.writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.164.0"; elif [ "$3 $4" = "mcp list" ]; then echo "[]"; else exit 1; fi\n', { mode: 0o700 });
   process.env.LLV_CODEX_BINARY = binary;
   process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "unused-runtime.sock");
 }
@@ -147,7 +147,7 @@ test("an advertised account pin cannot reserve a launch onto a resolver fallback
   await withClient(async (client, { resolveAs }) => {
     resolveAs("account-a");
     const response = await client.callTool({ name: "spawn_agent", arguments: args("account-b") });
-    expect(response.structuredContent).toMatchObject({ ok: false });
+    expect(response.structuredContent).toMatchObject({ ok: true, state: "failed", launched: false, outcome: "settled" });
     expect(registry.spawnReceiptForClientAttempt(requestId())?.state).toBe("failed");
   });
 });
