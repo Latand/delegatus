@@ -6532,7 +6532,16 @@ async function continueRestoredClaudeStage(
     evidence.hasUndatedExternalPrompt === true || (evidence.newestExternalPromptAt ?? 0) >= unixMs(at)
     || evidence.prompts?.some(prompt => prompt.origin === "external" && prompt.ts >= unixMs(at)) === true;
   if (!attempt.restoreContinuation) {
-    if (durable && !restartCutOf(attempt, durable, ports)) return false;
+    if (durable) {
+      const cutAt = unixMs(cut!.recordedAt);
+      // A pre-cut command can report its shutdown after the cut was recorded.
+      // Only a fresh prompt or provider-authored output proves Claude resumed;
+      // native task notifications still belong to the interrupted work.
+      const resumed = durable.lastAgentOutputAt === undefined ? !restartCutOf(attempt, durable, ports)
+        : (durable.lastAgentOutputAt ?? 0) > cutAt
+          || durable.prompts?.some(prompt => prompt.origin !== "harness" && prompt.ts > cutAt);
+      if (resumed) return false;
+    }
     // An equal-time external prompt cannot be proven to predate the restart.
     if (attempt.providerWait?.retryCancelled || durable && externalSinceCut(durable, cut!.recordedAt)) return false;
     const now = ports.now();

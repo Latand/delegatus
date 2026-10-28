@@ -19,7 +19,7 @@ async function saveFromPeerProcess(lane: ReturnType<typeof loadPipelines>[number
   expect({ exit: await exited, stdout, stderr }).toEqual({ exit: 0, stdout: "", stderr: "" });
 }
 
-async function restoredStage() {
+async function restoredStage(toolResultOffset = -1000) {
   const h = harness();
   const f = await idleStageHostFixture(h);
   let wall = Date.parse(f.attempt.startedAt!) + 60_000;
@@ -31,7 +31,7 @@ async function restoredStage() {
     { type: "assistant", timestamp: stamp(-1500), message: { role: "assistant", model: "claude-test", content: [
       { type: "tool_use", id: "background-command", name: "Bash", input: { command: "check", run_in_background: true } },
     ] } },
-    { type: "user", timestamp: stamp(-1000), message: { role: "user", content: [
+    { type: "user", timestamp: stamp(toolResultOffset), message: { role: "user", content: [
       { type: "tool_result", tool_use_id: "background-command", content: "Exit code 137" },
     ] } },
     ...queueOperationRecords(stamp(100)),
@@ -210,9 +210,12 @@ test("a fresh controller gives a later restart its own continuation budget after
   } finally { await r.f.end(); }
 });
 
-test.each(["unhosted", "missing"] as const)
-("native restore bookkeeping keeps its cut and continues the same Claude stage before unavailable-host grace settlement (%s projection)", async projection => {
-  const r = await restoredStage();
+test.each([
+  ["unhosted", -1000], ["missing", -1000],
+  ["unhosted", 50], ["missing", 50],
+] as const)
+("native restore bookkeeping keeps its cut before unavailable-host settlement (%s projection, result at %d ms)", async (projection, toolResultOffset) => {
+  const r = await restoredStage(toolResultOffset);
   try {
     // Real host persistence and production host-unavailability read, after grace.
     const unbind = await r.f.bind(0);
@@ -239,7 +242,35 @@ test.each(["unhosted", "missing"] as const)
     expect(r.h.calls.filter(call => call.startsWith("stop-host:"))).toEqual([]);
     expect(r.h.spawnInputs).toHaveLength(1);
     const evidence = await durableStageTurnEvidence("claude", r.f.transcriptPath);
-    expect(evidence).toMatchObject({ turn: "busy", lastAgentEventAt: Date.parse(r.cutAt) - 1000 });
+    expect(evidence).toMatchObject({ turn: "busy", lastAgentEventAt: Date.parse(r.cutAt) + toolResultOffset,
+      lastAgentOutputAt: Date.parse(r.cutAt) - 1500 });
+  } finally { await r.f.end(); }
+});
+
+test.each(["text", "tool_use", "thinking", "prompt", "pipeline prompt"] as const)
+("fresh Claude %s after a post-cut shutdown result prevents initial restore continuation", async kind => {
+  const r = await restoredStage(50);
+  try {
+    const timestamp = new Date(Date.parse(r.cutAt) + 500).toISOString();
+    if (kind === "pipeline prompt") {
+      const ledger = new FileClaudeDeliveryLedger();
+      const session = path.basename(r.f.transcriptPath, ".jsonl");
+      ledger.recordQueued(session, { id: "fresh-prompt", text: "Check the current work",
+        origin: { kind: "agent", role: "pipeline" } }, "turn-started");
+      ledger.confirmDelivered(session, "fresh-prompt", "fresh-prompt-row");
+    }
+    r.records.push(kind.endsWith("prompt")
+      ? { type: "user", uuid: "fresh-prompt-row", timestamp, message: { role: "user", content: "Check the current work" } }
+      : { type: "assistant", timestamp, message: { role: "assistant", model: "claude-test", content: [
+        kind === "text" ? { type: "text", text: "Checking the interrupted command" }
+          : kind === "thinking" ? { type: "thinking", thinking: "Inspect the interrupted command" }
+            : { type: "tool_use", id: "fresh-command", name: "Bash", input: { command: "check" } },
+      ] } });
+    r.write();
+    await tickPipelines([], r.ports);
+    expect(r.sends).toEqual([]);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restoreContinuation).toBeUndefined();
+    expect(loadPipelines()[0]!.state).toBe("running");
   } finally { await r.f.end(); }
 });
 
@@ -681,7 +712,7 @@ test.each(["unreadable", "partial history"] as const)("%s evidence refuses deliv
 });
 
 test.each(["normal Claude", "Codex", "final verdict"] as const)("%s retains its existing settlement behaviour", async kind => {
-  const r = await restoredStage();
+  const r = await restoredStage(50);
   try {
     const lane = loadPipelines()[0]!;
     const attempt = lane.runs[0]!.attempts[0]!;
