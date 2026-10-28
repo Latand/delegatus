@@ -4823,7 +4823,8 @@ async function retryTerminalStagePublication(
     delete attempt.publicationTextRepair;
   }
   const inspection = attempt.pullRequestInspection;
-  if (inspection?.sha === pipeline.lastPassedCommit && !inspection.exhausted) {
+  if (inspection?.sha === pipeline.lastPassedCommit) {
+    if (inspection.exhausted) { await park(pipeline, `${inspection.detail}; inspection retry budget exhausted`, attempt); return; }
     const remaining = unixMs(inspection.retryAt) - unixMs(ports.now());
     if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
   }

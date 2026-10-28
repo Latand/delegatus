@@ -1410,7 +1410,7 @@ test("PR inspection backoff and exhaustion survive fresh controller processes", 
     expect(lane.state).toBe("needs_decision");
     expect(lane.stateDetail).toContain("inspection retry budget exhausted");
     expect(lane.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
-    const after = await restart(Date.parse(lane.updatedAt) + 60_000);
+    const after = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 60_000);
     expect(after.checks).toBe(0);
   } finally { f.close(); }
 });
