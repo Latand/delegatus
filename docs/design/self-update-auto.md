@@ -182,9 +182,21 @@ when the tip is not green. The next merge on top gets a verdict of its own,
 and with `strict` protection its pull request's checks ran on a tree that
 already contains the earlier commit.
 
+### Exact post-merge runtime evidence
+
+The Delegatus runtime workflow also runs on pushes to `main`. When the merged
+commit has a different tree from its PR head, the updater reads checks on the
+merged commit and requires a successful `runtime-gate` from the matching
+GitHub Actions push workflow and check suite for that exact SHA. Branch
+protection must require that gate from GitHub Actions. Missing, running,
+failed, skipped or cancelled evidence keeps the update waiting or refused.
+An older running updater still needs an equal-tree PR to install this change;
+this rule takes effect after that updater is replaced. Cancelled main runs can
+leave their commits ineligible; a newer green tip may be used instead.
+
 ### 1.2 Why green is read from the pull request
 
-A commit on `main` has no checks here, so reading checks on the target itself
+Historically a commit on `main` had no runtime gate, so reading checks on the target itself
 would mean either "never green" or, through the combined status, a
 permanent `pending`. The checks that vouch for the code on `main` ran on the
 pull request that produced it. The rule makes sure they ran on **the same
