@@ -5410,7 +5410,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.draft.status": "Перше повідомлення · ще не надіслано",
   "kanban.fromConversation.menu": "Пайплайн з розмови…",
   "kanban.fromConversation.checking": "{title} · перевіряю гілку…",
-  "kanban.fromConversation.preparing": "Готую пайплайн з розмови {title} · {branch}…",
+  "kanban.fromConversation.preparing": "Готую пайплайн з розмови «{title}» · {branch}…",
   "kanban.fromConversation.notCreated": "Пайплайн не створено. {reason}",
   "kanban.fromConversation.unknown": "Відповіді ще немає. Пайплайн міг уже з’явитися; «Перевірити ще раз» запитає той самий.",
   "kanban.fromConversation.refresh": "Перевірити розмову ще раз",

@@ -278,7 +278,8 @@ export function StagePlaceholderPane({ slot, interactive, flow = false }: { slot
       <span aria-hidden className="h-1 w-full shrink-0 opacity-60" style={{ backgroundColor: tint.color }} />
       {/* A header wider than the pane (a longer kind word, finger-sized
           controls) wraps its controls to a second line inside the pane; the
-          title keeps a few words before they do. */}
+          title keeps a few words before they do. The controls wrap together,
+          so no line holds a lone ×. */}
       <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1" style={{ backgroundColor: tint.soft }}>
         <StageGlyph
           state={state}
@@ -301,51 +302,55 @@ export function StagePlaceholderPane({ slot, interactive, flow = false }: { slot
         <span className="shrink-0 rounded-full border border-border bg-card/70 px-1.5 py-0.5 text-caption font-bold uppercase tracking-wide text-muted">
           {review ? `⟳ ${t("groupOverride.reviewKind")}` : t("groupOverride.runKind")}
         </span>
-        {reorderable ? (
-          <span className="flex shrink-0 items-center gap-0.5" role="group" aria-label={t("groupOverride.stagesHeading")}>
-            <button
-              type="button"
-              data-stage-move="earlier"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
-              aria-label={t("pipelineSlot.moveEarlier", { role: label })}
-              disabled={busy || !canMoveTo(slot.index - 1)}
-              onClick={() => moveTo(slot.index - 1)}
-            >
-              <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
-            </button>
-            <button
-              type="button"
-              data-stage-move="later"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
-              aria-label={t("pipelineSlot.moveLater", { role: label })}
-              disabled={busy || !canMoveTo(slot.index + 1)}
-              onClick={() => moveTo(slot.index + 1)}
-            >
-              <ChevronRight className="h-3.5 w-3.5" aria-hidden />
-            </button>
+        {reorderable || interactive || canRemove ? (
+          <span className="flex shrink-0 items-center gap-1.5" data-stage-pane-controls="">
+            {reorderable ? (
+              <span className="flex shrink-0 items-center gap-0.5" role="group" aria-label={t("groupOverride.stagesHeading")}>
+                <button
+                  type="button"
+                  data-stage-move="earlier"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
+                  aria-label={t("pipelineSlot.moveEarlier", { role: label })}
+                  disabled={busy || !canMoveTo(slot.index - 1)}
+                  onClick={() => moveTo(slot.index - 1)}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  data-stage-move="later"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
+                  aria-label={t("pipelineSlot.moveLater", { role: label })}
+                  disabled={busy || !canMoveTo(slot.index + 1)}
+                  onClick={() => moveTo(slot.index + 1)}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              </span>
+            ) : null}
+            {interactive ? (
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                aria-label={t("groupOverride.applyStage")}
+                aria-expanded={configOpen}
+                onClick={() => setConfigOpen((value) => !value)}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            ) : null}
+            {canRemove ? (
+              <button
+                className="inline-flex shrink-0 items-center justify-center rounded-control border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+                aria-label={t("groupOverride.removeStage")}
+                title={t("groupOverride.removeStage")}
+                disabled={busy}
+                onClick={removeStage}
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            ) : null}
           </span>
-        ) : null}
-        {interactive ? (
-          <button
-            type="button"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            aria-label={t("groupOverride.applyStage")}
-            aria-expanded={configOpen}
-            onClick={() => setConfigOpen((value) => !value)}
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        ) : null}
-        {canRemove ? (
-          <button
-            className="inline-flex shrink-0 items-center rounded-control border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
-            aria-label={t("groupOverride.removeStage")}
-            title={t("groupOverride.removeStage")}
-            disabled={busy}
-            onClick={removeStage}
-          >
-            <X className="h-3 w-3" aria-hidden />
-          </button>
         ) : null}
       </header>
       <AgentMemoryCapNote cap={slot.attempt?.memoryCap} />

@@ -50,7 +50,7 @@
               "cut": false,
               "width": 366,
               "height": 56,
-              "text": "Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming…"
+              "text": "Preparing a pipeline from «CSV export retry and streaming writes» · fix/csv-export-retry-after-503-streaming…"
             }
           ],
           "targets": [],
@@ -207,6 +207,7 @@
           "role": "reviewer",
           "roleText": "Reviewer",
           "headerOutside": [],
+          "removeAlone": false,
           "bodyClipped": false
         },
         "configure": {
@@ -316,7 +317,7 @@
               "cut": false,
               "width": 366,
               "height": 98,
-              "text": "No answer yet. The pipeline may already exist; Check again asks for the same one.Check again"
+              "text": "No answer yet. The pipeline may already exist; «Check again» asks for the same one.Check again"
             }
           ],
           "targets": [
@@ -540,7 +541,7 @@
               "cut": false,
               "width": 366,
               "height": 56,
-              "text": "Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry-after-503-streaming…"
+              "text": "Preparing a pipeline from «CSV export retry and streaming writes» · fix/csv-export-retry-after-503-streaming…"
             }
           ],
           "targets": [],
@@ -697,6 +698,7 @@
           "role": "reviewer",
           "roleText": "Reviewer",
           "headerOutside": [],
+          "removeAlone": false,
           "bodyClipped": false
         },
         "configure": {
@@ -806,7 +808,7 @@
               "cut": false,
               "width": 366,
               "height": 98,
-              "text": "No answer yet. The pipeline may already exist; Check again asks for the same one.Check again"
+              "text": "No answer yet. The pipeline may already exist; «Check again» asks for the same one.Check again"
             }
           ],
           "targets": [
@@ -1030,7 +1032,7 @@
               "cut": false,
               "width": 366,
               "height": 56,
-              "text": "Готую пайплайн з розмови Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming…"
+              "text": "Готую пайплайн з розмови «Повтор експорту CSV і потоковий запис» · fix/csv-export-retry-after-503-streaming…"
             }
           ],
           "targets": [],
@@ -1187,6 +1189,7 @@
           "role": "reviewer",
           "roleText": "Рев'юер",
           "headerOutside": [],
+          "removeAlone": false,
           "bodyClipped": false
         },
         "configure": {
@@ -1520,7 +1523,7 @@
               "cut": false,
               "width": 366,
               "height": 56,
-              "text": "Готую пайплайн з розмови Повтор експорту CSV і потоковий запис · fix/csv-export-retry-after-503-streaming…"
+              "text": "Готую пайплайн з розмови «Повтор експорту CSV і потоковий запис» · fix/csv-export-retry-after-503-streaming…"
             }
           ],
           "targets": [],
@@ -1677,6 +1680,7 @@
           "role": "reviewer",
           "roleText": "Рев'юер",
           "headerOutside": [],
+          "removeAlone": false,
           "bodyClipped": false
         },
         "configure": {

@@ -210,7 +210,7 @@ test("choosing the row posts once, shows the draft being prepared on the card, a
   await tick();
   expect(route.posts).toEqual([{ conversationId: exportConversation.conversationId!, taskId: "t-export", sourceRevision: "rev-1", clientRequestId: "key-1" }]);
   expect(host.querySelector(".menu")).toBeNull();
-  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry…");
+  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from «CSV export retry and streaming writes» · fix/csv-export-retry…");
   /* No lane, no editable text and no id before the server answers. */
   expect(card(host).querySelector("[data-pipeline]")).toBeNull();
   expect(card(host).querySelector("[data-draft-message]")).toBeNull();
@@ -302,7 +302,7 @@ test("by keyboard, the row hands focus back to ⋯; a refusal leaves it on the c
   click(create);
   await tick();
   expect(route.posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-1"], ["key-2", "rev-2"]]);
-  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from CSV export retry and streaming writes · other-branch…");
+  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from «CSV export retry and streaming writes» · other-branch…");
 });
 
 test("a create with no answer: the row names the request's own source and asks for it again under the same key", async () => {
@@ -339,7 +339,7 @@ test("on a folded card, the no-answer row opens the card and shows the resend be
   await tick();
   expect(route.posts.map((post) => post.clientRequestId)).toEqual(["key-1", "key-1"]);
   expect(card(host).getAttribute("data-collapsed")).toBe("0");
-  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from CSV export retry and streaming writes · fix/csv-export-retry…");
+  expect(card(host).querySelector('[data-conversation-draft="creating"]')?.textContent).toBe("Preparing a pipeline from «CSV export retry and streaming writes» · fix/csv-export-retry…");
   route.release.shift()!(json(409, { error: "card no longer holds source", code: "SOURCE_NOT_ON_TASK" }));
   await tick(20);
   expect(card(host).getAttribute("data-collapsed")).toBe("0");

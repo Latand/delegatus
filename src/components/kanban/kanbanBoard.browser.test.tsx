@@ -40211,9 +40211,9 @@ describe("start a pipeline from a conversation", () => {
       states[record] = hint;
       expect({ title: hint.title, branch: hint.branch, titleAbove: hint.titleAbove, brokenSegments: hint.brokenSegments }).toEqual({ title: SOURCE_TITLE[combo.locale], branch: BRANCH, titleAbove: true, brokenSegments: [] });
     };
-    /* The opened configuration: the stage's own role selected, every header control inside the pane, nothing clipped in its body. */
+    /* The opened configuration: the stage's own role selected, every header control inside the pane, no header line holding the × alone, nothing clipped in its body. */
     const expectConfigure = async (pane: string) => {
-      const read = await page.evaluate((pane) => {
+      const read = await page.evaluate(([pane, removeLabel]) => {
         const root = document.querySelector<HTMLElement>(pane)!;
         const card = root.querySelector<HTMLElement>("[data-pipeline-stage-card]")!;
         const box = card.getBoundingClientRect();
@@ -40226,11 +40226,22 @@ describe("start a pipeline from a conversation", () => {
             const rect = button.getBoundingClientRect();
             return rect.left < box.left - 0.5 || rect.right > box.right + 0.5;
           }).map((button) => button.getAttribute("aria-label")),
+          removeAlone: (() => {
+            const header = card.querySelector<HTMLElement>("header")!;
+            const remove = header.querySelector<HTMLElement>(`button[aria-label="${removeLabel}"]`);
+            if (!remove) return null;
+            const own = remove.getBoundingClientRect();
+            const others = [...header.querySelectorAll<HTMLElement>(":scope > *, button")].filter((item) => !item.contains(remove));
+            return !others.some((item) => {
+              const rect = item.getBoundingClientRect();
+              return rect.width > 0 && rect.top < own.bottom - 0.5 && rect.bottom > own.top + 0.5;
+            });
+          })(),
           bodyClipped: body.scrollHeight > body.clientHeight + 1,
         };
-      }, pane);
+      }, [pane, t("groupOverride.removeStage")] as const);
       states.configureRead = read;
-      expect(read).toEqual({ role: "reviewer", roleText: read.roleText, headerOutside: [], bodyClipped: false });
+      expect(read).toEqual({ role: "reviewer", roleText: read.roleText, headerOutside: [], removeAlone: false, bodyClipped: false });
       expect(read.roleText).not.toBe(t("draft.noRole"));
     };
     const openTask = async () => {
