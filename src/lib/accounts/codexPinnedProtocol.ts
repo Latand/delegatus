@@ -46,7 +46,7 @@ export function installedCodexVersion(binary: string, env: NodeJS.ProcessEnv): s
 export async function preflightCodexProtocol(env: NodeJS.ProcessEnv): Promise<void> {
   const binary = process.env.LLV_CODEX_BINARY ?? "codex";
   const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
-  await withViewerOperation("codex.protocol-preflight", () => withCodexCliLaunch(binary, async () => {
+  await withViewerOperation("codex.protocol-admission", () => withCodexCliLaunch(binary, async () => {
     const version = await new Promise<string>((resolve, reject) => {
       execFile(binary, ["--version"], { env, timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 4096 }, (error, stdout) => {
         const parsed = !error && /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(stdout)?.[1];
