@@ -25,10 +25,13 @@ Object.assign(globalThis, {
 
 const realFetch = globalThis.fetch;
 const roots = new Set<Root>();
-afterEach(() => {
+function unmountPickers(): void {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
   document.body.replaceChildren();
+}
+afterEach(() => {
+  unmountPickers();
   localStorage.clear();
   globalThis.fetch = realFetch;
   setLocale("en");
@@ -514,6 +517,7 @@ test("a fork whose remote is a bare URL names the fork once, and a named remote 
     await linkState(host, "resolved");
     rows.push(host.querySelector("[data-pipeline-link-push]")?.textContent);
     expect(host.querySelector("[data-pipeline-link-fork]") !== null).toBe(source === forkByUrl);
+    unmountPickers();
   }
   expect(rows).toEqual(["fork contributor/project", "owner/project · mirror", undefined]);
 });
