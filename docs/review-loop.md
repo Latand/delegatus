@@ -102,13 +102,11 @@ A two-stage loop beside the build stage, from the example in
 }
 ```
 
-A legacy `review-loop` stage in a new pipeline is converted at creation into
-this pair (`src/lib/pipelines/legacyReviewDefinition.ts`) only when the
-conversion is provably safe: one read-write stage passes into it, its limit is a
-finite number from 1 to 9 and the fix stage fits within the eight-stage limit.
-Otherwise the stage is kept as written and the pipeline record carries
-`legacyReview` with the refusal codes (for example `stage-count` for a full
-eight-stage plan), so compose the pair yourself.
+A request that names a `review-loop` stage is refused with
+`STAGE_KIND_RETIRED` and is never converted implicitly; compose the pair above
+yourself. A stored pipeline that still carries one parks instead of running it;
+convert it explicitly with `pipeline_action` `preview-legacy-review` and then
+`convert-legacy-review` ([pipelines.md](pipelines.md#legacy-review-loop-stages)).
 
 ## Troubleshooting
 
