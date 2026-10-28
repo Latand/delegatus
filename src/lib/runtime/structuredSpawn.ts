@@ -2188,7 +2188,7 @@ export async function claudeStructuredHostOptions(
  * keeps its class and its controls across restarts. Throws
  * CpuContainmentUnavailable for work that cannot be contained.
  */
-export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
+export function structuredHostCell(registry: AgentRegistry, engine: AgentEngine, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
   const { liveAgents, memberships, conversation } = registry.structuredHostPlanningFacts(conversationId);
   const cpu = planAgentCpu(workloadForMemberships(memberships));
   const profile = receipt?.launchProfile ?? conversation?.launchProfile;
@@ -2198,7 +2198,7 @@ export function structuredHostCell(registry: AgentRegistry, engine: string, sess
   // Reconnecting the same native process keeps its original cgroup. A fresh
   // launch cannot replace this row until that scope has been retired.
   if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot")) {
-    const key = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
+    const key: SessionKey = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
     const retained = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
     if (retained) {
       if (retained.bootEpoch !== systemBootEpoch()) throw new Error("retained agent scope boot identity is unavailable");

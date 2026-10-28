@@ -81,7 +81,7 @@ test.each(["command", "authority"])("a hung %s is bounded by the whole stop dead
     const identity = captureProcessIdentity(process.pid);
     const state: HostState = { status: "dead", sessionKey: "scope-codec", endpoint: "stdio:released", pid: null,
       processStartIdentity: null, exitProcess: identity, eventCursor: 0, protocolVersion: null,
-      activeTurnRef: null, pendingAttention: [], activeFlags: [], ...memoryField(cell) };
+      activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null, ...memoryField(cell) };
     for (const [index, writer] of [codexHostColumns, claudeHostColumns, copilotHostColumns].entries()) {
       const key = { engine: "codex" as const, sessionId: `scope-codec-${index}` };
       const columns = writer(state, 1);
@@ -186,6 +186,7 @@ realScopeTest.each([
     const output = await new Response(child.stdout).text();
     expect(await child.exited, await errorText).toBe(0);
     const observed = JSON.parse(output.trim()) as { root: ReturnType<typeof captureProcessIdentity>; child: number };
+    if (!observed.root.startIdentity) throw new Error("fixture root process identity unavailable");
     expect(fs.readFileSync(`/proc/${observed.child}/cgroup`, "utf8")).toContain(plan.unit!);
     expect(await agentScopeCommand(["show", "--value", "-p", "LoadState", plan.unit!])).toBe("loaded");
     const filename = path.join(root, "registry.json");
@@ -200,7 +201,7 @@ realScopeTest.each([
     const key = { engine: "codex" as const, sessionId };
     const columns = codexHostColumns({ status: "dead", sessionKey: sessionId, endpoint: "stdio:released", pid: null,
       processStartIdentity: null, exitProcess: observed.root, eventCursor: 0, protocolVersion: null,
-      activeTurnRef: null, pendingAttention: [], activeFlags: [], ...memoryField(cell) }, 1);
+      activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null, ...memoryField(cell) }, 1);
     if (mode.startsWith("legacy")) { delete columns.scope; columns.process = null; }
     registry.upsert({ key, artifactPath, cwd: root, accountId: null, launchProfile: emptyLaunchProfile({ cwd: root }),
       status: "dead", host: null, structuredHost: columns, claimEpoch: 1, claimOwner: null, pendingAction: null });

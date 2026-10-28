@@ -495,7 +495,7 @@ if [ "$n" -ge 4 ]; then echo fixture-launch-cap >&2; exit 92; fi
 exec ${quote(process.execPath)} "$@"
 `, { mode: 0o700 });
   const inherited = { ...source, HOME: fixture, PATH: `${tools}:${source.PATH}` };
-  const launch = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
+  const launch: NodeJS.ProcessEnv = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
   const capturedGh = path.join(launch.LLV_AGENT_FORGE_DIR!, "gh");
   fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\nexec ${quote(capturedGh)} repo set-default --view\n`, { mode: 0o700 });
   const changedHome = path.join(fixture, "changed-home");

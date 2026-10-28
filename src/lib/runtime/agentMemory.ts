@@ -135,7 +135,7 @@ function cpuOnlyPlan(input: { engine: string; sessionKey: string; cpu?: AgentCpu
     systemdVersion: input.cpu.systemdVersion, cpu: input.cpu };
 }
 /** `input.cpu` comes from planAgentCpu; CPU placement is independent of the memory mode. */
-export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null; memoryScopes?: AgentMemoryScopes }, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
+export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null; memoryScopes?: AgentMemoryScopes }, env: Readonly<Record<string, string | undefined>> = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
   assertSpawnMemoryAvailable();
   for (const value of Object.values(input.memoryScopes ?? {})) assertAgentMemoryMax(value);
   const raw = env.DELEGATUS_AGENT_MEMORY ?? env.LLV_AGENT_MEMORY ?? "auto";

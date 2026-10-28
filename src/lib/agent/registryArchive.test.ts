@@ -104,7 +104,7 @@ function scopedFixture(legacy: boolean) {
   const unit = "delegatus-agent-projection-fixture.scope";
   const columns = codexHostColumns({ status: "dead", sessionKey: id(0), endpoint: "stdio:released", pid: null,
     processStartIdentity: null, eventCursor: 0, protocolVersion: null, activeTurnRef: null,
-    pendingAttention: [], activeFlags: [], ...(legacy
+    pendingAttention: [], activeFlags: [], account: null, ...(legacy
       ? { memory: normalizeHostMemory({ mechanism: "scope", limitBytes: 2 ** 30, unit, kills: 0, lastKill: null })! }
       : { scope: { unit, bootEpoch: "fixture-boot" } }) }, 1);
   const key = `codex:${id(0)}`;
