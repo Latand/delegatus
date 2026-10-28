@@ -1,0 +1,244 @@
+{
+  "recordedAt": "2026-10-23T15:27:19.102207+00:00",
+  "acceptedParent": "932a3dbb",
+  "baseRevision": "134a29c6",
+  "file": "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+  "sourceSha256": "39002eb15050b738a5054580b64815bf1e5dded0493384c80260695dd83e6e3c",
+  "measuredTree": "Accepted parent plus the source hashes in this record; the repair is committed after verification.",
+  "overlapAudit": {
+    "openProjectBranchesChecked": 38,
+    "missingRefs": 0,
+    "repairFileOverlaps": 0,
+    "mainRevision": "adce57649",
+    "mainChangesInRepairFiles": 0
+  },
+  "originalRefusal": {
+    "check": "native Codex 0.159.0",
+    "exitCode": 1,
+    "passedTests": 3,
+    "failedTests": 4,
+    "error": "initialize timed out"
+  },
+  "diagnosis": {
+    "fixtureRpcDeadlineMs": 5000,
+    "productionRpcDeadlineMs": 30000,
+    "observation": "The native fixture imposed a shorter deadline than production during app-server initialization. Serial whole-file runs passed on both sides; a valid initialize reply delayed beyond the fixture deadline reproduced the reported error."
+  },
+  "baselineComparison": {
+    "command": "gate-remote -- bun run test src/lib/runtime/codexAppServerHost.injectResponses.test.ts with LLV_CODEX_BINARY pinned to 0.159.0",
+    "isolation": "Private HOME, XDG roots, TMPDIR, LLV_STATE_DIR and CODEX_HOME; loopback Responses fixture without provider credentials. Relevant diagnostic, loop, blocking-wait and retention modules were read from base in the scratch export. Native host and fixture source were unchanged between the accepted parent and base.",
+    "wholeFileRuns": {
+      "head-round-1": 0,
+      "head-round-2": 0,
+      "head-round-3": 0,
+      "base-round-1": 0,
+      "base-round-2": 0,
+      "base-round-3": 0
+    },
+    "testsPerRun": 7
+  },
+  "controlledResponse": {
+    "nativeVersion": "0.159.0",
+    "test": "real Codex: writer generation drift after admission produces zero injections",
+    "initializeReplyDelayMs": 6500,
+    "method": "In a scratch export, hold only the real initialize response in the existing stdout shim. All other native protocol bytes and behavioral assertions remain unchanged.",
+    "originalDeadline": {
+      "exitCode": 1,
+      "error": "initialize timed out"
+    },
+    "productionDeadline": {
+      "exitCode": 0,
+      "passedTests": 1,
+      "assertions": 3
+    },
+    "instrumentationCommitted": false
+  },
+  "repair": {
+    "rpcDeadline": "Remove the fixture override, using the existing production deadline.",
+    "outerCaseBudgets": "Add 30 seconds for process startup; the resume case allows two startup intervals. Existing assertion, delivery and observation windows remain unchanged.",
+    "accountShim": "Keep the required account type and plan fields; remove an unused example address.",
+    "productionChanges": false,
+    "assertionsUnchanged": true,
+    "originalAcceptedSourceHashesMatch": true
+  },
+  "launcherSuiteSplit": {
+    "originalFile": "bin/cli.selfUpdate.integration.test.ts",
+    "originalBodySha256": "d923843e98fd1368b13349031c17bfa58565f5e1fce60ada06aa1e89147cffec",
+    "groups": [
+      {
+        "file": "bin/cli.selfUpdate.integration.test.ts",
+        "bodySha256": "6fb1eede49791024efc1e3b4862205b318ca34a2365f6072be73a40aceff738f",
+        "lines": 516,
+        "originalBodyIgnoringSeparatorSha256": "724b08086454fbcf9f66f60e3d73d4b8587e579bce2040157330d84efaac6259",
+        "finalSourceSha256": "d7084924d84cb35a1bcefae6493d452cfe7cbccc605c0507c419ca436104a0a2",
+        "checkedBodySha256": "724b08086454fbcf9f66f60e3d73d4b8587e579bce2040157330d84efaac6259"
+      },
+      {
+        "file": "bin/cli.selfUpdate.webRestart.integration.test.ts",
+        "bodySha256": "9ec6735495f1ca258e7fc64687461e20c404afa7bc2eb9d623489663d6e47020",
+        "lines": 573,
+        "originalBodyIgnoringSeparatorSha256": "5828fa18d3dab2d79ecbad5b0eb428f6000e76e94ffbac08be1cf537ecac2bec",
+        "finalSourceSha256": "955a79f4016dadcf3a4713177c8a0500ba66de57cd4f560acabb01bbf0a4ca8f",
+        "checkedBodySha256": "5828fa18d3dab2d79ecbad5b0eb428f6000e76e94ffbac08be1cf537ecac2bec"
+      },
+      {
+        "file": "bin/cli.selfUpdate.terminal.integration.test.ts",
+        "bodySha256": "ea0cdd2d3daf8bb836439e283c21aef9e0a1418ed9ea9cb06be0bdfb38e7e492",
+        "lines": 946,
+        "originalBodyIgnoringSeparatorSha256": "ea0cdd2d3daf8bb836439e283c21aef9e0a1418ed9ea9cb06be0bdfb38e7e492",
+        "finalSourceSha256": "23c32728cbaaee3554685111dccb272719ae28df62721f5c4d2134164e8706df",
+        "checkedBodySha256": "ea0cdd2d3daf8bb836439e283c21aef9e0a1418ed9ea9cb06be0bdfb38e7e492"
+      }
+    ],
+    "testBodiesByteIdentical": true,
+    "cleanupHelperMovedUnchanged": true,
+    "isolatedRuns": [
+      {
+        "file": "bin/cli.selfUpdate.integration.test.ts",
+        "exitCode": 0,
+        "passed": 32,
+        "skipped": 0,
+        "failed": 0,
+        "assertions": 169,
+        "elapsedSeconds": 64.04
+      },
+      {
+        "file": "bin/cli.selfUpdate.webRestart.integration.test.ts",
+        "exitCode": 0,
+        "passed": 39,
+        "skipped": 0,
+        "failed": 0,
+        "assertions": 403,
+        "elapsedSeconds": 93.89
+      },
+      {
+        "file": "bin/cli.selfUpdate.terminal.integration.test.ts",
+        "exitCode": 0,
+        "passed": 33,
+        "skipped": 29,
+        "failed": 0,
+        "assertions": 1064,
+        "elapsedSeconds": 66.95
+      },
+      {
+        "file": "bin/cli.selfUpdate.coldRecovery.integration.test.ts",
+        "exitCode": 0,
+        "passed": 36,
+        "skipped": 0,
+        "failed": 0,
+        "assertions": 2013,
+        "elapsedSeconds": 190.91
+      },
+      {
+        "file": "bin/cli.selfUpdate.divergedApply.integration.test.ts",
+        "exitCode": 0,
+        "passed": 5,
+        "skipped": 0,
+        "failed": 0,
+        "assertions": 84,
+        "elapsedSeconds": 5.9
+      }
+    ],
+    "lintExitCode": 0
+  },
+  "sharedFixtureReadiness": {
+    "file": "bin/__fixtures__/cli-self-update.ts",
+    "sourceSha256": "74573d2cfb0b742ff6c869240b1855985281b7f55fe244db01eafe4970d3b1a4",
+    "oldCondition": "Version banner in terminal output",
+    "newCondition": "The child prints its required URL and the persisted launcher record reports both web and runtime host healthy. The child output fences stale records from an earlier launch.",
+    "producer": "bin/cli.mjs",
+    "consumers": [
+      "bin/cli.selfUpdate.integration.test.ts",
+      "bin/cli.selfUpdate.webRestart.integration.test.ts",
+      "bin/cli.selfUpdate.terminal.integration.test.ts",
+      "bin/cli.selfUpdate.coldRecovery.integration.test.ts",
+      "bin/cli.selfUpdate.divergedApply.integration.test.ts"
+    ],
+    "copiesAndDefaults": "install copies the real launcher into an isolated checkout; release carries it into fixture worktrees; protectedInstall also builds package fixtures. start receives that fixture, defaults to no extra arguments, chooses an ephemeral port and reads the fixture state directory. No production writer or schema changes.",
+    "originalPackageCases": {
+      "exitCode": 1,
+      "failedTests": 2,
+      "cause": "The quiet package banner omits the version, so each old fixture wait reached 20 seconds."
+    },
+    "basePackageCases": {
+      "command": "gate-remote -- bun run test bin/cli.selfUpdate.integration.test.ts -t \"a packaged install relaunches\" with base launcher and accepted fixture in the scratch export",
+      "exitCode": 0,
+      "passedTests": 2,
+      "assertions": 13,
+      "elapsedSeconds": 4.3
+    }
+  },
+  "firstFullHook": {
+    "exitCode": 1,
+    "nativeMatrixPassed": true,
+    "failure": "The comparator reported an incomplete launcher integration run at its 300-second file budget and a runner timeout. The base whole-file run passed.",
+    "headFileElapsedMs": 300644,
+    "baseFileElapsedMs": 234340,
+    "repair": "Replace the obsolete version-banner wait with persisted readiness. Move unchanged groups into web-restart and terminal sibling files, each retaining the existing cleanup registration. Launcher case budgets and gate budgets are unchanged."
+  },
+  "checks": {
+    "repairedWholeFile": {
+      "runs": 3,
+      "testsPerRun": 7,
+      "assertionsPerRun": 37,
+      "exitCodes": [
+        0,
+        0,
+        0
+      ]
+    },
+    "typecheck": {
+      "phase": "Native deadline repair; the full hook below checks the final repair tree",
+      "command": "gate-remote -- bunx tsc --noEmit --incremental false",
+      "exitCode": 0
+    },
+    "eslint": {
+      "phase": "Native deadline repair; shared-fixture and split-file lint also ran separately and in the final hook",
+      "command": "gate-remote -- bunx eslint src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+      "exitCode": 0
+    },
+    "fullPrePush": {
+      "command": "gate-remote -- bash .githooks/pre-push",
+      "exitCode": 0,
+      "pushed": false,
+      "checkExitCodes": {
+        "native Codex shared contracts": 0,
+        "runtime verdict tests": 0,
+        "native Codex 0.154.0": 0,
+        "native Codex 0.163.0": 0,
+        "native Codex 0.162.1": 0,
+        "native Codex 0.159.0": 0,
+        "types": 0,
+        "touched tests": 0,
+        "Linux backend": 0,
+        "eslint": 0,
+        "Linux tests": 0,
+        "Viewer build": 0,
+        "MCP size budgets": 0,
+        "Viewer runtime": 0,
+        "runtime host": 0,
+        "runtime negative controls": 0,
+        "privacy": 0
+      },
+      "summary": [
+        "pre-push: native Codex shared contracts: passed in 97 s",
+        "pre-push: runtime verdict tests: passed in 150 s",
+        "pre-push: native Codex 0.154.0: passed in 182 s",
+        "pre-push: native Codex 0.163.0: passed in 185 s",
+        "pre-push: native Codex 0.162.1: passed in 190 s",
+        "pre-push: native Codex 0.159.0: passed in 190 s",
+        "pre-push: types: passed in 208 s",
+        "pre-push: touched tests: passed in 210 s",
+        "pre-push: Linux backend: passed in 0 s",
+        "pre-push: eslint: passed in 7 s",
+        "pre-push: Linux tests: passed in 7 s",
+        "pre-push: Viewer build: passed in 274 s",
+        "pre-push: MCP size budgets: passed in 13 s",
+        "pre-push: Viewer runtime: passed in 7 s",
+        "pre-push: runtime host: passed in 17 s",
+        "pre-push: runtime negative controls: passed in 61 s"
+      ]
+    }
+  },
+  "execution": "All top-level heavy invocations ran sequentially through the installed gate-slot wrapper and gate-remote. The full pre-push hook retained its own lanes, normal check plan and execution budget. No hook override or skip setting was used."
+}

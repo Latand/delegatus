@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -7,9 +7,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test } from "bun:test";
 
+import { procBackend } from "../src/lib/proc";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+import { agentStartupMessage } from "./agent-binaries.mjs";
 import { telemetryNotice } from "./telemetry-notice.mjs";
 
 const fixtures = new Set<string>();
@@ -72,9 +74,17 @@ async function probe(hostname: string, port: number): Promise<number> {
   });
 }
 
-async function waitForStatus(hostname: string, port: number, expected: number): Promise<void> {
+async function waitForStatus(hostname: string, port: number, expected: number, state: string): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
+    // A request to the launcher's temporary port-free listener can keep its
+    // close pending. Probe only after the Viewer fixture has actually started.
+    try { await readFile(path.join(state, "web.pid"), "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await Bun.sleep(50);
+      continue;
+    }
     if (await probe(hostname, port) === expected) return;
     await Bun.sleep(50);
   }
@@ -173,29 +183,50 @@ import { createViewerLoopMonitor } from ${JSON.stringify(pathToFileURL(path.reso
 import { createPerformanceSpans } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/performanceSpans.ts")).href)};
 process.env.LLV_STATE_OWNER = ${JSON.stringify(role)};
 writeFileSync(process.env.LLV_STATE_DIR + "/" + process.env.LLV_STATE_OWNER + "-quiet.json",
-  JSON.stringify({ quiet: process.env.LLV_QUIET_DIAGNOSTICS ?? null }));
+  JSON.stringify({ quiet: process.env.LLV_QUIET_DIAGNOSTICS ?? null, loop: process.env.LLV_LOOP_DIAGNOSTICS ?? null }));
 startupDiagnostic("info", "[fixture startup diagnostic] " + process.env.LLV_STATE_OWNER);
 let at = 0;
 const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
 at = 61000;
 monitor.tick();
+console.warn("[state transaction-hold] " + JSON.stringify({ collection: "fixture", heldMs: 103, role: process.env.LLV_STATE_OWNER }));
+setTimeout(() => {
+  const line = "[performance summary] " + JSON.stringify({ role: process.env.LLV_STATE_OWNER });
+  if (process.env.LLV_QUIET_DIAGNOSTICS === "1") {
+    process.stderr.write(line.slice(0, 12));
+    setTimeout(() => {
+      process.stderr.write(line.slice(12) + "\\n");
+      console.log("fixture diagnostics complete");
+    }, 25);
+  } else {
+    // Journal/debug deliberately stream fragments. Keep complete JSON records
+    // atomic in this fixture; the streaming cases below use one producer.
+    process.stderr.write(line + "\\n");
+    console.log("fixture diagnostics complete");
+  }
+}, 200);
 `;
 }
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; readinessDelayMs?: number } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+/* Without `git: true` the fixture has no .git and the launcher reads it as a
+   packaged install; with it, as a checkout. */
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; git?: boolean; stopAll?: boolean; readinessDelayMs?: number; viewerOutput?: string; hostOutput?: string } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
+  if (options.git && spawnSync("git", ["init", "-q", fixture]).status !== 0) throw new Error("git init failed for the checkout fixture");
   const bin = path.join(fixture, "bin");
   const nextBin = path.join(fixture, "node_modules", ".bin");
   const runtimeHost = path.join(fixture, "dist", "runtime-host.mjs");
   const home = path.join(fixture, "home");
   const state = path.join(fixture, "state");
+  const runtime = path.join(fixture, "runtime");
   await Promise.all([
     mkdir(bin, { recursive: true }),
     mkdir(nextBin, { recursive: true }),
     mkdir(path.dirname(runtimeHost), { recursive: true }),
     mkdir(home, { recursive: true }),
     mkdir(state, { recursive: true }),
+    mkdir(runtime, { mode: 0o700 }),
   ]);
   await Promise.all([
     /* The tailnet banner prints its QR code with it; without it the launcher
@@ -228,6 +259,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/viewerGateKey.mjs"), path.join(bin, "viewerGateKey.mjs")),
     copyFile(path.resolve("bin/windows-process-identity.mjs"), path.join(bin, "windows-process-identity.mjs")),
     copyFile(path.resolve("bin/darwin-process-identity.mjs"), path.join(bin, "darwin-process-identity.mjs")),
+    copyFile(path.resolve("bin/stop-all.mjs"), path.join(bin, "stop-all.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `${options.startupChatter ? STARTUP_CHATTER : ""}
 import { writeFileSync } from "node:fs";
@@ -239,7 +271,12 @@ await Bun.sleep(${options.readinessDelayMs ?? 0});
 const server = Bun.serve({
   hostname,
   port: Number(process.env.PORT),
-  fetch(request) {
+  async fetch(request) {
+    /* The menu's «Stop Delegatus», as the route starts it. */
+    if (${options.stopAll ? "true" : "false"} && new URL(request.url).pathname === "/api/stop-all-fixture") {
+      const { productionStopAllPorts, startStopAll } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/stopAll.ts")).href)});
+      return Response.json(await startStopAll("en", productionStopAllPorts()));
+    }
     /* What the launcher handed the Viewer, for the phone-access case. */
     /* Whether the gate is on, never the key itself. */
     if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null, gated: Boolean(process.env.LLV_TOKEN) });
@@ -248,6 +285,7 @@ const server = Bun.serve({
   },
 });
 ${options.diagnostics ? runtimeDiagnostics("viewer") : ""}
+${options.viewerOutput ?? ""}
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
@@ -268,6 +306,7 @@ server.listen(socketPath, () => writeFileSync(fencePath, JSON.stringify({
   acquisitionId: "fixture-acquisition-id",
 })));
 ${options.diagnostics ? runtimeDiagnostics("runtime-host") : ""}
+${options.hostOutput ?? ""}
 const stop = () => server.close(() => {
   rmSync(socketPath, { force: true });
   rmSync(fencePath, { force: true });
@@ -301,12 +340,16 @@ throw new Error("fixture QR failure");
   delete inherited.LLV_QUIET_DIAGNOSTICS;
   delete inherited.DELEGATUS_QUIET_DIAGNOSTICS;
   delete inherited.JOURNAL_STREAM;
+  // The gate's user bus describes its own OOM policy. A fixture must not
+  // inspect that service or print its warning as part of a clean install.
+  delete inherited.DBUS_SESSION_BUS_ADDRESS;
   return {
     cli: path.join(bin, "cli.mjs"),
     env: {
       ...inherited,
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
+      XDG_RUNTIME_DIR: runtime,
       LLV_STATE_DIR: state,
       TMPDIR: path.join(fixture, "tmp"),
       LLV_BUN_EXECUTABLE: process.execPath,
@@ -326,8 +369,8 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   children.add(child);
   const output = captureOutput(child);
 
-  await waitForStatus("127.0.0.1", port, 200);
-  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await output.waitFor("Open http://", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
@@ -345,7 +388,7 @@ test("the first start keeps a cold Viewer alive beyond fifteen seconds", async (
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("Delegatus v", 25_000);
+  await output.waitFor("Open http://", 25_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe("127.0.0.1", port)).toBe(200);
@@ -367,8 +410,8 @@ test("a machine that still has the retired systemd unit is told how to move to D
   const output = captureOutput(child);
 
   await output.waitFor("The systemd install of Delegatus is retired: Docker is the only install.", 10_000);
-  await output.waitFor("Delegatus v", 10_000);
-  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Open http://", 10_000);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   expect(output.text()).toContain("systemctl --user disable --now agent-log-viewer.service\n");
   expect(output.text()).toContain(`rm ${path.join(unitDir, "agent-log-viewer.service")}\n`);
   expect(output.text()).toContain("https://github.com/Latand/delegatus/blob/main/docs/docker.md");
@@ -399,8 +442,8 @@ test("a pre-existing non-loopback listener does not impersonate a widened Viewer
   children.add(child);
   const output = captureOutput(child);
 
-  await waitForStatus("127.0.0.1", port, 200);
-  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await output.waitFor("Open http://", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackAddress, port)).toBe(204);
@@ -441,13 +484,13 @@ test("an address the platform will not evaluate neither stops startup nor claims
 
   // The banner comes first: it is the assertion that names the CLI's own stderr
   // when a probe the guard could not answer killed startup instead.
-  await output.waitFor("Delegatus v", 10_000);
+  await output.waitFor("Open http://", 10_000);
   // What the guard could not cover is said out loud rather than only recorded.
   await output.waitFor(
     `the exposure check skipped addresses this machine would not answer for: ${nonLoopbackAddress}`,
     10_000,
   );
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   // The probe could not answer for that address and the guard read nothing into
@@ -628,8 +671,8 @@ test("a remembered choice whose publish fails says so and advertises no tailnet 
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("Delegatus v", 15_000);
-  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Open http://", 15_000);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   /* The publish failed, so the tailnet address answers nothing: the banner
      that would carry it, and its QR, are not printed. */
   expect(output.text()).toContain("listener already in use");
@@ -657,7 +700,7 @@ test("a remembered choice whose Tailscale went away starts locally and says why"
   const output = captureOutput(child);
 
   await output.waitFor("this start is local only", 10_000);
-  await waitForStatus("127.0.0.1", port, 200);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; gated: boolean };
   expect(answer.tailnetUrl).toBeNull();
   /* The gate stays on. A background mapping an earlier tailnet start left
@@ -686,15 +729,36 @@ test("a start prints the banner first, hides Next's startup lines and still prin
   expect(text).toContain("DO_NOT_TRACK=1");
   expect(text.split(telemetryNotice.en)).toHaveLength(2);
   expect(text).not.toContain("Reads logs from");
-  expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
-  expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
+  expect(text.indexOf("Open http://")).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf("Open http://")).toBeLessThan(text.indexOf("Error: fixture failure"));
   expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);
   expect(text).not.toContain("Opened:");
-  expect(text).toContain("DELEGATUS_DEBUG=1");
-  expect(text).toContain("child quiet diagnostics: unset");
+  expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
+  expect(text).toContain("child quiet diagnostics: 1");
   expect(text).not.toContain("Next.js");
   expect(text).not.toContain("- Local:");
   expect(text).not.toContain("Ready in");
+});
+
+test("an ordinary start prints only the URL and setup hint", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor(`Open http://127.0.0.1:${port}/`, 10_000);
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+  child.kill("SIGINT");
+  expect(await waitForExit(child, 10_000)).toBe(0);
+  await closed;
+  expect(output.text().split(/\r?\n/).filter(line => line.trim())).toEqual([
+    `  Open http://127.0.0.1:${port}/ in your browser.`,
+    ...agentStartupMessage("en", { home: fixture.env.HOME, envPath: fixture.env.PATH }).split("\n"),
+  ]);
 });
 
 test.each(["en", "uk"] as const)("the %s notice is printed once on first start and stays settled after restart", async lang => {
@@ -716,24 +780,151 @@ test.each(["en", "uk"] as const)("the %s notice is printed once on first start a
   }
 });
 
+/* The marker and unfinished prefix share a pipe write. After observing the
+   marker, the test releases the other producer, without timer-based ordering. */
+for (const channel of ["stdout", "stderr"] as const) {
+  test(`an unfinished host diagnostic cannot swallow a Viewer error on ${channel}`, async () => {
+    const fixture = await checkoutFixture({
+      hostOutput: `{
+        const fs = await import("node:fs");
+        fs.writeSync(${channel === "stdout" ? 1 : 2}, 'host partial ready\\n[state transaction-hold] {"heldMs":');
+      }`,
+      viewerOutput: `{
+        const fs = await import("node:fs");
+        const timer = setInterval(() => {
+          if (!fs.existsSync(process.env.LLV_STATE_DIR + "/release-error")) return;
+          clearInterval(timer);
+          process.${channel}.write("Error: interleaved child failure\\n");
+        }, 10);
+      }`,
+    });
+    await mkdir(fixture.env.TMPDIR!, { recursive: true });
+    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+      cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const output = captureOutput(child);
+    await output.waitFor("host partial ready\n", 10_000);
+    await writeFile(path.join(fixture.env.LLV_STATE_DIR!, "release-error"), "1");
+    await output.waitFor("Error: interleaved child failure\n", 10_000);
+    expect(output.text()).not.toContain("[state transaction-hold]");
+  });
+}
+
+test("replacement runtime hosts cannot inherit an unfinished diagnostic", async () => {
+  const fixture = await checkoutFixture({ hostOutput: `{
+    const fs = await import("node:fs");
+    const generationFile = process.env.LLV_STATE_DIR + "/output-generation";
+    const generation = fs.existsSync(generationFile) ? Number(fs.readFileSync(generationFile, "utf8")) + 1 : 1;
+    fs.writeFileSync(generationFile, String(generation));
+    if (generation === 1) {
+      fs.writeSync(2, 'first host ready\\n[state transaction-hold] {"heldMs":');
+      const timer = setInterval(() => {
+        if (fs.existsSync(process.env.LLV_STATE_DIR + "/replace-host")) process.exit(0);
+      }, 10);
+      timer.unref();
+    } else fs.writeSync(2, "Error: replacement host output\\n");
+  }` });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor("first host ready\n", 10_000);
+  await writeFile(path.join(fixture.env.LLV_STATE_DIR!, "replace-host"), "1");
+  await output.waitFor("Error: replacement host output\n", 10_000);
+  expect(output.text().split("\n").filter(line => line.startsWith("[state transaction-hold]"))).toEqual([]);
+});
+
+test("a closed child pipe flushes an undecided prefix while the launcher stays alive", async () => {
+  const fixture = await checkoutFixture({ viewerOutput: `{
+    const fs = await import("node:fs");
+    fs.writeSync(2, "[state");
+    fs.closeSync(2);
+  }` });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor("[state", 10_000);
+  expect(child.exitCode).toBeNull();
+});
+
+test("the prefix classification bound preserves Unicode in forwarded errors", async () => {
+  const fixture = await checkoutFixture({ viewerOutput: 'process.stderr.write(" ".repeat(255) + "🔧 Error: prefix boundary\\n");' });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor(" ".repeat(255) + "🔧 Error: prefix boundary\n", 10_000);
+});
+
+for (const scenario of ["ordinary", "journal", "debug"] as const) {
+  test(`${scenario} forwards large fragmented newline-free output before shutdown`, async () => {
+    const fixture = await checkoutFixture({ viewerOutput: `{
+      const fs = await import("node:fs");
+      const chunk = Buffer.alloc(64 * 1024, ${JSON.stringify(scenario === "ordinary" ? " " : "x")});
+      ${scenario === "ordinary" ? "" : 'fs.writeSync(1, "[performance");'}
+      const timer = setInterval(() => {
+        if (!fs.existsSync(process.env.LLV_STATE_DIR + "/release-output")) return;
+        clearInterval(timer);
+        ${scenario === "ordinary" ? "" : 'fs.writeSync(1, " summary] ");'}
+        for (let i = 0; i < 64; i++) fs.writeSync(1, chunk);
+        fs.writeSync(1, "stream complete");
+      }, 10);
+    }` });
+    await mkdir(fixture.env.TMPDIR!, { recursive: true });
+    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(await availablePort())], {
+      cwd: path.dirname(path.dirname(fixture.cli)),
+      env: { ...fixture.env, LLV_LANG: "en", JOURNAL_STREAM: scenario === "journal" ? "1:1" : undefined,
+        DELEGATUS_DEBUG: scenario === "debug" ? "1" : undefined },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const output = captureOutput(child);
+    await output.waitFor("Open http://", 10_000);
+    if (scenario !== "ordinary") await output.waitFor("[performance", 10_000);
+    await writeFile(path.join(fixture.env.LLV_STATE_DIR!, "release-output"), "1");
+    await output.waitFor("stream complete", 10_000);
+    const prefix = scenario === "ordinary" ? "" : "[performance summary] ";
+    expect(output.text()).toContain(prefix + (scenario === "ordinary" ? " " : "x").repeat(4 * 1024 * 1024) + "stream complete");
+    expect(child.exitCode).toBeNull();
+  });
+}
+
 /* Use a real PTY for the interactive case; CLI children still use pipes, as
    they do in production. Journal metadata must override even a terminal. */
+/* `loop` is the loop-gap volume the children are handed: bounded for a
+   packaged install, unset for a checkout (the service's journal keeps every
+   line, even when a shell exported the bounded choice) and under debug. */
 for (const scenario of [
-  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: null },
-  { name: "journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null },
-  { name: "interactive terminal", terminal: true, journal: undefined, debug: undefined, quiet: "1" },
-  { name: "journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null },
-  { name: "debug terminal", terminal: true, journal: undefined, debug: "1", quiet: null },
+  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: "1", git: false, loop: "bounded" },
+  { name: "journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null, git: false, loop: "bounded" },
+  { name: "checkout journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null, git: true, loop: null },
+  { name: "interactive terminal", terminal: true, journal: undefined, debug: undefined, quiet: "1", git: false, loop: "bounded" },
+  { name: "journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null, git: false, loop: "bounded" },
+  { name: "checkout journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null, git: true, loop: null },
+  { name: "debug terminal", terminal: true, journal: undefined, debug: "1", quiet: null, git: false, loop: null },
 ]) {
   // Bun's PTY is a POSIX facility; piped cases also run on Windows.
   test.skipIf(scenario.terminal && process.platform === "win32")(
     `${scenario.name} selects diagnostics for both children and retains stall evidence`, async () => {
-      const fixture = await checkoutFixture({ diagnostics: true });
+      const fixture = await checkoutFixture({ diagnostics: true, git: scenario.git });
       await mkdir(fixture.env.TMPDIR!, { recursive: true });
       const port = await availablePort();
       let output = "";
       const env = { ...fixture.env, JOURNAL_STREAM: scenario.journal, DELEGATUS_DEBUG: scenario.debug,
-        LLV_QUIET_DIAGNOSTICS: scenario.quiet === "1" ? undefined : "1" };
+        LLV_QUIET_DIAGNOSTICS: scenario.quiet === "1" ? undefined : "1",
+        LLV_LOOP_DIAGNOSTICS: scenario.loop === null ? "bounded" : undefined };
       const child = Bun.spawn([process.execPath, "--bun", fixture.cli, "--no-open", "--port", String(port)], {
         cwd: path.dirname(path.dirname(fixture.cli)), env,
         ...(scenario.terminal ? { terminal: { data(_terminal: Bun.Terminal, chunk: Uint8Array) { output += Buffer.from(chunk).toString(); } } }
@@ -751,19 +942,19 @@ for (const scenario of [
         } finally { reader.releaseLock(); }
       });
       try {
-        await waitForStatus("127.0.0.1", port, 200);
+        await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
         for (const role of ["viewer", "runtime-host"]) {
           expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, `${role}-quiet.json`), "utf8")))
-            .toEqual({ quiet: scenario.quiet });
+            .toEqual({ quiet: scenario.quiet, loop: scenario.loop });
         }
         const deadline = Date.now() + 10_000;
-        const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary)\]/.test(line));
-        while (diagnosticLines().length < 4 && child.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
-        expect(diagnosticLines()).toHaveLength(4);
+        const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary|state transaction-hold)\]/.test(line));
+        while (output.split("fixture diagnostics complete").length < 3 && child.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
+        expect(diagnosticLines()).toHaveLength(scenario.quiet === "1" ? 0 : 8);
         for (const role of ["viewer", "runtime-host"]) {
-          for (const prefix of ["[viewer loop-gap] ", "[performance summary] "]) {
+          for (const prefix of ["[viewer loop-gap] ", "[performance summary] ", "[state transaction-hold] "]) {
             const reports = diagnosticLines().filter(line => line.startsWith(prefix)).map(line => JSON.parse(line.slice(prefix.length)));
-            expect(reports.filter(report => report.role === role)).toHaveLength(1);
+            expect(reports.filter(report => report.role === role)).toHaveLength(scenario.quiet === "1" ? 0 : prefix === "[performance summary] " ? 2 : 1);
           }
           expect(output.includes(`[fixture startup diagnostic] ${role}`)).toBe(scenario.quiet === null);
         }
@@ -790,7 +981,7 @@ test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print t
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("Delegatus v", 10_000);
+  await output.waitFor("Open http://", 10_000);
   await output.waitFor("fixture failure that must reach the terminal", 10_000);
   const text = output.text();
   expect(text).toContain("▲ Next.js 16.3.3");
@@ -818,9 +1009,76 @@ writeFileSync(path.join(process.env.LLV_STATE_DIR, "runtime-control.json"), JSON
   });
   children.add(child);
   const output = captureOutput(child);
-  await waitForStatus("127.0.0.1", port, 200);
-  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await output.waitFor("Open http://", 10_000);
   expect(await (await fetch(`http://127.0.0.1:${port}/api/access`)).json()).toMatchObject({ gated: true });
   expect(await (await fetch(`http://127.0.0.1:${port}/api/control-port`)).json()).toEqual({ port: String(port) });
   expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, "runtime-control.json"), "utf8"))).toEqual({ port: String(port), credentialInherited: true });
 });
+
+/* The menu's «Stop Delegatus» end to end: the Viewer starts the stop, the stop
+   asks the real launcher to end, the launcher retires the Viewer and its
+   process group, and the stop, in a group of its own, goes on to the agent
+   host the registry records. A same-named process nobody recorded stays. */
+test("the menu's stop outlives the Viewer it stops and ends the launcher, the runtime host and the recorded agent host", async () => {
+  const fixture = await checkoutFixture({ stopAll: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const state = fixture.env.LLV_STATE_DIR!;
+  const hostScript = path.join(path.dirname(path.dirname(fixture.cli)), "codex");
+  await writeFile(hostScript, "setInterval(() => {}, 1000);\n");
+  const host = spawn(process.execPath, [hostScript, "app-server"], { detached: true, stdio: "ignore" });
+  const foreign = spawn(process.execPath, [hostScript, "app-server"], { detached: true, stdio: "ignore" });
+  children.add(host);
+  children.add(foreign);
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const foreignIdentity = captureProcessIdentity(foreign.pid!);
+  const { AgentRegistry, normalizeRegistry } = await import("../src/lib/agent/registry");
+  const { SqliteAgentRegistryStore } = await import("../src/lib/agent/sqliteRegistryStore");
+  const seed = new AgentRegistry(path.join(state, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const initial = seed.snapshot();
+  seed.close();
+  (initial.entries as Record<string, unknown>)["codex:orchestrator"] = {
+    key: { engine: "codex", sessionId: "orchestrator" }, artifactPath: "/sessions/orchestrator.jsonl", cwd: "/work", accountId: null,
+    status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:orchestrator", process: hostIdentity, eventCursor: 0, protocolVersion: "fixture-v1",
+      writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: null, pendingAction: null, updatedAt: "2026-10-21T15:00:00.000Z",
+  };
+  new SqliteAgentRegistryStore(path.join(state, "agent-registry.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry }).close();
+
+  const port = await availablePort();
+  const cli = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(cli);
+  const output = captureOutput(cli);
+  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await output.waitFor("Open http://", 10_000);
+  const runtimePid = Number(await readFile(path.join(state, "runtime.pid"), "utf8"));
+  const webPid = Number(await readFile(path.join(state, "web.pid"), "utf8"));
+  const runtime = captureProcessIdentity(runtimePid);
+  const web = captureProcessIdentity(webPid);
+
+  const started = await (await fetch(`http://127.0.0.1:${port}/api/stop-all-fixture`)).json() as { ok: boolean; pid: number };
+  expect(started).toMatchObject({ ok: true });
+  const stop = captureProcessIdentity(started.pid);
+  try {
+    expect(await waitForExit(cli, 20_000)).toBe(0);
+    const deadline = Date.now() + 20_000;
+    while (processIdentityStatus(stop) === "alive" && Date.now() < deadline) await Bun.sleep(25);
+    expect(processIdentityStatus(stop)).not.toBe("alive");
+    const report = await readFile(path.join(state, "stop-all.log"), "utf8");
+    expect(report).toContain(`Stopped the launcher (pid ${cli.pid}), and with it the Viewer and the runtime host it started.`);
+    expect(report).toContain(`codex-app-server pid ${host.pid} (codex orchestrator)`);
+    /* Exited, whether or not its parent has reaped it yet. */
+    const ended = (identity: ProcessIdentity) => processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid);
+    for (let i = 0; i < 200 && !(host.exitCode !== null || host.signalCode !== null); i++) await Bun.sleep(25);
+    expect(host.signalCode).toBe("SIGTERM");
+    expect([runtime, web].map(ended)).toEqual([true, true]);
+    expect(ended(foreignIdentity)).toBe(false);
+  } catch (error) {
+    throw new Error(`stop-all chain failed:\n${output.text()}`, { cause: error });
+  } finally {
+    await stopFixtureIdentity(stop);
+  }
+}, 60_000);

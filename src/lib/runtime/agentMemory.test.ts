@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { agentMemoryCeiling, GIB } from "./agentMemory";
 import { readHostExit, reclaimHostExit, recordHostExit } from "./hostExit";
+import { spawnSync } from "node:child_process";
 
 test("reserves the core budget and bounds each agent at launch", () => {
   for (const [n, gb] of [[1,53],[5,42],[8,26.5],[11,19],[14,15],[20,10.5],[30,7],[53,4]]) {
@@ -34,7 +35,7 @@ import * as childProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { procBackend } from "@/lib/proc";
-import { AgentMemoryCell, agentOomScore, parseMemorySize, probeAgentScopes, tickAgentMemoryWatchdogs, viewerUnitFromCgroup, wrapAgentCommand, normalizeHostMemory, planAgentMemory, invalidateAgentScopeProbe, type AgentMemoryPlan } from "./agentMemory";
+import { AgentMemoryCell, agentOomScore, parseMemorySize, probeAgentScopes, tickAgentMemoryWatchdogs, viewerUnitFromCgroup, wrapAgentCommand, wrapAgentLaunch, normalizeHostMemory, planAgentMemory, invalidateAgentScopeProbe, type AgentMemoryPlan } from "./agentMemory";
 const basePlan: AgentMemoryPlan = { mechanism: "scope", platform: "linux", limitBytes: 15 * GIB, budgetBytes: 106 * GIB, reserveBytes: 19 * GIB, totalBytes: 125 * GIB, score: 500, unit: "delegatus-agent-test-123.scope", slice: "delegatus-agents-test.slice", viewerUnit: "delegatus.service", systemdVersion: 255 };
 
 test("size overrides are binary, invalid values ignored, tiny hosts stay bounded", () => {
@@ -62,6 +63,48 @@ test("scope preserves literal argv and binding; watchdog raises score; off is un
   expect(viewerUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service")).toBe("delegatus.service");
   expect(viewerUnitFromCgroup("0::/system.slice/delegatus.service")).toBeNull();
 });
+test.skipIf(process.platform !== "linux")("a refused workload score warns and still execs with literal argv and native status", () => {
+  const plan = planAgentMemory({ engine: "codex", sessionKey: "score-refused", liveAgents: 1 },
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+  const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+  // The kernel refuses this value even when the test has elevated privileges.
+  plan.score = -1001;
+  const args = ["$literal", "two words", '"quote"'];
+  const wrapped = wrapAgentCommand(plan, process.execPath, ["-e",
+    'console.log(JSON.stringify({score:Number(require("node:fs").readFileSync("/proc/self/oom_score_adj","utf8")),args:process.argv.slice(1)}));process.exit(23)', ...args]);
+  const result = spawnSync(wrapped.command, wrapped.args, { encoding: "utf8", timeout: 5_000 });
+  expect(result.status).toBe(23);
+  expect(result.signal).toBeNull();
+  expect(JSON.parse(result.stdout)).toEqual({ score: inherited, args });
+  expect(result.stderr).toContain("workload OOM score unavailable");
+});
+
+test("disabled memory and unsupported platforms clear inherited deferred scores", () => {
+  const env = { NODE_ENV: "test" as const, LLV_SIGNAL_LAUNCHER: "launcher", LLV_SIGNAL_OOM_SCORE: "900" };
+  const plan = planAgentMemory({ engine: "codex", sessionKey: "score-off", liveAgents: 1 },
+    { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog" }, { totalBytes: 16 * GIB })!;
+  for (const unsupported of [null, { ...plan, mechanism: "none" as const }, { ...plan, platform: "darwin" as const }]) {
+    expect(wrapAgentLaunch(unsupported, "agent", ["literal"], env)).toEqual({ command: "agent", args: ["literal"], env: { NODE_ENV: "test", LLV_SIGNAL_LAUNCHER: "launcher" } });
+  }
+  expect(env.LLV_SIGNAL_OOM_SCORE).toBe("900");
+});
+
+test.skipIf(process.platform !== "linux")("the final Python exec warns on a refused score and preserves native exit status", () => {
+  const inherited = Number(fs.readFileSync("/proc/self/oom_score_adj", "utf8"));
+  const result = spawnSync("python3", ["-B", "-c", String.raw`
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('launcher', sys.argv[1])
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+launcher.execute(sys.argv[2:])
+`, path.resolve("bin/agent-signal-sandbox.py"), process.execPath, "-e",
+    'console.log(JSON.stringify({score:Number(require("node:fs").readFileSync("/proc/self/oom_score_adj","utf8")),pending:process.env.LLV_SIGNAL_OOM_SCORE??null}));process.exit(23)'],
+    { env: { ...process.env, LLV_SIGNAL_OOM_SCORE: "-1001" }, encoding: "utf8", timeout: 5_000 });
+  expect(result.status).toBe(23);
+  expect(JSON.parse(result.stdout)).toEqual({ score: inherited, pending: null });
+  expect(result.stderr).toContain("workload OOM score unavailable");
+});
+
 test("probe requires delegated memory and a successful fake scope runner", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-probe-"));
   const manager = path.join(root, "user.slice/user-1000.slice/user@1000.service");

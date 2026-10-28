@@ -46,9 +46,13 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
     if (voice) return NextResponse.json({ error: "voice delegation requires the operator's confirmed proposal", code: "voice_admission_refused", admission: "refused" }, { status: 403 });
     try {
       const link = resolveSeatMessageMachine(body.machine, project);
-      if (link) return NextResponse.json(queueSeatMessage(link, project, body.text, sender.conversationId, body.clientMessageId));
+      if (link) return NextResponse.json(queueSeatMessage(link, project, body.text, sender.conversationId, body.clientMessageId, typeof body.seatMessageFence === "string" ? body.seatMessageFence : undefined));
     } catch (error) {
-      if (error instanceof SeatMessageRefusal) return NextResponse.json({ error: error.message, code: error.code, admission: "refused" }, { status: 409 });
+      if (error instanceof SeatMessageRefusal) return NextResponse.json({ error: error.message, code: error.code,
+        // A newer attempt may own this key. Older clients must look up its
+        // receipt, rather than turn this refusal into permission for a new key.
+        ...(error.code === "seat_message_fenced" ? {} : { admission: "refused" }),
+      }, { status: 409 });
       throw error;
     }
   }

@@ -24,7 +24,6 @@ function bindDomGlobals() {
     Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
     sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
     ResizeObserver: TestResizeObserver, IntersectionObserver: undefined,
-    requestAnimationFrame: dom.requestAnimationFrame.bind(dom), cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   });
 }
 bindDomGlobals();

@@ -3,7 +3,7 @@ import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipeline } from "node:stream/promises";
-import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
+import { AgentMemoryCell, planAgentMemory, wrapAgentLaunch } from "@/lib/runtime/agentMemory";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -436,8 +436,8 @@ export function launchDetached(input: {
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     const fixture = headlessFixtureTransport();
     const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
-      const wrapped = wrapAgentCommand(plan, command, args);
-      return (fixture ?? spawn)(wrapped.command, wrapped.args, options);
+      const wrapped = wrapAgentLaunch(plan, command, args, options?.env ?? process.env);
+      return (fixture ?? spawn)(wrapped.command, wrapped.args, { ...options, env: wrapped.env });
     }) as typeof spawn;
     const launchOptions = {
       cwd: input.cwd,

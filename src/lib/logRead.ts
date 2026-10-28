@@ -43,6 +43,86 @@ async function startsRecord(fh: fs.FileHandle, offset: number): Promise<boolean>
   return bytesRead === 1 && one[0] === NEWLINE;
 }
 
+function sequenceBytes(lead: number): number {
+  if (lead >= 0xc2 && lead <= 0xdf) return 2;
+  if (lead >= 0xe0 && lead <= 0xef) return 3;
+  if (lead >= 0xf0 && lead <= 0xf4) return 4;
+  return 1;
+}
+
+/* Accept only prefixes of valid UTF-8: malformed bytes must still reach the
+   ordinary replacement decoder, rather than pinning a cursor forever. */
+function validPrefix(buf: Buffer, start: number, end: number): boolean {
+  for (let at = start + 1; at < end; at += 1) {
+    const byte = buf[at];
+    if (byte < 0x80 || byte > 0xbf) return false;
+    if (at === start + 1) {
+      const lead = buf[start];
+      if (lead === 0xe0 && byte < 0xa0 || lead === 0xed && byte > 0x9f
+        || lead === 0xf0 && byte < 0x90 || lead === 0xf4 && byte > 0x8f) return false;
+    }
+  }
+  return true;
+}
+
+/* Decode a bounded byte range with complete characters at both edges. Three
+   lookbehind bytes identify a character crossing `from`; that character goes
+   to the preceding history page. A trailing partial character stays on disk
+   for the next forward poll, even at a temporarily incomplete append. No
+   decoder state is shared between requests. */
+async function readUtf8Slice(fh: fs.FileHandle, from: number, to: number): Promise<{ start: number; end: number; data: string }> {
+  if (to <= from) return { start: from, end: from, data: "" };
+  const readStart = Math.max(0, from - 3);
+  const buf = Buffer.alloc(to - readStart);
+  let length = 0;
+  while (length < buf.length) {
+    const { bytesRead } = await fh.read(buf, length, buf.length - length, readStart + length);
+    if (bytesRead === 0) break;
+    length += bytesRead;
+  }
+  let end = length;
+  for (let at = Math.max(0, length - 3); at < length; at += 1) {
+    if (at + sequenceBytes(buf[at]) > length && validPrefix(buf, at, length)) {
+      end = at;
+      break;
+    }
+  }
+  let start = from - readStart;
+  for (let at = Math.max(0, start - 3); at < start; at += 1) {
+    const after = at + sequenceBytes(buf[at]);
+    if (after > start && after <= end && validPrefix(buf, at, after)) {
+      start = after;
+      break;
+    }
+  }
+  if (start >= end) return { start: from, end: from, data: "" };
+  return { start: readStart + start, end: readStart + end, data: buf.subarray(start, end).toString("utf-8") };
+}
+
+/** Backward history uses the same byte boundaries as forward polls. `offset`
+    and `start` both name the next `before` cursor, including any character
+    excluded at this page's leading edge. */
+export async function readHistoryChunk(pathname: string, beforeInput: number, bytes = MAX_CHUNK, allowed: (pathname: string) => boolean = pathAllowed): Promise<LogChunk | null> {
+  let stat;
+  try {
+    stat = await fs.stat(pathname);
+  } catch {
+    stat = null;
+  }
+  if (!pathname || !stat?.isFile() || !allowed(pathname)) return null;
+  const size = stat.size;
+  const before = Math.min(size, Number.isFinite(beforeInput) ? Math.max(0, beforeInput) : 0);
+  const from = Math.max(0, before - bytes);
+  const fh = await fs.open(pathname, "r");
+  try {
+    const slice = await readUtf8Slice(fh, from, before);
+    if (!slice.data) return { offset: before, start: before, size, data: "" };
+    return { offset: slice.start, start: slice.start, size, data: slice.data };
+  } finally {
+    await fh.close();
+  }
+}
+
 /**
  * Forward tail read shared by /api/log and the batched /api/logs: `offset`
  * continues a poll, the very first read of a large file jumps to the last
@@ -100,13 +180,12 @@ export async function readTailChunk(pathname: string, offsetInput: number, budge
         want = Math.min(MAX_CHUNK, Math.max(0, budget), size - offset);
       }
     }
-    const buf = Buffer.alloc(want);
-    const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+    const slice = await readUtf8Slice(fh, offset, offset + want);
     return {
-      offset: offset + bytesRead,
-      start: offset,
+      offset: slice.end,
+      start: slice.start,
       size,
-      data: buf.subarray(0, bytesRead).toString("utf-8"),
+      data: slice.data,
     };
   } finally {
     await fh.close();
