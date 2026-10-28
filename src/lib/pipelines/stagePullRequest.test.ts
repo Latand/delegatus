@@ -1464,3 +1464,36 @@ test("PR inspection retires a legacy inspection-error summary wait and adopts th
     expect(f.sends).toHaveLength(sent);
   } finally { f.close(); }
 });
+
+
+test.each(["retry-stage", "publish"] as const)("PR inspection %s preserves answered content repairs and grants inspection recovery", async action => {
+  const f = await inspectionFixture("empty");
+  try {
+    await f.finish(unsafeSummary);
+    expect(f.sends).toHaveLength(1); // The genuine content finding requests one rewrite.
+    f.setExpectedBody(publicSummary);
+    const waiting = await f.finish(publicSummary);
+    expect(waiting.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("answered");
+    expect(waiting.runs[0]!.attempts[0]!.pullRequestInspection?.failures).toBe(1);
+    for (const delay of [1_001, 5_001, 15_001]) {
+      f.advance(delay);
+      await tickPipelines([], f.h.ports);
+    }
+    const parked = loadPipelines().find(p => p.id === f.id)!;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs[0]!.attempts[0]!.pullRequestInspection?.exhausted).toBe(true);
+    f.recover();
+    if (action === "retry-stage") f.setExisting();
+    const renewed = await engineModule.patchPipeline(f.id, { action }, f.h.ports);
+    expect(renewed.error).toBeUndefined();
+    expect(renewed.pipeline!.runs[0]!.attempts[0]!.pullRequestInspection?.failures).toBe(0);
+    await tickPipelines([], f.h.ports);
+    const done = loadPipelines().find(p => p.id === f.id)!;
+    expect(done.cursor?.stageId).toBe("review");
+    expect(done.delivery?.target.pr).toBe(17);
+    expect(done.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("answered");
+    expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
+    if (action === "retry-stage") expect(done.runs[0]!.attempts[0]!.error).toContain("inspection-error");
+    expect(f.sends).toHaveLength(1);
+  } finally { f.close(); }
+});

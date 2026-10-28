@@ -4703,6 +4703,16 @@ const PR_INSPECTION_RETRY_MS = [1_000, 5_000, 15_000];
 const SUMMARY_REWRITE_LIMIT = 2;
 const SUMMARY_REWRITE_WAIT_MS = 10 * 60_000;
 
+function renewPullRequestInspection(pipeline: Pipeline, attempt: PipelineStageAttempt | null, now: string): void {
+  const inspection = attempt?.pullRequestInspection;
+  if (!inspection || !attempt) return;
+  if (inspection.sha !== pipeline.lastPassedCommit) { delete attempt.pullRequestInspection; return; }
+  // Keep the diagnostic for adoption of a PR the operator opened meanwhile.
+  inspection.failures = 0;
+  inspection.retryAt = now;
+  delete inspection.exhausted;
+}
+
 function summaryRewriteWorker(pipeline: Pipeline, owner: PipelineStageAttempt) {
   const repair = owner.publicationTextRepair;
   return pipeline.runs.find(run => run.stageId === repair?.stageId)?.attempts
@@ -15164,6 +15174,7 @@ export async function patchPipeline(
       const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      if (resumesPass) renewPullRequestInspection(current, attempt, ports.now());
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
         if (current.publicationAdmission?.state === "pending" && current.publicationAdmission.sha !== acceptedSha) return { error: "another publication admission is pending", status: 409 };
@@ -15827,7 +15838,7 @@ export async function patchPipeline(
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry"
         + (attempt?.publicationRepair ? publicationRepairDeliveryDetail(attempt.publicationRepair) : ""), status: 409 };
-      if (stage && attempt?.publicationTextRepair) {
+      if (stage && attempt?.publicationTextRepair && !attempt.pullRequestInspection) {
         const repair = attempt.publicationTextRepair;
         if (repair.part === "body") {
           // Keep the cumulative round for idempotency; renew a two-turn window.
@@ -15869,7 +15880,7 @@ export async function patchPipeline(
         }
         // A person grants one new push. Per-head automatic retry history stays durable.
         delete attempt.publicationRetry;
-        delete attempt.pullRequestInspection;
+        renewPullRequestInspection(pipeline, attempt, ports.now());
         attempt.state = "passed";
         pipeline.state = "running";
         pipeline.pausedState = null;
