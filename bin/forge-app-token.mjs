@@ -20,7 +20,7 @@
    it was typed in. No token is written to a file or to a terminal. */
 
 import { execFile, spawn } from "node:child_process";
-import { createSign } from "node:crypto";
+import { createHash, createSign } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -379,11 +379,21 @@ export function classifyGh(args, env = {}) {
 
 /** Runs `gh` for an agent. Returns the exit status. */
 export async function runGh(args, ports) {
-  if (ports.env.LLV_FORGE_GH_DELEGATED) {
+  /* Shell aliases and extensions start new gh commands after reaching real gh.
+     Track commands along this branch of the process tree, so a wrapper cycle
+     repeats a command while a normal nested command can proceed. Hash argv to
+     keep the inherited marker small and keep command contents out of it.
+     Eight delegations also bound wrappers that change argv on every launch.
+     The old boolean marker remains a refusal, including discovery subprocesses. */
+  const inherited = ports.env.LLV_FORGE_GH_DELEGATED;
+  const chain = inherited ? inherited.split(":") : ["v1"];
+  const command = createHash("sha256").update(JSON.stringify(args)).digest("hex");
+  if (chain[0] !== "v1" || chain.length > 8
+    || chain.slice(1).some((entry) => !/^[a-f0-9]{64}$/.test(entry)) || chain.includes(command)) {
     ports.stderr(`Delegatus: ${GH_REENTRY_REASON}.\n`);
     return 1;
   }
-  const delegatedEnv = { ...ports.env, LLV_FORGE_GH_DELEGATED: "1" };
+  const delegatedEnv = { ...ports.env, LLV_FORGE_GH_DELEGATED: [...chain, command].join(":") };
   const gh = ports.findGh();
   if (!gh) {
     ports.stderr("Delegatus: the gh command line tool was not found on PATH.\n");

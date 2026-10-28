@@ -480,7 +480,7 @@ test.skipIf(!posix)("no token, key or identifier is written into the launch dire
   expect(fs.statSync(directory).mode & 0o077).toBe(0);
 });
 
-(posix ? test : test.skip).each(["gh", "git remote", "git config", "git origin", "git remote accepted", "secret-tool"])("a changed HOME and a %s wrapper cannot re-enter the generated gh shim", route => {
+(posix ? test : test.skip).each(["gh", "gh changing args", "git remote", "git config", "git origin", "git remote accepted", "secret-tool"])("a changed HOME and a %s wrapper cannot re-enter the generated gh shim", route => {
   const fixture = fs.mkdtempSync(path.join(root, "reentry-"));
   const tools = path.join(fixture, "bin");
   fs.mkdirSync(tools);
@@ -492,14 +492,14 @@ n=0
 if [ -f ${quote(count)} ]; then read -r n < ${quote(count)}; fi
 n=$((n + 1))
 printf '%s\\n' "$n" > ${quote(count)}
-if [ "$n" -ge 4 ]; then echo fixture-launch-cap >&2; exit 92; fi
+if [ "$n" -ge ${route === "gh changing args" ? 12 : 4} ]; then echo fixture-launch-cap >&2; exit 92; fi
 exec ${quote(process.execPath)} "$@"
 `, { mode: 0o700 });
   const inherited = { ...source, HOME: fixture, PATH: `${tools}:${source.PATH}` };
   const launch: NodeJS.ProcessEnv = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
   const capturedGh = path.join(launch.LLV_AGENT_FORGE_DIR!, "gh");
-  if (route === "gh") {
-    fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\nexec ${quote(capturedGh)} repo set-default --view\n`, { mode: 0o700 });
+  if (route.startsWith("gh")) {
+    fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\n${route === "gh changing args" ? `n=0\nif [ -f ${quote(count)} ]; then read -r n < ${quote(count)}; fi\n` : ""}exec ${quote(capturedGh)} repo set-default --view${route === "gh changing args" ? ' "$n"' : ""}\n`, { mode: 0o700 });
   } else if (route === "secret-tool") {
     fs.writeFileSync(path.join(tools, "secret-tool"), `#!/bin/sh\nexec ${quote(capturedGh)} pr create --fill\n`, { mode: 0o700 });
   } else {
@@ -515,9 +515,9 @@ exec ${quote(realGit)} "$@"
   const changedHome = path.join(fixture, "changed-home");
   fs.mkdirSync(changedHome);
   const changed = { ...launch, HOME: changedHome, PATH: `${tools}:${launch.PATH}` };
-  for (const declared of route === "gh" ? ["acme/widgets", ""] : ["acme/widgets"]) {
+  for (const declared of route.startsWith("gh") ? ["acme/widgets", ""] : ["acme/widgets"]) {
     fs.rmSync(count, { force: true });
-    const args = route === "gh" ? ["gh", "pr", "list"]
+    const args = route.startsWith("gh") ? ["gh", "pr", "list"]
       : [capturedGh, "pr", "create", "--fill", ...["git origin", "secret-tool"].includes(route) ? ["--repo", "acme/widgets"] : []];
     const result = Bun.spawnSync(args, {
       cwd: repo, env: { ...changed, LLV_AGENT_FORGE_REPOSITORIES: declared },
@@ -526,7 +526,42 @@ exec ${quote(realGit)} "$@"
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("gh shim re-entry refused");
     expect(result.stderr.toString()).not.toContain("fixture-launch-cap");
-    expect(fs.readFileSync(count, "utf8").trim()).toBe("2");
+    expect(fs.readFileSync(count, "utf8").trim()).toBe(route === "gh changing args" ? "9" : "2");
+  }
+}, 25_000);
+
+(posix ? test : test.skip)("real gh shell aliases and extensions can launch fresh gh commands", () => {
+  const realGh = productionPorts().findGh();
+  expect(realGh).not.toBeNull();
+  if (!realGh) throw new Error("This regression requires an installed gh executable");
+  const fixture = fs.mkdtempSync(path.join(root, "nested-gh-"));
+  const tools = path.join(fixture, "bin");
+  const config = path.join(fixture, "gh-config");
+  const extension = path.join(fixture, "gh-nested-extension");
+  fs.mkdirSync(tools);
+  fs.mkdirSync(config);
+  fs.mkdirSync(extension);
+  fs.symlinkSync(realGh, path.join(tools, "gh"));
+  fs.writeFileSync(path.join(config, "config.yml"), "aliases:\n  nested-version: '!gh --version'\n  nested-alias: '!gh nested-version && gh --version'\n");
+  fs.writeFileSync(path.join(extension, "gh-nested-extension"), '#!/bin/sh\nexec gh --version "$@"\n', { mode: 0o700 });
+  const inherited = { ...source, HOME: fixture, XDG_DATA_HOME: path.join(fixture, "data"), GH_CONFIG_DIR: config, GH_TOKEN: "offline", PATH: `${tools}:${source.PATH}` };
+  const installed = Bun.spawnSync([realGh, "extension", "install", "."], {
+    cwd: extension, env: inherited, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+  });
+  expect(installed.exitCode, installed.stderr.toString()).toBe(0);
+  const launch = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
+  const version = Bun.spawnSync([realGh, "--version"], { env: inherited, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  expect(version.exitCode).toBe(0);
+  for (const declared of ["acme/widgets", ""]) {
+    for (const command of ["nested-version", "nested-alias", "nested-extension"]) {
+      const result = Bun.spawnSync(["gh", command], {
+        cwd: fixture, env: { ...launch, LLV_AGENT_FORGE_REPOSITORIES: declared },
+        stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      });
+      expect(result.stderr.toString()).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe(version.stdout.toString().repeat(command === "nested-alias" ? 2 : 1));
+    }
   }
 }, 25_000);
 
