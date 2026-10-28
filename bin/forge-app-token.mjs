@@ -46,6 +46,7 @@ export const FORGE_REPOSITORIES_ENV = "LLV_AGENT_FORGE_REPOSITORIES";
 
 const API = "https://api.github.com/";
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+const GH_REENTRY_REASON = "gh shim re-entry refused; a downstream gh command points back to the forge shim";
 
 export class ForgeAppRefusal extends Error {
   constructor(repository, reason) {
@@ -150,7 +151,8 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
   try {
     const raw = await ports.readCredential(slug);
     app = raw ? JSON.parse(raw) : null;
-  } catch {
+  } catch (error) {
+    if (error instanceof ForgeAppRefusal) throw error;
     app = null;
   }
   if (!app || typeof app !== "object") throw refuse("no GitHub App credential is available for it");
@@ -378,7 +380,7 @@ export function classifyGh(args, env = {}) {
 /** Runs `gh` for an agent. Returns the exit status. */
 export async function runGh(args, ports) {
   if (ports.env.LLV_FORGE_GH_DELEGATED) {
-    ports.stderr("Delegatus: gh shim re-entry refused; a downstream gh command points back to the forge shim.\n");
+    ports.stderr(`Delegatus: ${GH_REENTRY_REASON}.\n`);
     return 1;
   }
   const delegatedEnv = { ...ports.env, LLV_FORGE_GH_DELEGATED: "1" };
@@ -400,7 +402,12 @@ export async function runGh(args, ports) {
     /* `gh` picks the base repository among the checkout's remotes. When the
        first is not declared and another is, which one it would write to is
        not settled here, so the command has to say. */
-    const remotes = await ports.checkoutRepositories();
+    let remotes;
+    try { remotes = await ports.checkoutRepositories(); }
+    catch (error) {
+      ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(null, "checkout repository discovery failed")}\n`);
+      return 1;
+    }
     named = remotes[0] ?? null;
     if (named && !isDeclaredRepository(named, ports.env) && remotes.some((remote) => isDeclaredRepository(remote, ports.env))) {
       ports.stderr(`${refusalMessage(null, "this checkout has several GitHub remotes and one of them is an App repository; name the repository with --repo")}\n`);
@@ -536,8 +543,11 @@ export async function gitCredential(action, input, ports) {
 /* ── The running process ──────────────────────────────────────────────────── */
 
 function run(command, args, options = {}) {
-  return new Promise((resolve) => {
-    execFile(command, args, { timeout: 15_000, maxBuffer: 1024 * 1024, ...options }, (error, stdout) => {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { timeout: 15_000, maxBuffer: 1024 * 1024, ...options }, (error, stdout, stderr) => {
+      // Discovery must preserve a nested shim's refusal instead of reading it
+      // as a checkout with no remotes and passing the original write through.
+      if (String(stderr).includes(GH_REENTRY_REASON)) { reject(new ForgeAppRefusal(null, GH_REENTRY_REASON)); return; }
       resolve(error ? null : String(stdout));
     });
   });
@@ -551,12 +561,13 @@ function sessionBusEnv(env) {
 }
 
 export function productionPorts(env = process.env, cwd = process.cwd()) {
-  const originRepository = async () => parseRepository((await run("git", ["remote", "get-url", "origin"], { cwd, env }))?.trim() ?? "");
+  const discoveryEnv = { ...env, LLV_FORGE_GH_DELEGATED: "1" };
+  const originRepository = async () => parseRepository((await run("git", ["remote", "get-url", "origin"], { cwd, env: discoveryEnv }))?.trim() ?? "");
   /* The checkout's GitHub repositories in the order `gh` prefers them as the
      base: one marked by `gh repo set-default`, then upstream, github, origin. */
   const checkoutRepositories = async () => {
     const remotes = [];
-    for (const line of ((await run("git", ["remote", "-v"], { cwd, env })) ?? "").split("\n")) {
+    for (const line of ((await run("git", ["remote", "-v"], { cwd, env: discoveryEnv })) ?? "").split("\n")) {
       const match = /^(\S+)\s+(\S+)\s+\(fetch\)$/.exec(line);
       const slug = match ? parseRepository(match[2]) : null;
       if (slug) remotes.push([match[1], slug]);
@@ -564,7 +575,7 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
     const rank = (name) => ["origin", "github", "upstream"].indexOf(name);
     remotes.sort((left, right) => rank(right[0]) - rank(left[0]));
     const chosen = [];
-    for (const line of ((await run("git", ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"], { cwd, env })) ?? "").split("\n")) {
+    for (const line of ((await run("git", ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"], { cwd, env: discoveryEnv })) ?? "").split("\n")) {
       const match = /^remote\.(.+)\.gh-resolved\s+(\S+)$/.exec(line);
       const slug = !match ? null : match[2] === "base" ? remotes.find(([name]) => name === match[1])?.[1] : parseRepository(match[2]);
       if (slug) chosen.push(slug);
@@ -592,7 +603,7 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
     /* The item is keyed by the repository as the origin spells it, which a
        caller's own spelling may differ from by case only. */
     readCredential: async (repository) => {
-      const lookup = (name) => run("secret-tool", ["lookup", "service", FORGE_APP_SECRET_SERVICE, "repository", name], { env: sessionBusEnv(env) });
+      const lookup = (name) => run("secret-tool", ["lookup", "service", FORGE_APP_SECRET_SERVICE, "repository", name], { env: sessionBusEnv(discoveryEnv) });
       const direct = await lookup(repository);
       if (direct?.trim()) return direct;
       const origin = await originRepository();

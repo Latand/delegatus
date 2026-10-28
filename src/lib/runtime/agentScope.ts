@@ -37,6 +37,15 @@ export function sameAgentScope(left: AgentScopeIdentity | null, right: AgentScop
   return left?.unit === right?.unit && left?.bootEpoch === right?.bootEpoch;
 }
 
+/** A PID namespace change alone proves nothing about a unit in the user
+ * manager. A different kernel boot ID proves the old transient scope is gone. */
+function differentKernelBoot(recorded: string, current: string | null): boolean {
+  const linux = /^linux:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):pidns:pid:\[\d+\]$/;
+  const priorId = linux.exec(recorded)?.[1];
+  const currentId = current ? linux.exec(current)?.[1] : null;
+  return !!priorId && !!currentId && priorId !== currentId;
+}
+
 export function agentScopeCommand(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => execFile("systemctl", ["--user", ...args],
     { encoding: "utf8", timeout: 2_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
@@ -54,7 +63,11 @@ export async function stopAgentScope(scope: AgentScopeIdentity, options: {
   bootEpoch?: () => string | null;
   deadlineMs?: number;
 }): Promise<void> {
-  if (!normalizeAgentScope(scope) || !scope.bootEpoch || (options.bootEpoch ?? systemBootEpoch)() !== scope.bootEpoch) {
+  if (!normalizeAgentScope(scope) || !scope.bootEpoch) {
+    throw new Error("agent scope boot identity changed");
+  }
+  const currentBoot = (options.bootEpoch ?? systemBootEpoch)();
+  if (currentBoot !== scope.bootEpoch && !differentKernelBoot(scope.bootEpoch, currentBoot)) {
     throw new Error("agent scope boot identity changed");
   }
   const command = options.command ?? agentScopeCommand;
@@ -67,6 +80,13 @@ export async function stopAgentScope(scope: AgentScopeIdentity, options: {
       })]);
     } finally { clearTimeout(timer); }
   };
+  if (currentBoot !== scope.bootEpoch) {
+    // Retire only the recorded custody; a current unit reusing its name is
+    // unrelated and must receive no command, including a state query.
+    await bounded(Promise.resolve(options.authorizeAsync?.()));
+    options.authorize();
+    return;
+  }
   const authorized = async (args: string[]) => {
     await bounded(Promise.resolve(options.authorizeAsync?.()));
     options.authorize();

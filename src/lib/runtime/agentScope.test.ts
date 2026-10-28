@@ -11,7 +11,7 @@ import type { RuntimeHostClient } from "./client";
 import { AgentMemoryCell, GIB, planAgentMemory, wrapAgentCommand } from "./agentMemory";
 import { memoryField } from "./agentMemoryState";
 import { planAgentCpu } from "./cpuPlacement";
-import { codexHostColumns, claudeHostColumns, copilotHostColumns } from "./registry";
+import { codexHostColumns, claudeHostColumns, copilotHostColumns, stopTerminalStructuredOrphan } from "./registry";
 import type { HostState } from "./engineHost";
 import { agentScopeCommand, recordedAgentScope, stopAgentScope } from "./agentScope";
 import { dispatchStructuredControl } from "./structuredControls";
@@ -22,6 +22,79 @@ import { determined } from "./determinable";
 import { terminateStructuredHostTree } from "./structuredHostControl";
 
 const scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: "fixture-boot" };
+const linuxBoot = (digit: string, namespace = "123") => `linux:${[digit.repeat(8), digit.repeat(4), digit.repeat(4), digit.repeat(4), digit.repeat(12)].join("-")}:pidns:pid:[${namespace}]`;
+
+test.each(["unrelated-review.service", "delegatus-agent-fixture.service", "delegatus-agent-fixture.slice", "delegatus-agent-*.scope", "*.scope", "delegatus-agent-fixture.scope/other"])("invalid scope target %s receives no command", async unit => {
+  const calls: string[][] = [];
+  await expect(stopAgentScope({ ...scope, unit }, { authorize() {}, bootEpoch: () => scope.bootEpoch, deadlineMs: 30,
+    command: async args => { calls.push(args); return "loaded"; },
+  })).rejects.toThrow();
+  expect(calls).toEqual([]);
+});
+
+test("an earlier kernel boot retires only after custody is rechecked and sends no unit command", async () => {
+  const events: string[] = [];
+  await stopAgentScope({ ...scope, bootEpoch: linuxBoot("a") }, {
+    bootEpoch: () => linuxBoot("b"),
+    authorizeAsync: async () => { events.push("async"); }, authorize: () => { events.push("sync"); },
+    command: async () => { throw new Error("a current unit with the same name must stay untouched"); },
+  });
+  expect(events).toEqual(["async", "sync"]);
+  await expect(stopAgentScope({ ...scope, bootEpoch: linuxBoot("a") }, {
+    bootEpoch: () => linuxBoot("b"), authorizeAsync: async () => {}, authorize: () => { throw new Error("custody changed"); },
+    command: async () => { throw new Error("unexpected unit command"); },
+  })).rejects.toThrow("custody changed");
+});
+
+test.each([null, "unknown", linuxBoot("a", "456")])("uncertain boot evidence %s preserves scope custody", async current => {
+  const calls: string[][] = [];
+  await expect(stopAgentScope({ ...scope, bootEpoch: linuxBoot("a") }, { authorize() {}, bootEpoch: () => current,
+    command: async args => { calls.push(args); return "not-found"; },
+  })).rejects.toThrow("boot identity");
+  expect(calls).toEqual([]);
+});
+
+(process.platform === "linux" ? test : test.skip)("a fresh process can resume a persisted previous-kernel scope without touching its current namesake", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-reboot-"));
+  const filename = path.join(root, "registry.json");
+  const key = { engine: "codex" as const, sessionId: "scope-reboot" };
+  const boot = systemBootEpoch()!;
+  const priorBoot = boot.replace(/^linux:[^:]+:/, `linux:${["aaaaaaaa", "bbbb", "cccc", "dddd", "eeeeeeeeeeee"].join("-")}:`);
+  expect(priorBoot).not.toBe(boot);
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  try {
+    const commands = path.join(root, "unit-commands");
+    fs.writeFileSync(path.join(root, "systemctl"), `#!/bin/sh\nprintf called >> '${commands}'\nexit 91\n`, { mode: 0o700 });
+    const columns = codexHostColumns({ status: "dead", sessionKey: key.sessionId, endpoint: "stdio:released", pid: null,
+      processStartIdentity: null, exitProcess: { pid: 2_147_483_647, startIdentity: "fixture-root", bootEpoch: priorBoot },
+      eventCursor: 0, protocolVersion: null, activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+      scope: { unit: scope.unit, bootEpoch: priorBoot } }, 1);
+    registry.upsert({ key, artifactPath: "", cwd: root, accountId: null, status: "dead", host: null,
+      structuredHost: columns, claimEpoch: 1, claimOwner: null, pendingAction: null });
+    registry.close();
+    const result = Bun.spawnSync([process.execPath, "-e", `
+      const { AgentRegistry, setAgentRegistryForTests } = await import(${JSON.stringify(path.resolve("src/lib/agent/registry.ts"))});
+      const { stopTerminalStructuredOrphan } = await import(${JSON.stringify(path.resolve("src/lib/runtime/registry.ts"))});
+      const { captureProcessIdentity } = await import(${JSON.stringify(path.resolve("src/lib/processIdentity.ts"))});
+      const r = new AgentRegistry(process.argv[1], undefined, undefined, { sqliteMode: "off" });
+      setAgentRegistryForTests(r);
+      const key = ${JSON.stringify(key)};
+      const previous = r.readOnlySnapshot().entries["codex:scope-reboot"].structuredHost;
+      const setupHost = { ...previous, scope: undefined, memory: undefined, process: null, exitProcess: undefined };
+      const owner = captureProcessIdentity(process.pid);
+      const before = r.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost });
+      const stopped = await stopTerminalStructuredOrphan(r, key, {
+        signal() { throw new Error("no signal belongs to a previous boot"); }, protectedPids: () => new Set(),
+      });
+      const after = r.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost });
+      console.log(JSON.stringify({ before: before !== null, stopped, after: after !== null }));
+      r.close();
+    `, filename], { env: { ...process.env, PATH: `${root}${path.delimiter}${process.env.PATH}` }, stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({ before: false, stopped: true, after: true });
+    expect(fs.existsSync(commands)).toBe(false);
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("scope teardown requires collection and addresses all cgroup members", async () => {
   const calls: string[][] = [];
@@ -158,6 +231,7 @@ test.each([1, 2, 3])("replacement claim at scope command %i retains the original
 
 const realScopeTest = process.platform === "linux" && process.env.LLV_AGENT_MEMORY_SCOPE_TEST === "1" ? test : test.skip;
 realScopeTest.each([
+  ["previous-boot", "orphan"],
   ["memory", "controller"], ["cpu", "controller"], ["memory", "tree"], ["cpu", "tree"], ["memory", "retirement"], ["cpu", "retirement"], ["legacy", "controller"], ["legacy", "tree"], ["legacy", "retirement"], ["legacy-sqlite", "controller"], ["legacy-sqlite", "tree"], ["legacy-sqlite", "retirement"],
 ])("gone conversation removes its private %s scope through %s after restart", async (mode, route) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-kill-"));
@@ -202,12 +276,30 @@ realScopeTest.each([
     const columns = codexHostColumns({ status: "dead", sessionKey: sessionId, endpoint: "stdio:released", pid: null,
       processStartIdentity: null, exitProcess: observed.root, eventCursor: 0, protocolVersion: null,
       activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null, ...memoryField(cell) }, 1);
+    if (mode === "previous-boot") {
+      const priorBoot = observed.root.bootEpoch!.replace(/^linux:[^:]+:/, `linux:${["aaaaaaaa", "bbbb", "cccc", "dddd", "eeeeeeeeeeee"].join("-")}:`);
+      expect(priorBoot).not.toBe(observed.root.bootEpoch!);
+      columns.scope = { unit: plan.unit!, bootEpoch: priorBoot };
+      columns.process = { ...observed.root, bootEpoch: priorBoot };
+      columns.exitProcess = columns.process;
+    }
     if (mode.startsWith("legacy")) { delete columns.scope; columns.process = null; }
     registry.upsert({ key, artifactPath, cwd: root, accountId: null, launchProfile: emptyLaunchProfile({ cwd: root }),
       status: "dead", host: null, structuredHost: columns, claimEpoch: 1, claimOwner: null, pendingAction: null });
     registry.close();
     registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
     setAgentRegistryForTests(registry);
+    if (mode === "previous-boot") {
+      const setupHost = { ...columns, scope: undefined, memory: undefined, process: null, exitProcess: undefined };
+      const owner = captureProcessIdentity(process.pid);
+      expect(registry.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost })).toBeNull();
+      expect(await stopTerminalStructuredOrphan(registry, key)).toBe(true);
+      expect(registry.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost })).not.toBeNull();
+      // This live unit shares the old row's name, but belongs to this boot.
+      expect(await agentScopeCommand(["show", "--value", "-p", "LoadState", plan.unit!])).toBe("loaded");
+      expect(fs.readFileSync(`/proc/${observed.child}/cgroup`, "utf8")).toContain(plan.unit!);
+      return;
+    }
     journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
     const j = journal;
     const client = { snapshot: async () => j.snapshot(), readSession: async identity => j.readSession(identity),

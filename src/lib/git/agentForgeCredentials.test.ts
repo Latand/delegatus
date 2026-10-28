@@ -10,6 +10,7 @@ import { statePath } from "@/lib/configDir";
 
 import { FORGE_APP_REPOSITORIES_FILE, agentForgeWriteEnv, engineForgeWriteEnv, forgeAppRepositories, isForgeAppRepository } from "./agentForgeCredentials";
 import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
+import { productionPorts } from "../../../bin/forge-app-token.mjs";
 
 const posix = process.platform !== "win32";
 /* Address-shaped fixtures are joined, never written out. */
@@ -479,7 +480,7 @@ test.skipIf(!posix)("no token, key or identifier is written into the launch dire
   expect(fs.statSync(directory).mode & 0o077).toBe(0);
 });
 
-(posix ? test : test.skip)("a changed HOME and a downstream wrapper cannot re-enter the generated gh shim", () => {
+(posix ? test : test.skip).each(["gh", "git remote", "git config", "git origin", "git remote accepted", "secret-tool"])("a changed HOME and a %s wrapper cannot re-enter the generated gh shim", route => {
   const fixture = fs.mkdtempSync(path.join(root, "reentry-"));
   const tools = path.join(fixture, "bin");
   fs.mkdirSync(tools);
@@ -497,13 +498,28 @@ exec ${quote(process.execPath)} "$@"
   const inherited = { ...source, HOME: fixture, PATH: `${tools}:${source.PATH}` };
   const launch: NodeJS.ProcessEnv = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
   const capturedGh = path.join(launch.LLV_AGENT_FORGE_DIR!, "gh");
-  fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\nexec ${quote(capturedGh)} repo set-default --view\n`, { mode: 0o700 });
+  if (route === "gh") {
+    fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\nexec ${quote(capturedGh)} repo set-default --view\n`, { mode: 0o700 });
+  } else if (route === "secret-tool") {
+    fs.writeFileSync(path.join(tools, "secret-tool"), `#!/bin/sh\nexec ${quote(capturedGh)} pr create --fill\n`, { mode: 0o700 });
+  } else {
+    const realGit = Bun.which("git", { PATH: source.PATH })!;
+    fs.writeFileSync(path.join(tools, "git"), `#!/bin/sh
+if [ "$1" = ${quote(route === "git origin" ? "remote" : route.split(" ")[1]!)} ]; then
+  ${route.endsWith("accepted") ? "" : "exec "}${quote(capturedGh)} pr create --fill
+  exit 0
+fi
+exec ${quote(realGit)} "$@"
+`, { mode: 0o700 });
+  }
   const changedHome = path.join(fixture, "changed-home");
   fs.mkdirSync(changedHome);
   const changed = { ...launch, HOME: changedHome, PATH: `${tools}:${launch.PATH}` };
-  for (const declared of ["acme/widgets", ""]) {
+  for (const declared of route === "gh" ? ["acme/widgets", ""] : ["acme/widgets"]) {
     fs.rmSync(count, { force: true });
-    const result = Bun.spawnSync(["gh", "pr", "list"], {
+    const args = route === "gh" ? ["gh", "pr", "list"]
+      : [capturedGh, "pr", "create", "--fill", ...["git origin", "secret-tool"].includes(route) ? ["--repo", "acme/widgets"] : []];
+    const result = Bun.spawnSync(args, {
       cwd: repo, env: { ...changed, LLV_AGENT_FORGE_REPOSITORIES: declared },
       stdout: "pipe", stderr: "pipe", timeout: 10_000,
     });
@@ -513,3 +529,19 @@ exec ${quote(process.execPath)} "$@"
     expect(fs.readFileSync(count, "utf8").trim()).toBe("2");
   }
 }, 25_000);
+
+(posix ? test : test.skip)("the production builder discovers ordinary repositories and their selected base", async () => {
+  const fixture = fs.mkdtempSync(path.join(root, "discovery-"));
+  const git = (args: string[]) => {
+    const result = sh(["git", ...args], source, "", fixture);
+    expect(result.exitCode).toBe(0);
+  };
+  git(["init", "-q"]);
+  git(["remote", "add", "origin", "https://github.com/acme/widgets.git"]);
+  git(["remote", "add", "upstream", "https://github.com/acme/gadgets.git"]);
+  git(["config", "remote.origin.gh-resolved", "base"]);
+  const launch = { ...source, ...agentForgeWriteEnv(source, ["acme/widgets"], false) };
+  const ports = productionPorts(launch, fixture);
+  expect(await ports.checkoutRepositories()).toEqual(["acme/widgets", "acme/gadgets"]);
+  expect(await ports.originRepository()).toBe("acme/widgets");
+});
