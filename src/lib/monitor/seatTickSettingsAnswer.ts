@@ -1,4 +1,4 @@
-import { seatTickDeliveryAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { curationAnswer, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
@@ -92,6 +92,7 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
+  checkErrorAlarm?: SeatTickCheckErrorAlarm;
   autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null; proactive?: { enabled: boolean } };
   /** Added by the settings route (docs/design/turbo-mode.md §2.1). */
   turbo?: import("./turboRuntime").TurboAnswer;
@@ -251,8 +252,10 @@ export function seatTickSettingsAnswer(
   let lastRun: SeatTickLastRun | null = null;
   let lastDelivery: { at: string; outcome: string } | null = null;
   let journalError: string | null = null;
+  let checkErrorAlarm: SeatTickCheckErrorAlarm | null = null;
   try {
     const own = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project)).filter((entry) => entry.project === project);
+    checkErrorAlarm = seatTickCheckErrorAlarm(own);
     const record = own.at(-1) ?? null;
     lastRun = record
       ? {
@@ -272,6 +275,7 @@ export function seatTickSettingsAnswer(
   const active = orchestratorSeatForCurrentProject(project).active;
   const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {
+    ...(checkErrorAlarm ? { checkErrorAlarm } : {}),
     autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null, episode: effective.autonomy ?? null, proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) } },
     release: { ...RELEASE_DEFAULTS, ...settings.release, available: viewerOwnProjectKeys().includes(project), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,

@@ -1,7 +1,19 @@
-import type { SeatTickProjectState } from "./types";
+import type { SeatTickProjectState, SeatTickRunRecord } from "./types";
 
 export const SEAT_TICK_DELIVERY_ALARM_MS = 30 * 60_000;
 export interface SeatTickDeliveryAlarm { clientMessageId: string | null; since: string; ageMs: number; detail: string }
+
+export const SEAT_TICK_CHECK_ERROR_LIMIT = 3;
+export interface SeatTickCheckErrorAlarm { since: string; detail: string }
+
+/** The project journal is the counter, so process succession cannot reset it.
+ * A completed check ends the streak, including a quiet or refused check. */
+export function seatTickCheckErrorAlarm(records: readonly SeatTickRunRecord[]): SeatTickCheckErrorAlarm | null {
+  const recent = records.slice(-SEAT_TICK_CHECK_ERROR_LIMIT);
+  if (recent.length < SEAT_TICK_CHECK_ERROR_LIMIT || recent.some(record => record.verdict !== "error")) return null;
+  return { since: recent[0]!.at,
+    detail: `Seat tick check alarm: the last ${SEAT_TICK_CHECK_ERROR_LIMIT} checks failed; latest failure: ${recent.at(-1)!.detail ?? "reason unavailable"}` };
+}
 
 /** Only decided work starts the watchdog. Idle seats owe no delivery. The
  * durable first decision survives restarts and repeated failed attempts. */

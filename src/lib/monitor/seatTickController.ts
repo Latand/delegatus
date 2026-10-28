@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { seatTickDeliveryAlarm } from "./seatTickWatchdog";
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, SEAT_TICK_CHECK_ERROR_LIMIT } from "./seatTickWatchdog";
 import { SeatTickWork, outsideSeatTickWork, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
@@ -51,7 +51,7 @@ import {
   seatTickSourceGapRef,
 } from "./cards";
 import { openIssuesForProposal, type ProposalIssue } from "./githubEvidence";
-import { appendSeatTickRecord } from "./journalStore";
+import { appendSeatTickRecord, readSeatTickRecords } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
@@ -164,6 +164,8 @@ export interface SeatTickControllerDependencies {
       already doing. */
   writeSettings?: typeof writeSeatTickSettings;
   appendRecord?: typeof appendSeatTickRecord;
+  /** The same project's journal, paired with an overridden appendRecord. */
+  readRecords?: (project: string, limit: number) => SeatTickRunRecord[];
   deliver?: typeof deliverConversationMessage;
   /** Whether the board now carries the card. See {@link ensureSeatTickCard}. */
   ensureCard?: (project: string, card: SeatTickCard, at: string) => boolean;
@@ -267,6 +269,11 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
+  if (card.kind === "check-errors") return redactBounded([
+    "Seat tick checks keep failing", "", card.detail,
+    "The next check retries. Inspect the latest failure and restore the failing source so wakes can resume.",
+    "", `${MONITOR_REF_PREFIX} ${card.ref}`,
+  ].join("\n"), CARD_TEXT_LIMIT);
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
   if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
@@ -384,7 +391,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         /* The condition is on the board either way; only its wording is stale. */
         : unchanged;
     }
-    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.state === "open") {
+    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "check-errors") && card.state === "open") {
       /* Reopen the same card after a later outage or when a recovery's terminal
          outcome follows a closed intermediate notice. Creating with its durable
          receipt would replay the completed task without updating the notice. */
@@ -1426,8 +1433,9 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     },
     appendRecord: append,
   }, "check");
+  let record: SeatTickRunRecord | null;
   try {
-    return await work.run(() => work.wait("check", (async () => {
+    record = await work.run(() => work.wait("check", (async () => {
       for (let attempt = 0; ; attempt++) {
         const record = await runSeatTickAttempt(project, scoped);
         if (attempt || !record?.detail?.includes("Seat alarm sources changed")) return record;
@@ -1436,13 +1444,29 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
       }
     })()));
   } catch (error) {
-    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date().toISOString(), project,
+    record = { schemaVersion: 1, at: new Date().toISOString(), project,
       seatEpoch: null, verdict: "error", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null,
       detail: `the check overflowed or was canceled: ${work.detail()}; ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}; retry within one interval` };
     console.error(`[seat tick] ${record.detail}`);
     append(record);
-    return record;
   } finally { work.close(); }
+  if (record) {
+    // This notice must survive the deadline that ended the failed check. It
+    // gets one separate, bounded admission and carries no delivery authority.
+    try {
+      const recent = dependencies.readRecords
+        ? dependencies.readRecords(project, SEAT_TICK_CHECK_ERROR_LIMIT)
+        : readSeatTickRecords(SEAT_TICK_CHECK_ERROR_LIMIT, undefined, project);
+      const alarm = seatTickCheckErrorAlarm(recent);
+      if (alarm || record.verdict !== "error") await waitForStateLock("seat-tick.check-alarm", () =>
+        (dependencies.ensureCard ?? ensureSeatTickCard)(project, {
+          ref: "seat-tick-check-errors", kind: "check-errors", state: alarm ? "open" : "resolved", detail: alarm?.detail ?? "",
+        }, record.at), { waitMs: 1_000 });
+    } catch (error) {
+      console.error("[seat tick] check alarm write deferred", error instanceof Error ? error.name : "unknown");
+    }
+  }
+  return record;
 }
 
 /**

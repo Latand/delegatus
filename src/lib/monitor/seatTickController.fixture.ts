@@ -253,7 +253,10 @@ function harness(options: {
       writeSeatTickState(project, row, localStateFile);
     },
     appendRecord: (record) => { journal.push(record); },
+    readRecords: (project, limit) => journal.filter(record => record.project === project).slice(-limit),
     ensureCard: (project, card) => {
+      if (card.kind === "check-errors" && card.state === "resolved"
+        && !cards.some(entry => entry.project === project && entry.card.ref === card.ref && entry.card.state === "open")) return true;
       cards.push({ project, card });
       if (options.cardWrite === "throws") throw new Error("the board file cannot be written");
       return options.cardWrite !== "refused";

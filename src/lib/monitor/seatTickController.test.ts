@@ -466,7 +466,9 @@ test("two unresolved attempts of one project share one standing card, updated in
   const firstKey = first.rig.sent[0]!.clientMessageId!;
   /* Past the interval: the first attempt is carded. */
   await check(NOW + 61 * MINUTE, kept);
-  expect(await unresolvedCardsOn(project)).toHaveLength(1);
+  const firstCards = await unresolvedCardsOn(project);
+  expect(firstCards).toHaveLength(1);
+  expect(firstCards[0]!.text).toContain(firstKey);
   /* Past the age bound: it retires, and a second attempt goes out. */
   const third = await check(NOW + 121 * MINUTE, kept);
   expect(third.rig.sent).toHaveLength(1);
@@ -477,14 +479,25 @@ test("two unresolved attempts of one project share one standing card, updated in
 
   const cards = await unresolvedCardsOn(project);
   expect(cards).toHaveLength(1);
+  expect(cards[0]!.id).toBe(firstCards[0]!.id);
   const storedCard = (await import("@/lib/tasks/store")).loadTasks(STANDING_BOARD()).find(task => task.id === cards[0]!.id)!;
   expect(storedCard.dueAt).toBeUndefined(); expect(storedCard.dueTz).toBeUndefined();
   expect(cards[0]!.text).toContain(secondKey);
   expect(cards[0]!.text).toContain("Attempts on this card: 2");
 
-  /* A check that changes nothing leaves it exactly as it stands. */
-  await check(NOW + 187 * MINUTE, kept);
+  /* Re-reading the same instant changes neither the card nor its count. */
+  await check(NOW + 182 * MINUTE, kept);
   expect(await unresolvedCardsOn(project)).toEqual(cards);
+
+  /* Only the watchdog's age advances while both attempts stay unresolved. */
+  expect(cards[0]!.text).toContain("without delivery for 182 minutes;");
+  expect(cards[0]!.text).toContain(`ageMs=${182 * MINUTE};`);
+  await check(NOW + 187 * MINUTE, kept);
+  expect(await unresolvedCardsOn(project)).toEqual(cards.map(card => ({
+    ...card,
+    text: card.text.replace("without delivery for 182 minutes;", "without delivery for 187 minutes;")
+      .replace(`ageMs=${182 * MINUTE};`, `ageMs=${187 * MINUTE};`),
+  })));
 });
 
 test("a permanent refusal of the re-dispatch releases the attempt at once instead of fencing for the age bound", async () => {
