@@ -712,9 +712,9 @@ export class SelfUpdateService {
 
   private async autoGreen(target: string, repo: string, now: number): Promise<GreenVerdict> {
     let green = this.auto.green[target] ?? null;
-    if (!green || (["pending", "unknown", "red"].includes(green.state) && (!green.nextAt || Date.parse(green.nextAt) <= now))) {
-      green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, green?.firstReadAt, green?.state === "red");
-      if (["pending", "unknown", "red"].includes(green.state)) green = { ...green, nextAt: green.nextAt ?? new Date(now + 15 * 60_000).toISOString() };
+    if (!green || (["pending", "unknown", "red", "untested-tree"].includes(green.state) && (!green.nextAt || Date.parse(green.nextAt) <= now))) {
+      green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, green?.firstReadAt, ["red", "untested-tree"].includes(green?.state ?? ""));
+      if (["pending", "unknown", "red", "untested-tree"].includes(green.state)) green = { ...green, nextAt: green.nextAt ?? new Date(now + 15 * 60_000).toISOString() };
       this.auto = { ...this.auto, green: Object.fromEntries(Object.entries({ ...this.auto.green, [target]: green }).slice(-8)) };
       this.saveAuto();
     }

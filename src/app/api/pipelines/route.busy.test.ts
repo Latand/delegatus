@@ -24,7 +24,8 @@ fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: tru
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { loadPipelines, withPipelineMutation } = await import("@/lib/pipelines/store");
-const { tickPipelines } = await import("@/lib/pipelines/engine");
+const { tickPipelinesController } = await import("@/lib/pipelines/controllerPass");
+const { queuedPipelineCreationStatus } = await import("@/lib/pipelines/creationQueue");
 const { POST } = await import("./route");
 
 /** A durable creator lineage, the same one an agent caller carries. */
@@ -112,22 +113,28 @@ test("a create refused on the lock is queued, stores nothing yet, and is stored 
   const releaseLease = await holdRegistryLease();
   const task = "http busy refusal";
 
-  const startedAt = Date.now();
-  const queued = await POST(createRequest(task));
-  const elapsed = Date.now() - startedAt;
+  const body = await (async () => {
+    const startedAt = Date.now();
+    const queued = await POST(createRequest(task));
+    const elapsed = Date.now() - startedAt;
 
-  expect(queued.status).toBe(202);
-  const body = await queued.json() as { ok: boolean; pipeline: { id: string }; queued?: { reason: string } };
-  expect(body).toMatchObject({ ok: true, queued: { reason: "pipeline state is busy" } });
-  expect(pipelinesNamed(task)).toEqual([]);
-  /* It waited for the lock: the store gives up only once its own clock has
-     passed the configured wait. The wait was bounded: the request answered
-     while the lease was still held by someone else, released only below. */
-  expect(elapsed).toBeGreaterThanOrEqual(200);
+    expect(queued.status).toBe(202);
+    const body = await queued.json() as { ok: boolean; pipeline: { id: string }; queued?: { reason: string; queuedAt: string } };
+    const stored = queuedPipelineCreationStatus(body.pipeline.id);
+    expect(stored?.state).toBe("queued");
+    if (stored?.state !== "queued") throw new Error("expected a durable queued creation");
+    expect(stored.reason).not.toBe("");
+    expect(body).toMatchObject({ ok: true, queued: { reason: stored.reason, queuedAt: stored.queuedAt } });
+    expect(pipelinesNamed(task)).toEqual([]);
+    /* It waited for the lock: the store gives up only once its own clock has
+       passed the configured wait. The wait was bounded: the request answered
+       while the lease was still held by someone else, released below. */
+    expect(elapsed).toBeGreaterThanOrEqual(200);
+    return body;
+  })().finally(releaseLease);
 
-  await releaseLease();
-  await tickPipelines([]);
+  await tickPipelinesController([]);
   expect(pipelinesNamed(task)).toEqual([body.pipeline.id]);
-  await tickPipelines([]);
+  await tickPipelinesController([]);
   expect(pipelinesNamed(task)).toEqual([body.pipeline.id]);
 });

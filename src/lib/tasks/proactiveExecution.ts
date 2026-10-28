@@ -10,6 +10,7 @@ import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { readWorkerLimits, effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { projectAliasKeys } from "@/lib/projects/aliases";
 import { proactiveProjectWork } from "./store";
+import { hostlessConversationEvidence } from "@/lib/runtime/hostlessRegistryEvidence";
 
 export interface ProactiveExecutionContext {
   phase: "create" | "prepare" | "dispatch" | "effect" | "settle";
@@ -57,7 +58,12 @@ export function proactiveExecutionError(tasks: readonly BoardTask[], file = TASK
           const members = agentRegistry().conversationMemberships(id as `conversation_${string}`);
           if (members.some(member => member.kind === "orchestrator")) continue;
           const lanes = members.filter(member => member.kind === "pipeline");
-          if (!lanes.length) { workers.add(id); continue; }
+          if (!lanes.length) {
+            const retained = agentRegistry().conversationRetentionSnapshot(id);
+            const awaitingExit = Object.values(retained.entries).some(entry => entry.pendingHostExits?.length);
+            if (awaitingExit || !hostlessConversationEvidence(retained, id)) workers.add(id);
+            continue;
+          }
           for (const member of lanes) {
             if (member.containerId === live.pipeline?.id) continue;
             const lane = findPipelineRecord(member.containerId);

@@ -16,6 +16,12 @@ if (import.meta.main) {
     if (action === "pipeline-record") {
       const { findPipelineRecord } = await import("@/lib/pipelines/store");
       result = findPipelineRecord(key!);
+    } else if (action === "lane-dispatch") {
+      const { proactiveTaskExecutionError } = await import("./proactiveExecution");
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      const pipeline = findPipelineRecord(key!);
+      if (!pipeline?.proactiveTaskIds?.length) throw new Error("retained proactive pipeline authority is missing");
+      result = { error: proactiveTaskExecutionError(pipeline.proactiveTaskIds, file!, { pipeline, stageId: pipeline.cursor?.stageId, phase: "dispatch" }) };
     } else if (action === "lane-error") {
       const { proactiveTaskExecutionError } = await import("./proactiveExecution");
       const { findPipelineRecord } = await import("@/lib/pipelines/store");

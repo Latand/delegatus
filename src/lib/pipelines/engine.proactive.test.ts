@@ -7,6 +7,8 @@ import { candidate, NOW } from "@/lib/tasks/proactive.fixture";
 import { applySeatTickSettingsChange, defaultSeatTickSettings, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { agentRegistry } from "@/lib/agent/registry";
+import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { proactiveObservation } from "@/lib/accounts/proactiveReserve.fixture";
 import { assertProactivePipelineExecution, assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -15,7 +17,7 @@ import { TASKS_FILE, loadTasksByIds, mutateTasks } from "@/lib/tasks/store";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { bindAccountToProject } from "@/lib/accounts/projectBindings";
-import { reserveProactiveLane } from "@/lib/tasks/proactiveLane";
+import { proactiveGraphDigest, reserveProactiveLane } from "@/lib/tasks/proactiveLane";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setCodexCloudEnvironmentId } from "@/lib/projects/settings";
 import { settlePipelineControllerJobs } from "./controllerJobs";
@@ -23,6 +25,8 @@ import { requestDigest } from "@/lib/mcp/server";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { mergeAdmission, mergeEligible } from "@/lib/forge/autoMerge";
 import { mergeOnReviewSetting } from "@/lib/projects/settings";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { legacyDatabasePath } from "@/lib/state/legacyImport";
 
 const clock = spyOn(Date, "now").mockImplementation(() => NOW);
 afterEach(() => { clock.mockImplementation(() => NOW); });
@@ -678,7 +682,7 @@ test.each(["skipped", "accepted", "budget-spent"])("proactive result review reta
       stageId: "review", attempt: review.n, edge: "fail", budgetSpent: true,
     };
   }
-  expect(mergeEligible(lane)).toBe(true);
+  expect(mergeEligible(lane)).toBe(kind !== "budget-spent");
   if (kind === "accepted") {
     lane.reviewAcceptances![0]!.currentHead = "f".repeat(40);
     expect(mergeEligible(lane)).toBe(false);
@@ -719,4 +723,125 @@ test("a writable stage named review cannot authorize a proactive merge", async (
   buildRun.stageId = "fix-review";
   lane.runs.push(buildRun);
   expect(mergeEligible(lane)).toBe(false);
+});
+
+
+test("review probe: invalid task link cannot strand the project reservation", async () => {
+  const f = await fixture("invalid-link-probe");
+  expect((await closeAndDrain(f.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
+  const other = mutateTasks(tasks => {
+    const made = createTask(tasks, { project: "other-project", text: "Other requested outcome", placement: "unplaced" }, [],
+      { id: () => "cross-project-task", now: () => f.at });
+    if (!made.ok) throw new Error(made.error);
+    return { tasks: made.tasks, result: made.task };
+  });
+  const invalid = { ...f.request, taskIds: [f.task.id, other.id] };
+  const refused = await createPipelineFromRequest(invalid, f.h.ports, {
+    creationRequest: { key: "invalid-link-probe", digest: requestDigest("create_pipeline", invalid) },
+  });
+  expect(refused.pipeline).toBeUndefined();
+  expect(refused.status).toBe(400);
+  expect(refused.error).toContain("task project does not match");
+  const valid = await createPipelineFromRequest(f.request, f.h.ports, {
+    creationRequest: { key: "valid-after-invalid-probe", digest: requestDigest("create_pipeline", f.request) },
+  });
+  expect(valid.error).toBeUndefined();
+});
+
+
+test("review probe: companion scope cannot enter an unadopted proactive lane", async () => {
+  const f = await fixture("linked-edit-probe");
+  expect((await closeAndDrain(f.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
+  const other = mutateTasks(tasks => {
+    const made = createTask(tasks, { project: f.project, text: "Requested companion scope", placement: "unplaced" }, [],
+      { id: () => "linked-companion-task", now: () => f.at });
+    if (!made.ok) throw new Error(made.error);
+    const patched = patchTask(made.tasks, made.task.id, { status: "done" }, f.at);
+    if (!patched.ok) throw new Error(patched.error);
+    return { tasks: patched.tasks, result: patched.task };
+  });
+  const request = { ...f.request, taskIds: [f.task.id, other.id] };
+  const made = await createPipelineFromRequest(request, f.h.ports, {
+    creationRequest: { key: "linked-edit-probe", digest: requestDigest("create_pipeline", request) },
+  });
+  expect(made.error).toContain("exactly one linked task");
+  expect(made.pipeline).toBeUndefined();
+  // Refusing a companion must not consume the candidate's next scope review.
+  const corrected = await createPipelineFromRequest(f.request, f.h.ports, {
+    creationRequest: { key: "without-companion", digest: requestDigest("create_pipeline", f.request) },
+  });
+  expect(corrected.error).toBeUndefined();
+  await f.tick(); await f.pass();
+  expect(f.h.spawnInputs.map(input => input.role.roleId)).toEqual(["reviewer", "builder"]);
+  const lane = loadPipelines().find(row => row.id === corrected.pipeline!.id)!;
+  // Existing records and edits that add a companion also lose authority at effects.
+  lane.taskIds.push(other.id);
+  // Recreate an older multi-task grant from the real reservation writer's output.
+  // Its graph already includes the companion, so graph drift alone cannot fence it.
+  type ScopeRow = { key: string; graph: string; laneId: string };
+  const reservations = new SqliteStateCollection<ScopeRow>(legacyDatabasePath(TASKS_FILE), {
+    collection: "proactive_execution", schemaVersion: 1, key: row => row.key,
+    decode: value => value as ScopeRow, clone: structuredClone, busyMessage: "fixture scope receipt is busy",
+  });
+  try {
+    const saved = reservations.snapshot().find(row => row.laneId === lane.id)!;
+    reservations.boundedPatch(1, tx => tx.put({ ...saved, graph: proactiveGraphDigest(lane) }));
+  } finally { reservations.close(); }
+  savePipelines(loadPipelines().map(row => row.id === lane.id ? lane : row));
+  expect(() => assertProactivePipelineExecution(lane, "effect")).toThrow("linked task scope changed");
+  mutateTasks(tasks => {
+    const patched = patchTask(tasks, other.id, { text: "A materially different companion scope" }, f.at);
+    if (!patched.ok) throw new Error(patched.error);
+    return { tasks: patched.tasks, result: undefined };
+  });
+  expect(() => assertProactivePipelineExecution(lane, "dispatch")).toThrow("linked task scope changed");
+  await decideProactiveTask(f.task.id, "adopt", "operator", proactiveDecisionToken(loadTasksByIds(new Set([f.task.id]))[0]!));
+  expect(() => assertProactivePipelineExecution(lane, "dispatch")).not.toThrow();
+});
+
+const standaloneStates = ["dead", "unhosted", "live", "claimed", "pending", "starting", "exiting", "survivor"] as const;
+test.each([...standaloneStates])("review probe: standalone worker capacity follows retained custody: %s", async kind => {
+  const f = await fixture(`standalone-${kind}`);
+  setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
+  const ordinary = mutateTasks(tasks => {
+    const made = createTask(tasks, { project: f.project, text: "Completed requested work", placement: "unplaced" }, [],
+      { id: () => `ordinary-${kind}`, now: () => f.at });
+    if (!made.ok) throw new Error(made.error);
+    return { tasks: made.tasks, result: made.task };
+  });
+  const registry = agentRegistry();
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: "/repo", taskIds: [ordinary.id],
+    conversationId: `conversation_standalone_${kind}`, origin: { kind: "operator" },
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", model: "gpt-5.6-sol" }) });
+  if (begun.kind !== "created") throw new Error("fresh ordinary conversation required");
+  const sessionId = ["10000000", "0000", "4000", "8000", (standaloneStates.indexOf(kind) + 1).toString(16).padStart(12, "0")].join("-");
+  const artifactPath = `/codex/${sessionId}.jsonl`;
+  if (kind !== "starting") registry.completeSpawn(begun.receipt.launchId, {
+    key: sessionKeyFromTranscript("codex", artifactPath)!, artifactPath, cwd: "/repo", accountId: null,
+    status: kind === "unhosted" ? "unhosted" : kind === "live" ? "live" : "dead", host: null, claimEpoch: 0,
+    claimOwner: kind === "claimed" ? "pending-owner" : null, pendingAction: kind === "pending" ? "resume" : null,
+    ...(kind === "exiting" ? { pendingHostExits: [{ process: captureProcessIdentity(process.pid), launchId: null }] } : {}),
+    ...(kind === "survivor" ? { structuredTerminationSurvivors: [captureProcessIdentity(process.pid)] } : {}),
+  });
+  mutateTasks(tasks => {
+    const patched = patchTask(tasks, ordinary.id, { status: "done" }, f.at);
+    if (!patched.ok) throw new Error(patched.error);
+    return { tasks: patched.tasks, result: undefined };
+  });
+  expect(loadTasksByIds(new Set([ordinary.id]))[0]!.assignments.some(row => row.state === "linked")).toBe(true);
+  expect(registry.conversationMemberships(begun.receipt.conversationId).filter(member => member.kind === "pipeline")).toEqual([]);
+  const error = () => { try { assertProactivePipelineExecution(f.current(), "dispatch"); return null; } catch (error) { return String(error); } };
+  const settled = kind === "dead" || kind === "unhosted";
+  if (settled) expect(error()).toBeNull();
+  else expect(error()).toContain("worker capacity is exhausted");
+  // Capacity is recomputed from the durable registry after a real process restart.
+  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "lane-dispatch"],
+    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code) throw new Error(err);
+    const result = JSON.parse(out.split("RESULT ")[1]!);
+    if (settled) expect(result).toEqual({ error: null });
+    else expect(result.error).toContain("worker capacity is exhausted");
+  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
 });

@@ -261,11 +261,19 @@ test("real HTTP MCP pipeline creation cannot turn prepared proactive provenance 
   const { task } = await admitProactiveTask({ ...candidate("http-proactive-fence"), project: "viewer" },
     { ...context(), project: "viewer" }, undefined, authority());
   const before = loadPipelines().map(lane => lane.id);
-  const client = await agentClient(alice);
+  const caller = launchAgent("Proactive pipeline refusal fixture");
+  const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
+  const nativeId = ["20000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "fixture", `${nativeId}.jsonl`);
+  agentRegistry().completeSpawn(caller.launchId, {
+    key: sessionKeyFromTranscript("claude", transcript)!, artifactPath: transcript, cwd: sandbox, accountId: null,
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  const client = await agentClient(caller);
   try {
     const result = await client.callTool({ name: "create_pipeline", arguments: {
       clientRequestId: "http-proactive-create", task: task.text, taskIds: [task.id], repoDir: process.cwd(),
-      src: "prepared-proactive.jsonl", autoStart: false, stages: [],
+      src: transcript, autoStart: false, stages: [],
     } });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("disabled");

@@ -1800,6 +1800,13 @@ export class SqliteAgentRegistryStore {
                 // lifetime to the view; the finalizer closes it after the last
                 // caller releases that immutable view.
                 previousReader.readOnlyCache = null;
+                previousReader.writerSnapshotCache = null;
+                // The finalizer holds this reader until the view and its
+                // collections are released. Drop the reader's own references
+                // to those objects, otherwise it keeps its own lease alive.
+                previousReader.readOnlyHotFile = null;
+                previousReader.coldViewCache = null;
+                previousReader.readerViews.clear();
                 registerRetiredPreparedReader(previousView.file, previousReader);
               } else previousReader.close();
             }
@@ -2171,7 +2178,6 @@ export class SqliteAgentRegistryStore {
     for (const [collection,keys] of named) {
       const kept = this.collectionOrders.get(collection)!;
       const position = this.db.query<{ row_order: number }, [string, string]>("SELECT row_order FROM registry_rows WHERE collection=? AND row_key=?");
-      if (keys.length > 256) { this.collectionOrders.delete(collection); continue; }
       for (const key of keys) {
         yield;
         if (position.get(collection,key)?.row_order !== kept.orders.get(key)) {
@@ -2487,8 +2493,15 @@ export class SqliteAgentRegistryStore {
          holds the archived version it held, or none as before. */
       const kept = this.coldViewCache;
       const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
-      const archiveUnchanged = kept !== null && changes.length <= 256 && changes.every(change => !ROW_COLLECTION_KEYS.has(change.collection)
-        || version.get(change.collection,change.row_key)?.archive_id === kept.coldIds.get(change.collection as RowCollection)?.get(change.row_key));
+      let archiveUnchanged = kept !== null;
+      if (kept) for (const change of changes) {
+        if (ROW_COLLECTION_KEYS.has(change.collection)
+          && version.get(change.collection,change.row_key)?.archive_id !== kept.coldIds.get(change.collection as RowCollection)?.get(change.row_key)) {
+          archiveUnchanged = false;
+          break;
+        }
+        yield;
+      }
       const ownersUnchanged = archiveUnchanged && !ownersChanged;
       const remembered = yield* this.rememberReadOnlySteps({ file,revision,stamp },false,false,{ archiveUnchanged,ownersUnchanged });
       this.snapshotChangeId = this.changeId();

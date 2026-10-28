@@ -129,6 +129,7 @@ export async function reserveProactiveLane(pipeline: Pipeline, requestKey: strin
       if (!invented.length) return { records: [], result: undefined };
       if (invented.length !== 1) throw new Error("one proactive outcome per lane is required");
       const task = invented[0]!;
+      if (tasks.length !== 1) throw new Error("unadopted proactive lanes require exactly one linked task");
       if (store.get(holdKey(task.id))?.review === "hold") throw new Error("proactive scope review is held for the operator");
       if (canonicalProject(task.project) !== canonicalProject(pipeline.project)) throw new Error("proactive project mismatch");
       if (proactiveCandidateDecision(task, file).rejected) throw new Error("invented work was rejected by the operator");
@@ -196,6 +197,7 @@ export function proactiveLaneError(task: BoardTask, pipeline: Pipeline | undefin
   const authorityError = proactiveLiveAuthorityError(task, file, ports);
   if (authorityError) return authorityError;
   if (!pipeline) return "proactive starts remain disabled outside their reserved scope-reviewed lane";
+  if (pipeline.taskIds.length !== 1 || pipeline.taskIds[0] !== task.id) return "proactive frozen linked task scope changed; operator adoption required";
   if (pipeline.state === "closed" || pipeline.hiddenAt) return "proactive lane is closed or hidden";
   const store = collection(file, false);
   try {

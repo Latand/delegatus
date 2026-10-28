@@ -1,4 +1,5 @@
 import { withHostStopOrigin } from "./hostExit";
+import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { hotRegistryRows, registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
@@ -1014,6 +1015,7 @@ export async function bindStructuredDeliveryQueue(
         // checked other work; the shared actuation section now excludes sends.
         return !!session && runtimeIdleKillMatches({ ...session, retirementBlocked: false }, session.sessionKey, fence);
       },
+      seatQuotaDispatchGuard: prepareSeatQuotaDispatch,
       bindDeliveryGeneration: async (operationId, generationId) => {
         const bound = await registry.bindDeliveryOperationGenerationOffLoop(operationId, generationId);
         /* The queue defers the message and comes back; nothing was handed over. */

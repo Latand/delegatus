@@ -35,8 +35,8 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
   that the next agents of its role, its project or the machine start with.
 - **Telegram built in.** Agents post to chats you allow through a bot, and
   read your own Telegram account through a read-only MCP server.
-- **Made for a team.** People sign in as themselves, and two machines can
-  share one board.
+- **Made for a team.** People sign in as themselves and see the projects of
+  their workspaces, and two machines can share one board.
 
 <a id="run"></a>
 

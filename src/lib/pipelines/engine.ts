@@ -122,7 +122,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { clearEngineParkedTaskNote, parkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
 import { operatorLocale } from "@/lib/operator/settings";
-import { requestPipelineTick } from "./controllerSignal";
+import { hasLocalPipelineController, requestPipelineTick } from "./controllerSignal";
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
@@ -4183,8 +4183,8 @@ async function advancePipeline(
   const detail = successor.handoff && !successor.recheck ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
      new head leaves a head nobody reviewed. Under the default `advance` the
-     terminal gate completes after the final fix, while a nonterminal gate takes its
-     pass edge and relays the findings as unreviewed. Only an edge that
+     terminal gate re-checks the final fix once, while a nonterminal gate takes
+     its pass edge and relays the findings as unreviewed. Only an edge that
      asked for `stop-after-fix` stops in needs_review for the operator; a fix
      that wrote nothing new moves on under either. */
   if (
@@ -4222,8 +4222,8 @@ async function advancePipeline(
   pipeline.pausedState = null;
 }
 
-/** The final advance fix follows the gate's pass edge, including completion.
-    Explicit continuation grants retain their own validation ancestry. */
+/** A terminal advance gate owes one check of its final fix. Nonterminal gates
+    follow their pass edge; explicit grants retain their validation ancestry. */
 function passSuccessor(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -4252,8 +4252,34 @@ function passSuccessor(
     };
   }
 
+  const terminal = attempt && !terminalGrant ? terminalAdvanceGateForAttempt(pipeline, stage, attempt) : null;
+  if (terminal) return { next: terminal.id, handoff: null, recheck: true };
+
   if (!source || !activation) return { next: stage.next, handoff: null };
   return { next: source.next, handoff: { source, attempt: sourceAttempt } };
+}
+
+/** The obligation belongs to the spent fail activation, so retries and repairs
+    retain it through their durable ancestry.
+    A completed re-check discharges it even when older activations remain. */
+function terminalAdvanceGateForAttempt(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): PipelineStage | null {
+  let current: PipelineStageAttempt | undefined = attempt;
+  let currentStage = stage.id;
+  const checked = new Set<string>();
+  const visited = new Set<string>();
+  while (current?.activatedBy) {
+    const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+    if (current.activatedBy.budgetRecheck) checked.add(currentStage);
+    const source = pipeline.stages.find(candidate => candidate.id === activation.stageId);
+    if (activation.edge === "fail" && activation.budgetSpent && source?.next === null
+      && source.onFail && failEdgeExhaustion(source.onFail) === "advance" && !checked.has(source.id)) return source;
+    const key = `${activation.stageId}:${activation.attempt}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    currentStage = activation.stageId;
+    current = runFor(pipeline, currentStage)?.attempts.find(candidate => candidate.n === activation.attempt && !candidate.historical);
+  }
+  return null;
 }
 
 /** A terminal continuation owns one return to its reviewer after the complete
@@ -4405,13 +4431,12 @@ async function reconcileTerminalReviewPending(pipeline: Pipeline): Promise<boole
   return true;
 }
 
-/** Stored automatic budget stops belong to the owner. A retained failed
-    re-check owes one final fix; an already passed final fix owes its successor.
-    Explicit stops, blocked reviews and operator questions retain their wait. */
+/** An old default-advance stop after a passed fix still owes its successor.
+    A failed terminal re-check retains its exhausted-budget decision. */
 async function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
   if (pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") return false;
   const pending = pipeline.reviewPending;
-  if (!pending) return false;
+  if (!pending || pending.terminalRecheck) return false;
   const reviewStage = pipeline.stages.find(stage => stage.id === pending.stageId);
   if (!reviewStage?.onFail || failEdgeExhaustion(reviewStage.onFail) !== "advance") return false;
   const review = runFor(pipeline, reviewStage.id)?.attempts.find(attempt => attempt.n === pending.attempt && !attempt.historical);
@@ -4419,20 +4444,9 @@ async function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: Pipe
   const fix = fixStage && runFor(pipeline, fixStage.id)?.attempts.find(attempt => attempt.n === pending.fixAttempt && !attempt.historical);
   if (!review?.verdict || review.verdict.blocked || !review.completedAt || fix?.state !== "passed"
     || !fixStage || pending.currentHead !== pipeline.lastPassedCommit || pipelineSurvivorRefusal(pipeline)) return false;
-  if (pending.terminalRecheck) {
-    if (!currentTerminalReviewPending(pipeline, pending) || !terminalReviewPendingFromAttempt(pipeline, reviewStage, review)) return false;
-    review.budgetSpent = true;
-    review.reviewedHead = pending.reviewedHead;
-    pipeline.cursor = { stageId: reviewStage.onFail.to, state: "pending", input: failEdgeInput({ verdict: review.verdict, output: review.output ?? "" }),
-      activatedBy: { stageId: reviewStage.id, attempt: review.n, edge: "fail", budgetSpent: true } };
-    pipeline.state = "running";
-    pipeline.stateDetail = null;
-    pipeline.pausedState = null;
-  } else {
-    if (pipeline.state !== "needs_review" || !review.budgetSpent || fix.activatedBy?.stageId !== reviewStage.id
-      || fix.activatedBy.attempt !== review.n || !fix.activatedBy.budgetSpent) return false;
-    await advancePipeline(pipeline, fixStage, ports, fix, true);
-  }
+  if (pipeline.state !== "needs_review" || !review.budgetSpent || fix.activatedBy?.stageId !== reviewStage.id
+    || fix.activatedBy.attempt !== review.n || !fix.activatedBy.budgetSpent) return false;
+  await advancePipeline(pipeline, fixStage, ports, fix, true);
   delete pipeline.reviewPending;
   await clearEngineTaskNote(pipeline);
   return true;
@@ -4572,7 +4586,18 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
-type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
+type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed"; remote?: "unreachable" };
+
+/** A settled remote-read failure happened before any push. Pending reservations
+ * and uncertain writers still own their publication and cannot spend a retry. */
+function settledPublicationRefusal(pipeline: Pipeline): RefusedPublication | null {
+  const operation = pipeline.delivery?.operation;
+  const result = operation?.result;
+  if (operation?.state !== "settled" || !result) return null;
+  if (!result.ok) return result;
+  return result.remote === "unreachable" && !result.uncertain
+    ? { ok: false, error: result.detail, remote: "unreachable" } : null;
+}
 
 /** A quiescent publisher whose push never reached the remote: ended by a
     signal, by its time limit, or together with the Viewer that started it. */
@@ -4584,6 +4609,9 @@ function publicationNotLanded(published: RefusedPublication): boolean {
 function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
   const retried = attempt.publicationRetry?.exhausted ? `; retried ${PUBLICATION_RETRY_DELAYS_MS.length} times` : "";
+  if (published.remote === "unreachable") {
+    return `publishing the passed stage: checking the remote pipeline branch failed${retried}. Check remote access and connectivity, then use publish to try again.\n${published.error}`;
+  }
   if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
     return `publishing the passed stage: a check reached its execution deadline without a verdict after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
   }
@@ -4607,9 +4635,10 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
 
 /**
  * A publication that failed for a reason the stage cannot have caused waits
- * and tries again instead of asking a person at once: a refusal of a head that
- * changes nothing, or a push interrupted before it reached the remote (the
- * hook was not allowed to finish, so there is no verdict about the branch).
+ * and tries again instead of asking a person at once: a failed remote read,
+ * a refusal of a head that changes nothing, or a push interrupted before it
+ * reached the remote (the hook was not allowed to finish, so there is no
+ * verdict about the branch).
  * Execution deadlines without a decisive refusal retry on the same bounded
  * backoff as other interruptions. Each failed operation is counted once on
  * the attempt; the limit is durable across ticks and restarts.
@@ -4627,7 +4656,7 @@ async function retryRefusedPublication(
   const notLanded = publicationNotLanded(published);
   const deadlineOnly = failure?.retryableDeadline === true;
   if (!operation || operation.state !== "settled") return false;
-  const recoverable = recoverablePublication(published);
+  const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
     cause: deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
     detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
@@ -4653,6 +4682,7 @@ async function retryRefusedPublication(
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
   await keepPassedStageUnpublished(pipeline, attempt, deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
+    : published.remote === "unreachable" ? `${published.error}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
   ports.scheduleTick?.(Math.max(1_000, wait));
   return true;
@@ -4662,8 +4692,8 @@ async function retryRefusedPublication(
  * The operation id makes this safe to repeat after a lost acknowledgement. */
 function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, ports: PipelinePorts): void {
   const operation = pipeline.delivery?.operation;
-  const result = operation?.result as RefusedPublication | undefined;
-  if (!operation || operation.state !== "settled" || !result || result.ok !== false) return;
+  const result = settledPublicationRefusal(pipeline);
+  if (!operation || !result) return;
   const failure = result.failure;
   const notLanded = publicationNotLanded(result);
   const deadlineOnly = failure?.retryableDeadline === true;
@@ -4671,7 +4701,7 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
     cause: deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
     detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
-    recoverable: recoverablePublication(result) },
+    recoverable: result.remote === "unreachable" || recoverablePublication(result) },
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }
 
@@ -4848,6 +4878,13 @@ async function retryTerminalStagePublication(
     return;
   }
   if (published.remote === "unreachable") {
+    const refusal = settledPublicationRefusal(pipeline);
+    if (refusal) {
+      if (await retryRefusedPublication(pipeline, attempt, refusal, ports)) return;
+      attempt.error = afterCommitRepair(attempt, passedPublicationParkDetail(attempt, refusal));
+      await park(pipeline, attempt.error);
+      return;
+    }
     await keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
@@ -4917,7 +4954,8 @@ async function routeFailedAttempt(
   const used = failEdgeRoundsUsed(pipeline, stage);
   /* Under the default `advance` (#1868) `maxRounds` is also how many reviews
      the source gets: the fail of its last one is the handoff below, so the
-     reviewer runs N times and the fix stage N+1. `stop-after-fix` counts and
+     budget runs N reviews and N fixes, followed by one terminal re-check.
+     `stop-after-fix` counts and
      hands off the same way and differs only after that fix (#2187). `park`
      keeps today's count, which reviews once more and then stops. */
   const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) !== "park";
@@ -5861,7 +5899,7 @@ async function settleStageVerdict(
        A spent budget (#1868) hands the findings to the target once more under
        the edge's default `onExhausted: "advance"` and under `stop-after-fix`,
        and parks under `park`. After that last fix `advance` follows the
-       source's pass edge or completes, with no further review; `stop-after-fix`
+       source's pass edge, re-checking a terminal gate once; `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
     if (parsed.verdict.blocked === true) {
       await park(pipeline, parsed.verdict.blockedReason!, attempt);
@@ -9744,14 +9782,16 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
     ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
 
+const provisioningHost = globalThis as typeof globalThis & { __llvProvisioningRepositories?: Map<string, Promise<void>> };
+
 /**
- * The provisioning pre-pass: every lane waiting on a base, fetched and
- * provisioned before the controller takes the lease (#1799).
+ * Fetch and provision outside the lease (#1799). Scoped controller passes
+ * dispatch this work to bounded jobs and apply each outcome in a later lease.
  *
  * The indexed read takes no write lease. A pass with no provisioning work
  * reads no pipeline payloads and starts no subprocess.
  */
-async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[]): Promise<Map<string, PipelineProvisionOutcome>> {
+async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[], waitForRepository: (previous: Promise<void>) => Promise<void> = previous => previous): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
@@ -9794,7 +9834,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Close/delete may originate in another process. Indexed row revisions
   // invalidate only changed jobs; polling needs no lease or close-path hook.
   const watch = setInterval(revalidate, 50);
-  const repositoryTails = new Map<string, Promise<void>>();
+  const repositoryTails = provisioningHost.__llvProvisioningRepositories ??= new Map<string, Promise<void>>();
   const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
     worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
@@ -9819,6 +9859,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
         catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
       };
       let releaseRepository: (() => void) | undefined;
+      let repository: string | undefined, tail: Promise<void> | undefined;
       try {
         // Linked worktrees share refs and Git locks even when repoDir differs.
         // Resolve through Git asynchronously, then serialize each common dir.
@@ -9830,10 +9871,11 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
           return;
         }
-        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
         const previous = repositoryTails.get(repository);
-        repositoryTails.set(repository, new Promise<void>((resolve) => { releaseRepository = resolve; }));
-        await previous;
+        tail = new Promise<void>((resolve) => { releaseRepository = resolve; });
+        repositoryTails.set(repository, tail);
+        if (previous) await waitForRepository(previous);
         const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
@@ -9843,7 +9885,10 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
           error: `pipeline provisioning failed: ${String(error)}`,
         });
-      } finally { releaseRepository?.(); }
+      } finally {
+        releaseRepository?.();
+        if (repository && repositoryTails.get(repository) === tail) repositoryTails.delete(repository);
+      }
     }));
   } finally { clearInterval(watch); }
   return outcomes;
@@ -12316,6 +12361,12 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   const scoped = Boolean(controllerPipelineKeys());
+  if (!hasLocalPipelineController() && ports.structuredDeliveryPublication?.() === "unbound") {
+    // An inventory sidecar owns no delivery publisher. Hand off before Git,
+    // registry reconciliation or another lane can delay the controller wake.
+    requestPipelineTick();
+    return { pipelines: [], changed: false };
+  }
   let completePhase!: () => void;
   const phaseDone = new Promise<void>(resolve => { completePhase = resolve; });
   const queueControllerJob = (id: string, run: () => Promise<unknown>) => startPipelineControllerJob(id, async () => {
@@ -12431,7 +12482,22 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* Before the lease, never under it (#1799). */
     await settlePendingRemoteActions(ports);
     await settlePendingStageProvenance(ports);
-    const provisioned = await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
+    // Production controller passes own bounded jobs; Git never occupies the
+    // scheduler phase. The durable provisioning row is replayed after restart.
+    const provisioned = scoped ? new Map<string, PipelineProvisionOutcome>()
+      : await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
+    if (scoped) for (const lane of await selectControllerPipelines("provisioning", provisioningThrough)) {
+      startPipelineControllerJob(lane.id, async waitOutsideCapacity => {
+        await phaseDone;
+        await withControllerPipelineScope([lane.id], async () => {
+          const outcomes = await provisionPendingPipelines(ports, provisioningThrough, [], waitOutsideCapacity);
+          await withPipelineMutation(async (pipelines, persist) => {
+            const current = pipelines.find(row => row.id === lane.id);
+            if (current && await applyProvisionOutcome(current, outcomes.get(lane.id), ports)) await persist([current]);
+          });
+        });
+      }, () => controllerPipelineVersion(lane.id), "provisioning");
+    }
     const stageBranchProtections = new Map<string, StageBranchProtection>();
     await Promise.all((await selectControllerPipelines("hosts")).map(async (pipeline) => {
       const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
@@ -12546,7 +12612,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           await persistPipeline();
         }
         if (publicationPass === 0 && pipeline.delivery?.operation?.state === "settled"
-          && pipeline.delivery.operation.result?.ok && pipeline.delivery.operation.result.remote === "unreachable") {
+          && pipeline.delivery.operation.result?.ok && pipeline.delivery.operation.result.remote === "unreachable"
+          && !(passed && awaitingPassedPublication(pipeline) && !pipeline.delivery.operation.result.uncertain)) {
           delete pipeline.delivery.operation;
           await persistPipeline();
         }
@@ -13684,9 +13751,6 @@ export async function createPipelineFromRequest(
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
-  try {
-    await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
-  } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
     const tasks = loadTasks();
@@ -13694,6 +13758,9 @@ export async function createPipelineFromRequest(
     if (taskLinkError) return { error: taskLinkError, status: 400 };
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
+    try {
+      await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
+    } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
     let created: Pipeline;
     try {
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf });
@@ -13727,6 +13794,9 @@ export async function createPipelineFromRequest(
     if (taskLinkError) return { error: taskLinkError, status: 400 };
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
+    try {
+      await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
+    } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
@@ -15637,7 +15707,7 @@ export async function patchPipeline(
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
         }
-        if (pipeline.delivery?.operation?.state === "settled" && !pipeline.delivery.operation.result?.ok) {
+        if (pipeline.delivery && settledPublicationRefusal(pipeline)) {
           recordSettledPublicationFailure(pipeline, attempt, ports);
           delete pipeline.delivery.operation;
           pipeline.publishedCommit = null;
