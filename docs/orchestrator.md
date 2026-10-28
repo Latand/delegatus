@@ -86,8 +86,11 @@ contract is in [docs/pipelines.md](pipelines.md) and the review rounds in
 than the worker limit.
 
 **The merge bar.** A pull request is ready when the reviews passed its final
-head or the budget's last fix passed, the required checks are green and its
-body is read. The project's **Merge when the review passes** setting, on the
+head, the required checks are green and its body is read. When a terminal
+reviewer (`next: null`) spends its budget, a passing last fix is not enough:
+the resulting head needs a passing re-check of that reviewer before it is
+ready. Only a nonterminal review gate may advance on its budget's last passing
+fix, because a later stage still reviews that head. The project's **Merge when the review passes** setting, on the
 **Merging and syncing** page of the board's ⋯ menu, decides who merges it. Off
 (the default), the seat reports "PR ready" and merges only when you ask. On,
 Delegatus merges completed lanes itself once their checks are settled green;
