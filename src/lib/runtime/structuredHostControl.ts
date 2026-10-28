@@ -1,4 +1,4 @@
-import { recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
+import { differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
 
@@ -476,9 +476,6 @@ export async function terminateStructuredHostTree(
   if (typeof ref.bootEpoch !== "string" || ref.bootEpoch.length === 0) {
     return { ok: false, status: 409, error: "host boot epoch is unknown — refresh the resource list", remaining: [], survivors: [] };
   }
-  if ((dependencies.protectedPids ?? ownAncestry)().has(pid)) {
-    return { ok: false, status: 403, error: "this pid belongs to the viewer's own process chain", remaining: [], survivors: [] };
-  }
   const expected: ProcessIdentity = { pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch };
 
   if (scope?.bootEpoch && scope.bootEpoch !== expected.bootEpoch) {
@@ -494,7 +491,7 @@ export async function terminateStructuredHostTree(
     try {
       const denied = await dependencies.authorizeAsync?.();
       if (denied) throw new Error(denied.error);
-      await (dependencies.stopScope ?? stopAgentScope)(scope, { authorizeAsync: async () => {
+      await (dependencies.stopScope ?? stopAgentScope)(scope, { bootEpoch, authorizeAsync: async () => {
         const denied = await dependencies.authorizeAsync?.();
         if (denied) throw new Error(denied.error);
       }, authorize: () => {
@@ -517,6 +514,26 @@ export async function terminateStructuredHostTree(
       return { ok: false, status: 409, error: error instanceof Error ? error.message : "agent scope termination failed", remaining: [], survivors: [] };
     }
   };
+
+  const currentBoot = bootEpoch();
+  if (scope?.bootEpoch && differentKernelBoot(scope.bootEpoch, currentBoot)) {
+    // A reboot ended this scope and its old processes. Numeric PIDs, including
+    // our own ancestors, may now name unrelated processes; never inspect or
+    // signal those namesakes while discharging the old registry custody.
+    const retained = dependencies.retainedSurvivors ?? [];
+    if (retained.some(identity => !identity.bootEpoch || !differentKernelBoot(identity.bootEpoch, currentBoot))) {
+      return { ok: false, status: 409, error: "retained process has no previous-kernel proof", remaining: [], survivors: [] };
+    }
+    const refused = await endScope();
+    if (refused) return refused;
+    if (key && await retire(key, expected, retained, registryCustody) === false) {
+      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+    }
+    return { ok: true, via: "already-exited", pids: retained.map(identity => identity.pid) };
+  }
+  if ((dependencies.protectedPids ?? ownAncestry)().has(pid)) {
+    return { ok: false, status: 403, error: "this pid belongs to the viewer's own process chain", remaining: [], survivors: [] };
+  }
 
   const initialStatus = processIdentityStatus(expected, identityProbe);
   if (initialStatus === "dead" && !alive(pid)) {

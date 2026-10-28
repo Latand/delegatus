@@ -39,7 +39,7 @@ export function sameAgentScope(left: AgentScopeIdentity | null, right: AgentScop
 
 /** A PID namespace change alone proves nothing about a unit in the user
  * manager. A different kernel boot ID proves the old transient scope is gone. */
-function differentKernelBoot(recorded: string, current: string | null): boolean {
+export function differentKernelBoot(recorded: string, current: string | null): boolean {
   const linux = /^linux:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):pidns:pid:\[\d+\]$/;
   const priorId = linux.exec(recorded)?.[1];
   const currentId = current ? linux.exec(current)?.[1] : null;

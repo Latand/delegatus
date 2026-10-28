@@ -54,44 +54,130 @@ test.each([null, "unknown", linuxBoot("a", "456")])("uncertain boot evidence %s 
   expect(calls).toEqual([]);
 });
 
-(process.platform === "linux" ? test : test.skip)("a fresh process can resume a persisted previous-kernel scope without touching its current namesake", () => {
+test.each([
+  [null, false], ["unknown", false], [linuxBoot("a", "456"), false],
+  [linuxBoot("a"), true], [linuxBoot("b"), true],
+] as const)("tree teardown preserves PID protections with boot %s and protected PID %s", async (current, protectedPid) => {
+  const effects: string[] = [];
+  const result = await terminateStructuredHostTree({ kind: "structured", pid: process.pid, startIdentity: "fixture-root",
+    bootEpoch: linuxBoot("a"), engine: "codex", sessionId: "scope-boot-refusal", conversationId: null,
+    seat: false, turnBusy: false, owned: false, lastActiveAt: null }, {
+    scope: current === linuxBoot("b") ? null : { ...scope, bootEpoch: linuxBoot("a") },
+    bootEpoch: () => current, processIdentity: () => "fixture-root", pidAlive: () => true,
+    protectedPids: () => new Set(protectedPid ? [process.pid] : []),
+    signal: () => { effects.push("signal"); }, stopScope: async () => { effects.push("scope"); },
+    retireRegistryEntry: () => { effects.push("retire"); },
+  });
+  expect(result.ok).toBe(false);
+  expect(effects).toEqual([]);
+});
+
+test.each([null, linuxBoot("b")])("prior-kernel recovery retains a survivor with boot %s", async survivorBoot => {
+  const effects: string[] = [];
+  const result = await terminateStructuredHostTree({ kind: "structured", pid: process.pid, startIdentity: "fixture-root",
+    bootEpoch: linuxBoot("a"), engine: "codex", sessionId: "scope-survivor", conversationId: null,
+    seat: false, turnBusy: false, owned: false, lastActiveAt: null }, {
+    scope: { ...scope, bootEpoch: linuxBoot("a") }, bootEpoch: () => linuxBoot("b"),
+    retainedSurvivors: [{ pid: process.pid, startIdentity: "survivor", bootEpoch: survivorBoot }],
+    signal: () => { effects.push("signal"); }, stopScope: async () => { effects.push("scope"); },
+    retireRegistryEntry: () => { effects.push("retire"); },
+  });
+  expect(result).toMatchObject({ ok: false, error: "retained process has no previous-kernel proof" });
+  expect(effects).toEqual([]);
+});
+
+test("a previous-kernel scope cannot discharge a current-boot host", async () => {
+  const effects: string[] = [];
+  const result = await terminateStructuredHostTree({ kind: "structured", pid: process.pid, startIdentity: "fixture-root",
+    bootEpoch: linuxBoot("b"), engine: "codex", sessionId: "scope-boot-mismatch", conversationId: null,
+    seat: false, turnBusy: false, owned: false, lastActiveAt: null }, {
+    scope: { ...scope, bootEpoch: linuxBoot("a") }, bootEpoch: () => linuxBoot("b"),
+    signal: () => { effects.push("signal"); }, stopScope: async () => { effects.push("scope"); },
+    retireRegistryEntry: () => { effects.push("retire"); },
+  });
+  expect(result).toMatchObject({ ok: false, error: "agent scope and host boot identities disagree" });
+  expect(effects).toEqual([]);
+});
+
+test.each([1, 2, 3])("prior-kernel recovery refuses replacement custody at await %i", async boundary => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-reboot-custody-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const key = { engine: "codex" as const, sessionId: "scope-reboot-custody" };
+  const identity = { pid: process.pid, startIdentity: "fixture-root", bootEpoch: linuxBoot("a") };
+  const columns = { kind: "codex-app-server" as const, endpoint: "stdio:released", process: identity,
+    scope: { ...scope, bootEpoch: identity.bootEpoch }, eventCursor: 0, protocolVersion: null,
+    writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] };
+  registry.upsert({ key, artifactPath: "", cwd: root, accountId: null, status: "dead", host: null,
+    structuredHost: columns, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  setAgentRegistryForTests(registry);
+  let awaits = 0;
+  const effects: string[] = [];
+  try {
+    const result = await terminateStructuredHostTree({ kind: "structured", ...identity, engine: key.engine, sessionId: key.sessionId,
+      conversationId: null, seat: false, turnBusy: false, owned: false, lastActiveAt: null }, {
+      bootEpoch: () => linuxBoot("b"), signal: () => { effects.push("signal"); },
+      stopScope: (target, options) => stopAgentScope(target, { ...options, command: async () => { effects.push("unit"); return "not-found"; } }),
+      authorizeAsync: async () => {
+        if (++awaits === boundary) registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!,
+          claimEpoch: 2, structuredHost: { ...columns, writerClaimEpoch: 2 } });
+        return null;
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(effects).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]).toMatchObject({
+      claimEpoch: 2, structuredHost: { scope: columns.scope, writerClaimEpoch: 2 },
+    });
+  } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+(process.platform === "linux" ? test : test.skip).each([
+  ["off", "absent"], ["off", "allocated"], ["off", "protected"],
+  ["sqlite", "absent"], ["sqlite", "allocated"], ["sqlite", "protected"],
+] as const)("a fresh %s registry resumes a previous-kernel scope with an %s PID without touching its current namesake", (sqliteMode, pidState) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-reboot-"));
   const filename = path.join(root, "registry.json");
   const key = { engine: "codex" as const, sessionId: "scope-reboot" };
   const boot = systemBootEpoch()!;
   const priorBoot = boot.replace(/^linux:[^:]+:/, `linux:${["aaaaaaaa", "bbbb", "cccc", "dddd", "eeeeeeeeeeee"].join("-")}:`);
   expect(priorBoot).not.toBe(boot);
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
   try {
     const commands = path.join(root, "unit-commands");
     fs.writeFileSync(path.join(root, "systemctl"), `#!/bin/sh\nprintf called >> '${commands}'\nexit 91\n`, { mode: 0o700 });
     const columns = codexHostColumns({ status: "dead", sessionKey: key.sessionId, endpoint: "stdio:released", pid: null,
-      processStartIdentity: null, exitProcess: { pid: 2_147_483_647, startIdentity: "fixture-root", bootEpoch: priorBoot },
+      processStartIdentity: null, exitProcess: { pid: pidState === "absent" ? 2_147_483_647 : process.pid, startIdentity: "fixture-root", bootEpoch: priorBoot },
       eventCursor: 0, protocolVersion: null, activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
       scope: { unit: scope.unit, bootEpoch: priorBoot } }, 1);
     registry.upsert({ key, artifactPath: "", cwd: root, accountId: null, status: "dead", host: null,
       structuredHost: columns, claimEpoch: 1, claimOwner: null, pendingAction: null });
+    registry.recordStructuredTerminationSurvivors(key, columns.process!, [columns.process!]);
     registry.close();
     const result = Bun.spawnSync([process.execPath, "-e", `
       const { AgentRegistry, setAgentRegistryForTests } = await import(${JSON.stringify(path.resolve("src/lib/agent/registry.ts"))});
       const { stopTerminalStructuredOrphan } = await import(${JSON.stringify(path.resolve("src/lib/runtime/registry.ts"))});
       const { captureProcessIdentity } = await import(${JSON.stringify(path.resolve("src/lib/processIdentity.ts"))});
-      const r = new AgentRegistry(process.argv[1], undefined, undefined, { sqliteMode: "off" });
+      const r = new AgentRegistry(process.argv[1], undefined, undefined, { sqliteMode: ${JSON.stringify(sqliteMode)} });
       setAgentRegistryForTests(r);
       const key = ${JSON.stringify(key)};
       const previous = r.readOnlySnapshot().entries["codex:scope-reboot"].structuredHost;
       const setupHost = { ...previous, scope: undefined, memory: undefined, process: null, exitProcess: undefined };
       const owner = captureProcessIdentity(process.pid);
       const before = r.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost });
+      let signals = 0;
       const stopped = await stopTerminalStructuredOrphan(r, key, {
-        signal() { throw new Error("no signal belongs to a previous boot"); }, protectedPids: () => new Set(),
+        signal() { signals++; throw new Error("no signal belongs to a previous boot"); },
+        ${pidState === "protected" ? "" : "protectedPids: () => new Set(),"}
       });
-      const after = r.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost });
-      console.log(JSON.stringify({ before: before !== null, stopped, after: after !== null }));
       r.close();
+      const reopened = new AgentRegistry(process.argv[1], undefined, undefined, { sqliteMode: ${JSON.stringify(sqliteMode)} });
+      setAgentRegistryForTests(reopened);
+      const after = reopened.claimStructuredHost(key, owner, { allowUnhosted: true, setupHost });
+      console.log(JSON.stringify({ before: before !== null, stopped, after: after !== null, signals }));
+      reopened.close();
     `, filename], { env: { ...process.env, PATH: `${root}${path.delimiter}${process.env.PATH}` }, stdout: "pipe", stderr: "pipe", timeout: 15_000 });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
-    expect(JSON.parse(result.stdout.toString())).toEqual({ before: false, stopped: true, after: true });
+    expect(JSON.parse(result.stdout.toString())).toEqual({ before: false, stopped: true, after: true, signals: 0 });
     expect(fs.existsSync(commands)).toBe(false);
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
