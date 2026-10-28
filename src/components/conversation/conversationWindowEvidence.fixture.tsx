@@ -2079,22 +2079,41 @@ function InboxFixture() {
 function mountFileConfirmation(root: HTMLElement) {
   Date.now = () => Date.parse("2026-10-22T12:00:00Z");
   const state = params.get("state") ?? "pending";
-  const view: FileConfirmationView = {
-    id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle: "Fixture reports", topicId: 7,
+  /* `data=media` sends two images from outside the roots; `data=long` gives the file and the chat 70-character names. */
+  const data = params.get("data");
+  const long = data === "long";
+  const filename = long ? `quarterly-${"revenue-".repeat(5)}export-final-v2.json` : "weekly-report.json";
+  const chatTitle = long ? "Fixture reports for the regional and international operations office" : "Fixture reports";
+  const decided = state === "sent" || state === "rejected" || state === "failed" || state === "uncertain" ? { decidedAt: "2026-10-22T12:03:00.000Z", decidedBy: "owner" as const } : {};
+  const images = [{ path: "/sandbox/shots/board-before.png", caption: "Before / До" }, { path: "/sandbox/shots/board-after.png", caption: "After / Після" }];
+  const view: FileConfirmationView = data === "media" ? {
+    id: "fixture-confirmation", digest: "a".repeat(64), kind: "media", chatId: "-1000000000101", chatTitle, topicId: null,
+    options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: null, replyToMessageId: null, format: "plain", silent: false, images },
+    files: images.map((image, index) => ({ path: image.path, resolvedPath: image.path, filename: image.path.split("/").pop()!, sha256: String(index + 1).repeat(64), bytes: 48_213 + index })),
+    reasons: images.map(image => ({ code: "document_outside_roots" as const, path: image.path, roots: ["/sandbox/handoff"], reason: `${image.path} is outside the allowed document roots (/sandbox/handoff).` })),
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
+  } : {
+    id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle, topicId: 7,
     options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: 42, format: "html", silent: true,
-      document: { path: "/sandbox/handoff/weekly-report.json", filename: "weekly-report.json", caption: "Requested file / Запитаний файл" } },
-    files: [{ path: "/sandbox/handoff/weekly-report.json", resolvedPath: "/sandbox/.codex/auth.json", filename: "weekly-report.json", sha256: "b".repeat(64), bytes: 256 }],
+      document: { path: `/sandbox/handoff/${filename}`, filename, caption: "Requested file / Запитаний файл" } },
+    files: [{ path: `/sandbox/handoff/${filename}`, resolvedPath: "/sandbox/.codex/auth.json", filename, sha256: "b".repeat(64), bytes: 2458 }],
     reasons: [{ code: "document_forbidden_path", path: "/sandbox/.codex/auth.json", segment: ".codex", reason: "/sandbox/.codex/auth.json passes through dot-directory .codex." }, { code: "document_outside_roots", path: "/sandbox/.codex/auth.json", roots: ["/sandbox/handoff"], reason: "/sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff)." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
-    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"],
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
   };
   let sends = 0;
-  Object.assign(window, { fileConfirmationSends: () => sends });
+  const posts: unknown[] = [];
+  /* `post=hold` keeps every decision unanswered until the driver releases it, so the sending state can be framed. */
+  let release: () => void = () => {};
+  const held = params.get("post") === "hold" ? new Promise<void>(resolve => { release = resolve; }) : null;
+  Object.assign(window, { fileConfirmationSends: () => sends, fileConfirmationPosts: () => structuredClone(posts), releaseFileConfirmation: () => release() });
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), location.origin);
     if (url.pathname !== "/api/telegram/bot/confirmation") return Response.json({});
     if (state === "owner") return Response.json({ code: "OPERATOR_REQUIRED" }, { status: 401 });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
+      posts.push(body);
+      if (held) await held;
       if (body.approve) sends++;
       return Response.json(body.approve ? { messageIds: [100] } : { rejected: true });
     }
