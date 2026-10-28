@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -196,11 +196,22 @@ test("scope teardown requires collection and addresses all cgroup members", asyn
 });
 
 test.each(["unreadable", "kill-refused", "stop-refused", "surviving"])("%s scope keeps teardown unsuccessful", async failure => {
-  await expect(stopAgentScope(scope, { authorize() {}, bootEpoch: () => scope.bootEpoch, deadlineMs: 30,
-    command: async args => {
-      if (failure === "unreadable" || args[0] === failure.split("-")[0]) throw new Error(failure);
-      return "loaded";
-    } })).rejects.toThrow(failure === "surviving" ? "survived" : failure);
+  let now = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const calls: string[] = [];
+  try {
+    await expect(stopAgentScope(scope, { authorize() {}, bootEpoch: () => scope.bootEpoch, deadlineMs: 30,
+      command: async args => {
+        const command = args[0]!;
+        // Expire only after observing that the stopped scope is still loaded.
+        if (command === "show" && calls.includes("stop")) now = 30;
+        calls.push(command);
+        if (failure === "unreadable" || command === failure.split("-")[0]) throw new Error(failure);
+        return "loaded";
+      } })).rejects.toThrow(failure === "surviving" ? "survived" : failure);
+    expect(calls).toEqual(failure === "unreadable" ? ["show"]
+      : failure === "kill-refused" ? ["show", "kill", "show"] : ["show", "kill", "stop", "show"]);
+  } finally { clock.mockRestore(); }
 });
 
 test.each([1, 2, 3])("authority lost at command boundary %i prevents later effects", async boundary => {
