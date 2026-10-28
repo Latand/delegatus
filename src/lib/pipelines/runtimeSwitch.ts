@@ -152,6 +152,7 @@ export async function cancelPendingRuntimeSwitch(registry: Pick<AgentRegistry, "
 function clearOldWaits(attempt: PipelineStageAttempt) {
   delete attempt.providerWait; delete attempt.providerRecoveryBudget; delete attempt.severedTurn;
   delete attempt.verdictRequest; delete attempt.backgroundWait; delete attempt.controllerWait;
+  delete attempt.restoreContinuation;
 }
 
 function writeArtifact(file: string, content: string): void {
