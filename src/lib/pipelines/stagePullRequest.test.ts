@@ -1412,6 +1412,21 @@ test("PR inspection backoff and exhaustion survive fresh controller processes", 
     expect(lane.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
     const after = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 60_000);
     expect(after.checks).toBe(0);
+    // Recovery can observe the durable budget before the terminal lane write.
+    // Reopening that cursor must not grant another automatic inspection.
+    const interrupted = loadPipelines().find(p => p.id === f.id)!;
+    interrupted.state = "running";
+    interrupted.runs[0]!.attempts[0]!.state = "passed";
+    savePipelines([interrupted]);
+    const held = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 60_001);
+    expect(held.checks).toBe(0);
+    expect(held.lane.state).toBe("needs_decision");
+    f.advance(120_000); f.recover();
+    expect((await engineModule.patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    const done = loadPipelines().find(p => p.id === f.id)!;
+    expect(done.cursor?.stageId).toBe("review");
+    expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
   } finally { f.close(); }
 });
 
