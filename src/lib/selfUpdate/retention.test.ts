@@ -1547,3 +1547,30 @@ test("an unknown ignored file keeps an old release", async () => {
   expect(report.removed.some(row => row.dir === dir)).toBeFalse();
   expect(fs.readFileSync(path.join(dir, "notes.txt"), "utf8")).toBe("keep");
 });
+
+test.each(["release", "intermediate"])("generated file cleanup retains a replaced %s parent", async parent => {
+  const h = fixture(), dir = h.dirs[1]!;
+  const relative = parent === "release" ? "next-env.d.ts" : "generated/next-env.d.ts";
+  const target = path.join(dir, relative), replacedParent = path.dirname(target);
+  fs.mkdirSync(replacedParent, { recursive: true }); fs.writeFileSync(target, "preserved generated file");
+  const outside = path.join(h.root, "outside-release-records");
+  const run = h.ports.git!;
+  let inspecting = false, armed = false, replaced = false;
+  h.ports.git = async (args, cwd) => {
+    if (args[0] === "status") inspecting = cwd === dir;
+    if (args[0] === "for-each-ref" && inspecting) armed = true;
+    return args[0] === "status" && cwd === dir
+      ? { code: 0, stderr: "", stdout: fs.existsSync(target) ? `!! ${relative}\0` : "" } : run(args, cwd);
+  };
+  h.ports.current = async () => {
+    if (armed && !replaced) {
+      replaced = true; fs.renameSync(replacedParent, outside); fs.symlinkSync(outside, replacedParent, "dir");
+    }
+    return { record: h.record, inputs: h.inputs, fenced: true };
+  };
+  const report = await h.run();
+  expect(replaced).toBeTrue();
+  expect(report.removed.some(row => row.dir === dir)).toBeFalse();
+  expect(fs.readFileSync(path.join(outside, "next-env.d.ts"), "utf8")).toBe("preserved generated file");
+  expect(report.kept.some(row => row.dir === dir)).toBeTrue();
+});

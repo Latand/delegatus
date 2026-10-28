@@ -181,7 +181,10 @@ export async function attemptTempUtilityImage(): Promise<string> {
   }
   throw new Error("no installed container cleanup utility image");
 }
-async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure", original = directory, guard?: () => Promise<boolean>) {
+const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts -o -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.webp" -o -iname "*.gif" -o -iname "*.avif" -o -iname "*.svg" -o -iname "*.pdf" -o -iname "*.mp4" -o -iname "*.webm" ")" -print -quit) || exit; test -z "$found" || exit 75; ';
+
+async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
+  guard?: () => Promise<boolean>, requireNoEvidence = false) {
   const initial = fs.lstatSync(directory);
   if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
   const identity = `${initial.dev}:${initial.ino}`;
@@ -194,7 +197,9 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
     + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
   const body = operation === "measure" ? 'exec du -skx /attempt'
-    : inspection + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
+    : operation === "evidence" ? noEvidence
+      : inspection + (requireNoEvidence ? noEvidence : "")
+        + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
   const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
   const final = fs.lstatSync(directory);
@@ -237,11 +242,22 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
-export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>): Promise<void> {
+/** An unreadable tree can retire only when the readonly namespace proves it
+ * has no captures. The deletion namespace repeats that proof at dispatch. */
+export async function attemptTreeHasNoEvidence(directory: string, original: string): Promise<void> {
+  await containerCommand(directory, "evidence", original);
+}
+
+export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false): Promise<void> {
+  if (requireNoEvidence) {
+    await containerCommand(directory, "remove", original, guard, true);
+    await fs.promises.rmdir(directory);
+    return;
+  }
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    await containerCommand(directory, "remove", original, guard);
+    await containerCommand(directory, "remove", original, guard, true);
     await fs.promises.rmdir(directory);
   }
 }

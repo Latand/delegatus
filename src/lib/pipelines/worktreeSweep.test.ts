@@ -3767,3 +3767,49 @@ test("a backup ref changed before final dispatch retains the checkout", async ()
   expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
   expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("preserved");
 });
+
+test("reclaiming a lane preserves distinct staged and working versions", async () => {
+  const f = await staleBackupFixture();
+  fs.writeFileSync(path.join(f.dir, "README.md"), "staged version\n"); git(["add", "README.md"], f.dir);
+  const stagedBlob = git(["rev-parse", ":README.md"], f.dir);
+  fs.writeFileSync(path.join(f.dir, "README.md"), "working version\n");
+  expect((await sweepMergedWorktrees(f.options)).removed.map(row => row.path)).toContain(f.dir);
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"), "utf8"));
+  expect(git(["rev-list", "--objects", "--all"], f.root).split("\n").some(line => line.startsWith(stagedBlob + " "))).toBeTrue();
+  git(["gc", "--prune=now"], f.root);
+  expect(git(["show", `${manifest.ref}^2:README.md`], f.root)).toBe("staged version");
+  expect(git(["show", `${manifest.ref}:README.md`], f.root)).toBe("working version");
+  expect(git(["rev-parse", `refs/heads/${f.branch}`], f.root)).toBe(f.checkout.tip);
+});
+
+test("an index edit after backup retains the checkout", async () => {
+  const f = await staleBackupFixture();
+  fs.writeFileSync(path.join(f.dir, "README.md"), "first staged\n"); git(["add", "README.md"], f.dir);
+  fs.writeFileSync(path.join(f.dir, "README.md"), "working\n");
+  const run = f.options.git; let changed = false;
+  f.options.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (!changed && args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) {
+      changed = true;
+      fs.writeFileSync(path.join(f.dir, "README.md"), "second staged\n"); git(["add", "README.md"], f.dir);
+      fs.writeFileSync(path.join(f.dir, "README.md"), "working\n");
+    }
+    return result;
+  };
+  expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+  expect(changed).toBeTrue();
+  expect(git(["show", ":README.md"], f.dir)).toBe("second staged");
+  expect(fs.readFileSync(path.join(f.dir, "README.md"), "utf8")).toBe("working\n");
+});
+
+test("an unmerged index retains its checkout and conflict stages", async () => {
+  const f = await staleBackupFixture();
+  const blob = git(["rev-parse", "HEAD:README.md"], f.dir);
+  const conflict = spawnSync("git", ["update-index", "--index-info"], { cwd: f.dir, encoding: "utf8",
+    input: `0 ${"0".repeat(40)}\tREADME.md\n100644 ${blob} 1\tREADME.md\n100644 ${blob} 2\tREADME.md\n` });
+  expect(conflict.status).toBe(0);
+  const before = git(["ls-files", "--stage"], f.dir);
+  expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+  expect(git(["ls-files", "--stage"], f.dir)).toBe(before);
+  expect(git(["rev-parse", `refs/heads/${f.branch}`], f.root)).toBe(f.checkout.tip);
+});

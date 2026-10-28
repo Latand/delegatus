@@ -19,19 +19,35 @@ a new one-day orphan retention period. Process, socket, repository-link,
 container, mount and identity checks still apply before removal. Shared OS
 temp folders are excluded from adoption.
 
+Before retirement, attempt retention copies existing `.artifacts` files and
+image, PDF and video files into `state/evidence/attempt-temp/<root-digest>/`.
+This also covers adopted roots. Copies are checked by SHA-256 and recorded in
+a manifest. Changed captures get versioned destinations. A failed copy,
+linked evidence path or edit during the final owner read retains the source
+for a later pass; the evidence folder stays outside every sweep. If container
+permissions prevent inspection, a scoped read-only container must prove the
+whole root has no protected captures. Retirement then uses the cleanup
+container and repeats that proof immediately before deletion. Unreadable
+roots containing captures stay retained.
+
 An unreadable directory no longer aborts allocation measurement for an entire
 temp sweep. Empty uv source-distribution markers and Git worktrees whose links
 stay within the same recorded attempt are disposable. Unknown metadata,
 missing link targets and links outside the attempt keep it. Release retention
 can unlink generated regular files and symlinks after fresh protection and
-inode checks; a symlink's target stays intact.
+inode checks. The release root, release directory and physical target parent
+are rechecked after the final owner read; a replacement retains the release.
+A symlink's target stays intact.
 
 A completed or closed pipeline past four days can release a stale hold after
 preservation. A private Git index captures tracked and untracked work in a
 backup ref beneath `refs/delegatus/worktree-backup/`; the original branch stays.
+The backup's second parent holds the original staged tree, so a file with
+distinct staged and working versions is recoverable in both forms. The sweep
+also verifies that the original index has stayed unchanged before removal.
 Ignored artifacts and media are copied into the evidence folder and checked
-by size and SHA-256. A manifest records the ref, parent, tree, branch and media
-paths. Changed copies get versioned destinations. The sweep verifies the
+by size and SHA-256. A manifest records the ref, parent, both trees, branch
+and media paths. Changed copies get versioned destinations. The sweep verifies the
 snapshot, ref, evidence and current holders again before forced removal.
 Active owners, recent writes, locks, nested repositories and unknown ignored
 data continue to hold the checkout.
@@ -137,3 +153,35 @@ remain CI work. Publication privacy passes locally; hosted privacy-publication,
 build, bun-runtime, runtime-gate and native-codex-runtime remain the pipeline's
 publication checks. Changes to `src/lib/runtime/startup.ts` require the
 project's three review rounds before promotion. Host retirement is untouched.
+
+## Review fixes
+
+The preservation fixes were checked against pre-fix production code at
+`280d50bf6ffd3d948aeb37baf6f5a2f44e7f0f09` with the final tests in a detached scratch export.
+The four full regression files produced 17 intended failures before the fixes:
+two release-parent cases, eight attempt-evidence cases, three staged-index cases
+and four real Docker evidence cases. Their final full files pass all 584 tests.
+
+| File | Pass | Existing failures | Skipped |
+|---|---:|---:|---:|
+| `src/lib/selfUpdate/retention.test.ts` | 127 | 0 | 0 |
+| `src/lib/runtime/attemptTempRetention.test.ts` | 39 | 0 | 0 |
+| `src/lib/pipelines/worktreeSweep.test.ts` | 393 | 0 | 0 |
+| `src/lib/runtime/attemptTempProduction.test.ts` | 14 | 0 | 0 |
+| `src/lib/selfUpdate/retentionPass.test.ts` | 9 | 0 | 0 |
+| `src/lib/runtime/attemptTempFilesystem.test.ts` | 25 | 0 | 0 |
+| `src/lib/mainThreadInstrumentation.test.ts` | 18 | 7 | 0 |
+| `src/lib/state/declaredIndexes.test.ts` | 34 | 2 | 2 |
+| `src/lib/runtime/startup.test.ts` | 161 | 4 | 0 |
+
+The 13 remaining caller failures match two fresh whole-file runs on that
+pre-fix production revision, including duplicate test-name occurrences. Their
+exact identities and the final source hashes are in the evidence record under its
+`reviewFix` field. The two skipped index cases are opt-in retained-history
+performance fixtures. Every real Docker case ran.
+
+The final `bunx tsc --noEmit` passes. All commands ran serially in isolated
+HOME, config, state and temporary directories through the installed gate
+wrapper. The additional container check covers evidence arriving during native
+removal fallback. The instrumentation fixture supplies the disk
+pressure registration port used by the production timer.

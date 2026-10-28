@@ -9,14 +9,11 @@ report files). No sweep, removal or write ran against live state.
 
 ## 0. Originating requirement
 
-Operator, 2026-10-28 about 10:50 UTC, chat, verbatim (as this lane's pinned
-specification quotes it):
-
-> це постійно відщбувається! постійно забивається!!! чо за хуйня, ми ж фіксили, глянь чеерез задачі або іш'яю, чому знову 0забивається все нахуй . головне щоб лише скриншоти залишалися які для наших прототипів і звітів. досліди, цце не перший раз робимо вже .
-
-Operator, 2026-10-26 about 11:55 UTC, chat, verbatim:
-
-> Это не первый раз возникает, это нужно проанализировать предыдущие разы. И, соответственно, защитить issue. И потом взять в работу.
+Repeated disk exhaustion requires automatic reclamation of Delegatus-owned
+temporary data and an investigation of the earlier incidents. Screenshots and
+rendered frames used by prototypes and reports must survive cleanup in durable
+evidence storage. The cleanup fixes must address the recurring causes and carry
+regression coverage before publication.
 
 History named by the specification: disk full 2026-10-01 (#2404), 2026-10-06
 (#2571/#2595, #2198), 2026-10-22 at 99% (fixes #3208, #3217), 2026-10-26 at

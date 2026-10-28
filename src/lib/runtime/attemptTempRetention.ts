@@ -6,6 +6,7 @@ import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { preserveAttemptEvidence } from "./attemptTempEvidence";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "orphan" | "unknown";
 export type AttemptTempOwner = {
@@ -142,7 +143,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const bytes = stat ? await allocatedAttemptBytes(owner.directory) : owner.bytes;
       if (stat) store.measure(owner.directory, bytes);
       let currentDirectory = owner.directory;
-      let liveHold = false;
+      let liveHold = false, namespaceOnly = false;
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const eligible = async (directory = owner.directory) => {
         currentDirectory = directory;
@@ -154,18 +155,21 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled || !await inspectAttemptTree(directory, owner.directory)) return false;
         if (!await references(owner.directory, directory, scan())) { liveHold = true; return false; }
+        const evidence = options.mode === "dry-run" ? { current: () => true, namespaceOnly: false }
+          : await preserveAttemptEvidence(directory, owner.directory, owner.identity);
+        namespaceOnly = evidence.namespaceOnly;
         // Native/container observations can await I/O. Ownership must still
         // agree after them, at the same dispatch boundary.
         const authority = await options.state(owner);
         const final = fs.lstatSync(directory, { throwIfNoEntry: false });
         return authority === state && !!final?.isDirectory() && !final.isSymbolicLink()
-          && `${final.dev}:${final.ino}` === owner.identity;
+          && `${final.dev}:${final.ino}` === owner.identity && evidence.current();
       };
       if (stat && !await eligible()) { report.held++; if (liveHold) report.liveHeldBytes += bytes; continue; }
       const result = await sweepStaleTempDirs({
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
-        remove: directory => removeAttemptTree(directory, owner.directory, () => eligible(directory)),
+        remove: directory => removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.

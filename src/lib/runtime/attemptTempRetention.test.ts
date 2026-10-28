@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { statePath } from "@/lib/configDir";
 import { attemptReferencesClear } from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
@@ -369,4 +370,114 @@ test("legacy adoption advances its bounded cursor across store restarts", () => 
     expect(resumed.adopt(NOW + 1)).toEqual({ adopted: 5, errors: 0 });
     for (const directory of directories) expect(resumed.has(directory)).toBeTrue();
   } finally { resumed.close(); }
+});
+
+function legacyEvidence(f: ReturnType<typeof fixture>) {
+  const directory = path.join(f.root, "scratch/llv-stage-AbC123");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(directory, ".git")); fs.mkdirSync(path.join(directory, ".artifacts"));
+  fs.writeFileSync(path.join(directory, ".artifacts/prototype.png"), "prototype bytes");
+  fs.writeFileSync(path.join(directory, "report.webp"), "report bytes");
+  fs.writeFileSync(path.join(directory, "scratch.bin"), "disposable");
+  return directory;
+}
+
+function savedAttemptEvidence(original: string): string | undefined {
+  const root = statePath("evidence", "attempt-temp");
+  return fs.existsSync(root) ? fs.readdirSync(root).map(name => path.join(root, name)).find(directory => {
+    try { return JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8")).original === original; }
+    catch { return false; }
+  }) : undefined;
+}
+
+test("legacy scratch screenshots survive adoption and retirement across reopening", async () => {
+  const f = fixture(), directory = legacyEvidence(f);
+  expect((await f.sweep("orphan")).removed).toBe(0); f.store.close();
+  const store = new AttemptTempStore(f.filename);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => NOW + 2 * 86400000, state: async () => "orphan",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    const saved = savedAttemptEvidence(directory);
+    expect(saved).toBeDefined();
+    expect(fs.readFileSync(path.join(saved!, "files/.artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+    expect(fs.readFileSync(path.join(saved!, "files/report.webp"), "utf8")).toBe("report bytes");
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.existsSync(path.join(saved!, "files/scratch.bin"))).toBeFalse();
+  } finally { store.close(); }
+});
+
+test.each(["refused", "corrupt"])("%s evidence preservation keeps legacy scratch and retries", async failure => {
+  const f = fixture(), directory = legacyEvidence(f), copy = fs.promises.copyFile;
+  f.store.adopt(NOW); let attempted = false;
+  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (source, target, mode) => {
+    if (String(target).includes(path.join("evidence", "attempt-temp"))) {
+      attempted = true;
+      if (failure === "refused") throw new Error("fixture preservation refused");
+      await copy(source, target, mode); fs.writeFileSync(target, "corrupt"); return;
+    }
+    return copy(source, target, mode);
+  });
+  try {
+    expect(await f.sweep("orphan", { now: () => NOW + 2 * 86400000 })).toMatchObject({ removed: 0, errors: 1 });
+    expect(attempted).toBeTrue();
+    expect(fs.readFileSync(path.join(directory, ".artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+  } finally { refused.mockRestore(); }
+  try {
+    expect((await f.sweep("orphan", { now: () => NOW + 3 * 86400000 })).removed).toBe(1);
+    const saved = savedAttemptEvidence(directory)!;
+    expect(fs.readFileSync(path.join(saved, "files/.artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+  } finally { f.store.close(); }
+});
+
+test.each(["new", "changed"])("evidence arriving during the final authority read retains scratch until preserved (%s)", async kind => {
+  const f = fixture(), directory = legacyEvidence(f); let added = false;
+  f.store.adopt(NOW);
+  try {
+    expect((await f.sweep("orphan", { now: () => NOW + 2 * 86400000, state: async () => {
+      if (!added && savedAttemptEvidence(directory)) {
+        added = true; fs.writeFileSync(path.join(directory, kind === "new" ? "late.png" : ".artifacts/prototype.png"), "late frame");
+      }
+      return "orphan";
+    } })).removed).toBe(0);
+    expect(added).toBeTrue();
+    expect((await f.sweep("orphan", { now: () => NOW + 3 * 86400000 })).removed).toBe(1);
+    const saved = savedAttemptEvidence(directory)!;
+    const manifest = JSON.parse(fs.readFileSync(path.join(saved, "manifest.json"), "utf8"));
+    const entry = manifest.files.find((file: { path: string }) => file.path === (kind === "new" ? "late.png" : ".artifacts/prototype.png"));
+    expect(fs.readFileSync(path.join(saved, entry.savedPath), "utf8")).toBe("late frame");
+    expect(fs.readFileSync(path.join(saved, "files/.artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+  } finally { f.store.close(); }
+});
+
+test.each([".artifacts", "frame.png"])("linked %s evidence retains scratch and its outside target", async name => {
+  const f = fixture(), directory = f.make("linked-evidence");
+  const outside = path.join(f.root, "outside"); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "frame.png"), "outside capture");
+  fs.symlinkSync(name === ".artifacts" ? outside : path.join(outside, "frame.png"), path.join(directory, name));
+  try {
+    expect((await f.sweep()).removed).toBe(0);
+    expect(fs.existsSync(directory)).toBeTrue();
+    expect(fs.readFileSync(path.join(outside, "frame.png"), "utf8")).toBe("outside capture");
+  } finally { f.store.close(); }
+});
+
+test("a destination link swapped after hashing cannot authorize retirement", async () => {
+  const f = fixture(), directory = legacyEvidence(f); f.store.adopt(NOW);
+  const originalLstat = fs.lstatSync; let swapped = false;
+  const lstat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: fs.StatOptions) => {
+    if (!swapped && options?.bigint && String(file).endsWith(path.join("files", ".artifacts", "prototype.png"))
+      && !fs.existsSync(directory)) {
+      swapped = true;
+      const outside = path.join(f.root, "outside-capture.png");
+      fs.renameSync(file, outside); fs.symlinkSync(outside, file);
+    }
+    return originalLstat(file, options);
+  }) as typeof fs.lstatSync);
+  try {
+    const report = await f.sweep("orphan", { now: () => NOW + 2 * 86400000 });
+    expect(swapped).toBeTrue(); expect(report.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, ".artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+    expect(fs.readFileSync(path.join(f.root, "outside-capture.png"), "utf8")).toBe("prototype bytes");
+  } finally { lstat.mockRestore(); f.store.close(); }
 });

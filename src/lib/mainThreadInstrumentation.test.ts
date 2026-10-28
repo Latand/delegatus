@@ -69,6 +69,7 @@ test.each([
     const start = bind(expressions(file, name)[0]!, {
       withViewerOperation: h.operation, host, TIMER: symbol, sweepHost: host, retirementHost: host,
       tempSweepMaxAgeMs: () => 1, tempSweepMode: () => "dry-run",
+      registerDiskPressureSweep: () => () => {},
       FIRST_RECONCILE_DELAY_MS: 30_000, FIRST_SWEEP_DELAY_MS: 60_000,
       STRUCTURED_HOST_RETIREMENT_INTERVAL_MS: 300_000,
       ATTENTION_RECONCILE_INTERVAL_MS: 60_000, ASKS_SWEEP_INTERVAL_MS: 15_000, TEMP_SWEEP_INTERVAL_MS: 3_600_000,

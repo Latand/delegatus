@@ -14,7 +14,8 @@ const within = (file: string, root: string) => file === root || file.startsWith(
 type SavedFile = { path: string; savedPath: string; bytes: number; hash: string };
 
 /** A separate index preserves work without changing the checkout's index,
- * branch, or reflog. A backup is usable only after both its Git tree and
+ * branch, or reflog. The backup's second parent preserves the original index.
+ * A backup is usable only after both Git trees and
  * every ignored evidence file have been verified again. */
 export async function backupWorktree(options: {
   directory: string;
@@ -33,11 +34,14 @@ export async function backupWorktree(options: {
     GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0",
     GIT_AUTHOR_NAME: "Delegatus", GIT_COMMITTER_NAME: "Delegatus",
     GIT_AUTHOR_EMAIL: ["noreply", "example.invalid"].join("@"), GIT_COMMITTER_EMAIL: ["noreply", "example.invalid"].join("@") };
-  const git = async (...args: string[]) => {
-    const result = await exec("git", ["-c", "core.fsync=loose-object,reference", ...args], { cwd: directory, env, timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
+  const gitWithIndex = async (index: string | undefined, ...args: string[]) => {
+    const childEnv: NodeJS.ProcessEnv = { ...env };
+    if (index === undefined) delete childEnv.GIT_INDEX_FILE; else childEnv.GIT_INDEX_FILE = index;
+    const result = await exec("git", ["-c", "core.fsync=loose-object,reference", ...args], { cwd: directory, env: childEnv, timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
     if (!options.guard()) throw new Error("backup ownership changed");
     return result.stdout.trim();
   };
+  const git = (...args: string[]) => gitWithIndex(env.GIT_INDEX_FILE, ...args);
   const tree = async () => {
     await git("read-tree", head);
     await git("add", "-A");
@@ -76,8 +80,14 @@ export async function backupWorktree(options: {
   let retained = false;
   try {
     for (const ignored of options.ignored) collect(ignored.replace(/\/$/, ""));
+    const originalIndex = await gitWithIndex(undefined, "rev-parse", "--path-format=absolute", "--git-path", "index");
+    const indexBytes = fs.readFileSync(originalIndex);
+    const savedIndex = path.join(scratch, "original-index");
+    fs.writeFileSync(savedIndex, indexBytes, { flag: "wx", mode: 0o600 });
+    const indexTree = await gitWithIndex(savedIndex, "write-tree");
+    const indexCommit = await git("commit-tree", indexTree, "-p", head, "-m", "Preserve settled worktree index");
     const savedTree = await tree();
-    const commit = await git("commit-tree", savedTree, "-p", head, "-m", "Preserve settled worktree");
+    const commit = await git("commit-tree", savedTree, "-p", head, "-p", indexCommit, "-m", "Preserve settled worktree");
     const ref = `refs/delegatus/worktree-backup/${pipelineId}/${commit}`;
     const existing = await git("for-each-ref", "--format=%(objectname) %(refname)", ref);
     const recorded = existing.split("\n").find(line => line.endsWith(" " + ref))?.split(" ")[0];
@@ -100,7 +110,7 @@ export async function backupWorktree(options: {
       kept.push({ path: relative, savedPath, bytes, hash });
     }
     const manifest = statePath("evidence", pipelineId, "worktree-backup.json");
-    writeJsonDurably(manifest, { ref, head, branch: options.branch, tree: savedTree, files: kept,
+    writeJsonDurably(manifest, { ref, head, branch: options.branch, tree: savedTree, indexTree, indexCommit, files: kept,
       bytes: kept.reduce((total, file) => total + file.bytes, 0) });
     const verify = async () => {
       if (!options.guard()) return false;
@@ -114,8 +124,11 @@ export async function backupWorktree(options: {
           || await digest(path.join(evidence, file.savedPath)) !== file.hash) return false;
       }
       if (await git("rev-parse", ref) !== commit) return false;
+      if (await git("rev-parse", `${ref}^2^{tree}`) !== indexTree
+        || await git("rev-parse", `${ref}^{tree}`) !== savedTree) return false;
       const final = fs.lstatSync(directory);
-      return options.guard() && final.dev === root.dev && final.ino === root.ino;
+      return options.guard() && final.dev === root.dev && final.ino === root.ino
+        && fs.readFileSync(originalIndex).equals(indexBytes);
     };
     if (!await verify()) throw new Error("worktree changed after backup");
     retained = true;

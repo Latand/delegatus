@@ -1082,5 +1082,575 @@
       0,
       0
     ]
+  },
+  "reviewFix": {
+    "recordedAt": "2026-10-28T23:21:54.829311+00:00",
+    "baselineRevision": "280d50bf6ffd3d948aeb37baf6f5a2f44e7f0f09",
+    "capturedMain": "bcccf00e4d7e62607d5df91502cd190ffcdfa5f0",
+    "gateWrapper": "scripts/gate-slot.sh",
+    "installedGateRevision": "bcccf00e4d7e62607d5df91502cd190ffcdfa5f0",
+    "serial": true,
+    "environmentBuilders": [
+      "scripts/gate-cache.ts:checkEnvironment",
+      "scripts/local-gate.ts:isolatedEnvironment"
+    ],
+    "testProcessGroup": "setsid --wait; stdin closed",
+    "baselineProductionWithFinalTests": true,
+    "regressionBaselines": [
+      {
+        "label": "base-0",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/selfUpdate/retention.test.ts"
+        ],
+        "code": 1,
+        "summary": [
+          " 125 pass",
+          " 2 fail",
+          "Ran 127 tests across 1 file. [78.02s]",
+          "exit: 1"
+        ],
+        "counts": {
+          "pass": 125,
+          "fail": 2,
+          "skip": 0
+        },
+        "failures": [
+          "(fail) generated file cleanup retains a replaced release parent",
+          "(fail) generated file cleanup retains a replaced intermediate parent"
+        ]
+      },
+      {
+        "label": "base-1",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/attemptTempRetention.test.ts"
+        ],
+        "code": 1,
+        "summary": [
+          " 31 pass",
+          " 8 fail",
+          "Ran 39 tests across 1 file. [4.54s]",
+          "exit: 1"
+        ],
+        "counts": {
+          "pass": 31,
+          "fail": 8,
+          "skip": 0
+        },
+        "failures": [
+          "(fail) legacy scratch screenshots survive adoption and retirement across reopening",
+          "(fail) refused evidence preservation keeps legacy scratch and retries",
+          "(fail) corrupt evidence preservation keeps legacy scratch and retries",
+          "(fail) evidence arriving during the final authority read retains scratch until preserved (new)",
+          "(fail) evidence arriving during the final authority read retains scratch until preserved (changed)",
+          "(fail) linked .artifacts evidence retains scratch and its outside target",
+          "(fail) linked frame.png evidence retains scratch and its outside target",
+          "(fail) a destination link swapped after hashing cannot authorize retirement"
+        ]
+      },
+      {
+        "label": "base-2",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/worktreeSweep.test.ts"
+        ],
+        "code": 1,
+        "summary": [
+          " 390 pass",
+          " 3 fail",
+          "Ran 393 tests across 1 file. [45.82s]",
+          "exit: 1"
+        ],
+        "counts": {
+          "pass": 390,
+          "fail": 3,
+          "skip": 0
+        },
+        "failures": [
+          "(fail) reclaiming a lane preserves distinct staged and working versions",
+          "(fail) an index edit after backup retains the checkout",
+          "(fail) an unmerged index retains its checkout and conflict stages"
+        ]
+      },
+      {
+        "label": "last-docker-base",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/attemptTempFilesystem.test.ts"
+        ],
+        "docker": true,
+        "code": 1,
+        "summary": [
+          " 21 pass",
+          " 4 fail",
+          "Ran 25 tests across 1 file. [24.40s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) container-owned private files retain evidence and retire empty scratch (capture)",
+          "(fail) container-owned private files retain evidence and retire empty scratch (late-capture)",
+          "(fail) container-owned private files retain evidence and retire empty scratch (dispatch-capture)",
+          "(fail) container-owned private files retain evidence and retire empty scratch (fallback-capture)"
+        ],
+        "counts": {
+          "pass": 21,
+          "fail": 4,
+          "skip": 0
+        }
+      }
+    ],
+    "intendedRegressionFailures": 17,
+    "checks": [
+      {
+        "label": "head-0",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/selfUpdate/retention.test.ts"
+        ],
+        "code": 0,
+        "summary": [
+          " 127 pass",
+          " 0 fail",
+          "Ran 127 tests across 1 file. [80.62s]",
+          "exit: 0"
+        ],
+        "counts": {
+          "pass": 127,
+          "fail": 0,
+          "skip": 0
+        },
+        "failures": []
+      },
+      {
+        "label": "final-attempt-retention",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/attemptTempRetention.test.ts"
+        ],
+        "docker": false,
+        "code": 0,
+        "summary": [
+          " 39 pass",
+          " 0 fail",
+          "Ran 39 tests across 1 file. [4.92s]",
+          "exit: 0"
+        ],
+        "failures": [],
+        "counts": {
+          "pass": 39,
+          "fail": 0,
+          "skip": 0
+        }
+      },
+      {
+        "label": "head-2",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/worktreeSweep.test.ts"
+        ],
+        "code": 0,
+        "summary": [
+          " 393 pass",
+          " 0 fail",
+          "Ran 393 tests across 1 file. [58.24s]",
+          "exit: 0"
+        ],
+        "counts": {
+          "pass": 393,
+          "fail": 0,
+          "skip": 0
+        },
+        "failures": []
+      },
+      {
+        "label": "final-attempt-production",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/attemptTempProduction.test.ts"
+        ],
+        "docker": false,
+        "code": 0,
+        "summary": [
+          " 14 pass",
+          " 0 fail",
+          "Ran 14 tests across 1 file. [2.81s]",
+          "exit: 0"
+        ],
+        "failures": [],
+        "counts": {
+          "pass": 14,
+          "fail": 0,
+          "skip": 0
+        }
+      },
+      {
+        "label": "head-4",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/selfUpdate/retentionPass.test.ts"
+        ],
+        "code": 0,
+        "summary": [
+          " 9 pass",
+          " 0 fail",
+          "Ran 9 tests across 1 file. [2.78s]",
+          "exit: 0"
+        ],
+        "counts": {
+          "pass": 9,
+          "fail": 0,
+          "skip": 0
+        },
+        "failures": []
+      },
+      {
+        "label": "last-docker-head",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/attemptTempFilesystem.test.ts"
+        ],
+        "docker": true,
+        "code": 0,
+        "summary": [
+          " 25 pass",
+          " 0 fail",
+          "Ran 25 tests across 1 file. [24.91s]",
+          "exit: 0"
+        ],
+        "failures": [],
+        "counts": {
+          "pass": 25,
+          "fail": 0,
+          "skip": 0
+        }
+      },
+      {
+        "label": "final-instrumentation",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/mainThreadInstrumentation.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 18 pass",
+          " 7 fail",
+          "Ran 25 tests across 1 file. [2.78s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) orchestrator/seat read labels survive success and failure",
+          "(fail) src/lib/forge/autoMerge.ts sweepAutoMerge labels fixture reads and thrown reads",
+          "(fail) release retention labels its injected process scan (failed=%s)",
+          "(fail) release retention labels its injected process scan (failed=%s)",
+          "(fail) release byte counting records synchronous success and failure (failed=%s)",
+          "(fail) release byte counting records synchronous success and failure (failed=%s)",
+          "(fail) every revalidation timer labels its synchronous row read and refusal"
+        ],
+        "counts": {
+          "pass": 18,
+          "fail": 7,
+          "skip": 0
+        }
+      },
+      {
+        "label": "final-indexes",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/state/declaredIndexes.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 34 pass",
+          " 2 skip",
+          " 2 fail",
+          "Ran 38 tests across 1 file. [51.01s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) every persistent index declaration has a reopen fixture",
+          "(fail) restricted registry opens refuse repair of every missing constructor index"
+        ],
+        "counts": {
+          "pass": 34,
+          "fail": 2,
+          "skip": 2
+        }
+      },
+      {
+        "label": "final-startup",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/startup.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 161 pass",
+          " 4 fail",
+          "Ran 165 tests across 1 file. [41.65s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) startup socket recovery retains a partially adopted host and drains its held send once",
+          "(fail) startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot",
+          "(fail) startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+          "(fail) deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)"
+        ],
+        "counts": {
+          "pass": 161,
+          "fail": 4,
+          "skip": 0
+        }
+      }
+    ],
+    "distinctFiles": 9,
+    "totals": {
+      "pass": 820,
+      "fail": 13,
+      "skip": 2
+    },
+    "typecheck": {
+      "label": "last-tsc",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "docker": false,
+      "code": 0,
+      "summary": [
+        "exit: 0"
+      ],
+      "failures": [],
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    "preExistingComparisons": [
+      {
+        "label": "control-base-1-startup",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/startup.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 161 pass",
+          " 4 fail",
+          "Ran 165 tests across 1 file. [36.28s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) startup socket recovery retains a partially adopted host and drains its held send once",
+          "(fail) startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot",
+          "(fail) startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+          "(fail) deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)"
+        ],
+        "counts": {
+          "pass": 161,
+          "fail": 4,
+          "skip": 0
+        }
+      },
+      {
+        "label": "control-base-1-instrumentation",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/mainThreadInstrumentation.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 18 pass",
+          " 7 fail",
+          "Ran 25 tests across 1 file. [2.83s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) orchestrator/seat read labels survive success and failure",
+          "(fail) src/lib/forge/autoMerge.ts sweepAutoMerge labels fixture reads and thrown reads",
+          "(fail) release retention labels its injected process scan (failed=%s)",
+          "(fail) release retention labels its injected process scan (failed=%s)",
+          "(fail) release byte counting records synchronous success and failure (failed=%s)",
+          "(fail) release byte counting records synchronous success and failure (failed=%s)",
+          "(fail) every revalidation timer labels its synchronous row read and refusal"
+        ],
+        "counts": {
+          "pass": 18,
+          "fail": 7,
+          "skip": 0
+        }
+      },
+      {
+        "label": "control-base-1-indexes",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/state/declaredIndexes.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 34 pass",
+          " 2 skip",
+          " 2 fail",
+          "Ran 38 tests across 1 file. [29.68s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) every persistent index declaration has a reopen fixture",
+          "(fail) restricted registry opens refuse repair of every missing constructor index"
+        ],
+        "counts": {
+          "pass": 34,
+          "fail": 2,
+          "skip": 2
+        }
+      },
+      {
+        "label": "control-base-2-startup",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/startup.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 161 pass",
+          " 4 fail",
+          "Ran 165 tests across 1 file. [29.54s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) startup socket recovery retains a partially adopted host and drains its held send once",
+          "(fail) startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot",
+          "(fail) startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+          "(fail) deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)"
+        ],
+        "counts": {
+          "pass": 161,
+          "fail": 4,
+          "skip": 0
+        }
+      },
+      {
+        "label": "control-base-2-instrumentation",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/mainThreadInstrumentation.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 18 pass",
+          " 7 fail",
+          "Ran 25 tests across 1 file. [2.16s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) orchestrator/seat read labels survive success and failure",
+          "(fail) src/lib/forge/autoMerge.ts sweepAutoMerge labels fixture reads and thrown reads",
+          "(fail) release retention labels its injected process scan (failed=%s)",
+          "(fail) release retention labels its injected process scan (failed=%s)",
+          "(fail) release byte counting records synchronous success and failure (failed=%s)",
+          "(fail) release byte counting records synchronous success and failure (failed=%s)",
+          "(fail) every revalidation timer labels its synchronous row read and refusal"
+        ],
+        "counts": {
+          "pass": 18,
+          "fail": 7,
+          "skip": 0
+        }
+      },
+      {
+        "label": "control-base-2-indexes",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/state/declaredIndexes.test.ts"
+        ],
+        "docker": false,
+        "code": 1,
+        "summary": [
+          " 34 pass",
+          " 2 skip",
+          " 2 fail",
+          "Ran 38 tests across 1 file. [30.52s]",
+          "exit: 1"
+        ],
+        "failures": [
+          "(fail) every persistent index declaration has a reopen fixture",
+          "(fail) restricted registry opens refuse repair of every missing constructor index"
+        ],
+        "counts": {
+          "pass": 34,
+          "fail": 2,
+          "skip": 2
+        }
+      }
+    ],
+    "sourceSha256": {
+      "src/lib/mainThreadInstrumentation.test.ts": "a37aa4b4a16b7255e5f2c47c25259f6c56856a1d219222162fcb049b40df8dc1",
+      "src/lib/pipelines/worktreeBackup.ts": "8dd5a25aebad968a3b26010838f6f0399d7639426f4af6c92ddb4a0831bb1015",
+      "src/lib/pipelines/worktreeSweep.test.ts": "c1706524e3f8ee0a5035da32da5531e9594c52a745aab2d640df5099b5e4de32",
+      "src/lib/runtime/attemptTempEvidence.ts": "69a5f3e492c5bd5d342b7debd78d47e04d3ed275ebbdcd28ba92db65e3db6a2a",
+      "src/lib/runtime/attemptTempFilesystem.test.ts": "38059e0a2f4467b37a64187ffb352c1801c0897f2ecc6f917535a17901b3c94b",
+      "src/lib/runtime/attemptTempFilesystem.ts": "e305660121fa0f53a63801e300cb30381e55647d204f118941ea47544f4ac46d",
+      "src/lib/runtime/attemptTempRetention.test.ts": "748fc05396696cdb8fe9e31be9b65b4a28127732625632158c6d18b13f7ba70a",
+      "src/lib/runtime/attemptTempRetention.ts": "5dbf05afd8b618def2a1e35152dfc5dd7bad7217db8e0fc34c4b6d9dd38ce792",
+      "src/lib/selfUpdate/retention.test.ts": "0686d5805c2010435aede1acbaba5ff7773a399a394b44f46c63f65029f22b21",
+      "src/lib/selfUpdate/retention.ts": "450da94891f92cb6e22b4e950f8acf47c3726852888ad0056b9355e11cd3b825"
+    },
+    "ownedGateExits": [
+      1,
+      0,
+      0
+    ],
+    "hostedChecks": "pipeline publication",
+    "noLiveSweepOrDeletion": true,
+    "noPerformanceClaim": true,
+    "mainObservedBeforeCommit": "477cadc8796ea662a3db203b6a3db4f5e25ee8c7"
   }
 }

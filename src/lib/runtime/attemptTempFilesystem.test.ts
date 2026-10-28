@@ -5,7 +5,7 @@ import net from "node:net";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, expect, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -87,7 +87,7 @@ test("one tick reads each checkout once across roots and rereads it once stale",
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
 
-test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0)("container-owned private files retire through a scoped cleanup container", async () => {
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async kind => {
   const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);
   const image = await attemptTempUtilityImage();
   const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
@@ -98,7 +98,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   });
   store.register({ directory, pipelineId: "fixture", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
   await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0", "--mount", `type=bind,source=${directory},target=/attempt`,
-    "--entrypoint", "/bin/sh", image, "-c", "mkdir /attempt/private; dd if=/dev/zero of=/attempt/private/data bs=1048576 count=4 2>/dev/null; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
+    "--entrypoint", "/bin/sh", image, "-c", "mkdir -p /attempt/private/deep; dd if=/dev/zero of=/attempt/private/data bs=1048576 count=4 2>/dev/null; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
   try {
     expect(() => fs.readdirSync(path.join(directory, "private"))).toThrow();
     const now = Date.parse("2030-01-01T00:00:00Z");
@@ -106,6 +106,35 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
     const sweep = (at: number) => sweepAttemptTemps(store, { now: () => at, state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
     expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     fs.unlinkSync(pin);
+    const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
+      "mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.png"], { timeout: 15000 });
+    const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
+      "/attempt/private/deep/frame.png"], { timeout: 15000 })).stdout;
+    if (kind === "capture") {
+      await writeCapture();
+      expect((await sweep(now + 60000)).removed).toBe(0);
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    if (kind === "dispatch-capture" || kind === "fallback-capture") {
+      await expect(removeAttemptTree(directory, directory, async () => { await writeCapture(); return true; }, kind === "dispatch-capture")).rejects.toThrow();
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    if (kind === "late-capture") {
+      let reads = 0;
+      const report = await sweepAttemptTemps(store, { now: () => now + 60000, scan: () => ({ ownNamespace: null, processes: [] }),
+        references: async () => true, state: async () => {
+          if (++reads === 2) await writeCapture();
+          return "closed";
+        } });
+      expect(reads).toBeGreaterThanOrEqual(2);
+      expect(report.removed).toBe(0);
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
     let report;
     // Other test runs may remove a container between ps and inspect. Production
     // must retain this tree on that incomplete observation, then retry next tick.

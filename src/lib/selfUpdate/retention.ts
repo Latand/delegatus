@@ -210,6 +210,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     // Only absence is empty; aliases and unreadable/invalid roots still fail.
     const rootExists = fs.lstatSync(root, { throwIfNoEntry: false }) !== undefined;
     if (rootExists && fs.realpathSync(root) !== root) throw new Error("release root is an alias; skipped");
+    const rootIdentity = rootExists ? identity(root) : null;
     let listed: ReturnType<typeof parseWorktreeList> = [];
     if (rootExists && record.checkout) {
       const result = await run(["worktree", "list", "--porcelain", "-z"], record.checkout);
@@ -349,9 +350,13 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             let stat: fs.Stats;
             try { stat = fs.lstatSync(target); } catch { content = { ...content, ignored: [ignored] }; break; }
             if (stat.isFile() || stat.isSymbolicLink()) {
+              const parent = path.dirname(target), parentIdentity = identity(parent);
               const { current, processes: fresh } = await freshObservation();
               const final = fs.lstatSync(target, { throwIfNoEntry: false });
               if (protect(candidate, current, fresh, true) || heldByProcess(target, fresh) || current.fenced !== true
+                || identity(root) !== rootIdentity || fs.realpathSync(root) !== root
+                || identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir
+                || identity(parent) !== parentIdentity || fs.realpathSync(parent) !== parent
                 || !final || final.dev !== stat.dev || final.ino !== stat.ino
                 || !disposableIgnoredPath(candidate.dir, ignored)) {
                 content = { ...content, ignored: [ignored] }; break;
