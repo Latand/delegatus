@@ -20,7 +20,7 @@ function autonomyView(record: SeatTickSettingsAnswer | null): AutonomyView {
   return { state: !autonomyActive(episode, Date.now()) ? "off" : episode?.until ? "timed" : "unlimited", until: episode?.until ?? null, startedAt: episode?.startedAt ?? null, episode };
 }
 import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type MaintenanceReading, type SeatTickReading, type StatusSegment } from "./seatTickView";
-import { runtimeForEngine, runtimeForModel, useMaintainerRole, type MaintainerRoleRead, type MaintainerRuntime } from "./useMaintainerRole";
+import { offeredModels, runtimeForEngine, runtimeForModel, useMaintainerRole, type MaintainerRoleRead, type MaintainerRuntime } from "./useMaintainerRole";
 import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings";
 
 /*
@@ -1132,7 +1132,7 @@ function AgentPicker({ runtime, maintainer, state, phone }: {
   phone: boolean;
 }) {
   const { t } = useLocale();
-  const models = maintainer.choices.find((choice) => choice.engine === runtime.engine)?.models ?? [];
+  const models = offeredModels(maintainer.choices, runtime.engine, runtime.model);
   const efforts = models.find((model) => model.id === runtime.model)?.efforts ?? [];
   const select = phone ? "h-11 w-full" : "w-full";
   return (

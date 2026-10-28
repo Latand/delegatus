@@ -19,7 +19,18 @@ import type { RoleConfig, RoleEngine } from "@/lib/roles/types";
 
 export interface LaunchChoice {
   engine: RoleEngine;
-  models: Array<{ id: string; label: string; shortLabel: string; use: string; efforts: readonly string[] }>;
+  /* The catalogue's own flags: a launch alias of a pinned row and a retired
+     row are launch ids the picker does not offer beside the current choices. */
+  models: Array<{ id: string; label: string; shortLabel: string; use: string; efforts: readonly string[]; duplicateOf?: string; retired?: boolean }>;
+}
+
+/** The models the picker offers for `engine`, as the shared catalogue lists
+    them: no retired row unless it is the current one, and one row per release
+    (a current alias stands in for its pinned row). */
+export function offeredModels(choices: readonly LaunchChoice[], engine: RoleEngine, current: string | null): LaunchChoice["models"] {
+  const models = choices.find((choice) => choice.engine === engine)?.models ?? [];
+  const alias = models.find((model) => model.duplicateOf && model.id === current);
+  return models.filter((model) => model.id === current || (!model.duplicateOf && !model.retired && model.id !== alias?.duplicateOf));
 }
 
 export type MaintainerRuntime = Pick<RoleConfig, "engine" | "model" | "effort">;
@@ -152,9 +163,10 @@ export function useMaintainerRole(enabled: boolean): MaintainerRoleRead {
     kept when the new model has that tier and otherwise lands on the nearest
     one the model's own ladder offers. */
 export function runtimeForEngine(choices: readonly LaunchChoice[], from: MaintainerRuntime, engine: RoleEngine): MaintainerRuntime {
-  const models = choices.find((choice) => choice.engine === engine)?.models ?? [];
-  if (from.engine === engine || models.length === 0) return { ...from, engine };
+  if (from.engine === engine) return { ...from, engine };
   const wanted = equivalentConfig({ ...from }, engine).model;
+  const models = offeredModels(choices, engine, wanted);
+  if (models.length === 0) return { ...from, engine };
   const model = models.find((candidate) => candidate.id === wanted) ?? models[0]!;
   return { engine, model: model.id, effort: effortFor(model.efforts, from.effort) };
 }

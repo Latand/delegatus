@@ -2017,10 +2017,10 @@ test("the badge is localized with the rest of the dock", async () => {
 
 
 test.each([
-  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
-  ["gpt-6-astra", "max", "gpt-5.6-luna"],
-  ["gpt-6-sol", "ultra", "gpt-6-luna"],
-  ["gpt-6-sol", "max", "gpt-6-luna"],
+  ["gpt-6-astra", "ultra", "gpt-6-luna"],
+  ["gpt-6-astra", "max", "gpt-6-luna"],
+  ["gpt-6.1-terra", "ultra", "gpt-6-luna"],
+  ["gpt-6.1-terra", "max", "gpt-6-luna"],
 ] as const)("%s/%s to %s submits the displayed effort", async (from, effort, to) => {
   const host = mount();
   await settle();

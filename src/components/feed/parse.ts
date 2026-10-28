@@ -2944,7 +2944,17 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
       return true;
     }
     if (kind === "imagegeneration") {
-      const preview = textPart(item.revisedPrompt) || textPart(item.result);
+      /* Codex 0.164 names the picture by its attachment-store `fileId` instead
+         of inline `result` data; rollouts written during that migration carry
+         both, with an empty `result`. The file reference wins, as Codex's own
+         decoder reads it, and older inline results keep their output. The
+         saved file draws through the artifact route, which says when it is
+         gone or outside the served folders. */
+      const fileId = textPart(item.fileId);
+      const preview = textPart(item.revisedPrompt) || (fileId ? "" : textPart(item.result));
+      const output = item.failure ?? (fileId ? { fileId, savedPath: item.savedPath } : { result: item.result, savedPath: item.savedPath });
+      const picture = item.failure ? null : rasterImagePath(textPart(item.savedPath));
+      const text = picture ? toolOutputText(output) : "";
       emitCodexThreadTool({
         item,
         timing,
@@ -2952,7 +2962,8 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
         tool: "imageGeneration",
         args: preview ? { prompt: preview } : {},
         summary: preview ? `imageGeneration · ${preview}` : "imageGeneration",
-        output: item.failure ?? { result: item.result, savedPath: item.savedPath },
+        output,
+        ...(picture ? { blocks: [...(text ? [{ type: "text" as const, text }] : []), { type: "image" as const, path: picture }] } : {}),
       });
       return true;
     }

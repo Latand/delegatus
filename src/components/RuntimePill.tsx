@@ -242,14 +242,6 @@ export function RuntimePill({
     const catalogEfforts = engine === "copilot" ? copilotModels?.find((entry) => entry.id === model)?.efforts : null;
     return engine ? effortScale(engine, model, catalogEfforts) ?? [] : [];
   }, [engine, copilotModels]);
-  const modelOptions: readonly AgentModelOption[] = engine === "copilot" && copilotModels
-    ? [
-        ...copilotModels.map((model) => ({ id: model.id, label: model.name, shortLabel: model.name, use: "general" as const })),
-        ...(file.model && !copilotModels.some((model) => model.id === file.model)
-          ? [{ id: file.model, label: file.model, shortLabel: file.model, use: "general" as const }]
-          : []),
-      ]
-    : engine ? listedModels(engine, file.model) : [];
   /* #1846: the account the operator picked for this conversation, shown the moment it is tapped. It stands
      until the runtime session projects the same choice, which every other page then reads too.
      The pick is shared with the page's other account surfaces, so the header and the card badge say it too. */
@@ -642,6 +634,17 @@ export function RuntimePill({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, pillSurface, applyState, liveDraft, file, version, copilotModels, effortScaleForModel]);
 
+  /* The face's model and the one the transcript reports stay listed even when
+     retired from fresh menus, so a saved choice is shown checked and the
+     running model can be picked back. */
+  const modelOptions: readonly AgentModelOption[] = engine === "copilot" && copilotModels
+    ? [
+        ...copilotModels.map((model) => ({ id: model.id, label: model.name, shortLabel: model.name, use: "general" as const })),
+        ...(file.model && !copilotModels.some((model) => model.id === file.model)
+          ? [{ id: file.model, label: file.model, shortLabel: file.model, use: "general" as const }]
+          : []),
+      ]
+    : engine ? listedModels(engine, [face.model, observedModelId(file)]) : [];
   const efforts = useMemo(() => effortScaleForModel(face.model), [effortScaleForModel, face.model]);
   const speedShown = engine === "codex";
   const faceSpeed = speedTierOf(face);

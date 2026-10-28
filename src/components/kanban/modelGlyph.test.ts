@@ -9,8 +9,9 @@ test("every catalogued Claude and Codex model has its glyph, by family", () => {
   expect(ENGINE_MODELS.codex.map((option) => [option.id, modelGlyphKind("codex", option.id)])).toEqual([
     ["gpt-6-astra", "astra"],
     ["gpt-6.1-sol", "sol"],
-    ["gpt-6-sol", "sol"],
+    ["gpt-6.1-terra", "terra"],
     ["gpt-6-luna", "luna"],
+    ["gpt-6-sol", "sol"],
     ["gpt-5.6-sol", "sol"],
     ["gpt-5.6-terra", "terra"],
     ["gpt-5.6-luna", "luna"],

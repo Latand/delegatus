@@ -6,7 +6,7 @@ import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { launchModelIds } from "@/lib/agent/models";
 import type { SpawnReceipt } from "@/lib/agent/registry";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -114,7 +114,7 @@ test("task spawn rejects an explicit unknown model before receipt or assignment 
 
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({
-    error: `invalid codex model id "gpt-5.6-codex"; valid codex model ids: ${ENGINE_MODELS.codex.map((option) => option.id).join(", ")}`,
+    error: `invalid codex model id "gpt-5.6-codex"; valid codex model ids: ${launchModelIds("codex").join(", ")}`,
   });
   expect(Object.keys(registry.snapshot().receipts)).toHaveLength(0);
   expect(writes).toBe(0);
