@@ -18,5 +18,5 @@ const dependencies: HostedCloudDependencies = {
   uuid: () => "command-fixture",
 };
 const result = await prepareCloudEnvironment({ project: "repo-fixture", account: { engine: "codex", accountId: "account-a", kind: "managed",
-  home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: {} }, repository: "sample/project", ref: "main", signal: AbortSignal.timeout(10_000), assertCurrent: () => {}, now: () => Number(now) }, dependencies);
+  home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" as const } }, repository: "sample/project", ref: "main", signal: AbortSignal.timeout(10_000), assertCurrent: () => {}, now: () => Number(now) }, dependencies);
 process.stdout.write(JSON.stringify(result));

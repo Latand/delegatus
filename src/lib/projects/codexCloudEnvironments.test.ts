@@ -13,7 +13,7 @@ function fixture(options: Parameters<typeof stubCloudBackend>[0] = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-binding-")); roots.push(root); process.env.LLV_STATE_DIR = root;
   const backend = stubCloudBackend(options); stops.push(backend.stop);
   let clock = Date.UTC(2026, 9, 28);
-  const input = { project: "repo-fixture", account: { engine: "codex" as const, accountId: "account-a", kind: "managed" as const, home: root, transcriptRoot: root, env: {} },
+  const input = { project: "repo-fixture", account: { engine: "codex" as const, accountId: "account-a", kind: "managed" as const, home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } },
     repository: "sample/project", ref: "main", signal: new AbortController().signal, assertCurrent: () => {}, now: () => clock };
   return { backend, input, advance: (ms: number) => { clock += ms; }, prepare: () => prepareCloudEnvironment(input, backend.dependencies) };
 }

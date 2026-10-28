@@ -49,7 +49,7 @@ const key = (project: string, account: string, repository: string, ref: string, 
 function readStore(): SqliteStateCollection<CloudEnvironmentBinding> | null {
   const file = statePath("state.sqlite");
   if (readStateCollectionRevision(file, collection) === null) return null;
-  return new SqliteStateCollection(file, { ...seed, clone: structuredClone,
+  return new SqliteStateCollection<CloudEnvironmentBinding>(file, { ...seed, clone: structuredClone,
     decode: value => { const parsed = bindingSchema.safeParse(value); return parsed.success ? parsed.data : null; }, strictDecode: true,
     busyMessage: "Cloud environment bindings are busy" });
 }

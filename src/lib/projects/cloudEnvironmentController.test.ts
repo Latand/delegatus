@@ -18,7 +18,7 @@ function fixture() {
   ports.accounts = () => ["account-a", "account-b"].map(id => ({ id, kind: "managed" as const, label: id, home: root, sessionsDir: root, authPresent: true, loginPane: null, createdAt: 0 }));
   ports.remote = () => "https://github.com/sample/project.git";
   ports.allowed = () => true;
-  ports.resolve = (_project, accountId) => ({ kind: "available", account: { engine: "codex", accountId, kind: "managed", home: root, transcriptRoot: root, env: {} } });
+  ports.resolve = (_project, accountId) => ({ kind: "available", account: { engine: "codex", accountId, kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } } });
   ports.backend = input => openCloudEnvironmentBackend(input, backend.dependencies);
   ports.prepare = input => prepareCloudEnvironment(input, backend.dependencies);
   const controller = () => { const value = new CloudEnvironmentController(ports); cleanups.push(() => value.stop()); return value; };
