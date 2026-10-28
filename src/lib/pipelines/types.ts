@@ -990,6 +990,8 @@ export type PipelinePublicationFailure = {
   retryableDeadline?: boolean;
   /** Git refused HTTP access after its App credential helper verified a fresh mint. */
   retryableApp403?: boolean;
+  /** Observation clock captured with the refusal, before recovery can restart. */
+  observedAt?: string;
 };
 
 export type PipelinePublicationResult = (
@@ -1018,6 +1020,8 @@ export type PipelineDelivery = {
     passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;
+    /** Absolute limit carried by an automatic App-403 retry through admission. */
+    app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
       result?: PipelinePublicationResult };

@@ -8,6 +8,7 @@ import { RuntimeHost } from "@/runtime-host/host";
 import { serveRuntimeHost } from "@/runtime-host/socket";
 import { once } from "node:events";
 import { defaultPipelinePorts } from "./engine";
+import { pipelinePublicationFence } from "./git";
 import { beforeEach, afterEach } from "bun:test";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 
@@ -30,7 +31,49 @@ const stages = [
 ];
 const current = () => loadPipelines()[0]!;
 
-test.each(["recovers", "expires", "restarts late"])("App git 403 publication %s after waiting with its accepted content intact", async outcome => {
+async function restartedAppController(clock: string, mode: "tick" | "reserve" | "expire after read" = "tick") {
+  return realExec("bun", ["-e", `
+    const { spyOn } = await import("bun:test");
+    const git = await import("./src/lib/pipelines/git.ts");
+    if (${JSON.stringify(mode)} === "reserve") spyOn(git, "publishPipelineBranch").mockImplementation(async () => process.exit(0));
+    const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const { realExec } = await import("./src/lib/workflows/provision.ts");
+    const ports = defaultPipelinePorts();
+    let pushes = 0;
+    let clock = ${JSON.stringify(clock)}, reads = 0;
+    ports.now = () => clock;
+    ports.structuredDeliveryPublication = () => "ready";
+    ports.cpuAdmissionReconcile = async () => {};
+    ports.drainHold = () => null;
+    ports.deferStageGit = false;
+    ports.scheduleTick = () => {};
+    ports.conversationAgentActive = async () => false;
+    ports.resumeSeveredTurn = async () => false;
+    ports.exec = async (command, args, cwd, env, options) => {
+      if (args.includes("push")) { pushes++; return { code: 1, stdout: "", stderr: ${JSON.stringify(`${FORGE_PUSH_MINT_MARKER}\nfatal: HTTP 403`)} }; }
+      const result = await realExec(command, args, cwd, env, options);
+      if (${JSON.stringify(mode)} === "expire after read" && args.includes("ls-remote")) {
+        reads++;
+        clock = "2026-10-27T09:20:00.000Z";
+      }
+      return result;
+    };
+    await tickPipelines([], ports);
+    // Cross the reset window's first due time too: a recovered 08:00
+    // refusal must never reserve a 09:21 push after a 09:20 restart.
+    if (Date.parse(clock) >= Date.parse("2026-10-27T09:20:00.000Z")) {
+      clock = "2026-10-27T09:21:00.000Z";
+      await tickPipelines([], ports);
+    }
+    const pipeline = loadPipelines()[0];
+    console.log(JSON.stringify({ state: pipeline.state, detail: pipeline.stateDetail, pushes, reads,
+      since: pipeline.publicationRecovery?.[pipeline.lastPassedCommit]?.app403Since,
+      operationId: pipeline.delivery?.operation?.id, accepted: pipeline.lastPassedCommit, repair: pipeline.runs[0].attempts[0].publicationRepair }));
+  `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+}
+
+test.each(["recovers", "expires", "restarts late", "reserved retry", "legacy reserved retry", "legacy retry before deadline", "expires after admission", "unrecorded refusal"])("App git 403 publication %s after waiting with its accepted content intact", async outcome => {
   const f = await fixture();
   try {
     const start = Date.parse("2026-10-27T08:00:00.000Z");
@@ -57,30 +100,50 @@ test.each(["recovers", "expires", "restarts late"])("App git 403 publication %s 
     `], process.cwd(), { ...process.env });
     expect(restarted.code, restarted.stderr).toBe(0);
     expect(JSON.parse(restarted.stdout)).toEqual({ since: new Date(start).toISOString(), retryAt: null });
-    if (outcome === "restarts late") {
-      const recovered = await realExec("bun", ["-e", `
-        const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
-        const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
-        const { realExec } = await import("./src/lib/workflows/provision.ts");
-        const ports = defaultPipelinePorts();
-        let pushes = 0;
-        ports.now = () => "2026-10-27T09:20:00.000Z";
-        ports.deferStageGit = false;
-        ports.scheduleTick = () => {};
-        ports.conversationAgentActive = async () => false;
-        ports.exec = async (command, args, cwd, env, options) => {
-          if (args.includes("push")) { pushes++; return { code: 1, stdout: "", stderr: "fatal: HTTP 403" }; }
-          return realExec(command, args, cwd, env, options);
-        };
-        await tickPipelines([], ports);
-        const pipeline = loadPipelines()[0];
-        console.log(JSON.stringify({ state: pipeline.state, detail: pipeline.stateDetail, pushes }));
-      `], process.cwd(), { ...process.env });
+    if (["restarts late", "reserved retry", "legacy reserved retry", "legacy retry before deadline", "expires after admission", "unrecorded refusal"].includes(outcome)) {
+      const refusalId = current().delivery!.operation!.id;
+      if (outcome === "reserved retry" || outcome === "legacy reserved retry" || outcome === "legacy retry before deadline" || outcome === "expires after admission") {
+        // Exit a real controller after it durably reserves the 08:01 retry,
+        // before the publisher acquires that reservation.
+        const reserved = await restartedAppController("2026-10-27T08:01:00.000Z", "reserve");
+        expect(reserved.code, reserved.stderr).toBe(0);
+        expect(current().delivery!.operation).toMatchObject({ state: "pending", app403Deadline: "2026-10-27T09:00:00.000Z" });
+        if (outcome === "legacy reserved retry" || outcome === "legacy retry before deadline") {
+          const stored = current();
+          delete stored.delivery!.operation!.app403Deadline;
+          stored.delivery!.operation!.fence = pipelinePublicationFence(stored);
+          savePipelines([stored]);
+        }
+      } else if (outcome === "unrecorded refusal") {
+        const stored = current();
+        // Keep the publisher's real durable result, at the crash boundary
+        // before a controller has written retry history or an attempt counter.
+        expect(stored.delivery!.operation!.result!.failure!.observedAt).toBe(new Date(start).toISOString());
+        delete stored.publicationRecovery;
+        delete stored.runs[0]!.attempts[0]!.publicationRetry;
+        savePipelines([stored]);
+      }
+      const recovered = outcome === "legacy retry before deadline"
+        ? await restartedAppController("2026-10-27T08:02:00.000Z")
+        : outcome === "expires after admission"
+        ? await restartedAppController("2026-10-27T08:59:00.000Z", "expire after read")
+        : await restartedAppController("2026-10-27T09:20:00.000Z");
       expect(recovered.code, recovered.stderr).toBe(0);
       const result = JSON.parse(recovered.stdout);
-      expect(result.state).toBe("needs_decision");
-      expect(result.detail).toContain("the one-hour automatic retry window ended");
-      expect(result.pushes).toBe(0);
+      if (outcome === "legacy retry before deadline") {
+        expect(result.state).toBe("running");
+        expect(result.detail).toContain("waiting for GitHub to accept the App push");
+        expect(result.pushes).toBe(1);
+      } else {
+        expect(result.state).toBe("needs_decision");
+        expect(result.detail).toContain("the one-hour automatic retry window ended");
+        expect(result.pushes).toBe(0);
+      }
+      if (outcome === "restarts late" || outcome === "unrecorded refusal") expect(result.operationId).toBe(refusalId);
+      if (outcome === "expires after admission") expect(result.reads).toBeGreaterThan(0);
+      expect(result.since).toBe(new Date(start).toISOString());
+      expect(result.accepted).toBe(accepted);
+      expect(result.repair).toBeUndefined();
       return;
     }
     // Before its due time no new push is reserved, including after reload.

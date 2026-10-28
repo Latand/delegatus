@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
 import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, recordPublicationFailure } from "./publicationHistory";
+import { isStoredPipeline } from "./store";
 import { pipelineCompactRow } from "./listProjection";
 
 const SHA = "a".repeat(40);
@@ -29,6 +30,38 @@ test("App git 403 uses a persisted one-hour window with bounded backoff and a fi
   stale![SHA]!.app403Since = new Date(clock).toISOString();
   expect(mergePublicationRecovery(pipeline.publicationRecovery, stale)![SHA]!.app403Since).toBe(new Date(start).toISOString());
 });
+test.each(["settled", "executor", "journal"])("App refusal recovery retains its observation before history exists: %s", source => {
+  const { pipeline, attempt } = fixture();
+  const observedAt = "2026-10-27T08:00:00.000Z";
+  const result = { ok: false as const, error: "App git access unavailable", failure: {
+    step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0,
+    outputTail: "fatal: HTTP 403", retryableApp403: true, ...(source !== "journal" ? { observedAt } : {}) } };
+  const operation = pipeline.delivery!.operation!;
+  if (source === "executor") operation.executor = { pid: 1, identity: null, lock: "fixture.lock", result };
+  else operation.result = result;
+  if (source === "journal") pipeline.delivery!.journal.push({ at: observedAt, kind: "recovery", ownerId: pipeline.id,
+    epoch: 1, conversationId: null, reason: `publication refused: ${result.error}` });
+  const record = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: 1,
+    at: "2026-10-27T09:20:00.000Z", cause: "app-git-403", detail: "App git access unavailable", recoverable: true }, DELAYS);
+  expect(record.retryAt).toBeNull();
+  expect(pipeline.publicationRecovery![SHA]!.app403Since).toBe(observedAt);
+  expect(isPublicationRecovery(JSON.parse(JSON.stringify(pipeline.publicationRecovery)))).toBe(true);
+});
+
+test("publication operation dates survive the store reader and reject malformed dates", () => {
+  const { pipeline } = fixture();
+  const operation = pipeline.delivery!.operation!;
+  operation.app403Deadline = "2026-10-27T09:00:00.000Z";
+  operation.result = { ok: false, error: "App git access unavailable", failure: { step: "publishing the pipeline branch",
+    code: 1, signal: null, durationMs: 0, outputTail: "fatal: HTTP 403", retryableApp403: true, observedAt: "2026-10-27T08:00:00.000Z" } };
+  expect(isStoredPipeline(JSON.parse(JSON.stringify(pipeline)))).toBe(true);
+  operation.app403Deadline = "invalid";
+  expect(isStoredPipeline(pipeline)).toBe(false);
+  delete operation.app403Deadline;
+  operation.result.failure!.observedAt = "invalid";
+  expect(isStoredPipeline(pipeline)).toBe(false);
+});
+
 function fixture() {
   const pipeline = structuredClone(pipelineCorpus(1, 1)[0]!);
   pipeline.lastPassedCommit = SHA;

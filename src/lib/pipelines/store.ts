@@ -783,6 +783,9 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
     && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
+    && (operation.app403Deadline === undefined || typeof operation.app403Deadline === "string" && Number.isFinite(Date.parse(operation.app403Deadline)))
+    && [operation.result?.failure?.observedAt, operation.executor?.result?.failure?.observedAt]
+      .every(at => at === undefined || typeof at === "string" && Number.isFinite(Date.parse(at)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 

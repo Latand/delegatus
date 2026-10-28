@@ -1,3 +1,4 @@
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
@@ -1730,6 +1731,8 @@ export interface PipelinePublishRequest {
   /** What the caller last recorded as published; a match short-circuits the
       whole probe. */
   publishedSha?: string | null;
+  /** Same observation clock as the controller; defaults to the wall clock. */
+  now?: () => string;
 }
 
 /** Acquire a kernel lock on the parent's open file description BEFORE any
@@ -1787,7 +1790,7 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
     branch: pipeline.branch, worktree: pipeline.worktreeDir,
     attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
     delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
-      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null })).digest("hex");
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id, app403Deadline: delivery.operation?.app403Deadline } : null })).digest("hex");
 }
 
 /**
@@ -1814,6 +1817,9 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const now = request.now ?? (() => new Date().toISOString());
+  const expiredFailure = (deadline: string): PipelinePublicationFailure => ({ step: "publishing the pipeline branch", code: 1, signal: null,
+    durationMs: 0, outputTail: APP_PUSH_WINDOW_ENDED_REASON, retryableApp403: true, observedAt: new Date(Date.parse(deadline) - APP_PUSH_RETRY_WINDOW_MS).toISOString() });
   const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
   if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
@@ -1881,8 +1887,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         deliveryJournal(current, "recovery", error); tx.put(current);
         return { error };
       }
+      // Reservations written before the deadline field still carry the
+      // automatic retry's attempt counter and per-head refusal observation.
+      const retry = current.runs.find(run => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.publicationRetry;
+      const since = current.publicationRecovery?.[request.acceptedSha]?.app403Since;
+      const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
+        && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
+        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1978,6 +1990,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // through gate-slot.sh. The lane shows the reason while it waits, and a
       // close or takeover aborts the wait before any child exists.
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Re-read time after dependency admission and all preceding Git awaits.
+      // A queued automatic retry cannot acquire a fresh window on restart.
+      const deadline = reservation.pipeline.delivery!.operation!.app403Deadline;
+      if (!writeStarted && deadline && Date.parse(now()) >= Date.parse(deadline)) {
+        failureEvidence = expiredFailure(deadline);
+        return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
+      }
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
@@ -1998,7 +2019,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
-          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true } : {}),
+          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;

@@ -4510,7 +4510,7 @@ async function keepPassedStageUnpublished(
     committing cursor becomes a publication retry seam, so later ticks never
     rerun or reset stage work. An internal pipeline has nothing to wait for:
     a pass an older build left waiting here closes on its own record. */
-function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: { acceptedSha: string; publishedSha?: string | null; unchangedHead?: boolean }, recheckSettled = false): import("./git").PipelinePublishResult {
+function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: { acceptedSha: string; publishedSha?: string | null; unchangedHead?: boolean; app403Deadline?: string }, recheckSettled = false): import("./git").PipelinePublishResult {
   if (!pipeline.delivery) {
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "awaiting durable delivery admission" };
   }
@@ -4528,7 +4528,8 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
     if (operation.state === "pending" && (operation.fence || !recheckSettled)) return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
     if (!recheckSettled && operation.state === "settled" && operation.result) return operation.result as import("./git").PipelinePublishResult;
   }
-  delivery.operation = { id: crypto.randomUUID(), epoch: delivery.epoch, sha: request.acceptedSha, requestKey, state: "pending" };
+  delivery.operation = { id: crypto.randomUUID(), epoch: delivery.epoch, sha: request.acceptedSha, requestKey, state: "pending",
+    ...(request.app403Deadline ? { app403Deadline: request.app403Deadline } : {}) };
   if (request.publishedSha !== undefined && awaitingPassedPublication(pipeline) && pipeline.state === "running") delivery.operation.passedStage = true;
   delivery.operation.fence = pipelinePublicationFence(pipeline);
   return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
@@ -4660,7 +4661,8 @@ async function retryRefusedPublication(
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
   if (!recoverable) return false;
   const recovery = pipeline.publicationRecovery![operation.sha]!;
-  const appDeadline = app403 ? unixMs(recovery.app403Since!) + APP_PUSH_RETRY_WINDOW_MS : null;
+  const appDeadline = operation.app403Deadline ? unixMs(operation.app403Deadline)
+    : app403 ? unixMs(recovery.app403Since!) + APP_PUSH_RETRY_WINDOW_MS : null;
   const appWindowEnded = appDeadline !== null && unixMs(ports.now()) >= appDeadline;
   const record = attempt.publicationRetry = { sha: operation.sha, operationId: operation.id,
     failures: Math.min(recovery.failures, PUBLICATION_RETRY_DELAYS_MS.length), retryAt: history.retryAt ?? history.at,
@@ -4670,7 +4672,8 @@ async function retryRefusedPublication(
   if (wait <= 0) {
     delete pipeline.delivery!.operation;
     pipeline.publishedCommit = null;
-    const reserved = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: pipeline.lastPassedCommit, publishedSha: null });
+    const reserved = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: pipeline.lastPassedCommit, publishedSha: null,
+      ...(appDeadline !== null ? { app403Deadline: new Date(appDeadline).toISOString() } : {}) });
     if (!reserved.ok) return false;
     await keepPassedStageUnpublished(pipeline, attempt, reserved.remote === "unreachable" ? reserved.detail : "publication retry reserved");
     ports.scheduleTick?.(0);
@@ -5744,7 +5747,7 @@ export async function preparePipelineReviewRepair(flowId: string, ports: Pipelin
   } finally { clearInterval(watch); releasePublicationFileLock(descriptor); }
   if (!accepted) return { ok: false, retryable: true, detail: "review repair superseded before adoption" };
   if (!publishesRemoteBranch(accepted)) return { ok: true };
-  const published = await publishPipelineBranch(accepted, ports.exec, { acceptedSha: accepted.lastPassedCommit });
+  const published = await publishPipelineBranch(accepted, ports.exec, { acceptedSha: accepted.lastPassedCommit, now: ports.now });
   if (!published.ok) return { ok: false, retryable: false, detail: `publishing the repaired review head: ${published.error}` };
   if (published.remote === "unreachable") return { ok: false, retryable: true, detail: `repaired review head is unpublished: ${published.detail}` };
   if (published.remote === "unavailable") return { ok: false, retryable: false, detail: "the repaired review head has no delivery remote" };
@@ -8337,7 +8340,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           pipeline.delivery!.target.branch], pipeline.worktreeDir) : null;
         if (head.ok && head.sha === cloud.headSha && missing?.code === 0 && !missing.stdout.trim()) {
           assertCurrent();
-          const published = await publishPipelineBranch(pipeline, execute, { acceptedSha: cloud.headSha });
+          const published = await publishPipelineBranch(pipeline, execute, { acceptedSha: cloud.headSha, now: ports.now });
           if (!published.ok) throw new Error(`Codex Cloud lane publication failed: ${published.error}`);
           assertCurrent();
           remote = await currentPipelineRemoteBranchHead(pipeline, execute);
@@ -12671,7 +12674,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           const current = findPipelineRecord(lane.id);
           const operation = current?.delivery?.operation;
           if (current?.delivery?.active && operation?.state === "pending") {
-            await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha });
+            await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha, now: jobPorts.now });
             return true;
           }
           return changed;
@@ -12688,8 +12691,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       && pipeline.delivery.active);
     for (const pipeline of pending) {
       if (scoped) queueControllerJob(pipeline.id, () => withControllerPipelineScope([pipeline.id], () =>
-        publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha })));
-      else await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha });
+        publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha, now: ports.now })));
+      else await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha, now: ports.now });
     }
     if (!scoped && pending.length && publicationPass < 3) {
       await stopAdmissionPolling();

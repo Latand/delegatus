@@ -3,6 +3,7 @@ import type { Pipeline, PipelinePublicationFailure, PipelinePublicationRecovery,
 const HISTORY_LIMIT = 64;
 export const PUBLICATION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 export const APP_PUSH_WAIT_REASON = "waiting for GitHub to accept the App push";
+export const APP_PUSH_WINDOW_ENDED_REASON = `${APP_PUSH_WAIT_REASON}; the one-hour automatic retry window ended`;
 export const APP_PUSH_RETRY_WINDOW_MS = 60 * 60_000;
 
 export function publicationInterrupted(result: { error: string; outcome?: "not-landed" }): boolean {
@@ -41,7 +42,15 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
     totalAttempts: Math.max(0, inheritedFailures - (sameLegacy ? 1 : 0)), history: [] };
   const recorded = recovery.history.find(item => item.operationId === operation.id);
   if (recorded) return recorded;
-  if (input.cause === "app-git-403") recovery.app403Since ??= input.at;
+  if (input.cause === "app-git-403") {
+    const result = operation.result ?? operation.executor?.result;
+    // Older receipts have no observation field. Their immutable refusal journal
+    // predates controller recovery too; never replace it with the restart time.
+    const journal = result?.ok === false ? pipeline.delivery!.journal.findLast(entry =>
+      entry.kind === "recovery" && entry.reason === `publication refused: ${result.error}`)?.at : undefined;
+    const observedAt = result?.failure?.observedAt ?? journal ?? input.at;
+    recovery.app403Since = [recovery.app403Since, observedAt].filter((at): at is string => !!at).sort()[0]!;
+  }
   if (input.recoverable && !sameLegacy) recovery.failures++;
   if (sameLegacy && legacy.exhausted) recovery.failures = Math.max(recovery.failures, delays.length + 1);
   const delay = input.recoverable && recovery.failures <= delays.length ? delays[Math.max(0, recovery.failures - 1)] : undefined;
