@@ -44,6 +44,7 @@ export function focusTargetAnchorKeys(target: FocusTarget): string[] {
     case "stage":
       return [`slot::${target.pipelineId}::${target.stageId}`];
     case "flowRound":
+      // The archived deck preserves old addresses; opening it grants no actuation.
       return [`deck::${target.flowId}`];
     case "task":
       return [`task::${target.taskId}`];

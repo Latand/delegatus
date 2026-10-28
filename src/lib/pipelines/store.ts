@@ -350,6 +350,7 @@ function isAttempt(value: unknown, index: number): boolean {
       && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
     )) &&
     isProviderWait(attempt.providerWait) &&
+    isRestoreContinuation(attempt.restoreContinuation) &&
     isProviderRecoveries(attempt.providerRecoveries) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
@@ -398,6 +399,19 @@ function isAttempt(value: unknown, index: number): boolean {
     isPriorWriterStop(attempt.priorWriterStop) &&
     isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+function isRestoreContinuation(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const timestamp = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value));
+  return ["cutAt", "requestedAt", "deadline"].every(key => timestamp(record[key]))
+    && ["conversationId", "transcriptPath"].every(key => typeof record[key] === "string" && record[key].length > 0)
+    && (record.acceptedAt === undefined || timestamp(record.acceptedAt))
+    && (record.promptBoundary === null || Number.isSafeInteger(record.promptBoundary) && Number(record.promptBoundary) >= 0)
+    && Number.isSafeInteger(record.count) && Number(record.count) >= 1 && Number(record.count) <= 3
+    && typeof record.clientMessageId === "string" && record.clientMessageId.length > 0 && record.clientMessageId.length <= 300;
 }
 
 function isStartupOwnerWait(value: unknown): boolean {

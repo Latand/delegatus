@@ -666,6 +666,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           spend={card.task && !remote ? <TaskSpendMarks taskId={card.task.id} interactive /> : undefined}
           onToggle={motionLinks ? undefined : () => props.onToggleCollapsed(card.id)}
           expanded={!collapsed}
+          progress={card.task?.progress ? { progress: card.task.progress, running: card.workingSinceMs !== null, color: hex } : undefined}
         />
       ) : collapsed && card.task && card.priority !== "normal" ? (
         /* A closed card that has not started keeps its priority mark, which is how the Inbox reads at a glance. */

@@ -52,13 +52,18 @@ test.each(["pass", "fail", "absent", "refresh", "earlier"] as const)("only the c
   expect(current().state).toBe(kind === "fail" ? "needs_decision" : "completed");
 });
 
-test("a failed report's summary cannot leak into a succeeding fix that completes the lane", async () => {
+test("a failed report's summary cannot leak through the succeeding fix and final review", async () => {
   const f = await fixture([stage("review", null, { onFail: { to: "fix", maxRounds: 1 } }), stage("fix", "review")]);
   expect((await f.report(1, { verdict: "fail", findings: [{ severity: "P2", text: "Repair required" }], taskSummary: content })).error).toBeUndefined();
   await f.finish(1, "fail");
   await tickPipelines([], f.h.ports);
   expect((await f.report(2, { verdict: "pass" })).error).toBeUndefined();
   await f.finish(2, "pass");
+  expect(current().state).toBe("running");
+  expect(loadTasks().every(task => !task.summary)).toBe(true);
+  await tickPipelines([], f.h.ports);
+  expect((await f.report(3, { verdict: "pass" })).error).toBeUndefined();
+  await f.finish(3, "pass");
   expect(current().state).toBe("completed");
   expect(loadTasks().every(task => !task.summary)).toBe(true);
 });

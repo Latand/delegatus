@@ -83,7 +83,8 @@ import { shortId } from "@/lib/shortIds";
  * word for word. v58 (docs/design/gpt-6-role-prompts.md §3.3) states the
  * maintenance practice: report first, ramp, compare model arms, one lane per
  * accepted workstream, a re-run when a role's default model changes; it also
- * ships the working rule 16 that #3083 rewrote. */
+ * ships the working rule 16 that #3083 rewrote. v62 combines the terminal
+ * review check and automatic merge bar with main's correction and reporting rules. */
 
 import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -111,8 +112,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-// v62 combines task due dates with report preparation and decline handling.
-export const ORCHESTRATOR_PROMPT_VERSION = 62;
+// v64 combines task progress estimates with terminal review, due dates and report handling.
+export const ORCHESTRATOR_PROMPT_VERSION = 64;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -558,6 +559,21 @@ const SHIPPED_PROTOTYPE_DIRECTIVES = [
   "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
 ] as const;
 
+/** Upgrade either shipped v62 task duty without dropping the other. */
+const SHIPPED_TASK_CURRENT_BULLETS = [
+  "- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.",
+  "- Keep each task current: when it changes, a brief update_task note in plain operator language (why parked, what or whom it waits for, what runs now) and its progress (0-100).",
+  "- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.",
+] as const;
+const ORCHESTRATOR_TASK_CURRENT_BULLET = "- Keep each task current: on change, a brief update_task note and progress (0-100) in plain operator language. Give every promise a dueAt: a task due then, or an open task step due no later.";
+
+/** Review and merge policy shared by fresh mandates and exact shipped-text
+    upgrades. A terminal advance gate owes the last fixed head one check. */
+const ORCHESTRATOR_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next: review. advance (default): up to N reviews and fixes. Terminal (next:null): re-check last fix once; pass completes, fail parks with budget-spent findings. Nonterminal: pass edge with findings after fixing. No follow-up task. continue-review adds no rounds; traversed budgets cannot grow. Another gate's fail loop allows fresh handoff; rounds stay cumulative. stop-after-fix: needs_review after fix; use only when asked to look before merge. park stops before fix.`;
+const ORCHESTRATOR_REVIEW_READY_BAR = "A PR is ready when its final head passed review (terminal re-check included) or a nonterminal gate's last budget fix passed, required checks are green and its body is read.";
+const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once checks settle green";
+const SHIPPED_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next returns to review. advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.`;
+
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key \`viewer\`). You never act outside them: no direct process or runtime manipulation. The working rules below apply to you as to every agent; the rest of this mandate adds what a seat does.
 
 ${ORCHESTRATOR_PERSONALITY}
@@ -597,13 +613,13 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 ${ORCHESTRATOR_OUTPUTS_BULLET}
 ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
-- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.
+${ORCHESTRATOR_TASK_CURRENT_BULLET}
 
 ## Pipeline stage contract
 Stages form a graph; array order is presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
-Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next returns to review. advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.
+${ORCHESTRATOR_REVIEW_POLICY}
 Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, the project's critical runtime, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.
 The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.
 src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
@@ -737,7 +753,9 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     (v56), so no seat is told to ask with reply drafts. A v55–v57 mandate gets
     the v58 maintenance practice after its outputs bullet and the current
     working rule 16 the same way, through `orchestratorMandateUpgraded`, which
-    a seat request applies before it records a new intent.
+    a seat request applies before it records a new intent. The v62 upgrade
+    replaces the shipped review and merge clauses with the terminal re-check
+    policy by exact match, preserving bespoke wording and pending replay.
 
     Last, delivery renders the role table (#1880) from `roles` and puts it at
     the end, replacing any table the mandate already carried. Server callers
@@ -754,13 +772,16 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
-  mandate = mandate.split("- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.").join("- Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.");
+  mandate = mandate.split(SHIPPED_REVIEW_POLICY).join(ORCHESTRATOR_REVIEW_POLICY)
+    .split("A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read.").join(ORCHESTRATOR_REVIEW_READY_BAR)
+    .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR);
   const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
   const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
   mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);
   if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(rule13);
   mandate = mandate.split(SHIPPED_PREPARATION_CONSENT_RULE).join(ORCHESTRATOR_BUG_REPORT_RULE);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
+  for (const previous of SHIPPED_TASK_CURRENT_BULLETS) mandate = mandate.split(previous).join(ORCHESTRATOR_TASK_CURRENT_BULLET);
   if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
   return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
 }

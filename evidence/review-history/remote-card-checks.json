@@ -1,0 +1,101 @@
+{
+  "baseline": "134a29c6",
+  "sourceDigests": {
+    "src/components/kanban/KanbanBoard.tsx": "777871f6c8ee85f0dbcd16fc59e656c7fec79ba47052e6bd640d7d4365424494",
+    "src/components/kanban/RemoteCard.dom.test.tsx": "a616146207b3c3136f8d1d943560a1d4db3d45f48b36a597076d052dabb4b148"
+  },
+  "checks": [
+    {
+      "check": "whole-file-remote-card-head-1",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/kanban/RemoteCard.dom.test.tsx"
+      ],
+      "sample": "head",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "logSha256": "71472000beac04b6641adcd6b56e1a8ba09c3a23a47fcf2823e0117ca9078e66",
+      "recordWrittenAt": "2026-10-23T15:06:22.707354+00:00"
+    },
+    {
+      "check": "whole-file-remote-card-head-2",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/kanban/RemoteCard.dom.test.tsx"
+      ],
+      "sample": "head",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "logSha256": "92c83613596e45a9678889bc9de3b1a9d5958553c89a1122edbfca4109210533",
+      "recordWrittenAt": "2026-10-23T15:06:24.152345+00:00"
+    },
+    {
+      "check": "whole-file-remote-card-head-3",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/kanban/RemoteCard.dom.test.tsx"
+      ],
+      "sample": "head",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "logSha256": "04414961156feaba3eb4ec4745c6f148c1817c16feb81b18f06fe39c7c11fe20",
+      "recordWrittenAt": "2026-10-23T15:06:25.551337+00:00"
+    },
+    {
+      "check": "whole-file-remote-card-base-1",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/kanban/RemoteCard.dom.test.tsx"
+      ],
+      "sample": "base",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "logSha256": "767d8e230c20bac7af8dc4ba3156934086dfdbd6a73f2910ca708b52111e819e",
+      "recordWrittenAt": "2026-10-23T15:06:27.040328+00:00"
+    },
+    {
+      "check": "whole-file-remote-card-base-2",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/kanban/RemoteCard.dom.test.tsx"
+      ],
+      "sample": "base",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "logSha256": "22f718e2b4b177811f46d1be22609a41a401f281981c997d231dc951a36594ae",
+      "recordWrittenAt": "2026-10-23T15:06:28.366320+00:00"
+    },
+    {
+      "check": "whole-file-remote-card-base-3",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/kanban/RemoteCard.dom.test.tsx"
+      ],
+      "sample": "base",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "logSha256": "4101c598c09172ab942adbfd1b2e873254d268095edab941420aa72b09423580",
+      "recordWrittenAt": "2026-10-23T15:06:29.989311+00:00"
+    }
+  ],
+  "collectionExitCode": 1,
+  "collectionError": "After all six test commands passed, metadata collection referenced a nonexistent component filename. This record was recovered from the complete transferred logs; the component is KanbanBoard.tsx."
+}
