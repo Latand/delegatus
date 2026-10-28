@@ -12330,7 +12330,8 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
       const stage = currentStage(pipeline), attempt = stage && currentAttempt(pipeline, stage.id);
       if (stage?.kind !== "run" || !attempt || !controllerAttemptSelected(id, stage.id, attempt.n)
         || attempt.state !== "running" || !attempt.agentPath
-        || attempt.activation || openRuntimeSwitch(attempt) || attemptStage(stage, attempt).runtime === "codex-cloud") return;
+        || attempt.activation || openRuntimeSwitch(attempt)
+        || (attemptStage(stage, attempt).runtime === "codex-cloud" && !attempt.cloud?.fallback)) return;
       const current = () => {
         if (!abort.signal.aborted && performance.now() >= deadline) { expired = true; cancel(); }
         if (abort.signal.aborted) throw new StateSnapshotChangedError();

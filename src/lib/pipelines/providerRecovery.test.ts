@@ -74,6 +74,50 @@ test.each([true, null])("exact null-message capacity completion is shown and con
   expect(stageChipState(lane, lane.stages[0]!)).toBe("running");
 });
 
+test.each([false, true])("Cloud capacity recovery respects local fallback=%s", async fallback => {
+  const f = await capacity();
+  const lane = loadPipelines()[0]!, stage = lane.stages[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  stage.runtime = "codex-cloud";
+  stage.model = attempt.effectiveRole.model;
+  attempt.definition = { ...attempt.definition!, runtime: stage.runtime, model: stage.model };
+  attempt.executionRuntime = fallback ? "cloud-then-local" : "cloud";
+  attempt.cloud = { phase: "failed", environmentId: "ccarenv_fixture", branch: lane.branch,
+    headSha: lane.lastPassedCommit, deadlineAt: f.h.ports.now(), nextPollAt: f.h.ports.now(),
+    polls: 0, taskId: null, taskUrl: null, model: null, error: "Cloud unavailable",
+    ...(fallback ? { fallback: { at: f.h.ports.now(), reason: "Cloud unavailable" } } : {}) };
+  savePipelines([lane]);
+  const before = loadPipelines()[0]!;
+  let reads = 0;
+  const read = f.h.ports.durableTurnEvidence;
+  f.h.ports.durableTurnEvidence = async (...args) => { reads++; return read(...args); };
+
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  if (fallback) {
+    const waiting = loadPipelines()[0]!;
+    expect(waiting.state).toBe("running");
+    expect(waiting.stateDetail).toContain("waiting for model at capacity");
+    expect(waiting.runs[0]!.attempts[0]!.providerWait).toMatchObject({ condition: { kind: "transient" },
+      tries: 0, resumeAt: new Date(f.now() + 60_000).toISOString() });
+  }
+  f.advance(59_999);
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  expect(f.sends).toHaveLength(0);
+  f.advance(1);
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  if (fallback) {
+    expect(f.sends).toHaveLength(1);
+    const continued = loadPipelines()[0]!;
+    expect(continued.runs[0]!.attempts).toHaveLength(1);
+    expect(continued.runs[0]!.attempts[0]!.providerRecoveryBudget?.tries).toBe(1);
+    expect(continued.stateDetail).toContain("continuing the same conversation");
+  } else {
+    expect(reads).toBe(0);
+    expect(f.sends).toHaveLength(0);
+    expect(loadPipelines()[0]).toEqual(before);
+  }
+});
+
 test("ordinary recovery-budget exhaustion cannot skip the independent terminal observation", async () => {
   const f = await capacity();
   let clock = 0;
