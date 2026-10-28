@@ -214,20 +214,33 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Strip additive media fields before validation when the capability is absent,
- * preserving the legacy treatment of arbitrary unknown properties. */
+/** Strip media outside the trigger/direct-parent scope before validating its
+ * descriptors. Legacy claims still ignore all additive media fields. */
 export const requestSchema = z.preprocess(raw => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const value = raw as Record<string, unknown>;
-  if (Array.isArray(value.features) && value.features.includes("relay_media_in")) return raw;
+  const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
   const input = value.input as Record<string, unknown>;
+  const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
+    message && typeof message === "object" && message.id === input.respond_to) : undefined;
+  const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  const requestId = id.safeParse(value.request_id).success ? value.request_id : "invalid";
   return { ...value, input: { ...input,
-    ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map(message => {
+    ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map((message, entryIndex) => {
       if (!message || typeof message !== "object") return message;
+      if (inbound && allowed.has(message.id)) return message;
+      if (inbound && Object.hasOwn(message, "media")) {
+        const count = Array.isArray(message.media) ? message.media.length : 1;
+        // Log each dropped item without its contents or other conversation data.
+        for (let item = 0; item < count; item++) console.info("External relay history media dropped", JSON.stringify({
+          request: requestId,
+          entryIndex, count: 1,
+        }));
+      }
       const copy = { ...message }; delete copy.media; return copy;
     }) } : {}),
-    ...(Array.isArray(input.documents) ? { documents: input.documents.map(document => {
+    ...(!inbound && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
       if (!document || typeof document !== "object") return document;
       const copy = { ...document }; delete copy.message_id; delete copy.media_ref; delete copy.extraction; return copy;
     }) } : {}),

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import http from "node:http";
 import { once } from "node:events";
 import { watch } from "node:fs";
@@ -6,8 +6,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { documentBasename, prepareInboundMedia, validateMediaInput, validatePdfStructure, writeInboundAgentInput } from "./mediaInput";
-import { requestSchema, type ExternalRelayRequest } from "./protocol";
+import { inputSchema, requestSchema, type ExternalRelayRequest } from "./protocol";
+import { answerPrompt } from "./prompt";
 import { richRequest } from "./rich.fixture";
+import { contextRequest } from "./request.fixture";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
 import { admittedSeedMedia, RELAY_MEDIA_ANY_DOCUMENT, type InputMedia } from "./mediaInputValidation";
 const MiB = 1024 * 1024;
@@ -67,6 +69,115 @@ async function fixture(handler: (req: http.IncomingMessage, res: http.ServerResp
     close: async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(directory, { recursive: true, force: true }); } };
 }
 const options = () => ({ signal: new AbortController().signal, deadlineAt: Date.parse("2099-01-01T00:00:00Z"), authorize: () => {} });
+
+function historyRequest(trigger: number, parent: number | null, mediaIndexes: number[], size = 5) {
+  const r = request([]);
+  r.input.requester = requestSchema.parse(contextRequest).input.requester;
+  const template = r.input.conversation[0]!;
+  r.input.conversation = Array.from({ length: 40 }, (_, index) => ({
+    ...template, id: `message_${index}`, text: `History entry ${index}`,
+    reply_to: index === trigger && parent !== null ? `message_${parent}` : null,
+    ...(mediaIndexes.includes(index) ? { media: [{ ...ref(`media_${index}`, size), kind: "photo" as const, mime_type: "image/png" }] } : {}),
+  }));
+  r.input.respond_to = `message_${trigger}`;
+  return r;
+}
+
+test.each([
+  { trigger: 39, parent: null, mediaIndexes: [38, 39], kept: [39] },
+  { trigger: 37, parent: 32, mediaIndexes: [37, 38, 39], kept: [37] },
+  { trigger: 39, parent: 29, mediaIndexes: [27, 28, 29], kept: [29] },
+  { trigger: 39, parent: 22, mediaIndexes: [21, 22, 23], kept: [22] },
+])("history media layout %j proceeds through parsing, download and agent prompt", async ({ trigger, parent, mediaIndexes, kept }) => {
+  const sharp = (await import("sharp")).default;
+  const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+  const raw = historyRequest(trigger, parent, mediaIndexes, bytes.length);
+  // Cover both member and administrator requests with the same media scope.
+  if (parent !== null) Object.assign(raw.input.requester!, { is_admin: false, can_restrict_members: false });
+  expect(inputSchema.safeParse(raw.input).success).toBe(true);
+  const before = structuredClone(raw);
+  const downloads: string[] = [];
+  const f = await fixture((req, res) => {
+    downloads.push(req.url!.split("/").at(-1)!);
+    res.writeHead(200, { "content-type": "image/png", "content-length": bytes.length }); res.end(bytes);
+  });
+  const diagnostic = spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const parsed = requestSchema.parse(raw);
+    const refs = kept.map(index => `media_${index}`);
+    expect(validateMediaInput(parsed).map(media => media.ref)).toEqual(refs);
+    expect(parsed.input.conversation.map(message => message.text)).toEqual(raw.input.conversation.map(message => message.text));
+    expect(raw).toEqual(before);
+    const prompt = answerPrompt(parsed);
+    const history = JSON.parse(prompt.split("<conversation>\n")[1]!.split("\n</conversation>")[0]!);
+    expect(history).toEqual(parsed.input.conversation);
+    for (const index of mediaIndexes.filter(index => !kept.includes(index))) {
+      expect(history[index]).not.toHaveProperty("media");
+      expect(prompt).not.toContain(`media_${index}`);
+    }
+    const result = await prepareInboundMedia(f.relay, parsed, f.directory, options());
+    try {
+      expect(result.files.map(file => file.ref)).toEqual(refs);
+      expect(downloads).toEqual(refs);
+    } finally { await result.dispose(); }
+    expect(diagnostic.mock.calls).toEqual(mediaIndexes.filter(index => !kept.includes(index)).map(entryIndex => [
+      "External relay history media dropped", JSON.stringify({ request: raw.request_id, entryIndex, count: 1 }),
+    ]));
+    // Recovery and downstream validation see an already-normalized projection.
+    expect(requestSchema.parse(parsed)).toEqual(parsed);
+    expect(diagnostic).toHaveBeenCalledTimes(mediaIndexes.length - kept.length);
+  } finally { diagnostic.mockRestore(); await f.close(); }
+});
+
+test("history media is discarded before descriptor validation and permitted-item budgets", () => {
+  const raw = historyRequest(39, 38, [37, 38, 39]);
+  raw.input.conversation[39]!.media = [ref("trigger_a", 10 * MiB), ref("trigger_b", 10 * MiB)];
+  raw.input.conversation[38]!.media = [ref("parent_a", 10 * MiB), ref("parent_b", 10 * MiB)];
+  raw.input.conversation[38]!.reply_to = "message_37";
+  Object.assign(raw.input.conversation[37]!, { media: [null, { ref: "../outside" }, "invalid", {}, {}] });
+  const diagnostic = spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const parsed = requestSchema.parse(raw);
+    expect(validateMediaInput(parsed).map(media => media.ref)).toEqual(["trigger_a", "trigger_b", "parent_a", "parent_b"]);
+    expect(parsed.input.conversation[37]).not.toHaveProperty("media");
+    expect(diagnostic.mock.calls).toEqual(Array.from({ length: 5 }, () => [
+      "External relay history media dropped", JSON.stringify({ request: raw.request_id, entryIndex: 37, count: 1 }),
+    ]));
+  } finally { diagnostic.mockRestore(); }
+});
+
+test.each([38, 39])("trigger/direct-parent entry %s retains every metadata check after history drops", async entryIndex => {
+  const failures = [
+    [{ ...ref(), ref: "../outside" }], [{ ...ref(), filename: "../outside" }],
+    [{ ...ref(), expires_at: undefined }], [{ ...ref(), mime_type: "image/svg+xml" }],
+    [{ ...ref(), byte_size: 20 * MiB + 1 }],
+    [ref("a", 20 * MiB), ref("b", 20 * MiB), ref("c", 1)],
+    Array.from({ length: 5 }, (_, index) => ref(`ref_${index}`)),
+  ];
+  let downloads = 0;
+  const f = await fixture((_req, res) => { downloads++; res.end(); });
+  const diagnostic = spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const valid = requestSchema.parse(historyRequest(39, 38, [37, 38, 39]));
+    expect(validateMediaInput(valid).map(media => media.ref)).toEqual(["media_39", "media_38"]);
+    for (const media of failures) {
+      const raw = historyRequest(39, 38, [37, 38, 39]);
+      raw.input.conversation[entryIndex]!.media = media;
+      expect(requestSchema.safeParse(raw).success).toBe(false);
+      await expect(prepareInboundMedia(f.relay, raw, f.directory, options())).rejects.toBeInstanceOf(ExternalRelayError);
+    }
+    const duplicate = historyRequest(39, 38, [37, 38, 39]);
+    duplicate.input.conversation[38]!.media = [{ ...duplicate.input.conversation[39]!.media![0]!, byte_size: 6 }];
+    expect(requestSchema.safeParse(duplicate).success).toBe(false);
+    const noContext = historyRequest(39, 38, [37, 38, 39]);
+    noContext.features = ["relay_media_in"];
+    expect(requestSchema.safeParse(noContext).success).toBe(false);
+    const extracted = historyRequest(39, 38, [37, 38, 39]);
+    extracted.input.documents = [{ title: "History extraction", text: "text", message_id: "message_37", media_ref: "media_37", extraction: "complete" }];
+    expect(requestSchema.safeParse(extracted).success).toBe(false);
+    expect(downloads).toBe(0);
+  } finally { diagnostic.mockRestore(); await f.close(); }
+});
 
 test.each([
   ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "budget.xlsx"],
