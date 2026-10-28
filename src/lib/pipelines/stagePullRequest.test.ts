@@ -1319,6 +1319,10 @@ test.each(["timeout", "empty", "signal", "spawn", "missing"] as const)("PR inspe
     expect(first.publicationTextRepair).toBeUndefined();
     expect(first.pullRequestInspection?.failures).toBe(1);
     expect(first.error).toContain('"budgetMs":60000');
+    expect(first.error).toMatch(/"elapsedMs":[0-9]+/);
+    expect(first.error).toContain(`"cause":"${mode === "empty" ? "exit" : mode === "missing" ? "missing-input" : mode}"`);
+    if (mode === "empty") expect(first.error).toContain('"stderrTail":"gate could not load its input"');
+    if (mode === "timeout") expect(first.error).toContain('"stderrTail":"command timed out after 60000ms"');
     expect(first.error).toContain('"body":"available"');
     expect(first.error).toContain(mode === "missing" ? '"fingerprints":"missing"' : '"fingerprints":"available"');
     expect(first.error).toContain(mode === "timeout" ? '"signal":"SIGKILL"' : mode === "spawn" ? '"spawn":"EAGAIN"' : mode === "signal" ? '"signal":"SIGTERM"' : mode === "missing" ? '"exit":0' : '"exit":1');
