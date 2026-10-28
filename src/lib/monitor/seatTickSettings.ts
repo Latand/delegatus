@@ -616,6 +616,14 @@ export function applySeatTickSettingsChange(
   let instructionLines = seatTickInstructionLines(current);
   if (Object.hasOwn(change, "reason") || removing) {
     const author = context.instructionActor ?? context.actor;
+    const overLimit = (count: number) => ({ ok: false as const, error: `instructions (reason) are ${count} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` });
+    /* The panel's counter runs this same preview over its draft. */
+    const previewOf = (text: string | null | undefined) => previewSeatTickInstructions(current, {
+      ...(text !== undefined ? { text } : {}),
+      claimUnknown: text !== undefined && Object.hasOwn(change, "clearUnknownInstructions"),
+      ...(removing ? { removeSeatNotes: change.removeSeatNotes } : {}),
+    }, author, context.at);
+    const joinedLength = (lines: SeatTickInstructionLine[]) => lines.map(line => line.text).join("\n").length;
     let text: string | null | undefined;
     if (Object.hasOwn(change, "reason")) {
       if (author.kind === "unidentified") return { ok: false, error: "instruction writes need an identified author" };
@@ -625,21 +633,19 @@ export function applySeatTickSettingsChange(
       else {
         const redacted = redactMonitorText(raw).trim();
         if (raw.length > REASON_LIMIT || redacted.length > REASON_LIMIT) {
-          return { ok: false, error: `instructions (reason) are ${raw.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
+          /* The refusal names the total the panel previews for the text as
+             sent, seat notes included, and never less than what was sent. */
+          const sent = previewOf(raw.trim() || null);
+          return overLimit(sent.ok ? Math.max(raw.length, joinedLength(sent.lines)) : raw.length);
         }
         text = redacted || null;
       }
     }
-    /* The panel's counter runs this same preview over its draft. */
-    const preview = previewSeatTickInstructions(current, {
-      ...(text !== undefined ? { text } : {}),
-      claimUnknown: text !== undefined && Object.hasOwn(change, "clearUnknownInstructions"),
-      ...(removing ? { removeSeatNotes: change.removeSeatNotes } : {}),
-    }, author, context.at);
+    const preview = previewOf(text);
     if (!preview.ok) return preview;
     instructionLines = preview.lines;
     reason = instructionLines.map(line => line.text).join("\n") || null;
-    if ((reason?.length ?? 0) > REASON_LIMIT) return { ok: false, error: `instructions (reason) are ${reason!.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
+    if ((reason?.length ?? 0) > REASON_LIMIT) return overLimit(reason!.length);
   }
 
   /* Set, replaced and cleared through this one surface. Like the panel

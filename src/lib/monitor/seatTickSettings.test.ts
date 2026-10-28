@@ -188,7 +188,8 @@ test("operator instructions survive default cadence, schedule restore and expiry
 test("operator instructions over the storage limit are refused without dropping their tail", () => {
   const current = { ...defaultSeatTickSettings(PROJECT), reason: "Keep these instructions." };
   const result = change(current, { reason: "x".repeat(501) });
-  expect(result).toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  /* Named as the total that would be stored: the unattributed line, a newline and the 501 sent. */
+  expect(result).toEqual({ ok: false, error: "instructions (reason) are 526 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
   expect(current.reason).toBe("Keep these instructions.");
 });
 
@@ -613,6 +614,26 @@ test("the panel's preview of an edit is what the server stores, and the limit co
   expect(overPreview.ok && overPreview.lines.map(line => line.text).join("\n").length).toBe(501);
   expect(asOperator(current, { reason: over, clearUnknownInstructions: true, removeSeatNotes: edit.removeSeatNotes }))
     .toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+});
+
+test("a field alone over the limit is refused with the total the panel previews, seat notes included", async () => {
+  const { previewSeatTickInstructions } = await import("./seatTickInstructions");
+  const refusal = (count: number) => ({ ok: false as const, error: `instructions (reason) are ${count} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` });
+  const previewed = (current: SeatTickSettings, text: string, claimUnknown = false) => {
+    const preview = previewSeatTickInstructions(current, { text, claimUnknown }, OPERATOR, NEXT_AT);
+    return preview.ok ? preview.lines.map(line => line.text).join("\n").length : null;
+  };
+  const noted = settingsOf(applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { reason: "Note." }, { at: AT, actor: SEAT }));
+  const field = "x".repeat(501);
+  expect(previewed(noted, field)).toBe(507);
+  expect(asOperator(noted, { reason: field })).toEqual(refusal(507));
+  /* Stored before the limit counted seat notes: already 501 together. */
+  const legacy = { ...defaultSeatTickSettings(PROJECT), reason: `${LEGACY}\nNote.`, instructionLines: [{ text: LEGACY, author: null, at: null }, { text: "Note.", author: SEAT, at: AT }] };
+  expect(previewed(legacy, `${LEGACY}\nчитай`, true)).toBe(507);
+  expect(asOperator(legacy, { reason: `${LEGACY}\nчитай`, clearUnknownInstructions: true })).toEqual(refusal(507));
+  /* A removal that no longer matches leaves nothing to preview; the length sent is named. */
+  expect(asOperator(noted, { reason: field, removeSeatNotes: [{ index: 0, text: "Other.", at: AT }] })).toEqual(refusal(501));
+  expect(noted.reason).toBe("Note.");
 });
 
 
