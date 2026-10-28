@@ -1877,8 +1877,12 @@ export function defaultPipelinePorts(
       const receipt = evidence.receipt;
       if (!receipt) return null;
       const identityPublished = identityFence().allowsReceipt(receipt, { structured: evidence.structured });
-      const admittedButUnavailableBeforeDispatch = receipt.membershipAdmitted === true
-        && receipt.error === supervisedRuntimeHostUnavailableReason("pipeline structured runtime host");
+      // Callback startup fails before a session can be dispatched. Keep the
+      // exact diagnostic and the empty-host/generation fence below together.
+      const admittedButFailedBeforeDispatch = receipt.membershipAdmitted === true
+        && (receipt.error === supervisedRuntimeHostUnavailableReason("pipeline structured runtime host")
+          || receipt.engine === "codex" && receipt.transport === "structured"
+            && receipt.error?.startsWith("Codex callback listener failed before dispatch: ") === true);
       return {
         state: receipt.state,
         memoryCap: receipt.memoryCap,
@@ -1892,7 +1896,7 @@ export function defaultPipelinePorts(
         error: receipt.error,
         staged: receipt.key !== null,
         neverBegan: receipt.state === "failed" && !receipt.rejection
-          && (receipt.membershipAdmitted === false || admittedButUnavailableBeforeDispatch)
+          && (receipt.membershipAdmitted === false || admittedButFailedBeforeDispatch)
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
         roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection
