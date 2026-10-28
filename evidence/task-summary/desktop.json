@@ -9,7 +9,7 @@
     "src/components/kanban/kanbanBoard.css": "175ebf742e2b617de4ca799ee3b96923ccd0b90e7b86d14d151026081c9acd10",
     "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
     "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
-    "src/components/kanban/issue1695BrowserHarness.ts": "415ddf8855cca2ec133072c05744120115cb2795f378968007b895e39c523a5f"
+    "src/components/kanban/issue1695BrowserHarness.ts": "d7a073e436d554f47e277f56d639220127379bac7955e2c15795cf279f29954e"
   },
   "readings": [
     {
@@ -31,7 +31,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
-        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
         "rule": {
           "width": "2px",
           "background": "rgb(203, 195, 183)"
@@ -176,7 +176,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
-        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
         "rule": {
           "width": "2px",
           "background": "rgb(203, 195, 183)"
@@ -321,7 +321,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
-        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
         "rule": {
           "width": "2px",
           "background": "rgb(203, 195, 183)"
@@ -466,7 +466,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
-        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
         "rule": {
           "width": "2px",
           "background": "rgb(60, 64, 76)"
@@ -611,7 +611,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
-        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
         "rule": {
           "width": "2px",
           "background": "rgb(60, 64, 76)"
@@ -756,7 +756,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
-        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
         "rule": {
           "width": "2px",
           "background": "rgb(60, 64, 76)"
@@ -901,7 +901,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
-        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
         "rule": {
           "width": "2px",
           "background": "rgb(203, 195, 183)"
@@ -1047,7 +1047,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
-        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
         "rule": {
           "width": "2px",
           "background": "rgb(203, 195, 183)"
@@ -1193,7 +1193,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
-        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
         "rule": {
           "width": "2px",
           "background": "rgb(203, 195, 183)"
@@ -1340,7 +1340,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
-        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
         "rule": {
           "width": "2px",
           "background": "rgb(60, 64, 76)"
@@ -1486,7 +1486,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
-        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
         "rule": {
           "width": "2px",
           "background": "rgb(60, 64, 76)"
@@ -1632,7 +1632,7 @@
           "headlineWeight": "600"
         },
         "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
-        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
         "rule": {
           "width": "2px",
           "background": "rgb(60, 64, 76)"
