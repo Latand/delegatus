@@ -1566,6 +1566,48 @@ test("confirming a rotation posts to the ROTATE route, and never composes the ha
   expect(rotatePosts[0]!.cwd).toBeUndefined();
 });
 
+/* The incumbent's tier may be one global Turbo applied, which the rotate route
+   swaps back to the tier the seat had before Turbo; only a speed the operator
+   picks in the draft is sent. */
+test("an untouched rotate draft on a Codex seat sends no speed, so the server's inheritance decides it", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: true };
+  incumbentStatus = incumbent({ engine: "codex", model: "gpt-6.1-sol", accountId: "codex-primary" });
+  const host = mount([{ ...orchestratorFile, engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast", fast: true, proc: "running", pid: 4_242 } as FileEntry]);
+  await settle();
+  flushSync(() => undefined);
+  flushSync(() => rotateButton(host).click());
+  await settle();
+  const speed = host.querySelector('select[aria-label="Codex speed mode"]') as HTMLSelectElement;
+  expect(speed.value).toBe("");
+  expect(speed.selectedOptions[0]?.textContent).toBe(translate("en", "draft.speedInherited"));
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(rotatePosts).toHaveLength(1);
+  expect(rotatePosts[0]).toMatchObject({ engine: "codex", model: "gpt-6.1-sol" });
+  expect("fast" in rotatePosts[0]!).toBe(false);
+  expect("serviceTier" in rotatePosts[0]!).toBe(false);
+});
+
+test("a speed picked in the rotate draft is sent as the successor's explicit choice", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: true };
+  incumbentStatus = incumbent({ engine: "codex", model: "gpt-6.1-sol", accountId: "codex-primary" });
+  const host = mount([{ ...orchestratorFile, engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast", fast: true, proc: "running", pid: 4_242 } as FileEntry]);
+  await settle();
+  flushSync(() => undefined);
+  flushSync(() => rotateButton(host).click());
+  await settle();
+  const speed = host.querySelector('select[aria-label="Codex speed mode"]') as HTMLSelectElement;
+  flushSync(() => {
+    speed.value = "standard";
+    speed.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
+  });
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(rotatePosts).toHaveLength(1);
+  expect(rotatePosts[0]!.fast).toBe(false);
+  expect("serviceTier" in rotatePosts[0]!).toBe(false);
+});
+
 test("a double-click rotates ONCE, and a retry after a lost reply replays the same key", async () => {
   rotateResponses = [{ status: 0, body: null, throws: true }];
   const host = await mountLive();

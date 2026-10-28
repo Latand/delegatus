@@ -8,8 +8,10 @@ import type { RuntimeSettingsCapability } from "@/lib/runtime/contracts";
 import type { FileEntry } from "@/lib/types";
 
 import { RuntimePill } from "./RuntimePill";
+import { TaskToastHost } from "./tasks/taskToast";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 import { resumeKey, sendRuntimeFrom } from "./runtimeProfile";
+import { serviceTierRefusal } from "@/lib/accounts/codexServiceTiers";
 
 const dom = new Window();
 installActEnv();
@@ -23,11 +25,32 @@ Object.assign(globalThis, {
 let mobile = false;
 const requests: Array<Record<string, unknown>> = [];
 let copilotModelCatalogResponse: unknown = null;
+/* The Codex tier catalog answer and the speed action's answer; null answers 404 and ok. */
+type Answer = { status: number; body: unknown };
+let codexCatalogAnswer: Answer | null = null;
+let codexCatalogGate: Promise<void> | null = null;
+const catalogReads: string[] = [];
+const speedAnswers: Array<{ answer: Answer; gate?: Promise<void> }> = [];
+/* Holds the reconfigure answer open while set. */
+let reconfigureGate: Promise<void> | null = null;
+const json = (answer: Answer) => new Response(JSON.stringify(answer.body), { status: answer.status, headers: { "content-type": "application/json" } });
 globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
   if (String(_input).includes("/api/accounts/copilot/models")) {
     return new Response(JSON.stringify(copilotModelCatalogResponse ?? { models: [] }), { status: 200, headers: { "content-type": "application/json" } });
   }
-  requests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+  if (String(_input).includes("/api/accounts/codex/models")) {
+    catalogReads.push(String(_input));
+    if (codexCatalogGate) await codexCatalogGate;
+    return json(codexCatalogAnswer ?? { status: 404, body: { error: "Codex account was not found in the requested pool" } });
+  }
+  const sent = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+  requests.push(sent);
+  if (sent.action === "speed") {
+    const next = speedAnswers.shift();
+    if (next?.gate) await next.gate;
+    return json(next?.answer ?? { status: 200, body: { ok: true, operationId: "speed-ui", requestedTier: sent.serviceTier, appliedTier: sent.serviceTier, echoed: true } });
+  }
+  if (sent.action === "reconfigure" && reconfigureGate) await reconfigureGate;
   return new Response(JSON.stringify({
     ok: true,
     structured: true,
@@ -138,6 +161,11 @@ afterEach(() => {
   localStorage.clear();
   requests.length = 0;
   copilotModelCatalogResponse = null;
+  codexCatalogAnswer = null;
+  codexCatalogGate = null;
+  catalogReads.length = 0;
+  speedAnswers.length = 0;
+  reconfigureGate = null;
 });
 
 test("the pill face reads shortLabel · tier and opens a menu with the active tier checked", async () => {
@@ -495,8 +523,11 @@ test("speed rows exist only for codex and remain available on the structured sur
     .find((row) => row.getAttribute("data-runtime-value") === "speed")!;
   await click(speed);
   const speedRows = [...codex.host.ownerDocument.querySelectorAll('[data-runtime-row="speed"]')];
-  expect(speedRows.map((row) => row.textContent)).toEqual(["Standard", "Fast — priority tier"]);
-  expect(speedRows.every((row) => !row.hasAttribute("disabled"))).toBe(true);
+  expect(speedRows.map((row) => row.textContent)).toEqual(["Standard", "Fast — priority tier", "Ultra — Ultrafast tier"]);
+  expect(speedRows.slice(0, 2).every((row) => !row.hasAttribute("aria-disabled"))).toBe(true);
+  /* No catalog answered for the account (404 here): Ultra is not offered, and says so. */
+  expect(speedRows[2]!.getAttribute("aria-disabled")).toBe("true");
+  expect(codex.host.ownerDocument.querySelector("[data-runtime-row-note]")!.textContent).toBe("Can't read default's model catalog to check Ultrafast");
   await act(async () => codex.root.unmount());
 
   // Claude has no speed concept anywhere in the popover.
@@ -763,10 +794,335 @@ test("ultrafast is visible and effort-only composer profiles preserve the thread
   await click(speed);
   const standard = document.querySelector('[data-runtime-row="speed"][data-runtime-value="standard"]')!;
   await click(standard);
-  expect(sendRuntimeFrom(file)).toMatchObject({ fast: false });
+  /* Speed is the thread's own setting, changed in place: no per-turn override rides later sends. */
+  expect(requests.at(-1)).toMatchObject({ action: "speed", serviceTier: "default", path: file.path });
+  expect(sendRuntimeFrom(file)).toBeUndefined();
   localStorage.setItem(key + ":profile", JSON.stringify({ model: "gpt-6-astra", effort: "xhigh", fast: true }));
   expect(sendRuntimeFrom(file)).toMatchObject({ effort: "xhigh" });
   expect(sendRuntimeFrom(file)).not.toHaveProperty("fast");
+  await act(async () => root.unmount());
+});
+
+/* Ultra on the seat's speed control (2026-10-26): offered from the running
+   account's own catalog, chosen in place through the conversation's speed
+   action, and read back from what the conversation reports. */
+const solFile: FileEntry = { ...codexFile, model: "gpt-6.1-sol" };
+const catalogOf = (label: string, tiers: Array<{ id: string; name: string }> | null): Answer => ({
+  status: 200, body: { accounts: [{ id: "default", label, models: [{ slug: "gpt-6.1-sol", tiers }, { slug: "gpt-6-luna", tiers: [] }] }] },
+});
+const MAIN = catalogOf("Account A", [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }]);
+const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+const openSpeedPanel = async (host: HTMLElement) => {
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await click(document.querySelector('[data-runtime-row="submenu"][data-runtime-value="speed"]')!);
+  await settle();
+};
+const speedRow = (value: string) => document.querySelector(`[data-runtime-row="speed"][data-runtime-value="${value}"]`) as HTMLButtonElement;
+const deferred = () => { let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; }); return { gate, release }; };
+
+test("Ultra is offered where the account's catalog lists it, and a pick changes the speed in place and reads back applied", async () => {
+  codexCatalogAnswer = MAIN;
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(host);
+  expect(catalogReads).toEqual(["/api/accounts/codex/models?account=default"]);
+  expect(speedRow("ultrafast").hasAttribute("aria-disabled")).toBe(false);
+  expect(document.querySelector("[data-runtime-row-note]")).toBeNull();
+  await click(speedRow("ultrafast"));
+  await settle();
+  /* The choice took, so the speed rows close as any other pick does. */
+  expect(document.querySelector("[data-runtime-popover]")).toBeNull();
+
+  /* The in-place speed action, and nothing else: no reconfigure, no per-turn override. */
+  expect(requests).toEqual([{ path: solFile.path, conversationId: "conversation_runtime", action: "speed", serviceTier: "ultrafast" }]);
+  expect(sendRuntimeFrom(solFile)).toBeUndefined();
+  expect(faceOf(host)).toContain("Ultrafast");
+  expect(host.querySelector("[data-runtime-switch-pending]")).toBeNull();
+
+  /* The poll reads the applied tier back: the face keeps it, now as what the conversation runs. */
+  const applied = { ...solFile, fast: true, serviceTier: "ultrafast" };
+  await rerender(root, <RuntimePill file={applied} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  expect(faceOf(host)).toContain("6.1-Sol · High · Ultrafast");
+  await openSpeedPanel(host);
+  expect(speedRow("ultrafast").getAttribute("aria-checked")).toBe("true");
+  expect(speedRow("fast").getAttribute("aria-checked")).toBe("false");
+  await act(async () => root.unmount());
+});
+
+test("Ultra stays disabled with the account's own reason as visible text where its catalog lacks the tier", async () => {
+  codexCatalogAnswer = catalogOf("Account B", [{ id: "priority", name: "Fast" }]);
+  const desktop = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(desktop.host);
+  const ultra = speedRow("ultrafast");
+  expect(ultra.getAttribute("aria-disabled")).toBe("true");
+  const note = document.querySelector("[data-runtime-row-note]")!;
+  expect(note.textContent).toBe("Account B doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
+  expect(ultra.getAttribute("aria-describedby")).toBe(note.id);
+  await click(ultra);
+  expect(requests).toHaveLength(0);
+  await act(async () => desktop.root.unmount());
+
+  /* The phone has no tooltip: the sheet carries the same reason under the row. */
+  mobile = true;
+  const phone = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(phone.host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  const row = document.querySelector('[data-runtime-sheet-value="ultrafast"]')!;
+  expect(row.getAttribute("aria-disabled")).toBe("true");
+  expect(row.getAttribute("aria-describedby")).toBe(document.querySelector("[data-runtime-sheet] [data-runtime-row-note]")!.id);
+  await click(row);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet] [data-runtime-row-note]")!.textContent)
+    .toBe("Account B doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
+  await act(async () => phone.root.unmount());
+});
+
+test("while the catalog read is open Ultra claims nothing, and a model the catalog has no tiers for offers none", async () => {
+  const held = deferred();
+  codexCatalogGate = held.gate;
+  codexCatalogAnswer = MAIN;
+  const { host, root } = await renderPill(<RuntimePill file={{ ...solFile, model: "gpt-6-luna" }} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(host);
+  expect(speedRow("ultrafast").getAttribute("aria-disabled")).toBe("true");
+  expect(document.querySelector("[data-runtime-row-note]")).toBeNull();
+  held.release();
+  await settle();
+  await settle();
+  expect(speedRow("ultrafast").getAttribute("aria-disabled")).toBe("true");
+  expect(document.querySelector("[data-runtime-row-note]")!.textContent).toBe("Account A doesn't offer Ultrafast for GPT\u20116\u2011Luna");
+  await act(async () => root.unmount());
+});
+
+test("on the desktop, arrow keys reach the unavailable Ultra row, it announces the account's reason, and activating it sends nothing", async () => {
+  codexCatalogAnswer = catalogOf("Account B", [{ id: "priority", name: "Fast" }]);
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(host);
+  await settle();
+  expect(document.activeElement).toBe(speedRow("standard"));
+  const menu = document.querySelector("[data-runtime-popover]")!;
+  await keydown(menu, "ArrowDown");
+  expect(document.activeElement).toBe(speedRow("fast"));
+  await keydown(menu, "ArrowDown");
+  const ultra = document.activeElement as HTMLElement;
+  expect(ultra).toBe(speedRow("ultrafast"));
+  expect(ultra.getAttribute("role")).toBe("menuitemradio");
+  expect(ultra.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(ultra.getAttribute("aria-describedby")!)!.textContent)
+    .toBe("Account B doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
+  await keydown(menu, "Enter");
+  await keydown(menu, " ");
+  await click(ultra);
+  expect(requests).toHaveLength(0);
+  expect(speedRow("standard").getAttribute("aria-checked")).toBe("true");
+  /* The order wraps past it to Back, so it is one stop, never a trap. */
+  await keydown(menu, "ArrowDown");
+  expect(document.activeElement?.getAttribute("data-runtime-row")).toBe("back");
+  await act(async () => root.unmount());
+});
+
+test("on the desktop a refused speed choice keeps the speed rows open and says why beside them, without a second click", async () => {
+  codexCatalogAnswer = MAIN;
+  const refusal = "service tier \"ultrafast\" is not offered for gpt-6.1-sol on pinned account \"default\"";
+  const answer = deferred();
+  speedAnswers.push({ answer: { status: 409, body: { ok: false, code: "service_tier_unavailable", error: refusal } }, gate: answer.gate });
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(host);
+  await click(speedRow("ultrafast"));
+  /* Checked at once while the action answers; the rows stay where the choice was made. */
+  expect(speedRow("ultrafast").getAttribute("aria-checked")).toBe("true");
+  answer.release();
+  await settle();
+  await settle();
+  expect(document.querySelector("[data-runtime-popover]")).not.toBeNull();
+  expect(document.querySelector("[data-runtime-speed-error]")!.textContent).toBe(refusal);
+  expect([...document.querySelectorAll('[data-runtime-row="speed"]')].map((row) => row.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+  expect(faceOf(host)).not.toContain("Ultrafast");
+  /* Back on the root panel, the account line carries it instead: once per panel. */
+  await click(document.querySelector('[data-runtime-row="back"]')!);
+  expect(document.querySelector("[data-runtime-speed-error]")).toBeNull();
+  expect(document.querySelector("[data-runtime-popover-account]")!.textContent).toBe(refusal);
+  await act(async () => root.unmount());
+});
+
+test("a speed refusal that lands after its panel closed is said in a toast", async () => {
+  codexCatalogAnswer = MAIN;
+  const answer = deferred();
+  speedAnswers.push({ answer: { status: 409, body: { ok: false, error: "a runtime change is already in flight" } }, gate: answer.gate });
+  const { host, root } = await renderPill(<><RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} /><TaskToastHost /></>);
+  await openSpeedPanel(host);
+  await click(speedRow("ultrafast"));
+  await keydown(document.querySelector("[data-runtime-popover]")!, "Escape");
+  expect(document.querySelector("[data-runtime-popover]")).toBeNull();
+  expect(document.querySelector("[data-task-toasts]")).toBeNull();
+  answer.release();
+  await settle();
+  await settle();
+  expect(document.querySelector("[data-task-toasts]")!.textContent).toContain("a runtime change is already in flight");
+  await act(async () => root.unmount());
+});
+
+test("a refused speed choice returns to the speed the conversation runs and says why beside the speed rows", async () => {
+  mobile = true;
+  codexCatalogAnswer = MAIN;
+  const refusal = "service tier \"ultrafast\" is not offered for gpt-6.1-sol on pinned account \"default\"";
+  speedAnswers.push({ answer: { status: 409, body: { ok: false, code: "service_tier_unavailable", error: refusal } } });
+  /* happy-dom lays nothing out: record what the sheet asks to bring into view. */
+  const revealed: Element[] = [];
+  const original = dom.Element.prototype.scrollIntoView;
+  dom.Element.prototype.scrollIntoView = function (this: Element) { revealed.push(this); } as typeof original;
+  try {
+    const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+    await click(host.querySelector("[data-runtime-pill]")!);
+    await settle();
+    await click(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!);
+    await settle();
+    expect(requests.at(-1)).toMatchObject({ action: "speed", serviceTier: "ultrafast" });
+    /* The reason lands under the last row and grows below the sheet's edge, so the sheet reveals it. */
+    expect(revealed).toContain(document.querySelector("[data-runtime-speed-error]")!);
+    const rows = [...document.querySelectorAll('[data-runtime-sheet] [role="radiogroup"][aria-label="Speed"] [data-runtime-sheet-row]')];
+    expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    expect(document.querySelector("[data-runtime-speed-error]")!.textContent).toBe(refusal);
+    /* Once per surface: the account line does not repeat it. */
+    expect(document.querySelector("[data-runtime-sheet-account-current]")!.textContent).not.toContain(refusal);
+    expect(faceOf(host)).not.toContain("Ultrafast");
+    await act(async () => root.unmount());
+  } finally {
+    dom.Element.prototype.scrollIntoView = original;
+  }
+});
+
+test("a late refusal of an earlier speed choice never overrides the later one", async () => {
+  mobile = true;
+  codexCatalogAnswer = MAIN;
+  const first = deferred();
+  speedAnswers.push({ answer: { status: 409, body: { ok: false, error: "late refusal" } }, gate: first.gate });
+  speedAnswers.push({ answer: { status: 200, body: { ok: true, appliedTier: "priority" } } });
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  await click(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!);
+  const fast = [...document.querySelectorAll("[data-runtime-sheet-row]")].find((row) => row.textContent === "Fast — priority tier")!;
+  await click(fast);
+  await settle();
+  first.release();
+  await settle();
+  expect(requests.map((request) => request.serviceTier)).toEqual(["ultrafast", "priority"]);
+  expect(fast.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector("[data-runtime-speed-error]")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("the server's refusal of an unavailable Ultrafast is said as the Ultra row's own reason", async () => {
+  codexCatalogAnswer = MAIN;
+  /* The writer's own output: the account's catalog moved after the rows were read. */
+  const refusal = serviceTierRefusal([{ id: "default", label: "Account B", tiers: ["priority"], alternativeModels: [] }], "gpt-6.1-sol", "ultrafast", "default");
+  speedAnswers.push({ answer: { status: 409, body: { ok: false, code: "service_tier_unavailable", requestedTier: "ultrafast", error: refusal } } });
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(host);
+  await click(speedRow("ultrafast"));
+  await settle();
+  await settle();
+  expect(document.querySelector("[data-runtime-speed-error]")!.textContent).toBe("Account B doesn't offer Ultrafast for GPT\u20116.1\u2011Sol (offers: Fast)");
+  await act(async () => root.unmount());
+});
+
+test("on the phone an applied Ultrafast is named on the face and in the sheet's summary", async () => {
+  mobile = true;
+  codexCatalogAnswer = MAIN;
+  const applied = { ...solFile, fast: true, serviceTier: "ultrafast" };
+  const { host, root } = await renderPill(<RuntimePill file={applied} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  expect(faceOf(host)).toBe("6.1-Sol · high · Ultrafast");
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  expect(document.querySelector("[data-mobile2-next-message]")!.textContent).toBe("Applies to your next message: 6.1-Sol · high · Ultrafast");
+  await act(async () => root.unmount());
+
+  /* At the standard tier neither says a speed. */
+  const plain = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  expect(faceOf(plain.host)).toBe("6.1-Sol · high");
+  await click(plain.host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  expect(document.querySelector("[data-mobile2-next-message]")!.textContent).toBe("Applies to your next message: 6.1-Sol · high");
+  await act(async () => plain.root.unmount());
+});
+
+test("in the phone's sheet the tapped speed row says it is pending until its action answers", async () => {
+  mobile = true;
+  codexCatalogAnswer = MAIN;
+  const answer = deferred();
+  speedAnswers.push({ answer: { status: 200, body: { ok: true, requestedTier: "ultrafast", appliedTier: "ultrafast", echoed: true } }, gate: answer.gate });
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  const ultra = () => document.querySelector('[data-runtime-sheet-value="ultrafast"]')!;
+  await click(ultra());
+  expect(ultra().getAttribute("aria-checked")).toBe("true");
+  expect(ultra().querySelector("[data-runtime-sheet-pending]")!.textContent).toBe("switch pending");
+  expect(ultra().textContent).toBe("Ultra — Ultrafast tier switch pending");
+  expect(document.querySelectorAll("[data-runtime-sheet-pending]")).toHaveLength(1);
+  answer.release();
+  await settle();
+  await settle();
+  expect(ultra().getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector("[data-runtime-sheet-pending]")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("a later change that supersedes a speed choice takes its pending mark off the speed row", async () => {
+  mobile = true;
+  codexCatalogAnswer = MAIN;
+  const answer = deferred();
+  speedAnswers.push({ answer: { status: 200, body: { ok: true, requestedTier: "ultrafast", appliedTier: "ultrafast", echoed: true } }, gate: answer.gate });
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  await click(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!);
+  expect(document.querySelector("[data-runtime-sheet-pending]")).not.toBeNull();
+  const reconfigure = deferred();
+  reconfigureGate = reconfigure.gate;
+  const low = [...document.querySelectorAll('[data-runtime-sheet] [role="radiogroup"][aria-label="Reasoning"] [data-runtime-sheet-row]')].find((row) => row.textContent === "low")!;
+  await click(low);
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", effort: "low" });
+  /* The reconfigure is still saving: nothing says the superseded speed is. */
+  expect(host.querySelector("[data-runtime-pill]")!.getAttribute("aria-busy")).toBe("true");
+  expect(document.querySelector("[data-runtime-sheet-pending]")).toBeNull();
+  reconfigureGate = null;
+  reconfigure.release();
+  answer.release();
+  await settle();
+  await act(async () => root.unmount());
+});
+
+test("a refused speed choice drops its pending mark with its check", async () => {
+  mobile = true;
+  codexCatalogAnswer = MAIN;
+  const answer = deferred();
+  speedAnswers.push({ answer: { status: 409, body: { ok: false, error: "a runtime change is already in flight" } }, gate: answer.gate });
+  const { host, root } = await renderPill(<RuntimePill file={solFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await settle();
+  await click(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!);
+  expect(document.querySelector("[data-runtime-sheet-pending]")).not.toBeNull();
+  answer.release();
+  await settle();
+  await settle();
+  expect(document.querySelector("[data-runtime-sheet-pending]")).toBeNull();
+  expect(document.querySelector('[data-runtime-sheet-value="ultrafast"]')!.getAttribute("aria-checked")).toBe("false");
+  expect(document.querySelector("[data-runtime-speed-error]")!.textContent).toBe("a runtime change is already in flight");
+  await act(async () => root.unmount());
+});
+
+test("a pipeline's conversation keeps Standard and Fast on its own path and is offered no Ultra", async () => {
+  codexCatalogAnswer = MAIN;
+  const lineage: FileEntry["durableLineage"] = {
+    kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null,
+    memberships: [{ kind: "pipeline", containerId: "pipeline-fixture", role: "builder", slot: "stage", stageId: "ui", stageOrder: 1, round: null }],
+  } as FileEntry["durableLineage"];
+  const { host, root } = await renderPill(<RuntimePill file={{ ...solFile, durableLineage: lineage }} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await openSpeedPanel(host);
+  expect([...document.querySelectorAll('[data-runtime-row="speed"]')].map((row) => row.getAttribute("data-runtime-value"))).toEqual(["standard", "fast"]);
+  expect(catalogReads).toHaveLength(0);
+  await click(speedRow("fast"));
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", fast: true });
   await act(async () => root.unmount());
 });
 
