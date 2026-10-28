@@ -24,7 +24,7 @@ export const ENVIRONMENT_REASONS = {
 } as const;
 export type EnvironmentFailureCode = keyof typeof ENVIRONMENT_REASONS;
 export class CloudEnvironmentError extends HostedCloudError {
-  constructor(readonly code: EnvironmentFailureCode) { super(`Codex Cloud: ${ENVIRONMENT_REASONS[code]} (${code})`, "cloud-limit"); }
+  constructor(readonly code: EnvironmentFailureCode, readonly terminalOperationId?: string) { super(`Codex Cloud: ${ENVIRONMENT_REASONS[code]} (${code})`, "cloud-limit"); }
 }
 function fail(code: EnvironmentFailureCode): never { throw new CloudEnvironmentError(code); }
 function check(ok: unknown, code: EnvironmentFailureCode = "configuration_invalid"): asserts ok { if (!ok) fail(code); }
@@ -40,6 +40,8 @@ export interface EnvironmentSetupReceipt {
   draftId?: string;
   environmentId?: string;
   operationId?: string;
+  approvalAttempt?: number;
+  failedOperationId?: string;
   draftRevision?: number;
   configurationRevision?: number;
   createDispatched?: boolean;
@@ -97,7 +99,7 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
       : method === "POST" ? "setup_uncertain" : "catalog_incomplete"); }
     finally { try { await reader.cancel(); } catch { /* Release the owned reader. */ } reader.releaseLock(); }
     const prerequisite = providerFailure(result);
-    if (prerequisite) fail(prerequisite);
+    if (prerequisite && !(response.ok && url.startsWith(`${endpoint}/v1/environment-operations/`))) fail(prerequisite);
     if (!response.ok) fail(response.status === 401 ? "authentication_expired" : response.status === 403 ? "access_refused"
       : response.status === 404 ? url.includes("/v1/environment-configs/") ? "environment_missing" : "repository_access_missing"
         : method === "POST" ? "setup_uncertain" : "catalog_incomplete");
@@ -199,8 +201,9 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
       // A failed setup is decisive even while the approval operation is RUNNING.
       const observed = row(environment.observations); const failure = row(observed.failure);
       const code = providerFailure(failure) ?? providerFailure(result);
+      if (result.state === "FAILED") throw new CloudEnvironmentError(code ?? "approval_failed", operationId);
       if (code) fail(code);
-      if (result.state === "FAILED" || observed.phase === "failed") fail("approval_failed");
+      if (observed.phase === "failed") fail("approval_failed");
       check(["PENDING", "RUNNING", "SUCCEEDED"].includes(String(result.state)));
       return result.state === "SUCCEEDED";
     },

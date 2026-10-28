@@ -4,7 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { statePath } from "@/lib/configDir";
-import { canonicalProject, recordedProjectRemote } from "./aliases";
+import { canonicalProject, projectAliasKeys, recordedProjectRemote } from "./aliases";
 import { codexCloudEnvironmentId } from "./settings";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { initializeStateCollectionsAsync, readStateCollectionRevision, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -15,6 +15,7 @@ import { readCloudRunSetup } from "./cloudRunSetupImport";
 const id = z.string().regex(/^[A-Za-z0-9_~-]{1,200}$/);
 const instant = z.number().finite().nonnegative();
 const receiptSchema = z.object({ intent: id, configId: id.optional(), draftId: id.optional(), environmentId: id.optional(), operationId: id.optional(),
+  approvalAttempt: z.number().int().nonnegative().optional(), failedOperationId: id.optional(),
   draftRevision: z.number().int().nonnegative().optional(), configurationRevision: z.number().int().nonnegative().optional(),
   createDispatched: z.boolean().optional(), draftDispatched: z.boolean().optional() }).strict();
 const templateSchema = z.object({ installScript: z.string().max(65536).optional(), startSkill: z.string().max(65536).optional(),
@@ -45,7 +46,15 @@ export function cloudAccountVersion(account: Pick<AccountContext, "home">): stri
   return digest(JSON.stringify([account.home, version]));
 }
 const prefix = (project: string) => `${digest(canonicalProject(project))}!`;
-const key = (project: string, account: string, repository: string, ref: string, kind: "automatic" | "override") => `${prefix(project)}${account}!${kind}!${digest(JSON.stringify([repository, ref]))}`;
+const suffix = (account: string, repository: string, ref: string, kind: "automatic" | "override") => `${account}!${kind}!${digest(JSON.stringify([repository, ref]))}`;
+/** Keep writing the original row after succession: revisions and in-flight
+ * setup receipts have one owner across every predecessor name. */
+function key(project: string, account: string, repository: string, ref: string, kind: "automatic" | "override"): string {
+  const keys = projectAliasKeys(project).map(alias => `${digest(alias)}!${suffix(account, repository, ref, kind)}`);
+  const store = readStore();
+  try { return keys.find(candidate => store?.get(candidate)) ?? keys[0]!; }
+  finally { store?.close(); }
+}
 function readStore(): SqliteStateCollection<CloudEnvironmentBinding> | null {
   const file = statePath("state.sqlite");
   if (readStateCollectionRevision(file, collection) === null) return null;
@@ -62,6 +71,9 @@ async function update(value: CloudEnvironmentBinding, expected: number, assertCu
   try {
     return await store.mutate(async (rows, persist) => {
       assertCurrent();
+      if (!checked.key.startsWith("retired!") && key(checked.project, checked.accountId, checked.repository, checked.ref, checked.kind) !== checked.key) {
+        throw new CloudEnvironmentError("preparation_superseded");
+      }
       const old = rows.find(r => r.key === checked.key);
       if ((old?.revision ?? 0) !== expected) throw new CloudEnvironmentError("preparation_superseded");
       const next = bindingSchema.parse({ ...checked, revision: expected + 1 });
@@ -81,7 +93,7 @@ export function cloudEnvironmentChoiceFingerprint(project: string, accountId: st
 function projection(binding: CloudEnvironmentBinding): CloudEnvironmentProjection {
   const choice = cloudEnvironmentSelection(binding.project, binding.accountId);
   const stale = binding.kind === "automatic" && binding.selection !== JSON.stringify(choice);
-  return { project: binding.project, accountId: binding.accountId, kind: binding.kind, repository: binding.repository, ref: binding.ref,
+  return { project: canonicalProject(binding.project), accountId: binding.accountId, kind: binding.kind, repository: binding.repository, ref: binding.ref,
     environmentId: stale ? choice.environmentId || null : binding.environmentId, revision: binding.revision, accountVersion: binding.accountVersion,
     state: stale ? "discovering" : binding.state, code: stale ? null : binding.code, validatedAt: stale ? null : binding.validatedAt,
     retryAt: binding.retryAt, deadlineAt: binding.deadlineAt, retries: binding.retries,
@@ -96,9 +108,23 @@ export function readCloudEnvironmentBindings(project: string, options: { account
   if (options.after && !options.after.startsWith(start)) throw new Error("invalid Cloud binding cursor");
   const store = readStore();
   try {
-    const rows = store?.keyRange(options.after || start, `${start}\uffff`, limit + 1) ?? [];
-    return { bindings: rows.slice(0, limit).map(projection), nextCursor: rows.length > limit ? rows[limit - 1]!.key : null };
+    const rows = projectRows(store, project, account, options.after, limit + 1);
+    return { bindings: rows.slice(0, limit).map(({ binding }) => projection(binding)), nextCursor: rows.length > limit ? rows[limit - 1]!.cursor : null };
   } finally { store?.close(); }
+}
+/** Merge bounded indexed pages by logical key, preferring a canonical row
+ * when both names already held one. Cursors always use the canonical prefix. */
+function projectRows(store: SqliteStateCollection<CloudEnvironmentBinding> | null, project: string, account: string | undefined,
+  after: string | undefined, limit: number) {
+  const canonicalPrefix = prefix(project), rows = new Map<string, CloudEnvironmentBinding>();
+  for (const alias of projectAliasKeys(project)) {
+    const p = `${digest(alias)}!`, start = account ? `${p}${account}!` : p;
+    for (const binding of store?.keyRange(after ? p + after.slice(canonicalPrefix.length) : start, `${start}\uffff`, limit) ?? []) {
+      const cursor = canonicalPrefix + binding.key.slice(p.length);
+      if (!rows.has(cursor)) rows.set(cursor, binding);
+    }
+  }
+  return [...rows].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).slice(0, limit).map(([cursor, binding]) => ({ cursor, binding }));
 }
 export function preparedCloudEnvironmentId(project: string, accountId: string, repository: string, ref: string): string {
   const choice = cloudEnvironmentSelection(project, accountId);
@@ -189,6 +215,12 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     // A late response still records custody, but cannot publish readiness.
     saved = await update({ ...saved, ...patch }, saved.revision, receiptOnly ? () => {} : guard);
   };
+  const retireAutomatic = async (code: NonNullable<CloudEnvironmentBinding["code"]>) => {
+    const retiredKey = `retired!${digest(JSON.stringify([saved.key, saved.principal, saved.setup]))}`;
+    if (!read(retiredKey)) await update({ ...saved, key: retiredKey, state: "unavailable", code }, 0, guard);
+    await checkpoint({ environmentId: null, setup: { intent: digest(JSON.stringify([saved.setup.intent, saved.revision, code])) }, state: "discovering",
+      template: undefined, code: null, validatedAt: null, retryAt: 0, deadlineAt: now() + 10 * 60_000, retries: 0 });
+  };
   if (saved.state === "unavailable" && now() < saved.retryAt) return { state: "unavailable", reason: `Codex Cloud: ${ENVIRONMENT_REASONS[saved.code ?? "configuration_invalid"]} (${saved.code})` };
   if (saved.retryAt > now() && saved.state !== "ready") return { state: "pending", retryAt: saved.retryAt, reason: "Cloud environment approval is pending" };
   let backend: Awaited<ReturnType<typeof openCloudEnvironmentBackend>> | undefined;
@@ -199,10 +231,8 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     if (saved.principal && saved.principal !== backend.principal) {
       // Retain the old principal's custody independently before rediscovering
       // under the new login. Those setup effects are never replayed as it.
-      const retiredKey = `retired!${digest(JSON.stringify([saved.key, saved.principal, saved.setup]))}`;
-      if (!read(retiredKey)) await update({ ...saved, key: retiredKey, state: "unavailable", code: "preparation_superseded" }, 0, guard);
-      await checkpoint({ principal: backend.principal, environmentId: null, state: "discovering", setup: { intent: dependencies?.uuid() ?? randomUUID() },
-        validatedAt: null, code: null, retryAt: 0, deadlineAt: now() + 10 * 60_000, retries: 0 });
+      await retireAutomatic("preparation_superseded");
+      await checkpoint({ principal: backend.principal });
     }
     if (!saved.principal) await checkpoint({ principal: backend.principal });
     const matches = async (config: EnvironmentConfiguration) => config.ref === ref && (await backend!.repository(config.repositoryId)).name === repository;
@@ -219,16 +249,14 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       if (!config.ready) throw new CloudEnvironmentError("approval_failed");
       return await ready(config);
     }
-    if (saved.environmentId) {
+    if (saved.environmentId || saved.setup.configId) {
       try {
-        const config = await backend.detail(saved.environmentId);
-        if (await matches(config) && config.ready) return await ready(config);
+        const config = await backend.detail(saved.environmentId ?? saved.setup.configId!);
+        if (!await matches(config)) await retireAutomatic("configuration_invalid");
+        else if (config.ready) return await ready(config);
       } catch (error) {
         if (!(error instanceof CloudEnvironmentError) || error.code !== "environment_missing") throw error;
-        const retiredKey = `retired!${digest(JSON.stringify([saved.key, saved.principal, saved.setup]))}`;
-        if (!read(retiredKey)) await update({ ...saved, key: retiredKey, state: "unavailable", code: "environment_missing" }, 0, guard);
-        await checkpoint({ environmentId: null, setup: { intent: dependencies?.uuid() ?? randomUUID() }, state: "discovering",
-          code: null, validatedAt: null, retryAt: 0, deadlineAt: now() + 10 * 60_000, retries: 0 });
+        await retireAutomatic("environment_missing");
       }
     }
     const catalog = await backend.catalog(); guard();
@@ -255,7 +283,7 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       // never enter this service or its persisted receipts.
       let template: Pick<EnvironmentConfiguration, "installScript" | "startSkill" | "networkPolicy"> | undefined;
       const store = readStore();
-      try { template = store?.keyRange(prefix(project), `${prefix(project)}\uffff`, 100)
+      try { template = projectRows(store, project, undefined, undefined, 100).map(row => row.binding)
         .find(prior => prior.state === "ready" && prior.repository === repository && prior.ref === ref && prior.template)?.template; }
       finally { store?.close(); }
       await checkpoint({ state: "creating", setup: { ...saved.setup, createDispatched: true } });
@@ -264,7 +292,10 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     }
     const configId = saved.setup.configId!;
     const config = await backend.detail(configId);
-    if (!await matches(config)) throw new CloudEnvironmentError("manual_environment_mismatched");
+    if (!await matches(config)) {
+      await retireAutomatic("configuration_invalid");
+      return { state: "pending", retryAt: now() + 2000, reason: "Cloud environment preparation is being reconciled" };
+    }
     if (config.ready) return await ready(config);
     if (!saved.setup.draftId) {
       if (saved.setup.draftDispatched && config.draft) {
@@ -281,7 +312,8 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     if (!saved.setup.operationId) {
       const revision = await backend.draftRevision(configId, draftId);
       await checkpoint({ setup: { ...saved.setup, draftRevision: revision } });
-      const operationId = await backend.begin(configId, draftId, revision, saved.setup.intent);
+      const approvalKey = saved.setup.approvalAttempt ? digest(JSON.stringify([saved.setup.intent, saved.setup.approvalAttempt])) : saved.setup.intent;
+      const operationId = await backend.begin(configId, draftId, revision, approvalKey);
       await checkpoint({ setup: { ...saved.setup, operationId } }, true); guard();
     }
     if (await backend.operation(saved.setup.operationId!, saved.setup.environmentId!)) {
@@ -302,7 +334,12 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     }
     guard();
     const retries = Math.min(3, saved.retries + 1);
-    await checkpoint({ state: "unavailable", code: safe.code, retries,
+    // Only the provider's terminal FAILED state retires an operation. Runtime
+    // observations and uncertain replies keep the same resumable receipt.
+    const setup = safe.terminalOperationId && safe.terminalOperationId === saved.setup.operationId
+      ? { ...saved.setup, operationId: undefined, failedOperationId: safe.terminalOperationId, approvalAttempt: (saved.setup.approvalAttempt ?? 0) + 1 }
+      : saved.setup;
+    await checkpoint({ setup, state: "unavailable", code: safe.code, retries,
       retryAt: now() + (retries >= 3 || safe.code === "setup_deadline_exceeded" ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) });
     return { state: "unavailable", reason: safe.message };
   } finally { backend?.close(); }

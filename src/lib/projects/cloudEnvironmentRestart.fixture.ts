@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { prepareCloudEnvironment } from "./codexCloudEnvironments";
+import { cloudEnvironmentSelection, readCloudEnvironmentBindings, setCloudEnvironmentOverride, prepareCloudEnvironment } from "./codexCloudEnvironments";
 import type { HostedCloudDependencies } from "@/lib/pipelines/cloudHostedClient";
 
 const [url, crashAt, now] = process.argv.slice(2);
@@ -17,6 +17,15 @@ const dependencies: HostedCloudDependencies = {
   },
   uuid: () => "command-fixture",
 };
-const result = await prepareCloudEnvironment({ project: "repo-fixture", account: { engine: "codex", accountId: "account-a", kind: "managed",
+const project = process.argv[5] ?? "repo-fixture";
+if (crashAt === "read-binding") {
+  process.stdout.write(JSON.stringify({ choice: cloudEnvironmentSelection(project, "account-a"), rows: readCloudEnvironmentBindings(project).bindings }));
+  process.exit(0);
+}
+if (crashAt === "set-override") {
+  process.stdout.write(JSON.stringify(await setCloudEnvironmentOverride({ project, accountId: "account-a", environmentId: "asenvcfg_account-a", expectedRevision: Number(process.argv[6]), actor: "operator", assertCurrent: () => {} })));
+  process.exit(0);
+}
+const result = await prepareCloudEnvironment({ project, account: { engine: "codex", accountId: "account-a", kind: "managed",
   home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" as const } }, repository: "sample/project", ref: "main", signal: AbortSignal.timeout(10_000), assertCurrent: () => {}, now: () => Number(now) }, dependencies);
 process.stdout.write(JSON.stringify(result));

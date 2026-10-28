@@ -10,7 +10,10 @@ environment ID. Existing explicit IDs keep their precedence:
 
 `src/lib/projects/codexCloudEnvironments.ts` owns the installation-local SQLite
 collection. Settings transfers retain the legacy scalar; automatic bindings and
-setup receipts stay local. Project aliases resolve before reads and writes.
+setup receipts stay local. Reads resolve the canonical project and its alias
+predecessors, retaining each binding's original storage key and revision.
+Account pages merge indexed predecessor ranges with canonical cursors. Setup
+custody and manual choices survive alias registration and process restart.
 Manual overrides occupy separate rows and automatic updates use explicit keyed
 upserts. Compare-and-set writes return the current override on conflict.
 
@@ -53,7 +56,9 @@ uncertain. Draft recovery rereads the saved configuration; approval recovery
 reuses its operation or idempotency key. The optional legacy setup reader imports
 only recovery identifiers for an account-verified configuration and never writes
 to the source directory. A changed authenticated principal retires its old setup
-receipt before discovery under the new login.
+receipt before discovery under the new login. A changed repository or ref on an
+automatic configuration retires that configuration's receipts before discovering
+or creating a replacement. An explicit manual mismatch remains authoritative.
 
 ## Scheduling and execution
 
@@ -68,7 +73,13 @@ window has a ten-minute deadline and a three-failure budget. After cooldown,
 another bounded window reuses all setup receipts and the original creation
 intent. Account credential metadata or manual-selection changes permit earlier
 revalidation. Pending approval is
-scheduled two seconds later. Ready bindings are due for background validation
+scheduled two seconds later. A confirmed terminal FAILED approval clears its
+active operation receipt and advances a persisted approval-attempt counter. The
+next permitted attempt uses a fresh idempotency key with the same configuration
+and draft; a lost initiation reply reuses that attempt's key. Terminal failures
+consume the same three-failure budget and cooldown across restarts. A failed
+runtime observation with a running or uncertain operation keeps its receipt.
+Ready bindings are due for background validation
 after 24 hours. Stage admission validates its selected binding again.
 
 Network work runs outside storage leases. Every effect rechecks the caller's
