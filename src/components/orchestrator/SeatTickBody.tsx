@@ -8,7 +8,7 @@ import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import type { CurationAnswer } from "@/lib/memory/curation/answer";
 import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
-import { operatorInstructionText, seatTickInstructionLines } from "@/lib/monitor/seatTickInstructions";
+import { seatTickInstructionLines, type SeatTickInstructionLine } from "@/lib/monitor/seatTickInstructions";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
 import { autonomyActive, type AutonomySetting } from "@/lib/monitor/autonomy";
@@ -70,7 +70,31 @@ export interface SeatTickDraft {
   /** Minutes as typed. Empty means the default interval. */
   interval: string;
   until: string;
+  /** The operator's lines, together with the older lines no author was
+      recorded for: both are the operator's to edit. */
   reason: string;
+  /** Seat notes the operator removed, applied by Save. */
+  removedNotes: RemovedNote[];
+}
+
+/** A seat note by its place in the stored lines and everything it records. */
+interface RemovedNote { index: number; key: string }
+
+const isSeatNote = (line: SeatTickInstructionLine) => line.author?.kind === "manager" || line.author?.kind === "agent";
+const noteKey = (line: SeatTickInstructionLine) => JSON.stringify([line.text, line.at, line.author]);
+
+function fieldText(settings: SeatTickSettingsAnswer["settings"]): string {
+  return seatTickInstructionLines(settings).filter(line => !isSeatNote(line)).map(line => line.text).join("\n");
+}
+
+/** Whether the seat note at `index` is one the draft removes. A removal names
+    a place and a note; once earlier removals have landed the place moves, and
+    a note no longer stored is no removal at all. */
+function removedAt(lines: SeatTickInstructionLine[], removed: RemovedNote[], index: number): boolean {
+  const line = lines[index];
+  if (!line || !isSeatNote(line)) return false;
+  const key = noteKey(line);
+  return removed.some(note => note.key === key && (note.index === index || lines[note.index] === undefined || noteKey(lines[note.index]!) !== key));
 }
 
 function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
@@ -79,7 +103,8 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
     enabled: settings ? settings.enabled : true,
     interval: settings == null || settings.wakeIntervalMinutes === null ? "" : String(settings.wakeIntervalMinutes),
     until: settings?.until ? "keep" : "",
-    reason: settings ? operatorInstructionText(settings) : "",
+    reason: settings ? fieldText(settings) : "",
+    removedNotes: [],
   };
 }
 
@@ -96,7 +121,7 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
 function signatureOf(record: SeatTickSettingsAnswer | null): string {
   const settings = record?.settings;
   if (!settings) return "";
-  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, operatorInstructionText(settings), settings.until].join("");
+  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, fieldText(settings), settings.until].join("");
 }
 
 /** Only what CHANGED, so a save touches the fields the operator touched and
@@ -117,7 +142,12 @@ function changeOf(draft: SeatTickDraft, record: SeatTickSettingsAnswer | null): 
        names it. */
     change.wakeIntervalMinutes = raw === "" ? null : Number.isFinite(parsed) ? parsed : raw;
   }
-  if (draft.reason.trim() !== current.reason.trim()) change.reason = draft.reason.trim() || null;
+  if (draft.reason.trim() !== current.reason.trim()) {
+    change.reason = draft.reason.trim() || null;
+    /* The field holds the lines with no known author, so the save replaces
+       them along with the operator's own. */
+    if (record && seatTickInstructionLines(record.settings).some(line => !line.author || line.author.kind === "unidentified")) change.clearUnknownInstructions = true;
+  }
   if (draft.until !== current.until) change.untilMinutes = draft.until === "" ? null : Number(draft.until);
   return change;
 }
@@ -307,10 +337,25 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const releaseChange = releaseChangeOf(release, record);
   const change: SeatTickChange = { ...(autonomyDirty ? { autonomy: { enabled: autonomy.enabled, ...(autonomy.enabled && autonomy.hours !== "keep" ? { hours: autonomy.hours === "unlimited" ? null : Number(autonomy.hours) } : {}) } } : {}), ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(Object.keys(curationChange).length ? { curation: curationChange } : {}), ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
   const requestDirty = Object.keys(change).length > 0;
+  const storedLines = record ? seatTickInstructionLines(record.settings) : [];
+  const removals = storedLines.flatMap((line, index) => removedAt(storedLines, draft.removedNotes, index) ? [noteKey(line)] : []);
 
   const save = async () => {
     if (read.saving || roleSaving) return;
     setRuntimeError(null);
+    /* One request per removed note, each built from the record as it then
+       stands, before the rest: the server refuses a change that would remove
+       more than one note, which is how a note the panel never showed is kept. */
+    for (const key of removals) {
+      const removed = await read.saveAfter((current) => {
+        const lines = seatTickInstructionLines(current.settings);
+        const index = lines.findIndex(line => isSeatNote(line) && noteKey(line) === key);
+        if (index < 0) return null;
+        return { replaceOtherInstructions: true, reason: lines.filter((_, at) => at !== index).map(line => line.text).join("\n") || null };
+      });
+      if (removed === false) return;
+    }
+    if (removals.length) setDraft(previous => ({ ...previous, removedNotes: [] }));
     if (requestDirty) await read.save(change);
     if (roleDirty && runtimeDraft) {
       /* The picker shows the new runtime as stored at once; a refusal puts the
@@ -346,7 +391,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     maintainer,
     runtimeError,
     change,
-    dirty: requestDirty || roleDirty || autonomyDirty,
+    dirty: requestDirty || roleDirty || autonomyDirty || removals.length > 0,
     saving: read.saving || roleSaving,
     save,
   };
@@ -378,12 +423,15 @@ export function SeatTickActions({ read, state, surface }: {
   const saveError = read.errorScope === "turbo" ? null : read.error;
   if (!state.dirty && !saveError) return null;
   const overLimit = read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
+  const notesChanged = read.error === "the seat notes changed since the panel read them; one change removes exactly one seat note. Nothing was stored — check the notes and save again";
   const instructionsRequired = read.error === "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
   const error = overLimit
     ? t("seatTick.instructionsOverLimitError", { count: Number(overLimit[1]) })
     : instructionsRequired
       ? t("seatTick.instructionsRequiredError")
-      : read.error;
+      : notesChanged
+        ? t("seatTick.instruction.notesChangedError")
+        : read.error;
   /* Written out rather than interpolated: a Tailwind class assembled from a
      variable is a class Tailwind never sees and never emits. */
   const button = phone
@@ -524,12 +572,14 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const maintenance = record?.maintenance;
   const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
+  /* The count is what Save would store: the field, then every seat note the
+     draft keeps, one line each. */
   const instructionLines = record ? seatTickInstructionLines(record.settings) : [];
-  const protectedLines = instructionLines.filter(line => line.author?.kind !== "gateway");
-  const hasUnknownInstructions = instructionLines.some(line => !line.author || line.author.kind === "unidentified");
-  const hasSeatInstructions = protectedLines.some(line => line.author?.kind === "manager" || line.author?.kind === "agent");
-  const instructionLength = draft.reason.length + protectedLines.map(line => line.text).join("\n").length
-    + (draft.reason && protectedLines.length ? 1 : 0);
+  const notes = instructionLines.flatMap((line, index) => isSeatNote(line) ? [{ line, index, removed: removedAt(instructionLines, draft.removedNotes, index) }] : []);
+  const fieldLength = draft.reason.trim().length;
+  const keptNotes = notes.filter(note => !note.removed).map(note => note.line.text);
+  const instructionLength = fieldLength + keptNotes.join("\n").length + (fieldLength && keptNotes.length ? 1 : 0);
+  const counted = instructionLength >= 450;
   const phone = surface === "mobile";
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const turbo = useTurboControl(read, now);
@@ -673,7 +723,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         <label className="flex min-w-0 flex-col gap-1">
           <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
             <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
-            {instructionLength >= 450 ? (
+            {counted ? (
               <span
                 data-seat-tick-character-count={instructionLength}
                 aria-live="polite"
@@ -696,49 +746,57 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
             className={`min-h-0 w-full resize-none overflow-hidden rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           />
+          {instructionLength > 500 ? (
+            <span data-seat-tick-over-limit-split className="text-caption leading-4 text-danger">
+              {keptNotes.length
+                ? t("seatTick.instructionsOverLimitSplit", { field: fieldLength, notes: instructionLength - fieldLength })
+                : t("seatTick.instructionsOverLimitField")}
+            </span>
+          ) : null}
           <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
         </label>
 
-        {instructionLines.length > 0 ? (
-          <ul data-seat-tick-instruction-lines className="flex min-w-0 flex-col gap-2 text-ui">
-            {instructionLines.map((line, index) => (
-              <li key={index} data-seat-tick-instruction-line className="min-w-0 break-words">
-                <div className="text-caption text-muted">
-                  <span>{line.author?.kind === "gateway" ? t("seatTick.instruction.operator")
-                    : line.author?.kind === "manager" && line.author.seatEpoch !== null ? t("seatTick.instruction.seat", { epoch: line.author.seatEpoch })
-                    : line.author?.kind === "agent" || line.author?.kind === "manager" ? t("seatTick.instruction.agent")
-                    : t("seatTick.instruction.unknown")}</span>
-                  {" · "}
-                  {line.at ? <time dateTime={line.at}>{new Date(line.at).toLocaleString(locale)}</time> : t("seatTick.instruction.dateUnknown")}
-                </div>
-                <p className="whitespace-pre-wrap text-primary">{line.text}</p>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        {hasUnknownInstructions ? (
-          <button
-            type="button"
-            data-seat-tick-clear-unknown
-            disabled={state.saving || !draft.reason.trim()}
-            onClick={() => void read.save({ clearUnknownInstructions: true, reason: draft.reason.trim() })}
-            className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
-          >
-            {t("seatTick.instruction.removeUnknown")}
-          </button>
-        ) : null}
-
-        {hasSeatInstructions ? (
-          <button
-            type="button"
-            data-seat-tick-replace-other
-            disabled={state.saving || !draft.reason.trim()}
-            onClick={() => void read.save({ replaceOtherInstructions: true, reason: draft.reason.trim() })}
-            className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
-          >
-            {t("seatTick.instruction.replaceOther")}
-          </button>
+        {notes.length > 0 ? (
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <p className="text-ui text-primary">{t("seatTick.instruction.notesHead")}</p>
+            <ul data-seat-tick-instruction-lines className="flex min-w-0 flex-col gap-2 text-ui">
+              {notes.map(({ line, index, removed }) => {
+                const author = line.author?.kind === "manager" && line.author.seatEpoch !== null
+                  ? t("seatTick.instruction.seat", { epoch: line.author.seatEpoch })
+                  : t("seatTick.instruction.agent");
+                return (
+                  <li key={index} data-seat-tick-instruction-line data-seat-tick-note-removed={removed ? "" : undefined} className="flex min-w-0 items-start gap-2">
+                    {/* The author line sits level with the button's label. */}
+                    <div className={`flex min-w-0 flex-1 flex-col gap-0.5 ${phone ? "pt-3.5" : "pt-1.5"}`}>
+                      <p className="min-w-0 break-words text-caption leading-4 text-muted">
+                        <span>{author}</span>
+                        {"\u00A0· "}
+                        {line.at ? <time dateTime={line.at}>{new Date(line.at).toLocaleString(locale)}</time> : t("seatTick.instruction.dateUnknown")}
+                        {counted ? <>{"\u00A0· "}<span data-seat-tick-note-characters>{t("seatTick.instruction.characters", { count: line.text.length })}</span></> : null}
+                      </p>
+                      <p className={`whitespace-pre-wrap break-words ${removed ? "text-muted line-through" : "text-primary"}`}>{line.text}</p>
+                      {removed ? <p data-seat-tick-note-removed-label className="text-caption leading-4 text-muted">{t("seatTick.instruction.removed")}</p> : null}
+                    </div>
+                    <button
+                      type="button"
+                      data-seat-tick-remove-note={removed ? "undo" : "remove"}
+                      aria-label={t(removed ? "seatTick.instruction.undoAria" : "seatTick.instruction.removeAria", { author })}
+                      disabled={state.saving}
+                      onClick={() => setDraft(previous => ({
+                        ...previous,
+                        removedNotes: removed
+                          ? previous.removedNotes.filter(note => note.key !== noteKey(line))
+                          : [...previous.removedNotes, { index, key: noteKey(line) }],
+                      }))}
+                      className={`inline-flex ${phone ? "min-h-11 min-w-11" : "h-7"} shrink-0 items-center justify-center rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+                    >
+                      {t(removed ? "seatTick.instruction.undo" : "seatTick.instruction.remove")}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         ) : null}
 
         {reading.offDefault ? (

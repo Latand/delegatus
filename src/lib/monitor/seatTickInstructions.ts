@@ -47,12 +47,6 @@ export function replaceSeatTickInstructions(settings: Instructions, text: string
   return kept;
 }
 
-/** The browser edits operator lines; notes from seats and legacy text remain
- * visible in the attributed list below the editor. */
-export function operatorInstructionText(settings: Instructions): string {
-  return seatTickInstructionLines(settings).filter(line => line.author?.kind === "gateway").map(line => line.text).join("\n");
-}
-
 /** Wakes reserve this section in full. Dates stay on the stored lines and in
  * the panel; the wake groups their text under the authority it actually has. */
 export function seatTickInstructionSections(settings: Instructions): string[] {
