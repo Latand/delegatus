@@ -20491,12 +20491,14 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             expect(await rows.count()).toBe(2);
             expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(472));
             expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "150\u00A0chars" : "150\u00A0симв.");
+            expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Оркестратор, епоха 7");
+            expect(await rows.nth(1).textContent()).toContain(lang === "en" ? "Agent session" : "Сесія агента");
             await measure(page, `${name}-notes-near`);
             await field.fill(`${own!.text}${words[lang].more}`);
             const over = 472 + words[lang].more.length;
             expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en"
               ? `Field: ${260 + words[lang].more.length}\u00A0· seat notes below: 212. Shorten the field or remove a\u00A0note.`
-              : `Поле\u00A0— ${260 + words[lang].more.length}\u00A0· нотатки сидіння нижче\u00A0— 212. Скоротіть поле або приберіть нотатку.`);
+              : `Поле\u00A0— ${260 + words[lang].more.length}\u00A0· нотатки оркестратора нижче\u00A0— 212. Скоротіть поле або приберіть нотатку.`);
             expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over));
             await measure(page, `${name}-notes-over`);
             await rows.nth(1).locator('[data-seat-tick-remove-note="remove"]').click();
@@ -20509,8 +20511,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             await page.locator("[data-seat-tick-save]").click();
             await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
             expect(sent.slice(before)).toEqual([
-              { project: "atlas", replaceOtherInstructions: true, reason: `${own!.text}\n${seatNote!.text}` },
-              { project: "atlas", reason: `${own!.text}${words[lang].more}` },
+              { project: "atlas", reason: `${own!.text}${words[lang].more}`, removeSeatNotes: [{ index: 2, text: agentNote!.text, at: agentNote!.at }] },
             ]);
             expect(stored.instructionLines).toEqual([{ text: `${own!.text}${words[lang].more}`, author: operator, at: savedAt }, seatNote!]);
             expect(stored.instructionLines).not.toContainEqual(agentNote!);

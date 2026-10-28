@@ -8,7 +8,7 @@ import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import type { CurationAnswer } from "@/lib/memory/curation/answer";
 import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
-import { seatTickInstructionLines, type SeatTickInstructionLine } from "@/lib/monitor/seatTickInstructions";
+import { SEAT_NOTE_REMOVAL_STALE, hasUnknownAuthor, isSeatNote, operatorFieldText, previewSeatTickInstructions, seatTickInstructionLines, type SeatNoteRemoval, type SeatTickInstructionEdit, type SeatTickInstructionLine } from "@/lib/monitor/seatTickInstructions";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
 import { autonomyActive, type AutonomySetting } from "@/lib/monitor/autonomy";
@@ -74,28 +74,44 @@ export interface SeatTickDraft {
       recorded for: both are the operator's to edit. */
   reason: string;
   /** Seat notes the operator removed, applied by Save. */
-  removedNotes: RemovedNote[];
+  removedNotes: SeatNoteRemoval[];
 }
 
-/** A seat note by its place in the stored lines and everything it records. */
-interface RemovedNote { index: number; key: string }
-
-const isSeatNote = (line: SeatTickInstructionLine) => line.author?.kind === "manager" || line.author?.kind === "agent";
-const noteKey = (line: SeatTickInstructionLine) => JSON.stringify([line.text, line.at, line.author]);
-
-function fieldText(settings: SeatTickSettingsAnswer["settings"]): string {
-  return seatTickInstructionLines(settings).filter(line => !isSeatNote(line)).map(line => line.text).join("\n");
+/** The draft's removals located in the stored lines as they now stand: a note
+    keeps its removal when an earlier line moved it, and a note no longer
+    stored is no removal at all. */
+function removalsIn(lines: SeatTickInstructionLine[], removed: SeatNoteRemoval[]): SeatNoteRemoval[] {
+  const taken = new Set<number>();
+  return removed.flatMap(note => {
+    const matches = (index: number) => {
+      const line = lines[index];
+      return !!line && isSeatNote(line) && !taken.has(index) && line.text === note.text && line.at === note.at;
+    };
+    const index = matches(note.index) ? note.index : lines.findIndex((_, at) => matches(at));
+    if (index < 0) return [];
+    taken.add(index);
+    return [{ index, text: note.text, at: note.at }];
+  });
 }
 
-/** Whether the seat note at `index` is one the draft removes. A removal names
-    a place and a note; once earlier removals have landed the place moves, and
-    a note no longer stored is no removal at all. */
-function removedAt(lines: SeatTickInstructionLine[], removed: RemovedNote[], index: number): boolean {
-  const line = lines[index];
-  if (!line || !isSeatNote(line)) return false;
-  const key = noteKey(line);
-  return removed.some(note => note.key === key && (note.index === index || lines[note.index] === undefined || noteKey(lines[note.index]!) !== key));
+/** What Save would ask of the instructions. The counter previews exactly this
+    edit through the server's own helper. */
+function instructionEditOf(draft: SeatTickDraft, record: SeatTickSettingsAnswer | null): SeatTickInstructionEdit & { removeSeatNotes?: SeatNoteRemoval[] } {
+  const edit: SeatTickInstructionEdit & { removeSeatNotes?: SeatNoteRemoval[] } = {};
+  const lines = record ? seatTickInstructionLines(record.settings) : [];
+  if (draft.reason.trim() !== (record ? operatorFieldText(record.settings) : "").trim()) {
+    edit.text = draft.reason.trim() || null;
+    /* The field holds the lines with no known author, so the save replaces
+       them along with the operator's own. */
+    if (lines.some(hasUnknownAuthor)) edit.claimUnknown = true;
+  }
+  const removals = removalsIn(lines, draft.removedNotes);
+  if (removals.length) edit.removeSeatNotes = removals;
+  return edit;
 }
+
+/** Only the counter's preview: new lines are never stored from it. */
+const PREVIEW_AUTHOR = { kind: "gateway", conversationId: null, project: null, seatEpoch: null } as const;
 
 function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
   const settings = record?.settings;
@@ -103,7 +119,7 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
     enabled: settings ? settings.enabled : true,
     interval: settings == null || settings.wakeIntervalMinutes === null ? "" : String(settings.wakeIntervalMinutes),
     until: settings?.until ? "keep" : "",
-    reason: settings ? fieldText(settings) : "",
+    reason: settings ? operatorFieldText(settings) : "",
     removedNotes: [],
   };
 }
@@ -121,7 +137,7 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
 function signatureOf(record: SeatTickSettingsAnswer | null): string {
   const settings = record?.settings;
   if (!settings) return "";
-  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, fieldText(settings), settings.until].join("");
+  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, operatorFieldText(settings), settings.until].join("");
 }
 
 /** Only what CHANGED, so a save touches the fields the operator touched and
@@ -142,12 +158,10 @@ function changeOf(draft: SeatTickDraft, record: SeatTickSettingsAnswer | null): 
        names it. */
     change.wakeIntervalMinutes = raw === "" ? null : Number.isFinite(parsed) ? parsed : raw;
   }
-  if (draft.reason.trim() !== current.reason.trim()) {
-    change.reason = draft.reason.trim() || null;
-    /* The field holds the lines with no known author, so the save replaces
-       them along with the operator's own. */
-    if (record && seatTickInstructionLines(record.settings).some(line => !line.author || line.author.kind === "unidentified")) change.clearUnknownInstructions = true;
-  }
+  const instructions = instructionEditOf(draft, record);
+  if (instructions.text !== undefined) change.reason = instructions.text;
+  if (instructions.claimUnknown) change.clearUnknownInstructions = true;
+  if (instructions.removeSeatNotes) change.removeSeatNotes = instructions.removeSeatNotes;
   if (draft.until !== current.until) change.untilMinutes = draft.until === "" ? null : Number(draft.until);
   return change;
 }
@@ -337,26 +351,13 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const releaseChange = releaseChangeOf(release, record);
   const change: SeatTickChange = { ...(autonomyDirty ? { autonomy: { enabled: autonomy.enabled, ...(autonomy.enabled && autonomy.hours !== "keep" ? { hours: autonomy.hours === "unlimited" ? null : Number(autonomy.hours) } : {}) } } : {}), ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(Object.keys(curationChange).length ? { curation: curationChange } : {}), ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
   const requestDirty = Object.keys(change).length > 0;
-  const storedLines = record ? seatTickInstructionLines(record.settings) : [];
-  const removals = storedLines.flatMap((line, index) => removedAt(storedLines, draft.removedNotes, index) ? [noteKey(line)] : []);
 
   const save = async () => {
     if (read.saving || roleSaving) return;
     setRuntimeError(null);
-    /* One request per removed note, each built from the record as it then
-       stands, before the rest: the server refuses a change that would remove
-       more than one note, which is how a note the panel never showed is kept. */
-    for (const key of removals) {
-      const removed = await read.saveAfter((current) => {
-        const lines = seatTickInstructionLines(current.settings);
-        const index = lines.findIndex(line => isSeatNote(line) && noteKey(line) === key);
-        if (index < 0) return null;
-        return { replaceOtherInstructions: true, reason: lines.filter((_, at) => at !== index).map(line => line.text).join("\n") || null };
-      });
-      if (removed === false) return;
-    }
-    if (removals.length) setDraft(previous => ({ ...previous, removedNotes: [] }));
-    if (requestDirty) await read.save(change);
+    /* One request: the removals name each note by place, text and date, so a
+       note that moved on the server refuses the whole save. */
+    if (requestDirty && await read.save(change) && change.removeSeatNotes) setDraft(previous => ({ ...previous, removedNotes: [] }));
     if (roleDirty && runtimeDraft) {
       /* The picker shows the new runtime as stored at once; a refusal puts the
          operator's choice back as a draft beside the reason. A mapping that
@@ -391,7 +392,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     maintainer,
     runtimeError,
     change,
-    dirty: requestDirty || roleDirty || autonomyDirty || removals.length > 0,
+    dirty: requestDirty || roleDirty || autonomyDirty,
     saving: read.saving || roleSaving,
     save,
   };
@@ -423,7 +424,7 @@ export function SeatTickActions({ read, state, surface }: {
   const saveError = read.errorScope === "turbo" ? null : read.error;
   if (!state.dirty && !saveError) return null;
   const overLimit = read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
-  const notesChanged = read.error === "the seat notes changed since the panel read them; one change removes exactly one seat note. Nothing was stored — check the notes and save again";
+  const notesChanged = read.error === SEAT_NOTE_REMOVAL_STALE;
   const instructionsRequired = read.error === "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
   const error = overLimit
     ? t("seatTick.instructionsOverLimitError", { count: Number(overLimit[1]) })
@@ -572,13 +573,16 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const maintenance = record?.maintenance;
   const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
-  /* The count is what Save would store: the field, then every seat note the
-     draft keeps, one line each. */
+  /* The count is what Save would store, previewed by the helper the server
+     checks its limit with. */
   const instructionLines = record ? seatTickInstructionLines(record.settings) : [];
-  const notes = instructionLines.flatMap((line, index) => isSeatNote(line) ? [{ line, index, removed: removedAt(instructionLines, draft.removedNotes, index) }] : []);
-  const fieldLength = draft.reason.trim().length;
-  const keptNotes = notes.filter(note => !note.removed).map(note => note.line.text);
-  const instructionLength = fieldLength + keptNotes.join("\n").length + (fieldLength && keptNotes.length ? 1 : 0);
+  const edit = instructionEditOf(draft, record);
+  const notes = instructionLines.flatMap((line, index) => isSeatNote(line) ? [{ line, index, removed: !!edit.removeSeatNotes?.some(note => note.index === index) }] : []);
+  const preview = record ? previewSeatTickInstructions(record.settings, edit, PREVIEW_AUTHOR, "") : null;
+  const stored = preview?.ok ? preview.lines : instructionLines;
+  const instructionLength = stored.map(line => line.text).join("\n").length;
+  const fieldLength = stored.filter(line => !isSeatNote(line)).map(line => line.text).join("\n").length;
+  const keptNotes = stored.filter(isSeatNote);
   const counted = instructionLength >= 450;
   const phone = surface === "mobile";
   const reasonRef = useRef<HTMLTextAreaElement>(null);
@@ -785,8 +789,8 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
                       onClick={() => setDraft(previous => ({
                         ...previous,
                         removedNotes: removed
-                          ? previous.removedNotes.filter(note => note.key !== noteKey(line))
-                          : [...previous.removedNotes, { index, key: noteKey(line) }],
+                          ? previous.removedNotes.filter(note => note.text !== line.text || note.at !== line.at)
+                          : [...previous.removedNotes, { index, text: line.text, at: line.at }],
                       }))}
                       className={`inline-flex ${phone ? "min-h-11 min-w-11" : "h-7"} shrink-0 items-center justify-center rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
                     >

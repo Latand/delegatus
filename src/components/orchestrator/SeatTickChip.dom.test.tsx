@@ -1241,7 +1241,7 @@ test("curation: a failed run with zero counts shows its result without a counts 
 });
 
 
-test("the field holds the operator's and unattributed lines; seat notes are listed apart, count, and are removed one request each", async () => {
+test("the field holds the operator's and unattributed lines; seat notes are listed apart, count, and are removed with the edit in one request", async () => {
   const { applySeatTickSettingsChange } = await import("@/lib/monitor/seatTickSettings");
   const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
   const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: PROJECT, seatEpoch: 7 };
@@ -1292,17 +1292,16 @@ test("the field holds the operator's and unattributed lines; seat notes are list
   expect(count()).toBe("501");
   expect(puts()).toHaveLength(0);
 
-  /* Both notes removed and the field edited: one request per note, then the field with its claim. */
+  /* Both notes removed and the field edited: one request names each note by place, text and date. */
   type(reason(), "Legacy note.\nEdited instruction.");
   press(entries()[0]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
   press(entries()[1]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
   press(save());
   await settle(root, 8);
-  expect(puts().map(entry => entry.body)).toEqual([
-    { project: PROJECT, replaceOtherInstructions: true, reason: "Legacy note.\nOperator instruction.\nAgent note." },
-    { project: PROJECT, replaceOtherInstructions: true, reason: "Legacy note.\nOperator instruction." },
-    { project: PROJECT, reason: "Legacy note.\nEdited instruction.", clearUnknownInstructions: true },
-  ]);
+  expect(puts().map(entry => entry.body)).toEqual([{
+    project: PROJECT, reason: "Legacy note.\nEdited instruction.", clearUnknownInstructions: true,
+    removeSeatNotes: [{ index: 2, text: "Seat note.", at: "2026-10-01T12:00:00.000Z" }, { index: 3, text: "Agent note.", at: "2026-10-01T12:00:00.000Z" }],
+  }]);
   expect(getAnswer.settings.instructionLines).toEqual([
     settings.instructionLines![0]!,
     { text: "Edited instruction.", author: operator, at: "2026-10-02T12:00:00.000Z" },
@@ -1312,7 +1311,7 @@ test("the field holds the operator's and unattributed lines; seat notes are list
   expect(save()).toBeNull();
 });
 
-test("a removal refused because the notes moved keeps the field's edit unsent and says so", async () => {
+test("a removal refused because the seat rewrote its note stores nothing, keeps the field's edit and says so", async () => {
   const { applySeatTickSettingsChange } = await import("@/lib/monitor/seatTickSettings");
   const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
   const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: PROJECT, seatEpoch: 7 };
@@ -1322,8 +1321,8 @@ test("a removal refused because the notes moved keeps the field's edit unsent an
   getAnswer = { ...base, settings: noted.settings as typeof base.settings };
   const { root } = await mount();
   await open(root);
-  /* A second note lands on the server after the panel read the record. */
-  const later = applySeatTickSettingsChange(getAnswer.settings, { reason: "Seat note.\nLater note." }, { at: "2026-10-01T12:05:00.000Z", actor: seat });
+  /* The seat rewrites its note on the server after the panel read the record. */
+  const later = applySeatTickSettingsChange(getAnswer.settings, { reason: "Seat note, revised." }, { at: "2026-10-01T12:05:00.000Z", actor: seat });
   if (!later.ok) throw new Error(later.error);
   const moved = later.settings as typeof base.settings;
   putHandler = (sent) => {
@@ -1338,7 +1337,8 @@ test("a removal refused because the notes moved keeps the field's edit unsent an
   press(save());
   await settle(root, 8);
   expect(puts()).toHaveLength(1);
-  expect(puts()[0]!.body).toEqual({ project: PROJECT, replaceOtherInstructions: true, reason: "a release afternoon" });
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, reason: "a release afternoon, edited", removeSeatNotes: [{ index: 1, text: "Seat note.", at: "2026-10-01T12:00:00.000Z" }] });
   expect(body().querySelector("[data-seat-tick-error]")?.textContent).toBe("The seat notes changed while the panel was open. Nothing was stored\u00A0— check the notes and save again.");
+  expect(moved.instructionLines!.map(line => line.text)).toEqual(["a release afternoon", "Seat note, revised."]);
   expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon, edited");
 });

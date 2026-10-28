@@ -541,34 +541,78 @@ test("without the claim, an operator reason leaves lines with no known author al
     .toEqual({ ok: false, error: "only an operator can remove instructions with unknown authors" });
 });
 
-test("the operator removes one seat note by leaving it out of the whole text; the others keep their entries", () => {
-  const second: SeatTickSettingsActor = { kind: "agent", conversationId: "conversation_agent", project: "other", seatEpoch: null };
-  const current = settingsOf(applySeatTickSettingsChange(legacyWithNote(), { reason: "Agent note." }, { at: AT, actor: second }));
+const AGENT: SeatTickSettingsActor = { kind: "agent", conversationId: "conversation_agent", project: "other", seatEpoch: null };
+const twoNotes = () => settingsOf(applySeatTickSettingsChange(legacyWithNote(), { reason: "Agent note." }, { at: NEXT_AT, actor: AGENT }));
+const removal = (line: { text: string; at: string | null }, index: number) => ({ index, text: line.text, at: line.at });
+
+test("the operator removes seat notes by index, text and date in one change; every other line keeps its entry", () => {
+  const current = twoNotes();
   const lines = current.instructionLines!;
   expect(lines.map(line => line.text)).toEqual(["Older line one.", "Older line two.", "Seat note.", "Agent note."]);
-  const without = (text: string) => lines.filter(line => line.text !== text).map(line => line.text).join("\n");
-  const removed = settingsOf(asOperator(current, { replaceOtherInstructions: true, reason: without("Seat note.") }));
-  expect(removed.instructionLines).toEqual([lines[0]!, lines[1]!, lines[3]!]);
-  expect(removed.reason).toBe(without("Seat note."));
-  const last = settingsOf(asOperator({ ...defaultSeatTickSettings(PROJECT), reason: "Seat note.", instructionLines: [lines[2]!] }, { replaceOtherInstructions: true, reason: null }));
-  expect(last.reason).toBeNull();
-  expect(last.instructionLines).toEqual([]);
+  const one = settingsOf(asOperator(current, { removeSeatNotes: [removal(lines[2]!, 2)] }));
+  expect(one.instructionLines).toEqual([lines[0]!, lines[1]!, lines[3]!]);
+  expect(one.reason).toBe("Older line one.\nOlder line two.\nAgent note.");
+  const both = settingsOf(asOperator(current, { removeSeatNotes: [removal(lines[3]!, 3), removal(lines[2]!, 2)] }));
+  expect(both.instructionLines).toEqual([lines[0]!, lines[1]!]);
+  /* With the field's edit in the same change: indexes name the stored lines. */
+  const edited = settingsOf(asOperator(current, { reason: "Older line one.\nRewritten.", clearUnknownInstructions: true, removeSeatNotes: [removal(lines[2]!, 2)] }));
+  expect(edited.instructionLines).toEqual([lines[0]!, { text: "Rewritten.", author: OPERATOR, at: NEXT_AT }, lines[3]!]);
+  const only = settingsOf(asOperator({ ...defaultSeatTickSettings(PROJECT), reason: "Seat note.", instructionLines: [lines[2]!] }, { removeSeatNotes: [removal(lines[2]!, 0)] }));
+  expect(only.reason).toBeNull();
+  expect(only.instructionLines).toEqual([]);
 });
 
-test("a removal that would take away a seat note the panel never showed is refused and stores nothing", () => {
-  const current = legacyWithNote();
-  const refusal = { ok: false as const, error: "the seat notes changed since the panel read them; one change removes exactly one seat note. Nothing was stored — check the notes and save again" };
-  const seen = current.instructionLines!.filter(line => line.text !== "Seat note.").map(line => line.text).join("\n");
-  /* A second seat note arrived after the panel read the record. */
-  const added = settingsOf(applySeatTickSettingsChange(current, { reason: "Seat note.\nLater seat note." }, { at: NEXT_AT, actor: SEAT }));
-  expect(asOperator(added, { replaceOtherInstructions: true, reason: seen })).toEqual(refusal);
-  /* The seat rewrote another note; the panel still sends the old text. */
-  const two = settingsOf(applySeatTickSettingsChange(current, { reason: "Seat note.\nKept note." }, { at: AT, actor: SEAT }));
-  const rewritten = settingsOf(applySeatTickSettingsChange(two, { reason: "Seat note.\nKept note, rewritten." }, { at: NEXT_AT, actor: SEAT }));
-  expect(asOperator(rewritten, { replaceOtherInstructions: true, reason: `${seen}\nKept note.` })).toEqual(refusal);
-  /* The note was already gone: nothing is left out. */
-  expect(asOperator(current, { replaceOtherInstructions: true, reason: current.reason })).toEqual(refusal);
-  expect(current.instructionLines!.map(line => line.text)).toEqual(["Older line one.", "Older line two.", "Seat note."]);
+test("a removal that does not match the stored seat note refuses the whole change and stores nothing", () => {
+  const current = twoNotes();
+  const lines = current.instructionLines!;
+  const stale = { ok: false as const, error: "a seat note to remove is no longer stored as the panel read it. Nothing was stored — check the notes and save again" };
+  const cases: unknown[][] = [
+    [{ index: 3, text: "Seat note.", at: AT }],
+    [{ index: 2, text: "Seat note, rewritten.", at: AT }],
+    [{ index: 2, text: "Seat note.", at: NEXT_AT }],
+    [{ index: 4, text: "Seat note.", at: AT }],
+    [removal(lines[2]!, 2), removal(lines[2]!, 2)],
+    [removal(lines[0]!, 0)],
+    [removal(lines[3]!, 3), { index: 2, text: "Gone.", at: AT }],
+  ];
+  for (const removeSeatNotes of cases) {
+    expect(asOperator(current, { reason: "Older line one.", clearUnknownInstructions: true, removeSeatNotes: removeSeatNotes as never })).toEqual(stale);
+  }
+  const operatorLine = settingsOf(asOperator(current, { reason: "Operator line." }));
+  const operatorIndex = operatorLine.instructionLines!.findIndex(line => line.author?.kind === "gateway");
+  expect(asOperator(operatorLine, { removeSeatNotes: [removal(operatorLine.instructionLines![operatorIndex]!, operatorIndex)] })).toEqual(stale);
+  for (const malformed of [{}, [{ index: "2", text: "Seat note.", at: AT }], [{ index: -1, text: "Seat note.", at: AT }], [{ index: 2, text: "Seat note." }], [null]]) {
+    expect(asOperator(current, { removeSeatNotes: malformed as never })).toEqual({ ok: false, error: "removeSeatNotes must be a list of { index, text, at } naming stored seat notes" });
+  }
+  expect(current.instructionLines).toEqual(lines);
+});
+
+test("only an operator removes seat notes, and never beside a change that rewrites the lines first", () => {
+  const current = twoNotes();
+  const note = [removal(current.instructionLines![2]!, 2)];
+  expect(applySeatTickSettingsChange(current, { removeSeatNotes: note }, { at: NEXT_AT, actor: SEAT, instructionActor: SEAT })).toEqual({ ok: false, error: "only an operator can remove seat notes" });
+  expect(applySeatTickSettingsChange(current, { removeSeatNotes: note }, { at: NEXT_AT, actor: OPERATOR, instructionActor: { ...OPERATOR, kind: "unidentified" } })).toEqual({ ok: false, error: "only an operator can remove seat notes" });
+  const refusal = { ok: false, error: "removeSeatNotes goes with the operator's own reason only, not with replaceOtherInstructions or a clearUnknownInstructions without reason" };
+  expect(asOperator(current, { removeSeatNotes: note, replaceOtherInstructions: true, reason: "Replacement." })).toEqual(refusal);
+  expect(asOperator(current, { removeSeatNotes: note, clearUnknownInstructions: true })).toEqual(refusal);
+});
+
+test("the panel's preview of an edit is what the server stores, and the limit counts that", async () => {
+  const { previewSeatTickInstructions } = await import("./seatTickInstructions");
+  const current = twoNotes();
+  const lines = current.instructionLines!;
+  const edit = { text: `Older line one.\n${"x".repeat(450)}`, claimUnknown: true, removeSeatNotes: [removal(lines[3]!, 3)] };
+  const preview = previewSeatTickInstructions(current, edit, OPERATOR, NEXT_AT);
+  const stored = settingsOf(asOperator(current, { reason: edit.text, clearUnknownInstructions: true, removeSeatNotes: edit.removeSeatNotes }));
+  expect(preview).toEqual({ ok: true, lines: stored.instructionLines! });
+  const length = stored.reason!.length;
+  expect(length).toBe(edit.text.length + 1 + "Seat note.".length);
+  /* One more character than the limit allows, counted the same way, is refused. */
+  const over = `${edit.text}${"x".repeat(500 - length + 1)}`;
+  const overPreview = previewSeatTickInstructions(current, { ...edit, text: over }, OPERATOR, NEXT_AT);
+  expect(overPreview.ok && overPreview.lines.map(line => line.text).join("\n").length).toBe(501);
+  expect(asOperator(current, { reason: over, clearUnknownInstructions: true, removeSeatNotes: edit.removeSeatNotes }))
+    .toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
 });
 
 

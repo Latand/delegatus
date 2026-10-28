@@ -765,7 +765,7 @@ test("only the operator browser can replace seat instructions", async () => {
   ]);
 });
 
-test("the operator browser edits lines with no known author and removes one seat note, keeping the rest of each entry", async () => {
+test("the operator browser edits lines with no known author and removes seat notes by place, keeping the rest of each entry", async () => {
   setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
   seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
   writeSeatTickSettings(PROJECT, { ...readSeatTickSettings(PROJECT, settingsFile), reason: "Older line.\nOlder line to edit." }, settingsFile);
@@ -780,14 +780,22 @@ test("the operator browser edits lines with no known author and removes one seat
   const afterEdit = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
   expect(afterEdit).toEqual([seeded[0]!, { text: "Edited line.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: readSeatTickSettings(PROJECT, settingsFile).updatedAt }, seeded[2]!, seeded[3]!]);
 
-  const removed = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Older line.\nEdited line.\nSecond seat note." });
+  /* A seat request cannot remove notes, even from the operator's browser. */
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const seatAttempt = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "First seat note.", at: seeded[2]!.at }] }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  expect(seatAttempt.status).toBe(403);
+  setCallerConversationResolverForTests(() => null);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual(afterEdit);
+
+  const removed = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "First seat note.", at: seeded[2]!.at }] });
   expect(removed.status).toBe(200);
   expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!, afterEdit[3]!]);
-  const last = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Older line.\nEdited line." });
+  /* The panel still names the note at its old place: refused, nothing stored. */
+  const stale = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "First seat note.", at: seeded[2]!.at }] });
+  expect(stale.status).toBe(400);
+  expect(((await stale.json()) as { error: string }).error).toBe("a seat note to remove is no longer stored as the panel read it. Nothing was stored — check the notes and save again");
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!, afterEdit[3]!]);
+  const last = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "Second seat note.", at: seeded[3]!.at }] });
   expect(last.status).toBe(200);
-  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!]);
-  /* Nothing left to remove: the panel's request found the note already gone. */
-  const none = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Older line.\nEdited line." });
-  expect(none.status).toBe(400);
   expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!]);
 });

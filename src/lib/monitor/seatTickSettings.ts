@@ -10,7 +10,7 @@ import { applyLineEdits, type LineEdits, type LineTarget } from "@/lib/lineEdits
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
-import { seatTickInstructionLines, replaceSeatTickInstructions, type SeatTickInstructionLine } from "./seatTickInstructions";
+import { hasUnknownAuthor, previewSeatTickInstructions, seatTickInstructionLines, type SeatNoteRemoval } from "./seatTickInstructions";
 
 import { redactMonitorText } from "./redact";
 
@@ -200,10 +200,12 @@ export interface SeatTickSettingsChange {
       replaces: an unchanged line keeps its entry. Route authorization is
       operator-only. */
   clearUnknownInstructions?: boolean;
-  /** `reason` is then the whole instruction text: a line equal to a stored
-      line keeps that entry, a new line is the operator's, and a stored line
-      left out is removed. Exactly one seat note may be left out per change. */
+  /** Replace all non-operator lines together with a required operator replacement. */
   replaceOtherInstructions?: boolean;
+  /** Seat notes the operator removes, each named by its stored index, text
+      and date; any mismatch refuses the change. Route authorization is
+      operator-only. */
+  removeSeatNotes?: SeatNoteRemoval[];
   /** The seat's own additional prompt for its monitor; `null` clears it. */
   monitorPrompt?: string | null;
   /** ISO instant, or `null` for "until someone changes it". */
@@ -528,10 +530,6 @@ export function seatTickSettingsAfterLapse(
   return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.turbo ? { turbo: lapsed.turbo } : {}), ...(lapsed.turboHistory ? { turboHistory: lapsed.turboHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, ...(lapsed.instructionLines ? { instructionLines: lapsed.instructionLines } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
-function unknownAuthor(line: SeatTickInstructionLine): boolean {
-  return !line.author || line.author.kind === "unidentified";
-}
-
 export type SeatTickSettingsChangeResult =
   | { ok: true; settings: SeatTickSettings; notes?: string[] }
   | { ok: false; error: string };
@@ -555,7 +553,7 @@ export function applySeatTickSettingsChange(
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "replaceOtherInstructions", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision", "turbo"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "replaceOtherInstructions", "removeSeatNotes", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision", "turbo"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   if (Object.hasOwn(change, "clearUnknownInstructions")) {
@@ -563,7 +561,7 @@ export function applySeatTickSettingsChange(
     const author = context.instructionActor ?? context.actor;
     if (author.kind !== "gateway") return { ok: false, error: "only an operator can remove instructions with unknown authors" };
     if (!Object.hasOwn(change, "reason")) {
-      const kept = seatTickInstructionLines(current).filter(line => !unknownAuthor(line));
+      const kept = seatTickInstructionLines(current).filter(line => !hasUnknownAuthor(line));
       current = { ...current, reason: kept.map(line => line.text).join("\n") || null, instructionLines: kept };
     }
   }
@@ -571,8 +569,19 @@ export function applySeatTickSettingsChange(
     if (change.replaceOtherInstructions !== true) return { ok: false, error: "replaceOtherInstructions must be true" };
     const author = context.instructionActor ?? context.actor;
     if (author.kind !== "gateway") return { ok: false, error: "only an operator can replace other authors’ instructions" };
-    if (change.reason !== null && typeof change.reason !== "string") {
+    if (typeof change.reason !== "string" || !change.reason.trim()) {
       return { ok: false, error: "an operator replacement is required when replacing other authors’ instructions" };
+    }
+    const kept = seatTickInstructionLines(current).filter(line => line.author?.kind === "gateway");
+    current = { ...current, reason: kept.map(line => line.text).join("\n") || null, instructionLines: kept };
+  }
+  const removing = Object.hasOwn(change, "removeSeatNotes");
+  if (removing) {
+    const author = context.instructionActor ?? context.actor;
+    if (author.kind !== "gateway") return { ok: false, error: "only an operator can remove seat notes" };
+    /* Both rewrite the stored lines before the removal could name them. */
+    if (Object.hasOwn(change, "replaceOtherInstructions") || (Object.hasOwn(change, "clearUnknownInstructions") && !Object.hasOwn(change, "reason"))) {
+      return { ok: false, error: "removeSeatNotes goes with the operator's own reason only, not with replaceOtherInstructions or a clearUnknownInstructions without reason" };
     }
   }
 
@@ -605,45 +614,30 @@ export function applySeatTickSettingsChange(
 
   let reason = current.reason;
   let instructionLines = seatTickInstructionLines(current);
-  if (Object.hasOwn(change, "reason")) {
+  if (Object.hasOwn(change, "reason") || removing) {
     const author = context.instructionActor ?? context.actor;
-    if (author.kind === "unidentified") return { ok: false, error: "instruction writes need an identified author" };
-    const raw = change.reason;
-    if (raw === null) reason = null;
-    else if (typeof raw !== "string") return { ok: false, error: "reason must be a string" };
-    else {
-      const redacted = redactMonitorText(raw).trim();
-      if (raw.length > REASON_LIMIT || redacted.length > REASON_LIMIT) {
-        return { ok: false, error: `instructions (reason) are ${raw.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
+    let text: string | null | undefined;
+    if (Object.hasOwn(change, "reason")) {
+      if (author.kind === "unidentified") return { ok: false, error: "instruction writes need an identified author" };
+      const raw = change.reason;
+      if (raw === null) text = null;
+      else if (typeof raw !== "string") return { ok: false, error: "reason must be a string" };
+      else {
+        const redacted = redactMonitorText(raw).trim();
+        if (raw.length > REASON_LIMIT || redacted.length > REASON_LIMIT) {
+          return { ok: false, error: `instructions (reason) are ${raw.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
+        }
+        text = redacted || null;
       }
-      reason = redacted || null;
     }
-    if (Object.hasOwn(change, "replaceOtherInstructions")) {
-      /* The operator's whole text. Removal is said by leaving a line out, so a
-         seat note added or rewritten after the panel read the record would
-         vanish unseen beside the one being removed. One per change makes that
-         two, which is refused. */
-      const unused = [...seatTickInstructionLines(current)];
-      instructionLines = (reason ? reason.split("\n") : []).map(text => {
-        const index = unused.findIndex(line => line.text === text);
-        return index >= 0 ? unused.splice(index, 1)[0]! : { text, author, at: context.at };
-      });
-      if (unused.filter(line => !unknownAuthor(line) && line.author!.kind !== "gateway").length !== 1) {
-        return { ok: false, error: "the seat notes changed since the panel read them; one change removes exactly one seat note. Nothing was stored — check the notes and save again" };
-      }
-    } else if (Object.hasOwn(change, "clearUnknownInstructions")) {
-      /* Lines with no known author are the operator's older text: they join
-         the operator's block for this write and keep their entries when kept. */
-      const originals = new Map<SeatTickInstructionLine, SeatTickInstructionLine>();
-      const lines = seatTickInstructionLines(current).map(line => {
-        if (!unknownAuthor(line)) return line;
-        const claimed = { ...line, author };
-        originals.set(claimed, line);
-        return claimed;
-      });
-      instructionLines = replaceSeatTickInstructions({ reason: current.reason, instructionLines: lines }, reason, author, context.at)
-        .map(line => originals.get(line) ?? line);
-    } else instructionLines = replaceSeatTickInstructions(current, reason, author, context.at);
+    /* The panel's counter runs this same preview over its draft. */
+    const preview = previewSeatTickInstructions(current, {
+      ...(text !== undefined ? { text } : {}),
+      claimUnknown: text !== undefined && Object.hasOwn(change, "clearUnknownInstructions"),
+      ...(removing ? { removeSeatNotes: change.removeSeatNotes } : {}),
+    }, author, context.at);
+    if (!preview.ok) return preview;
+    instructionLines = preview.lines;
     reason = instructionLines.map(line => line.text).join("\n") || null;
     if ((reason?.length ?? 0) > REASON_LIMIT) return { ok: false, error: `instructions (reason) are ${reason!.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
   }

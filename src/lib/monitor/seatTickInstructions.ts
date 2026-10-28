@@ -47,6 +47,73 @@ export function replaceSeatTickInstructions(settings: Instructions, text: string
   return kept;
 }
 
+/** A line a seat or an agent session wrote for itself. Every other line is
+ * the operator's: their own, and the older lines no author was recorded for
+ * (#3091), which only the operator could have written. */
+export function isSeatNote(line: SeatTickInstructionLine): boolean {
+  return line.author?.kind === "manager" || line.author?.kind === "agent";
+}
+
+export function hasUnknownAuthor(line: SeatTickInstructionLine): boolean {
+  return !line.author || line.author.kind === "unidentified";
+}
+
+/** The operator's editable field: every line that is not a seat note, in
+ * stored order. */
+export function operatorFieldText(settings: Instructions): string {
+  return seatTickInstructionLines(settings).filter(line => !isSeatNote(line)).map(line => line.text).join("\n");
+}
+
+/** A seat note named by its place in the stored lines and what it records. */
+export interface SeatNoteRemoval { index: number; text: string; at: string | null }
+
+export const SEAT_NOTE_REMOVAL_STALE = "a seat note to remove is no longer stored as the panel read it. Nothing was stored — check the notes and save again";
+
+/** An operator's edit of the instructions. `text` absent keeps the field's
+ * lines as stored; `claimUnknown` makes the lines with no known author part of
+ * the block `text` replaces. */
+export interface SeatTickInstructionEdit {
+  text?: string | null;
+  claimUnknown?: boolean;
+  removeSeatNotes?: unknown;
+}
+
+/** The lines an edit would store. The panel's counter and the server's limit
+ * both count this, so the number on screen is the number the server checks.
+ * Removals are matched against the stored lines before anything else; one that
+ * no longer matches refuses the whole edit. */
+export function previewSeatTickInstructions(settings: Instructions, edit: SeatTickInstructionEdit, actor: SeatTickSettingsActor, at: string):
+  { ok: true; lines: SeatTickInstructionLine[] } | { ok: false; error: string } {
+  let lines = seatTickInstructionLines(settings);
+  if (edit.removeSeatNotes !== undefined) {
+    const removals = edit.removeSeatNotes;
+    if (!Array.isArray(removals) || removals.some(entry => !entry || typeof entry !== "object" || !Number.isInteger(entry.index) || entry.index < 0
+      || typeof entry.text !== "string" || (entry.at !== null && typeof entry.at !== "string"))) {
+      return { ok: false, error: "removeSeatNotes must be a list of { index, text, at } naming stored seat notes" };
+    }
+    const indexes = new Set<number>();
+    for (const { index, text, at: written } of removals as SeatNoteRemoval[]) {
+      const line = lines[index];
+      if (indexes.has(index) || !line || !isSeatNote(line) || line.text !== text || line.at !== written) return { ok: false, error: SEAT_NOTE_REMOVAL_STALE };
+      indexes.add(index);
+    }
+    lines = lines.filter((_, index) => !indexes.has(index));
+  }
+  if (edit.text === undefined) return { ok: true, lines };
+  const remaining = { reason: lines.map(line => line.text).join("\n") || null, instructionLines: lines };
+  if (!edit.claimUnknown) return { ok: true, lines: replaceSeatTickInstructions(remaining, edit.text, actor, at) };
+  /* Lines with no known author join the actor's block for this write and keep
+     their entries when kept. */
+  const originals = new Map<SeatTickInstructionLine, SeatTickInstructionLine>();
+  const claimed = lines.map(line => {
+    if (!hasUnknownAuthor(line)) return line;
+    const own = { ...line, author: actor };
+    originals.set(own, line);
+    return own;
+  });
+  return { ok: true, lines: replaceSeatTickInstructions({ reason: remaining.reason, instructionLines: claimed }, edit.text, actor, at).map(line => originals.get(line) ?? line) };
+}
+
 /** Wakes reserve this section in full. Dates stay on the stored lines and in
  * the panel; the wake groups their text under the authority it actually has. */
 export function seatTickInstructionSections(settings: Instructions): string[] {
