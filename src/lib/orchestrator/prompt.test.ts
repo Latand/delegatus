@@ -45,8 +45,8 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 62, and a v61 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(62);
+test("the default mandate is at version 63, and a v62 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(63);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -127,7 +127,8 @@ test("the default mandate is at version 62, and a v61 seat reads as stale", () =
   expect(orchestratorMandateStale(59)).toBe(true);
   expect(orchestratorMandateStale(60)).toBe(true);
   expect(orchestratorMandateStale(61)).toBe(true);
-  expect(orchestratorMandateStale(62)).toBe(false);
+  expect(orchestratorMandateStale(62)).toBe(true);
+  expect(orchestratorMandateStale(63)).toBe(false);
 });
 
 /**
@@ -194,6 +195,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   57: "928041c147b9f068a23674313b33c285c78555fa6a8afc0a89aeb20f49e99639",
   // v58 states the maintenance practice and ships #3083's working rule 16.
   58: "632ee54064e12e71db96a1ed427d0fc6f59566d6983d4b659429056ca7f4fb38",
+  // The terminal-review branch independently used v59 with fingerprint
+  // c16c157ea7afb595eac8f1b6773c7f166771fd7c516ce7d1eb917a84136ad863.
   // The due-date branch independently used v59 with fingerprint
   // c47fcd928d937a62b5c0281d911849a45965e48196a1e0d49af7bd33849985b9.
   // v59 requires a lesson in the same turn as an operator correction.
@@ -204,8 +207,12 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // with fingerprint 7f1a773990e3f1acb7c89b04ea5ff565d7a4e08af3461be5b37617a3bb8f8c7c.
   // v61 prepares reports automatically and ends reporting on a decline.
   61: "600201a2ca27c689eb5aa190ad62fbdd94718c704d6058d633add78bf7e85c55",
+  // The terminal-review branch independently used v62 with fingerprint
+  // a6ddf23434fbfc1e4ba6eb58f54db91bafd0b025c444af8e83d99b4c51d43baf.
   // v62 combines both v61 upgrades.
   62: "d96b1c425d22e14099845202fa03ffe8b3b09de3b2fc02fc7ddffa73e978040e",
+  // v63 combines terminal review and task due dates with correction and reporting rules.
+  63: "e1c2645372dd85556af496aadbdcc4827259d3ce9619bb92b7a121e78146f539",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -369,6 +376,25 @@ test("the clock handover reaches a bespoke or older mandate, exactly once", () =
    rather than as an appendix — and delivery has nothing to append. */
 test("the current default already contains the clock directive", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE);
+});
+
+test("the previous review and merge policy upgrades once without changing pending replay or bespoke wording (#3037)", () => {
+  const v57 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
+  const line = (text: string, prefix: string) => text.split("\n").find(value => value.startsWith(prefix))!;
+  const outputs = line(v57, "- A stage that hands a document on");
+  const v58 = v57.replace(line(v57, "16. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "16. "))
+    .replace(outputs, `${outputs}\n${maintenanceBullet(ORCHESTRATOR_SYSTEM_PROMPT)}`);
+  expect(createHash("sha256").update(v58).digest("hex")).toBe(PROMPT_FINGERPRINTS[58]);
+  expect(orchestratorMandateUpgraded(v58)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  const delivered = orchestratorMandateForDelivery(v58);
+  expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v58))).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateWithRoleTable(v58, null)).toBe(v58);
+  const bespoke = "Review: our own budget.\n- Merge bar: operator approval.";
+  expect(orchestratorMandateUpgraded(bespoke)).toBe(`${bespoke}\n\n${OPERATOR_CORRECTION_RULE}`);
+  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(bespoke))).toBe(`${bespoke}\n\n${OPERATOR_CORRECTION_RULE}`);
+  expect(orchestratorMandateForDelivery(bespoke)).toContain(bespoke);
 });
 
 /* Delivery, on exactly the terms the clock handover established: the seats that
@@ -675,8 +701,12 @@ test("the v60 status-note upgrade preserves the byte budget and is idempotent", 
   const previous = "- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.";
   const current = ORCHESTRATOR_SYSTEM_PROMPT.split("\n").find(line => line.startsWith("- Keep each task current:"))!;
   expect(Buffer.byteLength(current) - Buffer.byteLength(previous)).toBe(17);
-  const v60 = ORCHESTRATOR_SYSTEM_PROMPT.replace(current, previous)
-    .replace(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE.split("\n")[1]!, PREPARATION_CONSENT_RULE);
+  const v57 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
+  const line = (text: string, prefix: string) => text.split("\n").find(value => value.startsWith(prefix))!;
+  const outputs = line(v57, "- A stage that hands a document on");
+  const v60 = v57.replace(line(v57, "13. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "13. "))
+    .replace(line(v57, "16. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "16. "))
+    .replace(outputs, `${outputs}\n${maintenanceBullet(ORCHESTRATOR_SYSTEM_PROMPT)}`);
   expect(createHash("sha256").update(v60).digest("hex")).toBe(PROMPT_FINGERPRINTS[60]);
   expect(orchestratorMandateUpgraded(v60)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
   expect(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);

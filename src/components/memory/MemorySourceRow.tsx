@@ -124,7 +124,7 @@ export function MemorySourceRow({ phone = false, readEveryMs = READ_MS }: { phon
      phone, the panel's still row (16 px icon, 8 px gap, 12 px title) on the desktop; the line hangs
      under the title, as the worker limit's does, and wraps at word boundaries. */
   return (
-    <div data-header-menu-memory-source="" data-memory-source-state={state} className={phone ? "flex w-full flex-col px-4 pb-1.5" : "flex w-full flex-col rounded-[8px] px-2 py-1"}>
+    <div data-header-menu-memory-source="" data-memory-source-state={state} className={phone ? "flex w-full flex-col px-4 pb-0.5" : "flex w-full flex-col rounded-[8px] px-2 py-1"}>
       <div className={`flex items-center font-semibold text-primary ${phone ? "min-h-11 gap-3 text-body" : "min-h-6 gap-2 text-[12px]"}`}>
         <BookMarked className={`shrink-0 text-secondary ${phone ? "h-[18px] w-[18px]" : "h-4 w-4"}`} aria-hidden data-memory-source-icon="" />
         <span data-memory-source-title="" className="min-w-0 flex-1 leading-4">{title}</span>

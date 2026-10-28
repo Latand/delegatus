@@ -8,7 +8,7 @@ import { useConversationCatalog } from "@/hooks/useConversationCatalog";
 import { useTimeline } from "@/hooks/useTimeline";
 import { useSwitchboardData, type SwitchboardItem } from "@/hooks/useSwitchboardData";
 import { projectDisplayName } from "@/lib/displayNames";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";

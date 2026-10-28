@@ -1344,6 +1344,56 @@ test("a parked fork with a failed send uses one replacement continuation after i
   expect(h.spawnCount()).toBe(1);
   expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
 });
+test.each(["completed", "failed", "killed"] as const)("stage projection keeps reserved handoff runtime coherent through a %s outcome", async (outcome) => {
+  const { pipelineStageRead } = await import("@/lib/mcp/compactAnswers");
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { accountId: engine === "codex" ? "target-account" : "default" } } as never);
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  expect(requested.error).toBeUndefined();
+  const read = () => pipelineStageRead(loadPipelines()[0]!, "plan").attempt!;
+  expect(read().runtime).toEqual({ engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", serviceTierSource: null });
+  let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
+  let launches = 0;
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.spawnAgent = async (_input, reserved) => {
+    launches++;
+    await reserved({ launchId: "projection-launch", conversationId: "conversation_projection", accountId: "target-account" });
+    throw new Error("launch acknowledgement lost");
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
+    accountId: "target-account", effectiveRole: { engine: "claude", model: "fable" },
+    runtimeSwitches: [{ mode: "handoff", phase: "switching" }],
+  });
+  expect(read().runtime).toBeNull();
+  receipt = { state: "starting", launchId: "projection-launch", conversationId: "conversation_projection" } as never;
+  const restarted = await import(`./engine?projection-restart=${outcome}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  expect(read().runtime).toBeNull();
+  expect(launches).toBe(1);
+
+  if (outcome === "killed") {
+    // A terminal switch failure can retain the reserved successor identities.
+    h.ports.runtimeSwitchKilled = async () => true;
+    await restarted.tickPipelines([], h.ports);
+    expect(read().runtimeSwitch?.phase).toBe("failed");
+    expect(read().runtime).toBeNull();
+    expect(launches).toBe(1);
+    return;
+  }
+  receipt = { state: outcome, launchId: "projection-launch", conversationId: "conversation_projection", accountId: "target-account",
+    sessionId: "projection-session", transcript: "/codex/projection.jsonl", paneId: null, ...(outcome === "failed" ? { error: "launch refused" } : {}) } as never;
+  if (outcome === "completed") h.setSeat({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null,
+    accountId: "target-account", sessionId: "projection-session", agentPath: "/codex/projection.jsonl" });
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  expect(read().runtimeSwitch?.phase).toBe(outcome === "completed" ? "committed" : "rolled-back");
+  expect(read().runtime).toEqual(outcome === "completed"
+    ? { engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "target-account", serviceTierSource: null }
+    : { engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", serviceTierSource: null });
+  expect(launches).toBe(1);
+});
+
 test("a completed parked handoff receipt settles its successor after engine restart", async () => {
   const h = switchHarness();
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);

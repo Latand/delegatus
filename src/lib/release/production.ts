@@ -10,7 +10,9 @@ import { createTask } from "@/lib/tasks/commands";
 import { loadTasksByIds, mutateTasksFile } from "@/lib/tasks/store";
 import { pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import { createPipelineFromRequest } from "@/lib/pipelines/engine";
-import { productionReleaseController, releaseRequestDigest, type ReleasePorts } from "./run";
+import type { CreatePipelineRequest } from "@/lib/pipelines/types";
+import { MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
+import { productionReleaseController, releaseRequestDigest, ReleaseValidationRefusal, type ReleasePorts } from "./run";
 import { releaseCut, type ReleaseChange, type ReleaseDeployment } from "./policy";
 import { RELEASE_DEFAULTS } from "./settings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
@@ -144,6 +146,19 @@ export async function requiredReleaseChecks(repo: string, commits: string[], run
   }
   return pending ? "pending" : "green";
 }
+export async function createReleasePipeline(request: CreatePipelineRequest, key: string, create = createPipelineFromRequest): Promise<string> {
+  const digest = releaseRequestDigest(request);
+  const result = await create(request, undefined, { creationRequest: { key, digest } });
+  if (result.pipeline) return result.pipeline.id;
+  // Only an oversized prompt's structured validation refusal proves this payload
+  // cannot be admitted by a competing seat. A status or error string proves nothing.
+  if (result.status === 400 && request.stages.some((stage, index) => typeof stage.prompt === "string"
+    && stage.prompt.trim().length > MAX_STAGE_PROMPT_LENGTH
+    && result.violations?.some(violation => violation.field === `stages[${index}].prompt`))) {
+    throw new ReleaseValidationRefusal(digest, result.error ?? "release prompt refused");
+  }
+  throw new Error(result.error ?? "release pipeline refused");
+}
 export function releaseControllerForSources(sources: SeatTickSources) {
   const ports: ReleasePorts = {
     now: sources.now, settings: project => sources.settings(project).release,
@@ -202,11 +217,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       if (!outcome.ok) throw new Error(outcome.error);
       return outcome.task.id;
     },
-    create: async (request, key) => {
-      const result = await createPipelineFromRequest(request, undefined, { creationRequest: { key, digest: releaseRequestDigest(request) } });
-      if (!result.pipeline) throw new Error(result.error ?? "release pipeline refused");
-      return result.pipeline.id;
-    },
+    create: createReleasePipeline,
     lookup: key => pipelineDeliveryLookup({ requestKey: key })?.id ?? null,
     pipeline: id => {
       const lane = [...sources.pipelines(), ...sources.archivedPipelines()].find(p => p.id === id);

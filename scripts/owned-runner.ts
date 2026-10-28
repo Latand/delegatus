@@ -146,34 +146,73 @@ if (args[0] === "--namespace-guardian") {
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = child.pid ? captureProcessIdentity(child.pid) : null;
   let settled = false;
-  const finish = (code: number) => {
+  const finish = async (code: number) => {
     if (settled) return;
     settled = true;
+    await stopNotify();
     budget.close();
     const survivors = members().filter(pid => pid !== identity?.pid || processIdentityStatus(identity!) === "alive");
-    if (survivors.length) console.error(`owned runner: surviving owned processes: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
+    // A deadline ends the main process before systemd drains the cgroup.
+    // Its pending children are expected; the waiting client returns only after
+    // that cleanup. A normal exit with children still refuses the check.
+    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
-  child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); finish(1); });
-  child.once("exit", (code, signal) => finish(code ?? (signal === "SIGTERM" ? 143 : 137)));
+  child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
+  child.once("exit", (code, signal) => { void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
   setInterval(() => {
     const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
-    if (!alive(launch.owner) || (launch.parent && !alive(launch.parent))) finish(137);
+    if (!alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(137);
   }, 100);
-  cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); finish(124); });
+  cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
   // excludes queue waits. RuntimeMaxSec cannot be extended on older systemd.
+  // A short-lived helper can fail under pressure while the command is healthy.
+  // Retry asynchronously within half the kernel's 60-second watchdog window;
+  // owner checks, cancellation and the execution deadline keep running.
+  let notifying: ReturnType<typeof spawn> | undefined, notifyClosed: Promise<void> | undefined;
+  let nextNotify: ReturnType<typeof setTimeout> | undefined;
+  let lastFailure = "no completed notification";
+  const expired = () => {
+    console.error(`owned runner: watchdog notification failed: ${lastFailure} (no successful notification within 30000 ms)`);
+    void finish(1);
+  };
+  let notifyDeadline = setTimeout(expired, 30_000);
   const notify = () => {
     if (settled) return;
-    const result = spawnSync("systemd-notify", ["--no-block", "WATCHDOG=1"], { env: { ...process.env, NOTIFY_SOCKET: notifySocket }, stdio: "ignore", timeout: 2_000 });
-    if (result.status !== 0) { console.error("owned runner: watchdog notification failed"); finish(1); }
+    const helper = spawn("systemd-notify", ["--no-block", "WATCHDOG=1"], { env: { ...process.env, NOTIFY_SOCKET: notifySocket }, stdio: "ignore", timeout: 2_000, killSignal: "SIGKILL" });
+    notifying = helper;
+    let errorCode: string | undefined;
+    helper.once("error", (error: NodeJS.ErrnoException) => { errorCode = error.code ?? "spawn error"; });
+    notifyClosed = new Promise(resolve => helper.once("close", (code, signal) => {
+      notifying = undefined;
+      resolve();
+      if (settled) return;
+      if (code === 0) {
+        clearTimeout(notifyDeadline);
+        notifyDeadline = setTimeout(expired, 30_000);
+        nextNotify = setTimeout(notify, 10_000);
+      } else {
+        lastFailure = errorCode ?? (signal ? `signal ${signal}` : `exit ${code}`);
+        console.error(`owned runner: watchdog notification retry: ${lastFailure}`);
+        nextNotify = setTimeout(notify, 1_000);
+      }
+    }));
   };
+  async function stopNotify() {
+    clearTimeout(nextNotify); clearTimeout(notifyDeadline);
+    if (notifying) {
+      notifying.kill("SIGKILL");
+      // Reap our helper before the survivor check, including when the command
+      // exits or is cancelled while notification is still in flight.
+      await Promise.race([notifyClosed, Bun.sleep(1_000)]);
+    }
+  }
   notify();
-  setInterval(notify, 10_000);
-  process.on("SIGTERM", () => finish(143));
-  process.on("SIGINT", () => finish(130));
+  process.on("SIGTERM", () => { void finish(143); });
+  process.on("SIGINT", () => { void finish(130); });
 } else {
   if (!args.length) throw new Error("usage: owned-runner.ts command [args...]");
   const sandbox = signalSandboxContext();
@@ -195,7 +234,7 @@ if (args[0] === "--namespace-guardian") {
   }
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = gateServiceProperties();
-  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "8G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
+  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     service.once("error", error => { console.error(`owned runner: systemd admission failed: ${error.message}`); resolve(1); });

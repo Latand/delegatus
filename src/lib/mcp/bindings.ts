@@ -29,7 +29,7 @@ import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
 import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
-import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
 import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -49,6 +49,7 @@ import { budgetPage } from "./budgetPage";
 import { fleetAgents, fleetDetailRows, fleetLimitWaits, fleetPublicRow, fleetRuntimeFor, fleetSummary, type FleetScope, type FleetFilters } from "./agentFleet";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { entryServiceTierResult } from "@/lib/scanner/effort";
 import os from "node:os";
 import path from "node:path";
 
@@ -764,6 +765,11 @@ async function dispatchViewerControl(
     if (operationId || launchId) {
       throw new McpDispatchVerdictError(message, {
         status: response.status,
+        ...(pathname === "/api/conversation-host" && body.action === "speed" ? {
+          ...(typeof result.requestedTier === "string" ? { requestedTier: result.requestedTier } : {}),
+          ...(typeof result.appliedTier === "string" || result.appliedTier === null ? { appliedTier: result.appliedTier } : {}),
+          ...(typeof result.echoed === "boolean" ? { echoed: result.echoed } : {}),
+        } : {}),
         ...(refusals.length ? { refusals } : {}),
         ...(operationId ? { operationId } : {}),
         ...(launchId ? { launchId } : {}),
@@ -4654,6 +4660,16 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const receiptMatches = launchReceipt?.conversationId === active.conversationId;
   const engine = conversation?.engine ?? (receiptMatches ? launchReceipt.engine : null);
   const model = generation?.launchProfile?.model ?? (receiptMatches ? launchReceipt.launchProfile.model : null);
+  const profile = generation?.launchProfile ?? (receiptMatches ? launchReceipt.launchProfile : null);
+  const profileTier = profile?.serviceTier ?? (profile?.fast === true ? "priority" : profile?.fast === false ? "default" : null);
+  let tier: { value: string | null; source: "native" | "profile" | null } = { value: profileTier, source: profileTier === null ? null : "profile" };
+  if (engine === "codex" && transcriptPath) {
+    try {
+      const stat = fs.statSync(transcriptPath);
+      tier = entryServiceTierResult({ engine, path: transcriptPath, pid: null, size: stat.size, mtime: stat.mtimeMs / 1000 },
+        new Map([[transcriptPath, profileTier]]));
+    } catch { /* A missing transcript leaves only the persisted launch profile. */ }
+  }
   let session: { messages: number; tools: number; compactions: number } | null = null;
   if (transcriptPath && (engine === "claude" || engine === "codex")) {
     try {
@@ -4705,6 +4721,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     transcriptPath,
     engine,
     model,
+    runtime: { accountId: generation?.accountId ?? (receiptMatches ? launchReceipt.accountId : null),
+      serviceTier: engine === "codex" ? tier.value : null, serviceTierSource: engine === "codex" ? tier.source : null },
     promptVersion: active.promptVersion,
     predecessorConversationId: active.predecessorConversationId,
     health: {
@@ -5564,7 +5582,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     mandate: text(args.mandate) || ORCHESTRATOR_SYSTEM_PROMPT,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
     clientRequestId: spawnAttemptId(requestId(args)),
-    ...allowedSeatFields(args, ["conversationId", "cwd", "engine", "model", "effort", "accountId"]),
+    ...allowedSeatFields(args, ["conversationId", "cwd", "engine", "model", "effort", "fast", "serviceTier", "accountId"]),
   }, callerCapabilityHeaders());
   return redactPayload({
     /* The key the seat was designated under, which the route resolves after
@@ -5603,13 +5621,29 @@ async function sendMessageToOrchestrator(
     const link = resolveRemoteSeatMachine(machine, project, dependencies);
     if (link) {
       try {
-        return await dispatchControl(control)("/api/orchestrator/message", {
-          project, machine: link.install, text: bound?.sendPayload
-            ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-            : await orchestratorRelayEgressText(requiredMessageText(args)),
-          clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
+        const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
+          : await orchestratorRelayEgressText(requiredMessageText(args));
+        const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
+        const response = await dispatchControl(control)("/api/orchestrator/message", {
+          project, machine: link.install, text: message,
+          clientMessageId,
+          ...(bound?.seatMessageFence ? { seatMessageFence: bound.seatMessageFence } : {}),
         }, callerCapabilityHeaders());
+        const sender = bound?.caller.conversationId ?? attributionOf(dependencies).conversationId;
+        let admitted: ReturnType<typeof recoverSeatMessage>;
+        try {
+          admitted = sender ? recoverSeatMessage(link.install, clientMessageId, {
+            project, caller: sender, text: message, claimedAt: bound?.claimedAt ?? new Date().toISOString(), fence: false,
+          }) : null;
+        } catch (error) {
+          throw new McpDispatchUncertainError(`the outbound admission could not be corroborated: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (!admitted || !("operationId" in admitted)) throw new McpDispatchUncertainError("the Viewer answered without a durable outbound admission");
+        return { ...response, ...admitted };
       } catch (error) {
+        if (error instanceof McpDispatchVerdictError && error.details.code === "seat_message_fenced") {
+          throw new McpDispatchUncertainError(error.message);
+        }
         if (error instanceof McpDispatchVerdictError && error.details.admission === "refused" && typeof error.details.operationId !== "string") {
           const details = { ...error.details };
           delete details.admission;
@@ -5710,7 +5744,7 @@ async function rotateOrchestrator(
   const project = canonicalOrchestratorProject(required(args, "project"));
   /* Omitting mandate preserves the incumbent's core and handoff history;
      sending one explicitly replaces the core. */
-  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
+  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "fast", "serviceTier", "accountId", "keepIncumbentMandate"]);
   const result = await dispatchControl(control)("/api/orchestrator/rotate", {
     project,
     clientRequestId: spawnAttemptId(requestId(args)),
@@ -6774,6 +6808,7 @@ async function conversationAction(
     key: text(args.key),
     label: args.label,
     question: args.question,
+    ...(action === "speed" ? { serviceTier: args.serviceTier } : {}),
     ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
     ...(action === "answer" ? {
       requestId: text(args.requestId),
@@ -7003,6 +7038,9 @@ async function agentActivity(
         ? { evidence: "pending", unverifiedCount, ...undescribed }
         : {}),
       ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
+  } catch (error) {
+    if (error instanceof ProjectNameRefusal) throw new McpUnadmittedRefusal(error.message, error.details);
+    throw error;
   } finally {
     deadline.release();
   }
@@ -7785,6 +7823,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
+    ...(link ? { seatMessageFence: seatMessageRetryFence(link.install, orchestratorSendDownstreamKey(requestId(args))) } : {}),
   };
 }
 
@@ -7885,6 +7924,7 @@ async function recoverSend(
   legacy: boolean,
   dependencies: ViewerMcpDomainDependencies,
   args?: McpToolArgs,
+  fenceAdmission = true,
 ): Promise<McpRecoveryEvidence> {
   /* A send carries no durable sender identity of its own, so a claim made
      before bindings existed has no evidence that establishes its owner. */
@@ -7895,8 +7935,23 @@ async function recoverSend(
     return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
   }
   if (binding.toolName === "send_message_to_orchestrator" && binding.target.identity?.startsWith("machine:")) {
-    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey);
-    return found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
+    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey,
+      binding.sendPayload && binding.target.project && binding.caller.conversationId ? {
+        project: binding.target.project, caller: binding.caller.conversationId,
+        text: splitRelayMessageText(binding.sendPayload.text)?.body ?? binding.sendPayload.text,
+        claimedAt: binding.claimedAt, admissionFence: binding.seatMessageFence, fence: fenceAdmission,
+      } : undefined);
+    if (found?.state === "history-expired") return {
+      outcome: "history-expired", evidence: "seat-message-history-retention",
+      reason: "The 35-day seat-message history has expired. Check delivery manually on the destination before sending again; automatic resend is unsafe.",
+      ids: {}, facts: found,
+    };
+    if (found?.state === "not-delivered") return {
+      outcome: "not-executed", evidence: "seat-message-admission-fence",
+      reason: "The MCP-to-outbox hop did not admit this message. The old attempt is fenced; resend safely with the same clientRequestId.",
+      ids: {}, facts: { ...found, nextAction: "retry-same-key" }, seatMessageFenced: true,
+    };
+    return found && "operationId" in found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
       : { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
   }
   if (!binding.target.identity) {
@@ -8164,12 +8219,12 @@ export function viewerMcpRecoverableTools(
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
     },
     send_message: {
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
     },
   };
 }

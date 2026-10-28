@@ -49,7 +49,7 @@ test("probe reports the exact failed boundary", async () => {
   const root = directory(), stub = path.join(root, "codex");
   fs.writeFileSync(stub, `#!${process.execPath}\nprocess.exit(23);\n`, { mode: 0o700 });
   const ports = productionUpdatePorts({ bun: process.execPath, probeFile: path.join(root, "missing-probe.test.ts"), scratch: path.join(root, "scratch"), current: () => true, report: async () => {} });
-  await expect(ports.probe("0.164.0", stub)).rejects.toMatchObject({ check: "app-server schema" });
+  await expect(ports.probe("0.165.0", stub)).rejects.toMatchObject({ check: "app-server schema" });
   await expect(ports.probe("0.163.0", stub)).rejects.toMatchObject({ check: "native queue fixture" });
 });
 
@@ -104,9 +104,9 @@ test("a timed out command kills and verifies an unrefed descendant before reject
 test.skipIf(process.env.CODEX_UPDATE_NATIVE_SMOKE !== "1")("package artifacts install and probe a real CLI in a private prefix", async () => {
   const root = directory();
   const ports = productionUpdatePorts({ bun: process.execPath, probeFile: path.resolve("dist/gate/codex-probe.test.ts"), scratch: path.join(root, "scratch"), current: () => true, report: async () => {} });
-  const target = await ports.install("0.163.0", path.join(root, "versions"));
-  expect(await ports.version(target)).toBe("0.163.0");
-  try { await ports.probe("0.163.0", target); }
+  const target = await ports.install("0.164.0", path.join(root, "versions"));
+  expect(await ports.version(target)).toBe("0.164.0");
+  try { await ports.probe("0.164.0", target); }
   catch (error) {
     if (error instanceof Error && error.cause instanceof UpdateCommandFailure) console.error(error.cause.diagnostics);
     throw error;

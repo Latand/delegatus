@@ -85,8 +85,9 @@ export type PipelineEdgeKind = "pass" | "fail";
     (#1868, #2187). `advance` (the default, and every edge without the field)
     reads `maxRounds` as the number of reviews: the last review's findings go to
     the target once more and, when that fix passes, the lane follows the
-    source's own pass edge without re-running the source, or completes when
-    that edge is null, whether or not the fix wrote a new head.
+    source's own pass edge without re-running the source. A terminal source
+    re-checks that fix once: a pass completes, a fail parks with the remaining
+    findings, whether or not the fix wrote a new head.
     `stop-after-fix` counts and hands off the same way, and after that fix the
     lane waits in `needs_review` for the operator (#1938). `park` keeps the
     older count, one more review after `maxRounds` traversals, then stops for
@@ -104,8 +105,8 @@ export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: Pi
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
-  /** Omitted stages keep their local runtime. Slice 1 supports read-only Codex reviews. */
-  runtime?: "codex-cloud";
+  /** Omitted stages inherit the project default when the definition is created. */
+  runtime?: "local" | "codex-cloud";
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -194,10 +195,10 @@ export type PipelineEdgeActivation = {
   edge: PipelineEdgeKind;
   /** On a fail activation: the source's budget was spent, so this is the
       one handoff past it (#1868). It spends no reviewed round, and the
-      target's pass follows the source's pass edge or completes, with no
-      further review. */
+      target's pass follows the source's pass edge. A terminal source
+      re-checks the final fix once before completion. */
   budgetSpent?: true;
-  /** Legacy terminal re-check activation retained for existing records. */
+  /** The single terminal check after a spent budget's final fix. */
   budgetRecheck?: true;
 };
 
@@ -258,7 +259,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
-  runtime?: "codex-cloud";
+  runtime?: "local" | "codex-cloud";
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -410,6 +411,7 @@ export type PipelineStageAttempt = {
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
   cloud?: import("./cloudStage").CloudStageAttempt;
+  executionRuntime?: "local" | "cloud" | "cloud-then-local";
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
     hold?: PipelineAccountHold };
@@ -818,7 +820,7 @@ export type PipelineState = "draft" | "provisioning" | "running" | "needs_decisi
 /** Why review budget stopped this lane: an unreviewed fix in needs_review
     (#1938), or a failed terminal re-check in needs_decision. */
 export type PipelineReviewPending = {
-  /** A terminal budget re-check judged the current head and failed: fix first. */
+  /** A terminal budget re-check judged the current head and failed: retain the decision. */
   terminalRecheck?: true;
   /** The review stage whose fail-edge budget is spent, and its last attempt. */
   stageId: string;
@@ -1479,6 +1481,7 @@ export type PatchPipelineRequest = {
       running the attempt. An attempt another conversation runs by then answers
       409 `STAGE_CHANGED` before any runtime or definition is changed. */
   expectedConversationId?: string;
+  runtime?: "local" | "codex-cloud";
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;
