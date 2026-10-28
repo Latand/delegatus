@@ -10,7 +10,7 @@ import { applyLineEdits, type LineEdits, type LineTarget } from "@/lib/lineEdits
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
-import { hasUnknownAuthor, previewSeatTickInstructions, seatTickInstructionLines, type SeatNoteRemoval } from "./seatTickInstructions";
+import { hasUnknownAuthor, previewSeatTickInstructions, seatTickInstructionLines, type SeatNoteRemoval, type SeatTickInstructionLine } from "./seatTickInstructions";
 
 import { redactMonitorText } from "./redact";
 

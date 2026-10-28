@@ -592,7 +592,7 @@ test("only an operator removes seat notes, and never beside a change that rewrit
   const note = [removal(current.instructionLines![2]!, 2)];
   expect(applySeatTickSettingsChange(current, { removeSeatNotes: note }, { at: NEXT_AT, actor: SEAT, instructionActor: SEAT })).toEqual({ ok: false, error: "only an operator can remove seat notes" });
   expect(applySeatTickSettingsChange(current, { removeSeatNotes: note }, { at: NEXT_AT, actor: OPERATOR, instructionActor: { ...OPERATOR, kind: "unidentified" } })).toEqual({ ok: false, error: "only an operator can remove seat notes" });
-  const refusal = { ok: false, error: "removeSeatNotes goes with the operator's own reason only, not with replaceOtherInstructions or a clearUnknownInstructions without reason" };
+  const refusal = { ok: false as const, error: "removeSeatNotes goes with the operator's own reason only, not with replaceOtherInstructions or a clearUnknownInstructions without reason" };
   expect(asOperator(current, { removeSeatNotes: note, replaceOtherInstructions: true, reason: "Replacement." })).toEqual(refusal);
   expect(asOperator(current, { removeSeatNotes: note, clearUnknownInstructions: true })).toEqual(refusal);
 });
