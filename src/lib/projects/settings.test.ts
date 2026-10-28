@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { bridgeReportsSetting, codexCloudEnvironmentId, mergeOnReviewSetting, reportTelegramChoice, resetProjectSettingsForTests, setMergeOnReview, setReportTelegram } from "./settings";
+import { bridgeReportsSetting, codexCloudEnvironmentId, mergeOnReviewSetting, reportTelegramChoice, resetProjectSettingsForTests, setCodexCloudEnvironmentId, setMergeOnReview, setReportTelegram } from "./settings";
+import { persistProjectAliases } from "./aliases";
 
 let directory: string;
 let previous: string | undefined;
@@ -64,4 +65,21 @@ test("a same-size same-mtime replacement changes settings without a reset", () =
   fs.utimesSync(replacement, stamp, stamp);
   fs.renameSync(replacement, file);
   expect(codexCloudEnvironmentId("project")).toBe("cloud-b");
+});
+
+test("legacy Cloud choices use canonical then sorted predecessor precedence, including an explicit clear", () => {
+  expect(setCodexCloudEnvironmentId("repo-z", "asenvcfg_z")).toBe(true);
+  expect(setCodexCloudEnvironmentId("repo-a", "asenvcfg_a")).toBe(true);
+  expect(setCodexCloudEnvironmentId("repo-foreign", "asenvcfg_foreign")).toBe(true);
+  expect(persistProjectAliases([
+    { source: "repo-z", target: "repo-middle", displayName: "Fixture" },
+    { source: "repo-middle", target: "repo-current", displayName: "Fixture" },
+    { source: "repo-a", target: "repo-current", displayName: "Fixture" },
+  ])).toBe(true);
+  for (const project of ["repo-z", "repo-middle", "repo-a", "repo-current"]) expect(codexCloudEnvironmentId(project)).toBe("asenvcfg_a");
+  expect(codexCloudEnvironmentId("repo-foreign")).toBe("asenvcfg_foreign");
+  expect(setCodexCloudEnvironmentId("repo-current", "asenvcfg_current")).toBe(true);
+  for (const project of ["repo-z", "repo-middle", "repo-a", "repo-current"]) expect(codexCloudEnvironmentId(project)).toBe("asenvcfg_current");
+  expect(setCodexCloudEnvironmentId("repo-z", "")).toBe(true);
+  for (const project of ["repo-z", "repo-middle", "repo-a", "repo-current"]) expect(codexCloudEnvironmentId(project)).toBe("");
 });

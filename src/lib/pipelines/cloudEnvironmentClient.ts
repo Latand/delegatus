@@ -195,11 +195,19 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
       const result = await request(`${endpoint}/v1/environment-operations/${encodeURIComponent(operationId)}`);
       check(result.id === operationId && result.environment_id === environmentId);
       guard();
-      const status = await session.client.rpc("environment/status", { environmentIds: [environmentId] });
-      guard(); check(Array.isArray(status.data));
-      const environment = status.data.map(row).find(r => r.environmentId === environmentId); check(environment);
+      let environment: Row | undefined;
+      try {
+        const status = await session.client.rpc("environment/status", { environmentIds: [environmentId] });
+        guard(); check(Array.isArray(status.data));
+        environment = status.data.map(row).find(r => r.environmentId === environmentId); check(environment);
+      } catch (error) {
+        // The validated terminal result owns the receipt even if its runtime
+        // disappeared or diagnostics exhausted the backend session deadline.
+        input.signal.throwIfAborted(); input.assertCurrent();
+        if (result.state !== "FAILED") throw error;
+      }
       // A failed setup is decisive even while the approval operation is RUNNING.
-      const observed = row(environment.observations); const failure = row(observed.failure);
+      const observed = row(environment?.observations); const failure = row(observed.failure);
       const code = providerFailure(failure) ?? providerFailure(result);
       if (result.state === "FAILED") throw new CloudEnvironmentError(code ?? "approval_failed", operationId);
       if (code) fail(code);

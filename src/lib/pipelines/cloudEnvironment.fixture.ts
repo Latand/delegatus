@@ -4,7 +4,8 @@ import type { HostedCloudDependencies } from "./cloudHostedClient";
 type Row = Record<string, unknown>;
 /** HTTP and WebSocket provider substitute. Only the injected transport can
  * reach it; every HTTP request is remapped to this owned loopback listener. */
-export function stubCloudBackend(options: { create?: boolean; missingConnector?: boolean; pending?: boolean; failedApprovals?: number; operationPhaseFailed?: boolean; repository?: string; ref?: string } = {}) {
+export function stubCloudBackend(options: { create?: boolean; missingConnector?: boolean; pending?: boolean; failedApprovals?: number; operationPhaseFailed?: boolean;
+  runtimeStatus?: "missing" | "error" | "invalid" | "foreign"; repository?: string; ref?: string } = {}) {
   const calls: { method: string; path: string; account: string; body: Row }[] = [];
   const configs = new Map<string, Row>();
   const approvals = new Map<string, { id: string; failed: boolean }>();
@@ -69,6 +70,12 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
         const frame = JSON.parse(String(message)) as { id?: number; method: string; params: Row };
         if (frame.id === undefined) return;
         calls.push({ method: frame.method, path: "socket", account: socket.data.account, body: frame.params });
+        if (frame.method === "environment/status" && options.runtimeStatus) {
+          socket.send(JSON.stringify({ id: frame.id, ...(options.runtimeStatus === "error"
+            ? { error: { code: -32000, message: "fixture status unavailable" } }
+            : { result: { data: options.runtimeStatus === "missing" ? [] : options.runtimeStatus === "invalid" ? null : [{ environmentId: "ccarenv_foreign" }] } }) }));
+          return;
+        }
         let result: unknown = {};
         switch (frame.method) {
           case "environment/status": result = { data: [{ environmentId: "ccarenv_setup", status: options.missingConnector ? "offline" : "online",

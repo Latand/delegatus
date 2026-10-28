@@ -8,7 +8,7 @@ import { FileTransactionBusyError, withFileTransaction, withFileTransactionSync 
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { translate, type Locale } from "@/lib/i18n/core";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { canonicalProject, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasKeys, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
 import { assertAgentMemoryMax, validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 
 /*
@@ -190,11 +190,16 @@ export function bridgeReportsEnabled(project: string): boolean {
   return bridgeReportsSetting(project).enabled;
 }
 
-/** Legacy manual override. Empty permits per-account automatic preparation. */
+/** Legacy manual override. The canonical choice (including an explicit clear)
+ * wins, followed by predecessor keys in lexical order. Every alias agrees. */
 export function codexCloudEnvironmentId(project: string): string {
   const projects = readProjects();
-  const key = project.trim();
-  return projects[canonicalProject(key)]?.codexCloudEnvironmentId ?? projects[key]?.codexCloudEnvironmentId ?? "";
+  const [current, ...predecessors] = projectAliasKeys(project.trim());
+  for (const key of [current!, ...predecessors.sort()]) {
+    const value = projects[key]?.codexCloudEnvironmentId;
+    if (value !== undefined) return value;
+  }
+  return "";
 }
 
 export function validPipelineStageRuntime(value: unknown): value is "local" | "codex-cloud" {

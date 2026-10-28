@@ -8,6 +8,12 @@ environment ID. Existing explicit IDs keep their precedence:
 2. The legacy project-wide `codexCloudEnvironmentId`.
 3. A verified automatic binding for the account, GitHub repository and base ref.
 
+Legacy scalar choices resolve across the canonical project's predecessor keys.
+An explicit canonical value wins, including an empty value that clears the
+manual choice. Otherwise the first stored value in lexical predecessor-key
+order wins. Every project name uses this same precedence without rewriting
+the settings file.
+
 `src/lib/projects/codexCloudEnvironments.ts` owns the installation-local SQLite
 collection. Settings transfers retain the legacy scalar; automatic bindings and
 setup receipts stay local. Reads resolve the canonical project and its alias
@@ -79,6 +85,9 @@ next permitted attempt uses a fresh idempotency key with the same configuration
 and draft; a lost initiation reply reuses that attempt's key. Terminal failures
 consume the same three-failure budget and cooldown across restarts. A failed
 runtime observation with a running or uncertain operation keeps its receipt.
+A confirmed terminal failure retires its operation even if runtime status is
+missing, malformed or unavailable. Available matching runtime diagnostics can
+refine the failure reason; operation identity and caller authority remain required.
 Ready bindings are due for background validation
 after 24 hours. Stage admission validates its selected binding again.
 
