@@ -194,38 +194,25 @@ An older running updater still needs an equal-tree PR to install this change;
 this rule takes effect after that updater is replaced. Cancelled main runs can
 leave their commits ineligible; a newer green tip may be used instead.
 
-### 1.2 Why green is read from the pull request
+### 1.2 Which checks vouch for the target
 
-Historically a commit on `main` had no runtime gate, so reading checks on the target itself
-would mean either "never green" or, through the combined status, a
-permanent `pending`. The checks that vouch for the code on `main` ran on the
-pull request that produced it. The rule makes sure they ran on **the same
-code** by comparing trees. With `strict` protection the head had to be up to
-date with `main`, so a squash or merge commit's tree equals the head's tree.
-When the trees differ (an admin override, a non-strict merge, a direct push),
-nothing vouches for the exact tree on `main`, and the target is not green.
+When the PR head and the merged commit have identical trees, the PR head's
+checks vouch for the target. When those trees differ, a Delegatus checkout
+requires the exact post-merge push workflow described above. Other repositories
+still require matching trees.
 
 ### 1.3 The reads
 
-`src/lib/selfUpdate/green.ts` (new) reads `<owner>/<name>` of the remote with
-`githubRepositoryOfRemote` (`src/lib/forge/workLinks.ts:128`). It makes these
-anonymous `fetch` calls to `https://api.github.com`, with
-`Accept: application/vnd.github+json`, a 15 s timeout and no credentials:
+`src/lib/selfUpdate/green.ts` uses anonymous GitHub API reads with a 15-second
+timeout and follows bounded pagination:
 
-1. `GET /repos/<r>/commits/<target>/pulls`. It keeps the one pull request with
-   `merged_at` set, `base.ref` equal to the tracked branch and
-   `merge_commit_sha` equal to the target. None: `no-pull-request`.
-2. `GET /repos/<r>/commits/<head>`, which gives `commit.tree.sha`, compared with
-   `git rev-parse <target>^{tree}` in the checkout (the check already fetched
-   the target into `refs/self-update/tip`). Different: `untested-tree`.
-3. `GET /repos/<r>/commits/<head>/check-runs?per_page=100` and
-   `GET /repos/<r>/commits/<head>/statuses?per_page=100`, following `Link`
-   pagination. The combined `/status` endpoint is never used: it answers
-   `pending` for a commit with no statuses at all.
-4. `GET /repos/<r>/branches/<branch>` for
-   `protection.required_status_checks.contexts`, cached 30 minutes as the
-   merge runner caches it (`src/lib/forge/autoMerge.ts:233`). An unprotected
-   branch has none.
+1. Find the merged pull request for the exact target and tracked branch.
+2. Compare the PR head tree with the target tree. For a match, evaluate the PR
+   head checks. For a mismatch on Delegatus, evaluate the target checks and
+   require the app-bound runtime gate and its matching successful push workflow
+   and check suite. For a mismatch elsewhere, report `untested-tree`.
+3. Read check runs, statuses and branch protection; require every required
+   context and refuse red or incomplete evidence.
 
 Check runs and statuses are mapped onto the rollup shape (`name`, `status`,
 `conclusion`, `startedAt`, and `context`, `state` for a status) and folded with
@@ -243,7 +230,8 @@ re-exports them.
 | `green` | at least one check; every check finished; none red; every required context present | yes |
 | `red` | any check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, or a status `error`/`failure`. A red check that protection does not require still counts | yes |
 | `no-checks` | the head has no check run and no status | yes |
-| `no-pull-request`, `untested-tree` | §1.3 steps 1 and 2 | yes |
+| `no-pull-request` | §1.3 step 1 | yes |
+| `untested-tree` | §1.3 step 2 cannot establish target evidence | re-read periodically |
 | `pending` | a check has not finished, or a required context is missing | re-read at each check. It becomes `checks-timeout` 90 minutes after the first read (`MERGE_WAIT_LIMIT_MS`, `autoMerge.ts:37`) |
 | `unknown` | network failure, timeout, a 403/429 rate limit, a 404 (a private repository without credentials), or an answer that does not parse | re-read at the next check, or at `x-ratelimit-reset` when GitHub named one |
 | `unavailable` | the remote is not on github.com (a path, another forge, a GitHub Enterprise host) | until the remote changes |
