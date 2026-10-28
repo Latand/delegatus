@@ -136,7 +136,11 @@ test("the reporter policy refuses every other mutation before downstream dispatc
 test("an orchestrator and a builder still reach the engine", async () => {
   for (const caller of [SEAT, BUILDER]) {
     created.length = 0;
-    const answer = await call(caller, "create_pipeline", PIPELINE());
+    const input = PIPELINE();
+    const registry = { ...EMPTY_REGISTRY, conversations: {
+      [caller.conversationId!]: { id: caller.conversationId, engine: "codex", generations: [{ path: input.src }], continuityPaths: [] },
+    } };
+    const answer = await call(caller, "create_pipeline", input, registry);
     expect(String(answer.error ?? "")).not.toContain("starts no agents");
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({ repoDir: sandbox, autoStart: true });
