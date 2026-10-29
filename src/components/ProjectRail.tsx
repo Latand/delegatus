@@ -25,13 +25,16 @@ import { ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal, Search } 
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
-import { attentionTotal, buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
-import { MoveLabel, MoveToMenu, WorkspaceChip, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "./team/WorkspaceSwitch";
+import { attentionTotal, buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, projectKey, type ProjectSummary } from "./projectModel";
+import { ProjectRenameDialog, ProjectRowMenu, type ProjectMenuAt, type ProjectMenuTarget } from "./projectActions/ProjectRowMenu";
+import { projectRights, type ProjectRowActions } from "./projectActions/rights";
+import { WorkspaceChip, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "./team/WorkspaceSwitch";
 import { groupAll, workspaceScope } from "./team/workspaceFilter";
 import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
 import { Z } from "@/components/layers";
+import { requestFilesRefresh } from "@/lib/filesEvents";
 
 /**
  * Asks the rail to open the create-project form it already owns (issue #1162).
@@ -75,6 +78,10 @@ export interface ProjectRailProps {
       header names the current one, the list shows its projects, and All
       groups them. Absent, the rail is exactly what it was. */
   workspace?: WorkspaceRailState;
+  /** Rename and archive from a row's menu (docs/design/project-rail-context-menu/README.md). */
+  actions?: ProjectRowActions;
+  /** Each project's folder, beside the catalog's own, for the rename dialog. */
+  projectCwds?: Readonly<Record<string, string>>;
 }
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
@@ -85,7 +92,8 @@ const HEADER_SQUARE = `flex h-[26px] w-[26px] shrink-0 items-center justify-cent
 /* The columns at the right of a row's first line: who waits, who works, how old. */
 const SLOT_NEEDS = "flex w-8 shrink-0 items-center";
 const SLOT_LIVE = "flex w-6 shrink-0 items-center";
-const SLOT_AGE = "w-[30px] shrink-0 text-right text-[10.5px] tabular-nums text-muted";
+/* The age grows to its word: «19 год» is wider than 30 px in some fonts and broke over two lines. */
+const SLOT_AGE = "min-w-[30px] shrink-0 whitespace-nowrap text-right text-[10.5px] tabular-nums text-muted";
 
 type Translate = ReturnType<typeof useLocale>["t"];
 
@@ -151,7 +159,7 @@ function SectionLabel({ children, count, icon, lead }: { children: ReactNode; co
   );
 }
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject, workspace }: ProjectRailProps) {
+export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject, workspace, actions, projectCwds }: ProjectRailProps) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
@@ -194,14 +202,35 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     () => (workspace && !scope ? groupAll([...crownedRows, ...regularRows], workspace.view).filter((section) => section.rows.length || !query.trim()) : null),
     [workspace, scope, crownedRows, regularRows, query],
   );
-  const [moveError, setMoveError] = useState<{ project: string; text: string } | null>(null);
-  const moveProject = (project: string, workspaceId: string) => {
+  /* A refusal that came back after the row's menu closed stands under its row. */
+  const [rowError, setRowError] = useState<{ project: string; text: string } | null>(null);
+  const moveProject = (project: string, workspaceId: string | null) => {
     if (!workspace) return;
-    setMoveError(null);
+    setRowError(null);
     void workspace.place(project, workspaceId).then((result) => {
-      if (!result.ok) setMoveError({ project, text: workspaceErrorText(t, result.code) });
+      if (!result.ok) setRowError({ project, text: workspaceErrorText(t, result.code) });
     });
   };
+  /* One row's menu at a time, and the rename dialog it opens. */
+  const [menu, setMenu] = useState<{ project: string; at: ProjectMenuAt } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const triggers = useRef(new Map<string, HTMLButtonElement>());
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  const refocus = (project: string) => requestAnimationFrame(() => triggers.current.get(project)?.focus());
+  const working = useMemo(() => new Set(files.filter((file) => file.proc === "running" || file.activity === "live").map((file) => projectKey(file))), [files]);
+  const roots = useMemo(() => {
+    const known = new Map<string, string>();
+    for (const entry of projectCatalog) if (entry.projectRoot) known.set(entry.project, entry.projectRoot);
+    for (const [project, cwd] of Object.entries(projectCwds ?? {})) if (!known.has(project)) known.set(project, cwd);
+    return known;
+  }, [projectCatalog, projectCwds]);
+  const targetOf = (project: string): ProjectMenuTarget | null => {
+    const summary = summaries.find((entry) => entry.project === project);
+    if (!summary) return null;
+    return { project, name: summary.displayName, root: roots.get(project) ?? null, crowned: crownedProjects.has(project), archived: archivedProjects.has(project), working: working.has(project) };
+  };
+  const menuTarget = menu ? targetOf(menu.project) : null;
+  const renameTarget = renaming ? targetOf(renaming) : null;
   /* First run (issue #1162): the catalog answered and named no project at all.
      Distinct from a filter query that matched none, and from a failed fetch —
      both of those keep their own treatment. */
@@ -228,8 +257,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   }
 
   const columns = { anyNeeds: totalAttention > 0, anyLive: totalLive > 0 };
-  /* An archived row is drawn as the quiet rows above it, without the crown control. */
-  const railRow = (summary: ProjectSummary, archived = false, movable = false, pinnedMark = false) => (
+  /* An archived row is drawn as the quiet rows above it; its menu restores it instead of crowning it. */
+  const railRow = (summary: ProjectSummary, pinnedMark = false) => (
     <RailRow
       key={summary.project}
       summary={summary}
@@ -237,14 +266,15 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
       active={selected === summary.project}
       now={now}
       columns={columns}
-      crowned={crownedProjects.has(summary.project)}
+      menuOpen={menu?.project === summary.project}
+      error={rowError?.project === summary.project ? rowError.text : null}
+      rowRef={(element) => { if (element) rows.current.set(summary.project, element); else rows.current.delete(summary.project); }}
+      triggerRef={(element) => { if (element) triggers.current.set(summary.project, element); else triggers.current.delete(summary.project); }}
       onSelect={onSelect}
-      onToggleCrown={archived ? undefined : onToggleCrown}
-      move={movable && workspace?.view.canManage ? {
-        workspaces: workspace.view.workspaces,
-        error: moveError?.project === summary.project ? moveError.text : null,
-        onPick: (workspaceId) => moveProject(summary.project, workspaceId),
-      } : undefined}
+      onMenu={(at) => {
+        setRowError(null);
+        setMenu((open) => (open?.project === summary.project && at.from === "trigger" ? null : { project: summary.project, at }));
+      }}
     />
   );
   const overview = selected === OVERVIEW;
@@ -403,7 +433,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
                 {section.workspace ? section.workspace.name : t("workspaces.unassigned")}
               </SectionLabel>
             </div>,
-            ...section.rows.map((summary) => railRow(summary, false, !section.workspace, crownedProjects.has(summary.project))),
+            ...section.rows.map((summary) => railRow(summary, crownedProjects.has(summary.project))),
           ]) : (
             <>
               {/* Inside a workspace whose every project is pinned, an empty «Projects 0» says nothing. */}
@@ -429,7 +459,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
               <span data-rail-count="" className="font-semibold tabular-nums">{archivedRows.length}</span>
               <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${archiveOpen ? "rotate-90" : ""}`} aria-hidden />
             </button>
-            {archiveOpen ? <div data-rail-archived="">{archivedRows.map((summary) => railRow(summary, true))}</div> : null}
+            {archiveOpen ? <div data-rail-archived="">{archivedRows.map((summary) => railRow(summary))}</div> : null}
           </>
         ) : null}
         {!activeRows.length && !archivedRows.length ? (
@@ -455,6 +485,38 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
         ) : null}
       </nav>
       <RailFooter />
+      {menu && menuTarget ? (
+        <ProjectRowMenu
+          key={menu.project}
+          target={menuTarget}
+          at={menu.at}
+          row={() => rows.current.get(menu.project) ?? null}
+          view={workspace?.view ?? null}
+          rights={projectRights(workspace?.view, menu.project)}
+          actions={actions}
+          loaded={loaded}
+          onToggleCrown={onToggleCrown}
+          onMove={workspace ? moveProject : undefined}
+          onRename={() => { setMenu(null); setRenaming(menu.project); }}
+          onDeleted={(project) => {
+            requestFilesRefresh();
+            if (selected === project) onSelect(OVERVIEW);
+          }}
+          onError={(project, text) => setRowError({ project, text })}
+          onClose={(back) => {
+            const project = menu.project;
+            setMenu(null);
+            if (back) triggers.current.get(project)?.focus();
+          }}
+        />
+      ) : null}
+      {renameTarget && actions ? (
+        <ProjectRenameDialog
+          target={renameTarget}
+          rename={actions.rename}
+          onDone={() => { const project = renameTarget.project; setRenaming(null); refocus(project); }}
+        />
+      ) : null}
     </aside>
   );
 }
@@ -467,40 +529,23 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
  * whole name in the tooltip. The conversation count is in the tooltip too.
  * A row is the same height selected or not, so choosing a project moves nothing.
  */
-function focusVisible(element: Element): boolean {
-  try {
-    return element.matches(":focus-visible");
-  } catch {
-    return false;
-  }
-}
-
-/* The Move control's face; its placeholder in the row's first line takes exactly its width. */
-const MOVE_FACE = "inline-flex h-[22px] items-center gap-1 rounded-[7px] border px-1.5 text-[11px] font-semibold";
-
-function RailRow({ summary, pinnedMark = false, active, now, columns, crowned, onSelect, onToggleCrown, move }: {
+function RailRow({ summary, pinnedMark = false, active, now, columns, menuOpen, error, rowRef, triggerRef, onSelect, onMenu }: {
   summary: ProjectSummary;
   /** In the All view a pinned row stands under its workspace, so its name carries the crown the Pinned heading carried. */
   pinnedMark?: boolean;
   active: boolean;
   now: number;
   columns: { anyNeeds: boolean; anyLive: boolean };
-  crowned: boolean;
+  menuOpen: boolean;
+  /** A refusal of something its menu started. */
+  error: string | null;
+  rowRef: (element: HTMLDivElement | null) => void;
+  triggerRef: (element: HTMLButtonElement | null) => void;
   onSelect: (project: string) => void;
-  /** Absent on an archived row, which carries no crown control. */
-  onToggleCrown?: (project: string, crowned: boolean) => void;
-  /** The owner's «Move to…» on an Unassigned row (workspaces.md §13.5 D3). */
-  move?: { workspaces: readonly Workspace[]; error: string | null; onPick: (workspaceId: string) => void };
+  onMenu: (at: ProjectMenuAt) => void;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
-  const moveRef = useRef<HTMLButtonElement | null>(null);
-  const rowRef = useRef<HTMLDivElement | null>(null);
-  const [moveOpen, setMoveOpen] = useState(false);
-  const [keyboardOn, setKeyboardOn] = useState(false);
-  /* Move shows on the selected row and on a row the keyboard is on; it then
-     takes the marks' place in the first line, so it covers no text. */
-  const moveShown = Boolean(move) && (active || keyboardOn || moveOpen);
   const age = shortAge(summary.smt, now, t);
   const title = [
     summary.displayName,
@@ -510,17 +555,21 @@ function RailRow({ summary, pinnedMark = false, active, now, columns, crowned, o
     t("rail.rowConversations", { count: summary.conversations }),
     age ? t("rail.rowUpdated", { age }) : null,
   ].filter(Boolean).join(" · ");
-  /* The crown control stands where the age stands. On the desktop it shows while the pointer is on the
-     row or the keyboard is on the control, and the age steps aside for exactly as long; the phone keeps
-     the control in view, so its rows carry no age. */
-  const ageClass = !onToggleCrown ? "" : isMobile ? "opacity-0" : "group-hover:opacity-0 group-has-[[data-rail-crown]:focus-visible]:opacity-0";
+  const actionsLabel = t("rail.row.actions", { name: summary.displayName });
+  /* A row at rest carries no control, selected or not (docs/design/project-rail-context-menu/README.md).
+     The ⋯ stands where the age stands: on the desktop it shows while the pointer is on the row, the
+     keyboard is on it or its menu is open, and the age steps aside for exactly as long. */
+  const ageClass = isMobile ? "opacity-0" : menuOpen ? "opacity-0" : "group-hover:opacity-0 group-has-[[data-rail-row-menu]:focus-visible]:opacity-0";
   return (
     <div
       ref={rowRef}
       data-flip-key={summary.project}
+      data-rail-row={summary.project}
       className="group relative"
-      onFocus={move ? (event) => setKeyboardOn(focusVisible(event.target)) : undefined}
-      onBlur={move ? (event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setKeyboardOn(false); } : undefined}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onMenu({ from: "pointer", x: event.clientX });
+      }}
     >
       <button
         type="button"
@@ -528,16 +577,19 @@ function RailRow({ summary, pinnedMark = false, active, now, columns, crowned, o
         title={title}
         aria-current={active ? "page" : undefined}
         onClick={() => onSelect(summary.project)}
-        className={`mb-px block w-full rounded-[10px] border px-2.5 text-left ${FOCUS} ${isMobile ? "min-h-11" : ""} ${active ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"} ${summary.catalogOnly ? "opacity-70" : ""}`}
+        onKeyDown={(event) => {
+          /* The keyboard's context-menu keys open the same menu beside the row. */
+          if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+            event.preventDefault();
+            onMenu({ from: "keyboard" });
+          }
+        }}
+        className={`mb-px block w-full rounded-[10px] border px-2.5 text-left ${FOCUS} ${isMobile ? "min-h-11" : ""} ${active ? "border-border bg-canvas" : `border-transparent hover:bg-canvas ${menuOpen ? "bg-canvas" : ""}`} ${summary.catalogOnly ? "opacity-70" : ""}`}
       >
         <span data-rail-name="" className={`my-1.5 line-clamp-2 text-[13px] leading-[18px] ${active ? "font-bold" : "font-semibold"} ${summary.catalogOnly ? "text-muted" : ""}`}>
           <span className="block break-words">
             <span className="float-right ml-1.5 flex h-[18px] items-center gap-1.5 font-normal">
-              {moveShown ? (
-                <span aria-hidden data-rail-move-space="" className={`invisible ${MOVE_FACE} border-transparent`}><MoveLabel /></span>
-              ) : (
-                <MarkColumns needs={summary.attentionCount} live={summary.liveCount} {...columns} own />
-              )}
+              <MarkColumns needs={summary.attentionCount} live={summary.liveCount} {...columns} own />
               <span data-rail-slot="age" className={`${SLOT_AGE} ${ageClass}`}>{age}</span>
             </span>
             {pinnedMark ? <Crown data-rail-pinned-mark="" className="mr-1 inline h-3 w-3 -translate-y-px fill-crown text-crown" aria-hidden /> : null}
@@ -545,57 +597,22 @@ function RailRow({ summary, pinnedMark = false, active, now, columns, crowned, o
           </span>
         </span>
       </button>
-      {move ? (
-        <button
-          ref={moveRef}
-          type="button"
-          data-rail-move=""
-          aria-haspopup="menu"
-          aria-expanded={moveOpen}
-          aria-label={t("workspaces.moveProject", { name: summary.displayName })}
-          className={`absolute right-[47px] top-[5px] ${MOVE_FACE} border-border bg-card text-secondary hover:text-primary ${FOCUS} ${moveShown ? "" : "pointer-events-none opacity-0"}`}
-          onClick={() => setMoveOpen((value) => !value)}
-        >
-          <MoveLabel />
-        </button>
-      ) : null}
-      {move && moveOpen ? (
-        <MoveToMenu
-          workspaces={move.workspaces}
-          anchor={moveRef}
-          beside={rowRef}
-          onClose={() => setMoveOpen(false)}
-          onPick={(workspaceId) => {
-            setMoveOpen(false);
-            move.onPick(workspaceId);
-          }}
-        />
-      ) : null}
-      {move?.error ? <p role="alert" data-rail-move-error="" className="px-2.5 pb-1 text-[11px] font-semibold text-danger">{move.error}</p> : null}
-      {onToggleCrown ? (
-        <button
-          type="button"
-          data-rail-crown=""
-          className={`group/crown absolute right-1.5 flex items-center justify-center rounded-[7px] border border-border bg-card transition-opacity focus-visible:opacity-100 ${FOCUS} ${
-            isMobile ? "top-1/2 h-6 w-6 -translate-y-1/2" : "top-[5px] h-[22px] w-[22px] opacity-0 group-hover:opacity-100"
-          }`}
-          title={crowned ? t("rail.uncrown") : t("rail.crown")}
-          aria-label={crowned ? t("rail.uncrown") : t("rail.crown")}
-          aria-pressed={crowned}
-          onClick={() => onToggleCrown(summary.project, !crowned)}
-        >
-          {/* Same crown idiom as conversation favorites (FavoriteCrown):
-              dashed gray when unset, lit gold when committed. */}
-          <Crown
-            className={`h-3.5 w-3.5 ${
-              crowned
-                ? "fill-crown text-crown"
-                : "text-muted [stroke-dasharray:2_3] group-hover/crown:fill-crown group-hover/crown:text-crown group-hover/crown:[stroke-dasharray:0]"
-            }`}
-            aria-hidden
-          />
-        </button>
-      ) : null}
+      <button
+        ref={triggerRef}
+        type="button"
+        data-rail-row-menu={summary.project}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-label={actionsLabel}
+        title={actionsLabel}
+        onClick={() => onMenu({ from: "trigger" })}
+        className={`absolute right-1.5 flex items-center justify-center rounded-[7px] border border-border bg-card text-secondary transition-opacity hover:text-primary focus-visible:opacity-100 ${FOCUS} ${
+          isMobile ? "top-1/2 h-6 w-6 -translate-y-1/2" : `top-1 h-6 w-6 ${menuOpen ? "text-primary opacity-100" : "opacity-0 group-hover:opacity-100"}`
+        }`}
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+      </button>
+      {error ? <p role="alert" data-rail-row-error="" className="px-2.5 pb-1 text-[11px] font-semibold text-danger">{error}</p> : null}
     </div>
   );
 }

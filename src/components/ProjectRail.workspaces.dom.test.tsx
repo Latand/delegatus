@@ -13,9 +13,9 @@ import type { FileEntry } from "@/lib/types";
  * The rail with workspaces (docs/design/workspaces.md §13.5 D1–D3, §13.8
  * test 6): without the prop the rail is today's; a chosen workspace lists
  * only its projects and keeps the crown and the archive inside it; All draws
- * one section per workspace and then Unassigned; the owner, and only the
- * owner, moves an Unassigned project, and a refused move comes back with
- * its reason on the row.
+ * one section per workspace and then Unassigned; the owner moves a project
+ * from its row's menu, a member sees that row closed with its reason, and a
+ * refused move comes back with its reason on the row.
  */
 
 const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
@@ -159,8 +159,6 @@ describe("a chosen workspace", () => {
     expect(host.querySelector("[data-rail-archive]")?.textContent).toBe(`${t("rail.archive")}1`);
     await click(host.querySelector("[data-rail-archive]")!);
     expect(rows(host)).toEqual(["shop-app", "shop-backend"]);
-    /* Nothing moves inside a workspace. */
-    expect(host.querySelector("[data-rail-move]")).toBeNull();
   });
 
   test("the chip's menu switches; a member gets the rows and Manage only", async () => {
@@ -215,24 +213,30 @@ describe("All", () => {
     ]);
   });
 
-  test("Move shows on the selected Unassigned row for the owner, never for a member", async () => {
+  test("no row carries a Move control; the row's menu moves for the owner and says why it is closed for a member", async () => {
     setWorkspacesForTests(teamView(true));
     const host = await render(<Harness initial="all" selected="scratch-notes" />);
-    const moves = [...host.querySelectorAll("[data-rail-move]")];
-    /* Every Unassigned row carries it for the keyboard; only the selected one shows it and keeps its place. */
-    expect(moves.length).toBe(2);
-    const selectedMove = host.querySelector("[data-rail-project='scratch-notes']")!.parentElement!.querySelector("[data-rail-move]")!;
-    expect(selectedMove.className).not.toContain("opacity-0");
-    expect(host.querySelector("[data-rail-project='scratch-notes'] [data-rail-move-space]")).not.toBeNull();
-    const otherMove = host.querySelector("[data-rail-project='bench-tmp']")!.parentElement!.querySelector("[data-rail-move]")!;
-    expect(otherMove.className).toContain("opacity-0");
-    expect(selectedMove.textContent).toBe(t("workspaces.move"));
+    expect(host.querySelector("[data-rail-move]")).toBeNull();
+    await click(host.querySelector("[data-rail-row-menu='scratch-notes']")!);
+    const move = dom.document.querySelector("[data-row-menu='scratch-notes'] [data-row-menu-item='move']")!;
+    expect(move.getAttribute("aria-disabled")).toBeNull();
+    expect(move.textContent).toBe(`${t("workspaces.moveTo")}${translate("en", "rail.row.moveHint", { where: t("workspaces.unassigned") })}`);
+    await click(move);
+    const page = dom.document.querySelector("[data-row-menu-page='move']")!;
+    expect([...page.querySelectorAll("[data-row-menu-space]")].map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
+      ["Client work", "false"], ["Research", "false"], [t("workspaces.unassigned"), "true"],
+    ]);
 
     await act(async () => { root?.unmount(); });
     root = null;
     setWorkspacesForTests(teamView(false));
     const member = await render(<Harness initial="all" selected="scratch-notes" />);
-    expect(member.querySelector("[data-rail-move]")).toBeNull();
+    await click(member.querySelector("[data-rail-row-menu='scratch-notes']")!);
+    const closed = dom.document.querySelector("[data-row-menu='scratch-notes'] [data-row-menu-item='move']")!;
+    expect(closed.getAttribute("aria-disabled")).toBe("true");
+    expect(closed.querySelector("[data-row-menu-why='off']")?.textContent).toBe(t("rail.row.ownerMoves"));
+    await click(closed);
+    expect(dom.document.querySelector("[data-row-menu-page='move']")).toBeNull();
   });
 
   test("a move shows at once; a refusal puts the row back with its reason", async () => {
@@ -243,17 +247,16 @@ describe("All", () => {
       return url.startsWith("/api/team/workspaces") ? { status: 200, body: teamView(true) } : notFound();
     };
     const host = await render(<Harness initial="all" selected="scratch-notes" />);
-    const move = host.querySelector("[data-rail-project='scratch-notes']")!.parentElement!.querySelector("[data-rail-move]")!;
-    await click(move);
-    const menu = dom.document.querySelector("[data-workspace-popover='move']")!;
-    expect([...menu.querySelectorAll("[data-workspace-move-to]")].map((row) => row.textContent)).toEqual(["Client work", "Research"]);
-    await click(menu.querySelector(`[data-workspace-move-to='${RESEARCH}']`)!);
+    await click(host.querySelector("[data-rail-row-menu='scratch-notes']")!);
+    await click(dom.document.querySelector("[data-row-menu-item='move']")!);
+    await click(dom.document.querySelector(`[data-row-menu-space='${RESEARCH}']`)!);
+    expect(dom.document.querySelector("[data-row-menu]")).toBeNull();
     /* Optimistic: the row is already under Research. */
     expect(sections(host)).toEqual(["Client work2", "Research2", `${t("workspaces.unassigned")}1`]);
     expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ project: "scratch-notes", workspaceId: RESEARCH });
     await act(async () => { refuse({ status: 404, body: { code: "workspace_gone", error: "gone" } }); });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(sections(host)).toEqual(["Client work2", "Research1", `${t("workspaces.unassigned")}2`]);
-    expect(host.querySelector("[data-rail-move-error]")?.textContent).toBe(t("workspaces.error.gone"));
+    expect(host.querySelector("[data-rail-row-error]")?.textContent).toBe(t("workspaces.error.gone"));
   });
 });

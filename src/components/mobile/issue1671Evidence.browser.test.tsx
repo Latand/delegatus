@@ -13022,7 +13022,7 @@ describe("team workspaces slice (a) on the phone", () => {
             if (pageErrors.length) failures.push(`${tag} P1/P2: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
-        /* P3: All, a heading per workspace and Unassigned with Move; Move to… expands under the row and lands. */
+        /* P3: All, a heading per workspace and Unassigned; a long press opens the row's menu, whose Move to… page lands. */
         {
           const { context, page, pageErrors } = await open("overview=1&scenario=workspaces&ws=all");
           try {
@@ -13031,23 +13031,30 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
             await page.locator("[data-mobile2-workspace-section='unassigned']").waitFor();
             await page.locator("[data-mobile2-workspace-section='unassigned']").scrollIntoViewIfNeeded();
-            /* The rows carry the projects' names, whole: Move takes the marks' place on the Unassigned row. */
+            /* The rows carry the projects' names, whole, and no Move control (docs/design/project-rail-context-menu/README.md). */
             const label = await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().evaluate((element) => ({ text: (element.textContent ?? "").trim(), cut: element.scrollWidth > element.clientWidth + 0.5 }));
             readings.push({ tag, state: "P3-unassigned-label", ...label });
             if (label.text !== "delegatus" || label.cut) failures.push(`${tag} P3: the Unassigned row reads ${JSON.stringify(label)}`);
             await frame(page, tag, "P3-all", [
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
-              ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.move")],
               [`[data-mobile2-project='${delegatus}']`, "delegatus"],
               ["[data-mobile2-sheet='projects']", "atlas-docs"],
             ]);
-            const move = page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move]`);
+            if (await page.locator("[data-mobile2-move]").count()) failures.push(`${tag} P3: a row still carries Move`);
+            /* A held press, through the row's own pointer handlers. */
+            const held = (await page.locator(`[data-mobile2-longpress='${delegatus}']`).boundingBox())!;
+            await page.mouse.move(held.x + held.width / 3, held.y + held.height / 2);
+            await page.mouse.down();
+            await page.waitForTimeout(650);
+            await page.mouse.up();
+            const move = page.locator(`[data-row-menu='${delegatus}'] [data-row-menu-item='move']`);
+            await move.waitFor();
             const target = await move.boundingBox();
-            if (!target || target.height < 44) failures.push(`${tag} P3: Move is ${target?.height ?? 0} px tall`);
+            if (!target || target.height < 44) failures.push(`${tag} P3: Move to… is ${target?.height ?? 0} px tall`);
             await move.click();
-            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`).scrollIntoViewIfNeeded();
-            await frame(page, tag, "P3-move", [[`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, words(lang, "workspaces.moveTo")], [`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, client[lang]]]);
-            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-to='${CLIENT_ID}']`).click();
+            await page.locator("[data-row-menu-page='move']").waitFor();
+            await frame(page, tag, "P3-move", [["[data-row-menu-page='move']", words(lang, "workspaces.moveTo")], ["[data-row-menu-page='move']", client[lang]]]);
+            await page.locator(`[data-row-menu-space='${CLIENT_ID}']`).click();
             await page.locator(`[data-mobile2-workspace-section='${CLIENT_ID}'] [data-mobile2-project='${delegatus}']`).waitFor();
             if (pageErrors.length) failures.push(`${tag} P3: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }

@@ -1,7 +1,7 @@
 "use client";
 
-import { Archive, Check, ChevronRight, Crown, Folder, FolderPlus, Layers, Loader2, TriangleAlert } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { Archive, Check, ChevronRight, Crown, Folder, FolderPlus, Hand, Layers, Loader2, MoreHorizontal, TriangleAlert, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
@@ -10,8 +10,12 @@ import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
-import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
-import { MobileWorkspaceSwitch, MoveLabel, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "../team/WorkspaceSwitch";
+import { requestFilesRefresh } from "@/lib/filesEvents";
+
+import { ProjectActionsSheetBody } from "../projectActions/ProjectActionsSheet";
+import { projectRights, type ProjectRowActions } from "../projectActions/rights";
+import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, projectKey, type ProjectSummary } from "../projectModel";
+import { MobileWorkspaceSwitch, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "../team/WorkspaceSwitch";
 import { groupAll, workspaceScope } from "../team/workspaceFilter";
 import { workingAgentCounts } from "../workingAgents";
 import { ResourcesFooter } from "../ResourcesFooter";
@@ -25,7 +29,15 @@ import { MobileSheet, MobileSheetDivider, MobileSheetRow, MobileSheetSection } f
  * the rest, an Archive fold and Create project — dense 44 px rows, the current
  * one checked, each row one tap that replaces the board. The hamburger and the
  * drawer that held the desktop rail are gone (§6).
+ *
+ * A project's menu (docs/design/project-rail-context-menu/README.md, variant
+ * 2): a long press on any row, or the ⋯ on the open project's row, shows its
+ * actions in the list's place. The first time the list opens, one line says
+ * so, and never again in this browser.
  */
+
+/** Where this browser remembers that the long-press hint was shown. */
+export const PROJECT_MENU_HINT_STORAGE_KEY = "llv:project-menu-hint:v1";
 
 type CreateProject = (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 
@@ -51,6 +63,39 @@ export interface MobileProjectSheetProps {
   /** A team install's workspaces (docs/design/workspaces.md §13.5 P2, P3).
       Absent, the sheet is exactly what it was. */
   workspace?: WorkspaceRailState;
+  /** Rename, archive and restore from a project's menu. */
+  actions?: ProjectRowActions;
+  onToggleCrown?: (project: string, crowned: boolean) => void;
+  /** Each project's folder, beside the catalog's own, for Rename. */
+  projectCwds?: Readonly<Record<string, string>>;
+}
+
+/** A press held for half a second (or the browser's own long press, which arrives as contextmenu) opens a row's menu; the click it ends in does nothing else. */
+function LongPress({ onLong, children, project }: { onLong: () => void; children: ReactNode; project: string }) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fired = useRef(false);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const clear = () => { if (timer.current) clearTimeout(timer.current); timer.current = null; };
+  const fire = () => { if (fired.current) return; fired.current = true; clear(); onLong(); };
+  useEffect(() => clear, []);
+  return (
+    <div
+      data-mobile2-longpress={project}
+      className="select-none [-webkit-touch-callout:none]"
+      onPointerDown={(event) => { fired.current = false; start.current = { x: event.clientX, y: event.clientY }; clear(); timer.current = setTimeout(fire, 500); }}
+      onPointerMove={(event) => { if (start.current && Math.hypot(event.clientX - start.current.x, event.clientY - start.current.y) > 8) clear(); }}
+      onPointerUp={clear}
+      onPointerCancel={clear}
+      onContextMenu={(event) => { event.preventDefault(); fire(); }}
+      onClickCapture={(event) => { if (fired.current) { event.preventDefault(); event.stopPropagation(); fired.current = false; } }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function hintSeen(): boolean {
+  try { return window.localStorage.getItem(PROJECT_MENU_HINT_STORAGE_KEY) === "seen"; } catch { return true; }
 }
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
@@ -72,6 +117,9 @@ export function MobileProjectSheet({
   onCreateProject,
   onClose,
   workspace,
+  actions,
+  onToggleCrown,
+  projectCwds,
 }: MobileProjectSheetProps) {
   const { t } = useLocale();
   const summaries = useMemo(
@@ -93,17 +141,34 @@ export function MobileProjectSheet({
      with its crown, so each heading counts what the switcher counts (§13.5 P3). */
   const sections = useMemo(() => (workspace && !scope ? groupAll([...crowned, ...rest], workspace.view) : null), [workspace, scope, crowned, rest]);
   const [switchOpen, setSwitchOpen] = useState(false);
-  const [moving, setMoving] = useState<string | null>(null);
-  const [moveError, setMoveError] = useState<{ project: string; text: string } | null>(null);
-  const owner = Boolean(workspace?.view.canManage);
-  const move = (project: string, workspaceId: string) => {
+  /* A refusal that came back after the project's menu closed stands under its row. */
+  const [rowError, setRowError] = useState<{ project: string; text: string } | null>(null);
+  const move = (project: string, workspaceId: string | null) => {
     if (!workspace) return;
-    setMoving(null);
-    setMoveError(null);
+    setRowError(null);
     void workspace.place(project, workspaceId).then((result) => {
-      if (!result.ok) setMoveError({ project, text: workspaceErrorText(t, result.code) });
+      if (!result.ok) setRowError({ project, text: workspaceErrorText(t, result.code) });
     });
   };
+  /* The project whose menu stands in the list's place. */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const working = useMemo(() => new Set(files.filter((file) => file.proc === "running" || file.activity === "live").map((file) => projectKey(file))), [files]);
+  const roots = useMemo(() => {
+    const known = new Map<string, string>();
+    for (const entry of projectCatalog) if (entry.projectRoot) known.set(entry.project, entry.projectRoot);
+    for (const [project, cwd] of Object.entries(projectCwds ?? {})) if (!known.has(project)) known.set(project, cwd);
+    return known;
+  }, [projectCatalog, projectCwds]);
+  const menuSummary = menuFor ? summaries.find((summary) => summary.project === menuFor) ?? null : null;
+  /* The long-press hint, once per browser: read when the list first opens, remembered at once. */
+  const [hint, setHint] = useState(false);
+  const canMenu = Boolean(actions || onToggleCrown || workspace);
+  useEffect(() => {
+    if (!canMenu || !summaries.length || hintSeen()) return;
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- one read of this browser's storage once the list has rows */
+    setHint(true);
+    try { window.localStorage.setItem(PROJECT_MENU_HINT_STORAGE_KEY, "seen"); } catch { /* private mode: shown again next time */ }
+  }, [canMenu, summaries.length]);
   /* While the switcher is open over a chosen workspace, its rows stand in for the list. */
   const listHidden = switchOpen && scope !== null;
   /* A first run (the catalog answered with no project at all) opens the create
@@ -113,11 +178,12 @@ export function MobileProjectSheet({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(firstRun && Boolean(onCreateProject));
 
-  /* `marks` false: an Unassigned row whose Move control takes the marks' place, as the rail's row does (§13.5 D3). */
-  const row = (summary: ProjectSummary, quiet = false, marks = true) => {
+  const row = (summary: ProjectSummary, quiet = false) => {
     const current = summary.project === selected;
     const isCrowned = crownedProjects.has(summary.project);
-    return (
+    /* The open project's ⋯ stands on its row, in its check's place: a phone has no hover to show it later. */
+    const door = canMenu && current;
+    const sheetRow = (
       <MobileSheetRow
         key={summary.project}
         icon={isCrowned ? <Crown className="h-[18px] w-[18px] fill-crown text-crown" aria-hidden /> : <Folder className="h-[18px] w-[18px]" aria-hidden />}
@@ -129,7 +195,7 @@ export function MobileProjectSheet({
           <>
             {/* Working is the green ● count the rail row, the board header and
                 its columns draw, whichever row is selected. */}
-            {!marks ? null : summary.liveCount ? (
+            {summary.liveCount ? (
               <span data-mobile2-working="" className="inline-flex items-center gap-1 font-bold tabular-nums text-success">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" aria-hidden />
                 {t("mobile2.projects.live", { count: summary.liveCount })}
@@ -139,54 +205,68 @@ export function MobileProjectSheet({
                 {summary.smt ? t("mobile2.projects.quietSince", { age: fmtAge(summary.smt) }) : t("mobile2.projects.quiet")}
               </span>
             )}
-            {marks && summary.attentionCount ? (
+            {summary.attentionCount ? (
               <Badge tone="warning">
                 <TriangleAlert className="h-[11px] w-[11px]" aria-hidden /> {summary.attentionCount}
               </Badge>
             ) : null}
-            {current ? <Check className="h-[18px] w-[18px] text-accent" aria-hidden /> : null}
+            {door ? <span className="w-[26px] shrink-0" aria-hidden /> : current ? <Check className="h-[18px] w-[18px] text-accent" aria-hidden /> : null}
           </>
         }
         onSelect={() => onSelect(summary.project)}
       />
     );
+    const label = t("rail.row.actions", { name: summary.displayName });
+    return (
+      <div key={summary.project} data-mobile2-project-row={summary.project}>
+        <div className="relative">
+          {canMenu ? <LongPress project={summary.project} onLong={() => { setRowError(null); setHint(false); setMenuFor(summary.project); }}>{sheetRow}</LongPress> : sheetRow}
+          {door ? (
+            <button
+              type="button"
+              data-mobile2-project-menu={summary.project}
+              aria-haspopup="menu"
+              aria-label={label}
+              title={label}
+              onClick={() => { setRowError(null); setHint(false); setMenuFor(summary.project); }}
+              className="absolute right-[3px] top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-[8px] text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <MoreHorizontal className="h-5 w-5" aria-hidden />
+            </button>
+          ) : null}
+        </div>
+        {rowError?.project === summary.project ? <p role="alert" data-mobile2-row-error="" className="px-4 pb-2 text-label font-semibold text-danger">{rowError.text}</p> : null}
+      </div>
+    );
   };
 
-  /* An Unassigned row for the owner: the row, then its Move control, and under
-     them the workspaces it can go to while Move is pressed (P3). */
-  const movableRow = (summary: ProjectSummary) => (
-    <div key={summary.project} data-mobile2-movable={summary.project}>
-      <div className="flex items-center">
-        <div className="min-w-0 flex-1">{row(summary, false, false)}</div>
-        <button
-          type="button"
-          data-mobile2-move=""
-          aria-expanded={moving === summary.project}
-          aria-label={t("workspaces.moveProject", { name: summary.displayName })}
-          onClick={() => setMoving((value) => (value === summary.project ? null : summary.project))}
-          className={`mr-3 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-[8px] border px-3 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${moving === summary.project ? "border-accent/45 bg-accent/10 text-accent" : "border-border bg-card text-secondary"}`}
-        >
-          <MoveLabel />
-        </button>
-      </div>
-      {moving === summary.project && workspace ? (
-        <div data-mobile2-move-list="" className="pl-6">
-          <MobileSheetSection>{t("workspaces.moveTo")}</MobileSheetSection>
-          {workspace.view.workspaces.map((target) => (
-            <MobileSheetRow
-              key={target.id}
-              icon={<span className="flex h-[18px] w-[18px] items-center justify-center"><WorkspaceDot color={target.color} size={12} /></span>}
-              label={target.name}
-              attrs={{ "data-mobile2-move-to": target.id }}
-              trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
-              onSelect={() => move(summary.project, target.id)}
-            />
-          ))}
-        </div>
-      ) : null}
-      {moveError?.project === summary.project ? <p role="alert" className="px-4 pb-2 text-label font-semibold text-danger">{moveError.text}</p> : null}
-    </div>
-  );
+  if (menuSummary) {
+    const project = menuSummary.project;
+    const back = (error?: string) => {
+      setMenuFor(null);
+      if (error) setRowError({ project, text: error });
+    };
+    return (
+      <MobileSheet name="projects" title={menuSummary.displayName} onClose={() => back()}>
+        <ProjectActionsSheetBody
+          key={project}
+          target={{ project, name: menuSummary.displayName, root: roots.get(project) ?? null, crowned: crownedProjects.has(project), archived: archivedProjects.has(project), working: working.has(project) }}
+          view={workspace?.view ?? null}
+          rights={projectRights(workspace?.view, project)}
+          actions={actions}
+          loaded={loaded}
+          onToggleCrown={onToggleCrown}
+          onMove={workspace ? move : undefined}
+          onDone={back}
+          onDeleted={(deleted) => {
+            setMenuFor(null);
+            requestFilesRefresh();
+            if (selected === deleted) onSelect(OVERVIEW);
+          }}
+        />
+      </MobileSheet>
+    );
+  }
 
   return (
     /* The phone has no rail, so the rail's resources block rides at the foot of
@@ -223,6 +303,22 @@ export function MobileProjectSheet({
         onSelect={() => onSelect(OVERVIEW)}
       />
       <MobileSheetDivider />
+      {hint ? (
+        <div data-mobile2-project-hint="" className="flex items-center gap-3 pl-4">
+          <Hand className="h-[18px] w-[18px] shrink-0 text-secondary" aria-hidden />
+          <span className="min-w-0 flex-1 text-label font-medium text-secondary">{t("rail.row.hint")}</span>
+          <button
+            type="button"
+            data-mobile2-project-hint-dismiss=""
+            aria-label={t("rail.row.hintDismiss")}
+            title={t("rail.row.hintDismiss")}
+            onClick={() => setHint(false)}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+      ) : null}
       {listHidden || sections ? null : crowned.map((summary) => row(summary))}
       {listHidden ? null : sections ? sections.map((section) => (
         <div key={section.workspace?.id ?? "unassigned"} data-mobile2-workspace-section={section.workspace?.id ?? "unassigned"}>
@@ -230,7 +326,7 @@ export function MobileProjectSheet({
             {section.workspace ? <WorkspaceDot color={section.workspace.color} size={8} /> : null}
             <span className="min-w-0 truncate">{section.workspace ? section.workspace.name : t("workspaces.unassigned")}</span>
           </MobileSheetSection>
-          {section.rows.map((summary) => (!section.workspace && owner ? movableRow(summary) : row(summary)))}
+          {section.rows.map((summary) => row(summary))}
         </div>
       )) : rest.map((summary) => row(summary))}
       {scope && !listHidden && loaded && !active.length && !archived.length ? (

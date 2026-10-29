@@ -30201,7 +30201,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       panel: dialog ? { width: Math.round(dialog.width), height: Math.round(dialog.height), inside: dialog.left >= 0 && dialog.top >= 0 && dialog.right <= innerWidth && dialog.bottom <= innerHeight } : null,
       crown: (() => {
         const opacity = (element: Element | null) => (element ? Number(getComputedStyle(element).opacity) : -1);
-        const reached = rail.querySelector<HTMLElement>("[data-rail-crown]:focus-visible") ?? rail.querySelector<HTMLElement>("[data-flip-key]:hover [data-rail-crown]");
+        /* The row's one control on hover or focus is its ⋯ now (docs/design/project-rail-context-menu/README.md), in the crown's old place. */
+        const reached = rail.querySelector<HTMLElement>("[data-rail-row-menu]:focus-visible") ?? rail.querySelector<HTMLElement>("[data-flip-key]:hover [data-rail-row-menu]");
         if (!reached) return null;
         const row = reached.closest<HTMLElement>("[data-flip-key]")!;
         const age = row.querySelector<HTMLElement>('[data-rail-slot="age"]');
@@ -30215,7 +30216,7 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
           ageText: age?.textContent ?? "",
           overlapsMarks: [...row.querySelectorAll<HTMLElement>("[data-rail-needs], [data-rail-live]")].some((mark) => meets(mark.getBoundingClientRect())),
           /* Every other row keeps its age and shows no control. */
-          elsewhere: { crowns: others.filter((entry) => opacity(entry.querySelector("[data-rail-crown]")) > 0).length, ages: others.filter((entry) => entry.querySelector('[data-rail-slot="age"]') && opacity(entry.querySelector('[data-rail-slot="age"]')) < 1).length },
+          elsewhere: { crowns: others.filter((entry) => opacity(entry.querySelector("[data-rail-row-menu]")) > 0).length, ages: others.filter((entry) => entry.querySelector('[data-rail-slot="age"]') && opacity(entry.querySelector('[data-rail-slot="age"]')) < 1).length },
         };
       })(),
       rail: {
@@ -30332,7 +30333,7 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
             await page.locator("[data-rail-filter]").focus();
             for (let presses = 0; presses < 40; presses += 1) {
               await page.keyboard.press("Tab");
-              if (await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-crown") === true)) break;
+              if (await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-row-menu") === true)) break;
             }
             await page.mouse.move(size.width - 200, 400);
             await page.waitForTimeout(400);
@@ -37869,7 +37870,7 @@ describe("team workspaces slice (a)", () => {
               await frame(page, tag, "D1-long", [["[data-workspace-chip]", names[lang].long.slice(0, 8)]]);
             } finally { await context.close(); }
           }
-          /* D3: All, the sections in order, Move on the selected Unassigned row, and its menu. */
+          /* D3: All, the sections in order, and Move to… from the selected Unassigned row's menu. */
           {
             const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
             try {
@@ -37896,30 +37897,30 @@ describe("team workspaces slice (a)", () => {
               const marked = await page.locator("[data-rail-pinned-mark]").evaluateAll((marks) => marks.map((mark) => mark.closest("[data-rail-project]")?.getAttribute("data-rail-project")).sort());
               if (JSON.stringify(marked) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D3: the pinned rows' crowns ${JSON.stringify(marked)}`);
               await page.locator("[data-rail-project='paper-kite']").click();
-              const move = page.locator("[data-rail-project='paper-kite']").locator("xpath=..").locator("[data-rail-move]");
-              await move.waitFor();
+              if (await page.locator("[data-rail-move]").count()) failures.push(`${tag} D3: a row still carries Move`);
               await frame(page, tag, "D3-all", [
                 ["[data-rail-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
                 ["[data-workspace-chip]", words(lang, "workspaces.all")],
-                ["[data-rail-move]:not(.opacity-0)", words(lang, "workspaces.move")],
                 ["[data-rail-project='paper-kite']", "Paper Kite"],
               ]);
-              await move.click();
-              await page.locator("[data-workspace-popover='move']").waitFor();
+              await page.locator("[data-rail-project='paper-kite']").hover();
+              await page.locator("[data-rail-row-menu='paper-kite']").click();
+              await page.locator("[data-row-menu='paper-kite'] [data-row-menu-item='move']").click();
+              await page.locator("[data-row-menu-page='move']").waitFor();
               /* The menu covers neither the row's own name nor its control. */
               const covers = await page.evaluate(() => {
-                const menu = document.querySelector("[data-workspace-popover='move']")!.getBoundingClientRect();
-                const own = [document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]"), document.querySelector("[data-rail-project='paper-kite']")?.parentElement?.querySelector("[data-rail-move]")]
+                const menu = document.querySelector("[data-row-menu]")!.getBoundingClientRect();
+                const own = [document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]"), document.querySelector("[data-rail-row-menu='paper-kite']")]
                   .map((element) => element!.getBoundingClientRect());
                 return own.some((box) => box.left < menu.right && box.right > menu.left && box.top < menu.bottom && box.bottom > menu.top);
               });
               if (covers) failures.push(`${tag} D3: the Move to… menu covers its own row`);
-              await frame(page, tag, "D3-move", [["[data-workspace-popover='move']", words(lang, "workspaces.moveTo")], ["[data-workspace-popover='move']", names[lang].client]], "[data-workspace-popover='move']");
-              const cutTargets = await cutNames(page, "[data-workspace-popover='move'] [data-workspace-move-to] span.truncate");
+              await frame(page, tag, "D3-move", [["[data-row-menu-page='move']", words(lang, "workspaces.moveTo")], ["[data-row-menu-page='move']", names[lang].client]], "[data-row-menu]");
+              const cutTargets = await cutNames(page, "[data-row-menu-page='move'] [data-row-menu-space] span");
               if (cutTargets.length) failures.push(`${tag} D3: Move to… cuts ${JSON.stringify(cutTargets)}`);
               /* The move lands: the row joins Client work and leaves Unassigned. */
-              await page.locator(`[data-workspace-move-to='${FIXTURE_IDS.client}']`).click();
-              await page.waitForFunction(() => !document.querySelector("[data-workspace-popover='move']"));
+              await page.locator(`[data-row-menu-space='${FIXTURE_IDS.client}']`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-row-menu]"));
               const moved = await page.evaluate(() => [...document.querySelectorAll("[data-rail-workspace-section], [data-rail-project]")]
                 .map((element) => element.getAttribute("data-rail-workspace-section") ?? element.getAttribute("data-rail-project")));
               const at = moved.indexOf("paper-kite");
@@ -38086,6 +38087,292 @@ describe("team workspaces slice (a)", () => {
   }, 900_000);
 });
 
+
+describe("a project row's menu in the rail, variant 2", () => {
+  browserTest("rest, hover, ⋯ and right-click menus, Move to…, rename, the archive and delete asks, closed rows, and the phone's ⋯, long press and hint", async () => {
+    const out = path.resolve(process.env.LLV_ROW_MENU_OUT ?? ".artifacts/project-row-menu");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
+    const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+    const renamed = { en: "Paper Kite web shop", uk: "Паперовий змій, вебкрамниця" };
+
+    /** What a frame must hold: every text under `roots` inside the window and its clipping boxes, no word split over two
+        lines, no ellipsis; with `menu`, the menu at least 8 px inside the window and over no word of the rail. */
+    const read = (page: Page, roots: string[], menu: string | null, besideRail: boolean) => page.evaluate(({ roots, menu, besideRail }) => {
+      const problems: string[] = [];
+      const panel = menu ? document.querySelector<HTMLElement>(menu) : null;
+      const panelBox = panel?.getBoundingClientRect() ?? null;
+      if (menu && !panelBox) problems.push(`${menu} is not open`);
+      if (panelBox && (panelBox.left < 7.5 || panelBox.top < 7.5 || panelBox.right > innerWidth - 7.5 || panelBox.bottom > innerHeight - 7.5)) problems.push(`the menu stands ${JSON.stringify([panelBox.left, panelBox.top, panelBox.right, panelBox.bottom].map(Math.round))} in ${innerWidth}×${innerHeight}`);
+      for (const selector of roots) for (const root of document.querySelectorAll<HTMLElement>(selector)) {
+        if (!root.getClientRects().length) continue;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const text = node.textContent ?? "";
+          const owner = node.parentElement!;
+          const style = getComputedStyle(owner);
+          if (!text.trim() || style.visibility === "hidden" || Number(style.opacity) === 0 || owner.closest("[aria-hidden='true'], .sr-only, [data-rail-slot='age']")) continue;
+          for (const match of text.matchAll(/\S+/g)) {
+            const range = document.createRange();
+            range.setStart(node, match.index!);
+            range.setEnd(node, match.index! + match[0].length);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0.5);
+            if (!rects.length) continue;
+            const tops = new Set(rects.map((rect) => Math.round(rect.top)));
+            if (tops.size > 1) problems.push(`«${match[0]}» breaks over ${tops.size} lines`);
+            for (const rect of rects) {
+              if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) problems.push(`«${match[0]}» leaves the window`);
+              for (let parent: HTMLElement | null = owner; parent && parent !== document.body; parent = parent.parentElement) {
+                const clip = getComputedStyle(parent);
+                if (clip.overflowX === "visible" && clip.overflowY === "visible") continue;
+                const box = parent.getBoundingClientRect();
+                if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) { problems.push(`«${match[0]}» is cut by ${parent.tagName.toLowerCase()}.${String(parent.className).split(" ")[0]}`); break; }
+              }
+              /* Beside the rail, the menu covers no word of it. */
+              if (panelBox && besideRail && !panel!.contains(owner) && owner.closest("aside[data-project-rail]")
+                && rect.left < panelBox.right && rect.right > panelBox.left && rect.top < panelBox.bottom && rect.bottom > panelBox.top) problems.push(`the menu covers «${match[0]}» of the rail`);
+            }
+          }
+        }
+        for (const element of root.querySelectorAll<HTMLElement>(".truncate")) {
+          if (element.getClientRects().length && element.scrollWidth > element.clientWidth + 0.5 && (panel?.contains(element) || element.closest("[data-row-menu], [data-project-rename]"))) problems.push(`«${element.textContent}» is cut with an ellipsis`);
+        }
+      }
+      return [...new Set(problems)];
+    }, { roots, menu, besideRail });
+
+    async function frame(page: Page, tag: string, state: string, defining: string[], roots: string[], menu: string | null = null, besideRail = false) {
+      const text = await page.evaluate(() => document.body.innerText);
+      for (const word of defining) if (!text.includes(word)) failures.push(`${tag} ${state}: «${word}» is not on screen`);
+      for (const problem of await read(page, roots, menu, besideRail)) failures.push(`${tag} ${state}: ${problem}`);
+      const file = `${tag}-${state}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, defining, file });
+    }
+    /* Which ⋯ are drawn, with their boxes, and whether one covers a word of its own row. */
+    const triggers = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-row-menu]")]
+      .filter((button) => Number(getComputedStyle(button).opacity) > 0.5)
+      .map((button) => {
+        const box = button.getBoundingClientRect();
+        const row = button.closest("[data-rail-row]")!;
+        const covered: string[] = [];
+        const walker = document.createTreeWalker(row.querySelector("[data-rail-project]")!, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!(node.textContent ?? "").trim() || Number(getComputedStyle(node.parentElement!).opacity) === 0 || node.parentElement!.closest("[data-rail-slot='age']")) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) if (rect.width > 0 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top) covered.push(node.textContent!.trim());
+        }
+        return { project: button.getAttribute("data-rail-row-menu"), width: box.width, height: box.height, covered };
+      }));
+    const ages = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("aside[data-project-rail] [data-rail-slot='age']")]
+      .filter((age) => (age.textContent ?? "").trim() && age.getClientRects().length)
+      .filter((age) => { const range = document.createRange(); range.selectNodeContents(age); return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size > 1; })
+      .map((age) => age.textContent));
+    const hold = async (page: Page, selector: string) => {
+      const box = (await page.locator(selector).boundingBox())!;
+      await page.mouse.move(box.x + box.width / 3, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.waitForTimeout(650);
+      await page.mouse.up();
+    };
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [820, 900], [390, 844]] as const) {
+        const tag = `${lang}-${theme}-${width}`;
+        const phone = width === 390;
+        const open = (query: string) => openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+        const rail = ["aside[data-project-rail]"];
+        const desk = ["aside[data-project-rail]", "[data-row-menu]", "[data-project-rename]"];
+        if (!phone) {
+          const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
+          try {
+            await page.locator("[data-rail-project='paper-kite']").waitFor({ timeout: 20_000 });
+            await page.locator("[data-rail-project='paper-kite']").click();
+            await page.mouse.move(width - 40, height - 40);
+            await page.waitForTimeout(300);
+            /* At rest: no control on any row, the selected one included, and every age on one line. */
+            const resting = await triggers(page);
+            if (resting.length) failures.push(`${tag} rest: ⋯ drawn on ${JSON.stringify(resting.map((entry) => entry.project))}`);
+            if (await page.locator("[data-rail-move], [data-rail-crown]").count()) failures.push(`${tag} rest: a Move or crown control is on a row`);
+            const broken = await ages(page);
+            if (broken.length) failures.push(`${tag} rest: ages over two lines ${JSON.stringify(broken)}`);
+            await frame(page, tag, "rest", ["Paper Kite", "Harbor Docs"], rail);
+            /* Hover: one ⋯ in the age's place, 24 px or more, over no word of its row. */
+            await page.locator("[data-rail-project='harbor-docs']").hover();
+            await page.waitForTimeout(250);
+            const hovered = await triggers(page);
+            readings.push({ tag, state: "hover", hovered });
+            if (hovered.length !== 1 || hovered[0]!.project !== "harbor-docs" || hovered[0]!.width < 24 || hovered[0]!.height < 24 || hovered[0]!.covered.length) failures.push(`${tag} hover: ${JSON.stringify(hovered)}`);
+            await frame(page, tag, "hover", ["Harbor Docs"], rail);
+            /* The ⋯ of the selected row: the menu beside the rail, level with its row. */
+            await page.locator("[data-rail-project='paper-kite']").hover();
+            await page.locator("[data-rail-row-menu='paper-kite']").click();
+            await page.locator("[data-row-menu='paper-kite']").waitFor();
+            await frame(page, tag, "menu", [words(lang, "rail.row.rename"), words(lang, "rail.row.renameHint"), words(lang, "workspaces.moveTo"), words(lang, "rail.row.moveHint", { where: words(lang, "workspaces.unassigned") }), words(lang, "rail.row.archive"), words(lang, "rail.row.delete")], desk, "[data-row-menu]", true);
+            await page.keyboard.press("Escape");
+            await page.waitForFunction(() => !document.querySelector("[data-row-menu]"));
+            if (!(await page.evaluate(() => document.activeElement?.getAttribute("data-rail-row-menu") === "paper-kite"))) failures.push(`${tag} Escape: the focus did not come back to the ⋯`);
+            /* Right-click: the same menu at the pointer, under the row. */
+            const row = (await page.locator("[data-rail-project='harbor-docs'] [data-rail-name]").boundingBox())!;
+            await page.mouse.click(row.x + 40, row.y + row.height / 2, { button: "right" });
+            await page.locator("[data-row-menu='harbor-docs']").waitFor();
+            const under = await page.evaluate(() => {
+              const menu = document.querySelector("[data-row-menu]")!.getBoundingClientRect();
+              const own = document.querySelector("[data-rail-project='harbor-docs'] [data-rail-name]")!.getBoundingClientRect();
+              return { menuTop: menu.top, rowBottom: own.bottom, menuBottom: menu.bottom, rowTop: own.top };
+            });
+            if (!(under.menuTop >= under.rowBottom - 0.5 || under.menuBottom <= under.rowTop + 0.5)) failures.push(`${tag} context: the menu covers its own row ${JSON.stringify(under)}`);
+            await frame(page, tag, "context", [words(lang, "rail.row.rename"), words(lang, "rail.crown")], desk, "[data-row-menu]");
+            await page.keyboard.press("Escape");
+            if (width !== 1440) { if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`); continue; }
+            /* The keyboard alone: Shift+F10 on the row, the arrows, → opens Move to…, ← comes back. */
+            await page.locator("[data-rail-project='paper-kite']").focus();
+            await page.keyboard.press("Shift+F10");
+            await page.locator("[data-row-menu='paper-kite']").waitFor();
+            for (const keys of [["ArrowDown"], ["ArrowRight"]]) for (const keyName of keys) await page.keyboard.press(keyName);
+            await page.locator("[data-row-menu-page='move']").waitFor();
+            await frame(page, tag, "move", [words(lang, "headerMenu.back"), words(lang, "workspaces.moveTo"), "Client work", words(lang, "workspaces.unassigned")], desk, "[data-row-menu]", true);
+            await page.keyboard.press("ArrowLeft");
+            await page.locator("[data-row-menu-view='rest']").waitFor();
+            if (!(await page.evaluate(() => document.activeElement?.getAttribute("data-row-menu-item") === "move"))) failures.push(`${tag} ←: the focus is not on Move to…`);
+            await page.keyboard.press("Escape");
+            /* Rename: a dialog over an inert page; the name lands on the row; the menu then offers the folder's name back. */
+            await page.locator("[data-rail-project='paper-kite']").hover();
+            await page.locator("[data-rail-row-menu='paper-kite']").click();
+            await page.locator("[data-row-menu-item='rename']").click();
+            await page.locator("[data-project-rename-input]").fill(renamed[lang]);
+            const inert = await page.evaluate(() => Boolean(document.querySelector("aside[data-project-rail]")?.closest("[inert]")));
+            if (!inert) failures.push(`${tag} rename: the page behind the dialog is not inert`);
+            await frame(page, tag, "rename", [words(lang, "rail.row.renameTitle"), words(lang, "rail.row.folderLead"), "/srv/projects/paper-kite"], desk);
+            await page.keyboard.press("Enter");
+            await page.locator("[data-project-rename]").waitFor({ state: "detached" });
+            await page.locator(`[data-rail-project='paper-kite']:has-text("${renamed[lang]}")`).waitFor();
+            await page.locator("[data-rail-project='paper-kite']").hover();
+            await page.locator("[data-rail-row-menu='paper-kite']").click();
+            await page.locator("[data-row-menu-item='reset']").waitFor();
+            await frame(page, tag, "renamed", [renamed[lang], words(lang, "rail.row.resetName"), words(lang, "rail.row.resetNameHint", { folder: "paper-kite" })], desk, "[data-row-menu]", true);
+            await page.locator("[data-row-menu-item='reset']").click();
+            await page.waitForFunction((name) => document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]")?.textContent?.trim() === name, "Paper Kite");
+            /* Archive and Delete ask first; Cancel leaves the project where it was. */
+            await page.locator("[data-rail-project='paper-kite']").hover();
+            await page.locator("[data-rail-row-menu='paper-kite']").click();
+            await page.locator("[data-row-menu-item='archive']").click();
+            await frame(page, tag, "archive", [words(lang, "rail.row.archiveTitle", { name: "Paper Kite" }), words(lang, "rail.row.archiveYes"), words(lang, "common.cancel")], desk, "[data-row-menu]", true);
+            await page.locator("[data-row-menu-cancel]").click();
+            await page.keyboard.press("Escape");
+            /* Delete counts the project's conversations before it asks. */
+            await page.locator("[data-rail-project='harbor-docs']").hover();
+            await page.locator("[data-rail-row-menu='harbor-docs']").click();
+            await page.locator("[data-row-menu='harbor-docs'] [data-row-menu-item='delete']").click();
+            await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
+            await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Harbor Docs" }), words(lang, "rail.row.deleteBody", { count: 1 }), words(lang, "trash.confirmYes")], desk, "[data-row-menu]", true);
+            await page.locator("[data-row-menu-cancel]").click();
+            await page.keyboard.press("Escape");
+            /* Archive confirmed: the row goes to the archive fold, and its menu there restores it. */
+            await page.locator("[data-rail-project='paper-kite']").hover();
+            await page.locator("[data-rail-row-menu='paper-kite']").click();
+            await page.locator("[data-row-menu-item='archive']").click();
+            await page.locator("[data-row-menu-confirm='archive']").click();
+            await page.locator("[data-rail-archive]").waitFor();
+            await page.locator("[data-rail-archive]").click();
+            await page.locator("[data-rail-archived] [data-rail-project='paper-kite']").hover();
+            await page.locator("[data-rail-archived] [data-rail-row-menu='paper-kite']").click();
+            await page.locator("[data-row-menu-item='unarchive']").click();
+            await page.locator("[data-rail-archive]").waitFor({ state: "detached" });
+            /* A project with agents working: Archive and Delete closed, with the reason. */
+            await page.locator("[data-rail-project='acme-ledger']").hover();
+            await page.locator("[data-rail-row-menu='acme-ledger']").click();
+            await page.locator("[data-row-menu='acme-ledger']").waitFor();
+            const closed = await page.locator("[data-row-menu] [data-row-menu-item][aria-disabled='true']").evaluateAll((items) => items.map((item) => item.getAttribute("data-row-menu-item")));
+            if (JSON.stringify(closed) !== JSON.stringify(["archive", "delete"])) failures.push(`${tag} working: closed rows ${JSON.stringify(closed)}`);
+            await frame(page, tag, "working", [words(lang, "rail.row.working"), words(lang, "rail.uncrown")], desk, "[data-row-menu]", true);
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+          if (width !== 1440) continue;
+          /* A member: the closed rows say who may do them; the crown stays open. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all&member=1");
+            try {
+              await page.locator("[data-rail-project='paper-kite']").waitFor({ timeout: 20_000 });
+              await page.locator("[data-rail-project='paper-kite']").hover();
+              await page.locator("[data-rail-row-menu='paper-kite']").click();
+              await page.locator("[data-row-menu='paper-kite']").waitFor();
+              const closed = await page.locator("[data-row-menu] [data-row-menu-item][aria-disabled='true']").evaluateAll((items) => items.map((item) => item.getAttribute("data-row-menu-item")));
+              if (JSON.stringify(closed) !== JSON.stringify(["rename", "move", "archive", "delete"])) failures.push(`${tag} member: closed rows ${JSON.stringify(closed)}`);
+              await frame(page, tag, "member", [words(lang, "rail.row.ownerRenames"), words(lang, "rail.row.ownerMoves"), words(lang, "rail.row.ownerArchives"), words(lang, "rail.crown")], desk, "[data-row-menu]", true);
+              if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+          continue;
+        }
+        /* The phone: the sheet's first opening says a long press opens the menu, and the open project's row carries its ⋯. */
+        for (const member of [false, true]) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces&rail=1&ws=all${member ? "&member=1" : ""}`);
+          /* The list scrolls, so a frame reads its own rows: the menu's, its pages', the hint and the ⋯'s row. */
+          const sheet = ["[data-row-menu]", "[data-row-menu-page]", "[data-mobile2-project-hint]", "[data-mobile2-project-row]:has([data-mobile2-project-menu])"];
+          try {
+            await page.locator("[data-mobile2-open='projects']").first().click({ timeout: 20_000 });
+            await page.locator("[data-mobile2-project='harbor-docs']").waitFor({ timeout: 20_000 });
+            const door = page.locator("[data-mobile2-project-menu]");
+            if (await door.count() !== 1) failures.push(`${tag} list: ${await door.count()} ⋯ on the rows`);
+            const target = await door.first().evaluate((button) => {
+              const box = button.getBoundingClientRect();
+              const row = button.closest("[data-mobile2-project-row]")!.getBoundingClientRect();
+              const inset = 2;
+              const edges = [[box.left + inset, box.top + inset], [box.right - inset, box.top + inset], [box.left + inset, box.bottom - inset], [box.right - inset, box.bottom - inset]];
+              return {
+                width: box.width, height: box.height, inside: box.left >= row.left - 0.5 && box.right <= row.right + 0.5 && box.top >= row.top - 0.5 && box.bottom <= row.bottom + 0.5,
+                hits: edges.every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))),
+              };
+            });
+            readings.push({ tag, state: member ? "member-list" : "list", door: target });
+            if (target.width < 44 || target.height < 44 || !target.inside || !target.hits) failures.push(`${tag} list: the ⋯ ${JSON.stringify(target)}`);
+            if (!member) {
+              if (!(await page.locator("[data-mobile2-project-hint]").count())) failures.push(`${tag} list: no long-press hint on the first opening`);
+              await frame(page, tag, "list", [words(lang, "rail.row.hint"), "Harbor Docs"], sheet);
+            }
+            await door.first().click();
+            await page.locator("[data-row-menu]").waitFor();
+            const short = await page.locator("[data-row-menu] [data-row-menu-item]").evaluateAll((items) => items.filter((item) => item.getBoundingClientRect().height < 44).map((item) => item.getAttribute("data-row-menu-item")));
+            if (short.length) failures.push(`${tag} menu: rows under 44 px ${JSON.stringify(short)}`);
+            if (member) {
+              await frame(page, tag, "member", [words(lang, "rail.row.ownerRenames"), words(lang, "rail.row.ownerMoves"), words(lang, "rail.crown")], sheet);
+              continue;
+            }
+            await frame(page, tag, "menu", [words(lang, "rail.row.rename"), words(lang, "workspaces.moveTo"), words(lang, "rail.row.archive"), words(lang, "rail.row.delete")], sheet);
+            await page.locator("[data-row-menu-item='move']").click();
+            await page.locator("[data-row-menu-page='move']").waitFor();
+            await frame(page, tag, "move", [words(lang, "headerMenu.back"), "Client work"], sheet);
+            await page.locator("[data-row-menu-back]").click();
+            await page.locator("[data-row-menu-item='rename']").click();
+            await page.locator("[data-project-rename-input]").fill(renamed[lang]);
+            await frame(page, tag, "rename", [words(lang, "rail.row.name"), words(lang, "rail.row.save")], sheet);
+            await page.locator("[data-row-menu-back]").click();
+            /* Back to the list, then a held press on another row opens that row's menu. */
+            await page.keyboard.press("Escape");
+            await page.locator("[data-mobile2-longpress='harbor-docs']").waitFor();
+            if (await page.locator("[data-mobile2-project-hint]").count()) failures.push(`${tag} list again: the hint is still drawn after a menu opened`);
+            await page.locator("[data-mobile2-longpress='harbor-docs']").scrollIntoViewIfNeeded();
+            await hold(page, "[data-mobile2-longpress='harbor-docs']");
+            await page.locator("[data-row-menu='harbor-docs']").waitFor();
+            await frame(page, tag, "longpress", ["Harbor Docs", words(lang, "rail.row.rename"), words(lang, "rail.uncrown")], sheet);
+            await page.locator("[data-row-menu='harbor-docs'] [data-row-menu-item='delete']").click();
+            await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
+            await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Harbor Docs" }), words(lang, "trash.confirmYes"), words(lang, "common.cancel")], sheet);
+            await page.locator("[data-row-menu-cancel]").click();
+            if (pageErrors.length) failures.push(`${tag} phone: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
 
 // Slice (b): reach placement, role changes and scoped invitations through Team's controls.
 describe("team workspaces slice (b)", () => {
