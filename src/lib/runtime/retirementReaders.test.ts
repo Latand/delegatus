@@ -13,14 +13,15 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
 const CREATED = new Date(NOW).toISOString();
-function seeded(root: string, history: number) {
+const retirementSession = (index: number) => ["00000000", "0000", "0000", "0000", String(index + 1).padStart(12, "0")].join("-");
+function seeded(root: string, history: number, sessionId = (index: number) => `reader-${index}`) {
   const seed = new AgentRegistry(path.join(root, "seed.json"), undefined, undefined, { sqliteMode: "off" });
   const conversation = seed.ensureConversation("codex", "/fixture/template.jsonl", null);
   const receipt = seed.beginSpawn("codex", "/fixture", { title: "Reader fixture" });
   seed.close();
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   for (let n = 0; n <= history; n++) {
-    const id = `conversation_reader_${n}` as `conversation_${string}`, session = `reader-${n}`;
+    const id = `conversation_reader_${n}` as `conversation_${string}`, session = sessionId(n);
     file.conversations[id] = { ...conversation, id, createdAt: CREATED, updatedAt: CREATED, generations: [{ ...conversation.generations[0]!, createdAt: CREATED, id: session, path: `/fixture/${n}.jsonl` }],
       turn: { ...conversation.turn, state: "idle" } };
     file.entries[`codex:${session}`] = { key: { engine: "codex", sessionId: session }, artifactPath: `/fixture/${n}.jsonl`, cwd: "/fixture", accountId: null,
@@ -44,7 +45,7 @@ test("retirement and startup membership payload reads stay flat across tenfold r
   try {
     for (const history of [10, 100]) {
       const directory = path.join(root, String(history)); fs.mkdirSync(directory);
-      const initial = seeded(directory, history);
+      const initial = seeded(directory, history, retirementSession);
       const counts: number[] = [];
       for (let reopened = 0; reopened < 2; reopened++) {
         let reads = 0;
@@ -62,7 +63,7 @@ test("retirement and startup membership payload reads stay flat across tenfold r
           counts.push(reads);
           // Exercise the production startup selector over the same indexed view.
           const registry = { readOnlySnapshot: () => snapshot,
-            structuredHostEntries: () => [snapshot.entries["codex:reader-0"]!] } as AgentRegistry;
+            structuredHostEntries: () => [snapshot.entries[`codex:${retirementSession(0)}`]!] } as AgentRegistry;
           reads = 0;
           const selected = pipelineStartupMemberships(registry);
           expect(Object.keys(selected.memberships)).toEqual(["conversation_reader_0", "conversation_reader_alias", "conversation_reader_pending"]);
