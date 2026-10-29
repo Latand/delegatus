@@ -6,6 +6,7 @@ import { settlePipelineControllerJobs, startPipelineControllerJob } from "./cont
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { pipelineArtifactsDir } from "./store";
 
 // Every observation starts a new interpreter against the writer's real store.
 async function restartedTick(now: string, mode = "spawn", repo?: string) {
@@ -84,12 +85,19 @@ test.each(["settles", "exhausts"] as const)("settlement admission survives proce
   if (exhausted) expect(final.lane.stateDetail).toContain("after 3 automatic retries");
   expect(final.spawns).toHaveLength(0);
   expect(final.lane.runs[0]!.attempts).toHaveLength(1);
+  const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString(), "settlement-free");
+  expect(after.lane.state).toBe(exhausted ? "needs_decision" : "completed");
+  expect(after.spawns).toHaveLength(0);
 });
 
-test.skipIf(process.platform === "win32").each(["settles", "exhausts"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
+test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
   const exhausted = outcome === "exhausts";
+  const invalidReceipt = outcome === "invalid-receipt";
+  const parked = exhausted || invalidReceipt;
   savePipelines([]);
-  const fixture = await realWorktreeLane("cancelled commit recovery", BUILD_ONLY);
+  const fixture = await realWorktreeLane("cancelled commit recovery", [{ id: "study", kind: "run",
+    role: { roleId: "architect" }, access: "read-only", prompt: "Write the declared output",
+    outputs: ["result.txt"], next: null }]);
   try {
     const lane = loadPipelines()[0]!;
     fs.writeFileSync(path.join(fixture.worktree, "result.txt"), "preserved result\n");
@@ -100,21 +108,39 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts"] as const)
     Object.assign(lane.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
     savePipelines([lane]);
     let now = Date.parse("2026-10-29T08:48:00.000Z");
-    for (const [n, delay] of [30_000, 60_000, 120_000, 240_000].entries()) {
+    let receipt: string | undefined;
+    const delays = invalidReceipt ? [30_000] : [30_000, 60_000, 120_000, 240_000];
+    for (const [n, delay] of delays.entries()) {
       const retry = await restartedTick(new Date(now).toISOString(), "commit-cancel", fixture.repo);
       expect(retry.lane.state).toBe("running");
       expect(retry.lane.lastPassedCommit).toBe(lane.lastPassedCommit);
       expect(retry.lane.runs[0]!.attempts[0]!.stageCommitWait?.failures).toBe(n + 1);
       expect(retry.lane.runs[0]!.attempts[0]!.commitRepair).toBeUndefined();
       expect(retry.spawns).toHaveLength(0);
+      const files = fs.readdirSync(pipelineArtifactsDir(lane.id)).filter(file => /^stage-commit-.*\.json$/.test(file));
+      expect(files).toHaveLength(1);
+      const nextReceipt = fs.readFileSync(path.join(pipelineArtifactsDir(lane.id), files[0]!), "utf8");
+      receipt ??= nextReceipt;
+      expect(nextReceipt).toBe(receipt);
       now += delay;
     }
     if (!exhausted) fs.writeFileSync(path.join(fixture.repo, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const receiptPath = path.join(pipelineArtifactsDir(lane.id), fs.readdirSync(pipelineArtifactsDir(lane.id)).find(file => /^stage-commit-.*\.json$/.test(file))!);
+    if (invalidReceipt) fs.writeFileSync(receiptPath, "{}\n");
     const final = await restartedTick(new Date(now).toISOString(), exhausted ? "commit-cancel" : "commit-free", fixture.repo);
-    expect(final.lane.state).toBe(exhausted ? "needs_decision" : "completed");
+    expect(final.lane.state).toBe(parked ? "needs_decision" : "completed");
     expect(final.lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
     if (exhausted) expect(final.lane.stateDetail).toContain("after 4 automatic retries");
-    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(exhausted ? "0" : "1");
+    if (invalidReceipt) {
+      expect(final.lane.stateDetail).toContain("ownership receipt could not be verified");
+      expect(fs.readFileSync(receiptPath, "utf8")).toBe("{}\n");
+    }
+    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
+    fs.writeFileSync(path.join(fixture.repo, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString(), "commit-free", fixture.repo);
+    expect(after.lane.state).toBe(parked ? "needs_decision" : "completed");
+    expect(after.spawns).toHaveLength(0);
+    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
@@ -157,6 +183,7 @@ test("three interrupted launch retries retain their cap through real process res
     now += delay;
     const lane = loadPipelines()[0]!;
     lane.runs[0]!.attempts[0]!.state = "spawning";
+    lane.runs[0]!.attempts[0]!.startedAt = new Date(now).toISOString();
     lane.cursor!.state = "spawning";
     savePipelines([lane]);
   }
@@ -164,6 +191,9 @@ test("three interrupted launch retries retain their cap through real process res
   expect(parked.lane.state).toBe("needs_decision");
   expect(parked.lane.stateDetail).toContain("after 3 automatic retries");
   expect(parked.spawns).toHaveLength(0);
+  const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString());
+  expect(after.lane.state).toBe("needs_decision");
+  expect(after.spawns).toHaveLength(0);
 });
 
 test("a counted launch without its receipt remains an uncertain stop", async () => {
@@ -209,21 +239,21 @@ test("the first spawning checkpoint already contains the restartable activation"
   await create(h.ports, BUILD_ONLY as never);
   await tickPipelines([], h.ports);
   const prototype = SqliteStateCollection.prototype as InstanceType<typeof SqliteStateCollection<Pipeline>>;
-  const original = prototype.mutate;
+  const original = prototype.reconcileSnapshot;
   let checkpoint: Pipeline | undefined;
-  prototype.mutate = function<R>(operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => Promise<void>) => Promise<R> | R,
-    ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]): Promise<R> {
-    return original.call(this, (records, persist) => operation(records, async changed => {
+  prototype.reconcileSnapshot = function<R>(operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => Promise<void>, assertCurrent: (record: Pipeline) => void) => Promise<R> | R,
+    ...args: [observeHold?: (heldMs: number) => void, explicitOnly?: boolean, keys?: readonly string[]]): Promise<R> {
+    return original.call(this, (records, persist, assertCurrent) => operation(records, async changed => {
       await persist(changed);
       const row = loadPipelines()[0];
       if (!checkpoint && row?.cursor?.state === "spawning") {
         checkpoint = structuredClone(row);
         throw new Error("restart at the first spawning checkpoint");
       }
-    }), ...args) as Promise<R>;
+    }, assertCurrent), ...args) as Promise<R>;
   };
   try { await tickPipelines([], h.ports).catch(() => {}); }
-  finally { prototype.mutate = original; }
+  finally { prototype.reconcileSnapshot = original; }
   expect(checkpoint?.runs[0]!.attempts[0]!.activation?.phase).toBe("reserved");
   expect(h.spawnInputs).toHaveLength(0);
 });

@@ -137,6 +137,11 @@ test.each(["settles", "exhausts"] as const)("publication capacity retries retain
     if (exhausted) expect(current().stateDetail).toContain("after 3 automatic retries");
     expect(h.spawnInputs).toHaveLength(1);
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
+  if (exhausted) {
+    now += 24 * 60 * 60_000;
+    await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+    expect(current().state).toBe("needs_decision");
+  }
 });
 
 test("observing an unchanged external job does not request another immediate tick", async () => {

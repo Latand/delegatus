@@ -78,6 +78,10 @@ waits. The scheduler still retains custody of both jobs. Git's existing locks,
 ownership checks and receipts decide whether a result can be accepted. This
 change makes no latency or throughput claim.
 
+An unchanged declared-output tree reuses its original ownership receipt. A
+repaired tree receives a new receipt after the earlier receipt is validated;
+an unreadable or invalid receipt parks with its cause and remains untouched.
+
 Every exhausted stop parks with its cause and retry count. The retry fields
 are stored on the existing attempt and survive decoding in a new process.
 New attempts start with these optional fields absent. Explicit control,

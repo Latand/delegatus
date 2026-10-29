@@ -700,6 +700,25 @@ async function staleStageIndex(pipeline: Pipeline, head: string, tree: string, e
   }
 }
 
+function readStageCommitReceipt(receiptFile: string, parent: string, declaredOutputs: readonly string[]): StageCommitReceipt | null {
+  try {
+    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
+    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    if (!value || typeof value !== "object") throw new Error("invalid receipt");
+    const receipt = value as StageCommitReceipt;
+    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
+      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
+      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
+      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
+      throw new Error("invalid receipt");
+    }
+    return receipt;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 /** The controller flushes ownership before Git writes. Recovery must prove the
     exact parent, tree, nonce and declared paths; a familiar commit title alone
     never grants a read-only stage permission to have created a commit. */
@@ -711,20 +730,11 @@ async function recoverStageCommit(
   exec: ExecPort,
   cwd: string,
 ): Promise<PipelineGitResult | null> {
-  let receipt: StageCommitReceipt;
+  let receipt: StageCommitReceipt | null;
   try {
-    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
-    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
-    if (!value || typeof value !== "object") throw new Error("invalid receipt");
-    receipt = value as StageCommitReceipt;
-    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
-      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
-      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
-      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
-      throw new Error("invalid receipt");
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    receipt = readStageCommitReceipt(receiptFile, parent, declaredOutputs);
+    if (!receipt) return null;
+  } catch {
     return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
   }
   const proof = await exec("git", ["show", "-s", "--format=%P%x00%T%x00%B", head], cwd);
@@ -932,8 +942,18 @@ export async function commitPipelineStage(
   }
   let receipt: StageCommitReceipt | undefined;
   if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
-    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
-    writeJsonDurably(receiptFile, receipt);
+    try {
+      const previous = readStageCommitReceipt(receiptFile, protectedHead, declaredOutputs);
+      if (previous?.tree === custodyTree && previous.paths.length === changedOutputPaths.length
+        && new Set(previous.paths).size === changedOutputPaths.length
+        && previous.paths.every(file => changedOutputPaths.includes(file))) receipt = previous;
+      else {
+        receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
+        writeJsonDurably(receiptFile, receipt);
+      }
+    } catch {
+      return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
+    }
   }
   const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   const recheckedTree = await exec("git", ["write-tree"], pipeline.worktreeDir);
