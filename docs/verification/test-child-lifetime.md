@@ -296,7 +296,7 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 272 files: 178 with asynchronous primitives and
+The recorded census contains 273 files: 179 with asynchronous primitives and
 94 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
@@ -483,6 +483,7 @@ repeated for this inventory correction.
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
 | `src/lib/testing/fixtureProcess.test.ts` | Node spawn and private-namespace spawnSync | owned; original-handle, start/boot, real PID reuse, descendant and stalled-report regressions preserve same-argv bystanders within three/seven-second deadlines |
 | `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
+| `src/lib/testing/testHomeIsolation.test.ts` | 48; synchronous launches at 131 | owned; preload records original handles, supervisor TERM/KILL cases await child shutdown, and synchronous isolated runners are awaited |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
 | `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
@@ -494,7 +495,7 @@ repeated for this inventory correction.
 | `src/runtime-host/runtimeHostFence.test.ts` | 60, 115, 124 | owned |
 | `src/runtime-host/runtimeHostStartup.test.ts` | 176 | owned |
 | `src/runtime-host/runtimeHostSuccession.process.test.ts` | 36 | owned; original host handles are retained before readiness, finally cleanup awaits TERM with three-second KILL escalation, and the private runner service contains interrupted succession |
-| `test-preload.ts` | 19 | contained helper |
+| `test-preload.ts` | 46, 66; forwarded Node spawn at 151 | contained helper; startup-home and admission re-entry use the owned runner with the supervisor identity, and exits are awaited before temporary-root cleanup |
 
 | File | Synchronous launch sites | Disposition |
 | --- | --- | --- |
