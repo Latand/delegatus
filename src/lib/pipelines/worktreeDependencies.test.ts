@@ -240,6 +240,33 @@ test("cancelled setup leaves the old dependency link available", async () => {
   } finally { f.close(); }
 }, 30_000);
 
+test("a lockfile-only change selects a new completed installation", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    const manifest = fs.readFileSync(path.join(f.worktreeDir, "package.json"));
+    fs.appendFileSync(path.join(f.worktreeDir, "bun.lock"), "\n");
+    await prepareWorktreeDependencies(f.pipeline);
+    expect(fs.realpathSync(local)).not.toBe(before);
+    expect(fs.readFileSync(path.join(f.worktreeDir, "package.json")).equals(manifest)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+  } finally { f.close(); }
+}, 30_000);
+
+test("a mismatched completion receipt refuses reuse in a fresh process", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.readlinkSync(local);
+    const receipt = path.join(path.dirname(fs.realpathSync(local)), "installed.json");
+    fs.writeFileSync(receipt, JSON.stringify({ key: "0".repeat(64) }));
+    await expect(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir))
+      .rejects.toThrow("stage environment: dependency preparation failed: incomplete shared dependency entry");
+    expect(fs.readlinkSync(local)).toBe(before);
+  } finally { f.close(); }
+}, 30_000);
+
 
 test.each(["missing-lock", "local-dependency", "workspace", "escaping-patch", "symlink-patch"])("%s refuses setup before linking an unproved installation", async shape => {
   const f = await lockedFixture();
