@@ -12493,9 +12493,6 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
     const candidateAttempt = currentAttempt(candidate, candidateStage.id)!;
-    // Clear only with an adopted, freshly fenced settlement result. An
-    // aborted observation retains the original recovery window.
-    delete candidateAttempt.settlementPreparationWait;
     if (candidate.stateDetail === STAGE_SETTLEMENT_PREPARATION_DETAIL) candidate.stateDetail = null;
     const receiptKey = crypto.createHash("sha256").update(JSON.stringify({
       stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId,
@@ -12567,6 +12564,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       }
+      // Preparation alone does not renew recovery. Keep its first failure
+      // across jobs that still await publication or another settlement step.
+      if (candidate.cursor?.stageId !== stage.id || candidate.cursor.state !== "committing")
+        delete candidateAttempt.settlementPreparationWait;
       await revalidate();
       if (!abort.signal.aborted && controllerTickFingerprint(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);

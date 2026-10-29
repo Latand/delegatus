@@ -359,9 +359,14 @@ test.each(["fresh", "exhausted"] as const)("a pending publication cannot bypass 
     expect(current().delivery!.operation).toEqual(operation);
     expect(pushes).toBe(0);
     if (outcome === "fresh") {
+      const window = current().runs[0]!.attempts[0]!.settlementPreparationWait;
+      expect(window).toBeDefined();
       race.restore(); race = undefined;
       clock += 60_000;
-      for (let n = 0; n < 3; n++) { await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs(); }
+      await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+      expect(current().delivery!.operation!.state).toBe("settled");
+      expect(current().runs[0]!.attempts[0]!.settlementPreparationWait?.startedAt).toBe(window!.startedAt);
+      for (let n = 0; n < 2; n++) { await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs(); }
       expect(current().cursor?.stageId).toBe("audit");
       expect(current().delivery!.operation).toMatchObject({ id: operation.id, requestKey: operation.requestKey,
         epoch: operation.epoch, sha: operation.sha, state: "settled", result: { ok: true, remote: "published" } });
