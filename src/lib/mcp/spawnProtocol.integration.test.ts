@@ -43,7 +43,11 @@ async function fixture(mode: string, version = "0.165.0") {
 import fs from "node:fs";
 import path from "node:path";
 const args = process.argv.slice(2);
-if (args[0] === "--version") { console.log("codex-cli ${version}"); process.exit(0); }
+if (args[0] === "--version") {
+  if (process.env.FIXTURE_MODE === "version-exit") process.exit(2);
+  console.log(process.env.FIXTURE_MODE === "version-invalid" ? "unknown version" : "codex-cli ${version}");
+  process.exit(0);
+}
 if (!args.includes("generate-json-schema")) { console.log("[]"); process.exit(0); }
 const mode = process.env.FIXTURE_MODE;
 fs.appendFileSync(process.env.FIXTURE_CALLS, "generate\\n");
@@ -157,11 +161,13 @@ fs.writeFileSync(path.join(out, "codex_app_server_protocol.schemas.json"), schem
   };
 }
 
-for (const [mode, cause] of [["exit", "exit 2"], ["missing", "ENOENT"], ["parse", "not JSON"], ["break", "not an additive extension"], ["timeout", "timed out"]]) {
-  test(`MCP refuses ${mode} schema generation before reserving or dispatching a launch`, async () => {
+for (const [mode, cause] of [["exit", "exit 2"], ["missing", "ENOENT"], ["parse", "not JSON"], ["break", "not an additive extension"], ["timeout", "timed out"],
+  ["version-exit", "cannot identify executable version"], ["version-invalid", "cannot identify executable version"]]) {
+  test(`MCP refuses ${mode} protocol validation before reserving or dispatching a launch`, async () => {
     const f = await fixture(mode!);
     const answer = await f.call("spawn_agent", f.args);
     expect(answer).toMatchObject({ ok: false });
+    expect(String(answer.error)).toContain(mode!.startsWith("version-") ? "CLI unknown" : "CLI 0.165.0");
     expect(String(answer.error)).toContain("Supported: 0.164.0");
     expect(String(answer.error)).toContain("cause:");
     expect(String(answer.error)).toContain(cause!);

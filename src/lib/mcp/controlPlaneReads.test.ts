@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
+import { productionDomainDependencies, targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
 import { setAgentRegistryForTests } from "@/lib/agent/registry";
 import { systemScheduler } from "@/lib/deadline";
@@ -141,6 +141,7 @@ function dependencies(options: { scans?: number; projections?: number; completed
     snapshot,
     completedFileScan,
     injected: {
+      ...productionDomainDependencies,
       completedFileScan,
       registrySnapshot: () => {
         counts.projectionCalls += 1;

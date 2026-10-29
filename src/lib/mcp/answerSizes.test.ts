@@ -28,7 +28,7 @@ for (const project of ["size-board", "created-board"]) {
   beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
   completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
 }
-const { viewerMcpBindings } = await import(bindingModule);
+const { productionDomainDependencies, viewerMcpBindings } = await import(bindingModule);
 const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("./server");
 const { saveTasks, loadTasks, loadTasksForList, taskSelectionSource, mutateTasks } = await import("@/lib/tasks/store");
 const { savePipelines, pipelineSelectionSource } = await import("@/lib/pipelines/store");
@@ -333,13 +333,14 @@ test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeG
     updatedAt: new Date(now).toISOString(),
   }]));
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...productionDomainDependencies,
     livenessSources: () => ({
       now: () => now,
       probe: { now: () => now, pidAlive: (pid: number) => pid < 1010, processIdentity: (pid: number) => `identity-${pid - 1000}` },
       registrySnapshot: () => ({ entries, conversations: {} }), pipelines: () => [],
       listFiles: async () => files, describeTranscript: async () => null,
       transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
-    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+    }), refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
   const live = await service.callTool("agent_activity", { clientRequestId: "mixed-live", liveOnly: true, limit: 200 }) as any;
@@ -412,6 +413,7 @@ test("expired unhosted busy transcripts leave liveOnly while starting launches s
     size: 100, activity: "live", proc: null, pid: null,
   }));
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+    ...productionDomainDependencies,
     livenessSources: () => ({
       now: () => now,
       probe: { now: () => now, pidAlive: () => true, processIdentity: () => "live-identity" },
@@ -425,7 +427,7 @@ test("expired unhosted busy transcripts leave liveOnly while starting launches s
       } }, conversations: {} }), pipelines: () => [],
       listFiles: async () => files, describeTranscript: async () => null,
       transcriptEvidence: async (_engine: string, file: string) => ({ turn: "busy", lastRecordTs: file.includes("orphan-10") && /orphan-10[01]/.test(file) ? now : now - 86400000, providerProgressAt: null }),
-    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+    }), refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never), new MemoryMcpReceiptStore());
   const live = await service.callTool("agent_activity", { clientRequestId: "orphans-live", liveOnly: true, limit: 200, full: true }) as any;
   expect(live.count).toBe(2);
@@ -449,12 +451,13 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
       return { items: files.slice(offset, offset + limit), total: files.length, nextCursor: offset + limit < files.length ? String(offset + limit) : null };
     },
   } as never, {
+    ...productionDomainDependencies,
     livenessSources: () => ({
       now: () => now, probe: { now: () => now, pidAlive: () => false, processIdentity: () => null },
       registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],
       listFiles: async () => files, describeTranscript: async () => null,
       transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now, providerProgressAt: null }),
-    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+    }), refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never), new MemoryMcpReceiptStore());
   for (const [tool, budget] of [["list_conversations", 12000], ["agent_activity", 24000]] as const) {
     let cursor: string | null = null;
