@@ -1797,12 +1797,13 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
   const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-rehost-state-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(stateRoot, "state");
-  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  let ownedFixture: Awaited<ReturnType<typeof fixture>> | undefined;
   const controller = new AbortController();
   const successor = `stage-proof-rehost-new-owner-${nextFixture}`;
   let restoreGuardRead = () => {};
   try {
-    f = await fixture();
+    const f = await fixture();
+    ownedFixture = f;
     const previousPipelines = loadPipelines();
     const home = path.join(f.root, "account");
     await fs.mkdir(home);
@@ -1845,7 +1846,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
     }
     let shell: NodeJS.ProcessEnv = { NODE_ENV: "test" };
     const configureShell = async (env: NodeJS.ProcessEnv) => {
-      if (engine === "codex") shell = agentCodexPublicationPolicy({}, { ...env, HOME: f!.root }).set as NodeJS.ProcessEnv;
+      if (engine === "codex") shell = agentCodexPublicationPolicy({}, { ...env, HOME: f.root }).set as NodeJS.ProcessEnv;
       else {
         const policy = applyClaudeSpawnPolicy(home, { publicationEnv: env });
         shell = JSON.parse(await fs.readFile(policy.settingsPath, "utf8")).env;
@@ -1884,7 +1885,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
         const receipt: ProviderReceipt = { operationId: "migration-stage-operation", nativeId, path: transcript, continuityPaths: [], historyHash: "fixture",
           host: { kind: engine === "codex" ? "codex-app-server" : "claude-fork", identity: nativeId, epoch: 1, verifiedAt: START } };
         const provider = new RegisteredSuccessorProvider({ registry, accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
-          startCodex: async () => { throw new Error("unexpected feature client"); }, claudeStatus: async () => ({ loggedIn: true }) });
+          startCodex: async () => { throw new Error("unexpected feature client"); }, claudeStatus: async () => ({ loggedIn: true }), now: () => START });
         const capture = async (_id: string, options?: { env?: NodeJS.ProcessEnv }) => {
           await configureShell(options?.env ?? { NODE_ENV: "test" });
           throw new Error("captured migration environment");
@@ -1919,7 +1920,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
     try {
       await bindStructuredDeliveryQueue([]);
       await fs.rm(stageGitReceiptDirectory(successor), { recursive: true, force: true });
-      await f?.close();
+      await ownedFixture?.close();
     } finally {
       if (previousState === undefined) delete process.env.LLV_STATE_DIR;
       else process.env.LLV_STATE_DIR = previousState;
