@@ -68,7 +68,7 @@ export function retainedLivenessFixture(count = 120) {
     const stat = fs.statSync(worker.transcript);
     const sessions = path.join(directory, "sessions");
     const entry = catalogEntryToFileEntry({ ...describe("codex-sessions", sessions, worker.transcript, stat),
-      path: worker.transcript, root: "codex-sessions", name: path.relative(sessions, worker.transcript),
+      path: worker.transcript, root: "codex-sessions", engine: "codex", name: path.relative(sessions, worker.transcript),
       mtime: stat.mtimeMs / 1000, size: stat.size, firstPrompt: "" });
     const files: FileEntry[] = [{ ...entry, conversationId, project: "fixture", title: "Retained liveness", activity: "live" }];
     let cacheStatus: CachedFileScan["cacheStatus"] = "hit";
