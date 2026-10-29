@@ -160,28 +160,44 @@ test("a pinned capacity continuation keeps retrying after a prolonged transport 
 });
 
 test("capacity selection preserves a required tier and waits when only the source offers it", async () => {
-  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
-  const source = createManagedCodexAccount("source seat", { id: LIMITED_ACCOUNT });
-  const spare = createManagedCodexAccount("spare seat", { id: SPARE_ACCOUNT });
-  const catalog = (tier: string) => JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: tier }] }] });
-  fs.writeFileSync(path.join(source.home, "models_cache.json"), catalog("priority"));
-  for (const offered of [true, false]) {
-    fs.writeFileSync(path.join(spare.home, "models_cache.json"), catalog(offered ? "priority" : "standard"));
-    const f = await capacityPool();
-    const lane = loadPipelines()[0]!;
-    lane.stages[0]!.effectiveRole.model = "gpt-6.1-sol";
-    lane.runs[0]!.attempts[0]!.effectiveRole.model = "gpt-6.1-sol";
-    savePipelines([lane]);
-    await recoverPipelineProviderTurn(f.id, f.h.ports);
-    const saved = loadPipelines()[0]!;
-    expect(saved.state).toBe("running");
-    expect(saved.runs[0]!.attempts).toHaveLength(offered ? 2 : 1);
-    expect(saved.runs[0]!.attempts.at(-1)!.effectiveRole).toMatchObject({ model: "gpt-6.1-sol", serviceTier: "priority" });
-    if (offered) expect(saved.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
-    else {
-      expect(saved.stateDetail).toContain("waiting for model at capacity");
-      expect(f.sends).toHaveLength(0);
-      expect(f.wakes).toContain(60_000);
+  const { createManagedCodexAccount, listCodexAccounts } = await import("@/lib/accounts/codex");
+  const { CODEX_ACCOUNTS_SOURCE } = await import("@/lib/accounts/accountsStore");
+  const { persistedAccountSource, seedAccountSource, clearAccountFixture } = await import("@/lib/accounts/accountsStoreFixture");
+  expect(listCodexAccounts().some(account => [LIMITED_ACCOUNT, SPARE_ACCOUNT].includes(account.id))).toBe(false);
+  const prior = structuredClone(persistedAccountSource(CODEX_ACCOUNTS_SOURCE));
+  const homes: string[] = [];
+  try {
+    const source = createManagedCodexAccount("source seat", { id: LIMITED_ACCOUNT });
+    homes.push(source.home);
+    const spare = createManagedCodexAccount("spare seat", { id: SPARE_ACCOUNT });
+    homes.push(spare.home);
+    const catalog = (tier: string) => JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: tier }] }] });
+    fs.writeFileSync(path.join(source.home, "models_cache.json"), catalog("priority"));
+    for (const offered of [true, false]) {
+      fs.writeFileSync(path.join(spare.home, "models_cache.json"), catalog(offered ? "priority" : "standard"));
+      const f = await capacityPool();
+      const lane = loadPipelines()[0]!;
+      lane.stages[0]!.effectiveRole.model = "gpt-6.1-sol";
+      lane.runs[0]!.attempts[0]!.effectiveRole.model = "gpt-6.1-sol";
+      savePipelines([lane]);
+      await recoverPipelineProviderTurn(f.id, f.h.ports);
+      const saved = loadPipelines()[0]!;
+      expect(saved.state).toBe("running");
+      expect(saved.runs[0]!.attempts).toHaveLength(offered ? 2 : 1);
+      expect(saved.runs[0]!.attempts.at(-1)!.effectiveRole).toMatchObject({ model: "gpt-6.1-sol", serviceTier: "priority" });
+      if (offered) expect(saved.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+      else {
+        expect(saved.stateDetail).toContain("waiting for model at capacity");
+        expect(f.sends).toHaveLength(0);
+        expect(f.wakes).toContain(60_000);
+      }
+    }
+  } finally {
+    try {
+      if (prior === undefined) clearAccountFixture(CODEX_ACCOUNTS_SOURCE);
+      else seedAccountSource(CODEX_ACCOUNTS_SOURCE, prior);
+    } finally {
+      for (const home of homes) fs.rmSync(home, { recursive: true, force: true });
     }
   }
 });
