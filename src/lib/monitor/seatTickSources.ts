@@ -498,12 +498,23 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
  */
 export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
+const monitorDueVersions = new WeakMap<readonly BoardTask[], readonly string[]>();
+function ignoredMonitorDueVersions(board: readonly BoardTask[], project: string): readonly string[] {
+  const rows = projectRows(board, project);
+  const reusable = Object.isFrozen(board) && projectRowsCache.get(board)?.complete === true;
+  const cached = reusable ? monitorDueVersions.get(rows) : undefined;
+  if (cached) return cached;
+  const versions = rows.flatMap(task => taskMonitorRef(task) && task.dueAt && Number.isFinite(Date.parse(task.dueAt))
+    ? [`t:${task.id}:${Date.parse(task.dueAt)}`] : []);
+  if (reusable) monitorDueVersions.set(rows, versions);
+  return versions;
+}
+
 function overdueTaskInputs(sources: SeatTickSources, project: string, now: number, openTasks: ReadonlySet<string>, shown: readonly string[], board: readonly BoardTask[]): SeatTickTaskInput[] {
   return performanceSpans.sync("seat-tick.project", () => {
     // Exclude notices from bounded discovery too, so a prefix of dated notices
     // cannot prevent real overdue work from reaching the selection window.
-    const ignored = projectRows(board, project).flatMap(task => taskMonitorRef(task) && task.dueAt && Number.isFinite(Date.parse(task.dueAt))
-      ? [`t:${task.id}:${Date.parse(task.dueAt)}`] : []);
+    const ignored = ignoredMonitorDueVersions(board, project);
     return (sources.overdueTasks?.(project, now, [...shownOverdueDates(shown, now), ...ignored], overdueSweepCursor(shown, now), [...shownOverdueDates(shown, now, true), ...ignored]) ?? []).filter(task => !taskMonitorRef(task)).slice(0, 51).map(task => ({
       id: task.id, title: task.text.split(/\r?\n/, 1)[0]!, status: task.status,
       owned: task.chosen === true ? openTasks.has(task.id) : taskEvidenceFor(task).owner !== null,
