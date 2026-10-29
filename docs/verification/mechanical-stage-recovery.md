@@ -175,7 +175,8 @@ expiry with no started heavy-check phase or decisive refusal in the complete
 output. Queue progress alone supplies no such proof. The existing
 `retryableDeadline` flag retains the capacity policy across readers; optional
 `admissionDeadline` metadata preserves the admission reason. Classification
-happens before output truncation. The existing per-head history counts each
+happens on both complete streams before redaction and output truncation; only
+the classification and redacted diagnostics are retained. The existing per-head history counts each
 operation once across restart and takeover, and stops after three retries.
 
 An unchanged declared-output tree reuses its original ownership receipt. A
@@ -224,6 +225,8 @@ Run each named file separately through the project's gate wrapper, using
   diagnostics, successful retry, exhaustion, existing producer repair controls.
 - `src/lib/pipelines/publication.test.ts`: production admission-helper output,
   started-check and refusal vetoes, incomplete admission evidence.
+- `src/lib/pipelines/git.test.ts`: production publication capture classifies
+  both streams before redaction, retaining refusal vetoes and redacting output.
 - `src/lib/pipelines/parkedPublication.test.ts`: real Git hook admission expiry,
   unchanged accepted head, persisted retry history, process restarts, exhaustion
   and a subsequent genuine check refusal.

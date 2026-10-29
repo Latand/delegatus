@@ -2025,6 +2025,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
+        // Redaction may discard a stream containing decisive refusal evidence.
+        // Only the classification survives; raw bytes are never persisted.
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(`${executed.stdout}\n${executed.stderr}`);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
@@ -2037,7 +2040,6 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null : hookBudgetStop(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
-        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(output);
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
