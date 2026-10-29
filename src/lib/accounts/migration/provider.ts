@@ -1,4 +1,5 @@
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { stageGitEnvironment } from "@/lib/runtime/stageGitEnvironment";
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -379,7 +380,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     identity = await successorCapability(input, "codex");
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
-      input.target.env,
+      { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
       identity.capability,
     );
   } catch (error) {
@@ -544,7 +545,7 @@ async function publishClaudeSuccessorHost(
     identity = await successorCapability(input, "claude");
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
-      input.target.env,
+      { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
       identity.capability,
     );
     const launchPaths = claudeHostLaunchPaths(input.target);
