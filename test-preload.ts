@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll } from "bun:test";
@@ -9,6 +10,35 @@ import { captureProcessIdentity } from "./src/lib/processIdentity";
 import { spawn } from "node:child_process";
 import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 
+const homeKeys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CODE_TMPDIR"] as const;
+function isolateHomes(root: string, env: NodeJS.ProcessEnv): void {
+  for (const key of homeKeys) {
+    env[key] = path.join(root, key.toLowerCase());
+    fs.mkdirSync(env[key]!, { recursive: true, mode: 0o700 });
+  }
+}
+
+// Some readers have no home override (Codex auth, transcript defaults, legacy
+// migrations). Bun caches os.homedir() at startup, so changing HOME here cannot
+// isolate those readers. Re-enter once with a private startup home as well.
+const argv = Bun.argv;
+if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
+  const startup = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
+  try {
+    const env = { ...process.env };
+    isolateHomes(startup.root, env);
+    env.LLV_TEST_STARTUP_HOME = env[process.platform === "win32" ? "USERPROFILE" : "HOME"];
+    const runner = Bun.spawn(argv, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const terminate = () => runner.kill("SIGTERM");
+    const interrupt = () => runner.kill("SIGINT");
+    process.on("SIGTERM", terminate);
+    process.on("SIGINT", interrupt);
+    try { process.exitCode = await runner.exited; }
+    finally { process.off("SIGTERM", terminate); process.off("SIGINT", interrupt); }
+  } finally { startup.release(); }
+  process.exit(process.exitCode);
+}
+
 // Each Linux test runner enters its own service when a manager is available.
 // A nested runner cannot reuse its parent's admission. Without a manager the
 // owned runner binds portable admission to the command PID and warns about
@@ -18,7 +48,6 @@ const admitted = process.platform !== "linux"
   || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
     && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
 if (!admitted) {
-  const argv = fs.readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean);
   const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...argv], {
     env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
@@ -74,16 +103,15 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
  * write the user's real viewer state. A test that wants its own isolated dir
  * still overrides this value itself.
  */
-const isolatedKeys = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY"] as const;
+const isolatedKeys = [...homeKeys, "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY"] as const;
 const inherited = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
 let run: ReturnType<typeof claimProcessTempRoot> | undefined;
 let releaseChildren: (() => Promise<void>) | undefined;
 function beginRepetition(): void {
   run = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"]) {
-    process.env[key] = path.join(run.root, key.toLowerCase());
-    fs.mkdirSync(process.env[key]!, { recursive: true, mode: 0o700 });
-  }
+  // Bun caches os.homedir() at process start. Pin account and CLI overrides
+  // too, including inherited ones, before a resolver or scanner can load.
+  isolateHomes(run.root, process.env);
   process.env.GIT_CONFIG_GLOBAL = path.join(process.env.HOME!, ".gitconfig");
   // `git init` must never copy a template hook pointing outside this root.
   process.env.GIT_TEMPLATE_DIR = path.join(run.root, "git-template");
