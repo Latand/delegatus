@@ -25,12 +25,14 @@ What every variant keeps:
   is later build work (the Keys route has no delete today); the state shows its
   result;
 - one line that Codex agents keep signing in with their subscription, because
-  this key cannot serve them;
+  this key cannot serve them: a footnote under a divider, on the Keys page
+  (variants 1 and 3) or the «who serves what» page (variant 2), never on a
+  single feature's settings;
 - the product's switch (`SettingSwitch` in `ProjectSettingRow`, amber when on
   and blocked), the agent mapping's two-choice segments, the onboarding
   dictation step's radio list and the menu's row and back-row recipes; status as
-  a dot whose short note opens in the row's flow; no new colour, font, pill or
-  card shape.
+  a dot whose short note opens in the row's flow, drawn only where a feature
+  needs attention; no new colour, font, pill or card shape.
 
 The invented installation reads aloud with ElevenLabs, dictates with Soniox and
 talks through Codex V3, so each feature's previous provider is a non-default
@@ -38,9 +40,9 @@ one. «Switched» moves «Asks you», dictation and Voice Delegatus to OpenAI.
 
 | Variant | Name | Where the choice lives |
 |---|---|---|
-| 1 | Перемикачі під рядком OpenAI · Switches under the OpenAI row | Once the key is saved, a group «Що обслуговує OpenAI» opens under the OpenAI row: one switch per feature, its line saying what serves it now («Зараз Soniox») or what OpenAI replaces («Замість Soniox»). With no key the group is one line; with the key removed only the remembered features stay, switches amber, «Без ключа працює Soniox». |
-| 2 | Хто що обслуговує · Who serves what | One row «Хто що обслуговує» under «Import keys» opens a page of its own: each feature with its dot and a two-choice control (its provider or OpenAI). Without a key a notice says so with «Додати ключ» and OpenAI is disabled; a remembered feature says «З ключем повернеться OpenAI», and its amber dot's note names who serves it now. |
-| 3 | У налаштуваннях кожної функції · In each feature's settings | Under the OpenAI row a list of the six features, each naming its provider now, opens that feature's own settings in place, where OpenAI is one more choice in its existing list (dictation: Faster Whisper, ChatGPT Voice, ElevenLabs Scribe, Soniox, OpenAI). Without a key the OpenAI choice is disabled with «Спершу додайте ключ OpenAI». |
+| 1 | Перемикачі під рядком OpenAI · Switches under the OpenAI row | Once the key is saved, a group «Що обслуговує OpenAI» opens under the OpenAI row, nested from its name, the switches ending on the row actions' edge: one switch per feature, its line saying what serves it now («Зараз Soniox») or what OpenAI replaces («Замість Soniox»). With no key the group is one line; with the key removed only the remembered features stay, switches amber, «Без ключа працює Soniox». |
+| 2 | Хто що обслуговує · Who serves what | One row «Хто що обслуговує» under «Import keys» opens a page of its own: each feature's name with a two-choice control under it (its provider or OpenAI). Without a key a notice says so with «Додати ключ» and OpenAI is disabled. With the key removed, the notice says once that moved features run on their previous provider until the key is back; each of those rows says «Було на OpenAI» and carries an amber dot whose note names the OpenAI model it would run («На OpenAI: gpt-transcribe для запису, gpt-live-transcribe наживо»). |
+| 3 | У налаштуваннях кожної функції · In each feature's settings | Under the OpenAI row a list of the six features, each naming its provider now, opens that feature's own settings in place, where OpenAI is one more choice in its existing list (dictation: Faster Whisper, ChatGPT Voice, ElevenLabs Scribe, Soniox, OpenAI). Without a key the OpenAI choice is disabled, its last line «Ключа OpenAI ще немає» and one «Додати ключ» link; with the key removed that line is amber, «Було вибрано, доки ключ не прибрали». «Asks you», memory in chats and learned rules have no provider list today, so their page is new: the feature's line and a two-choice list (OpenRouter or OpenAI). |
 
 Each frame prints its variant number, name and state above the surface, in the
 frame's language. Telegram transcription, call notes and research tools stay
@@ -63,13 +65,16 @@ out (the inventory's «Deferred»).
 The case `openai key services prototype` in
 `src/components/conversation/conversationWindow.browser.test.tsx` bundles the
 fixture with the browser drivers' evidence builder, serves `prototype.css` in
-place of `globals.css`, and frames 1440 × 900 and 390 × 844 (touch), en and uk,
+place of `globals.css`, and frames 1440 × 900, 820 × 900 and 390 × 844 (touch), en and uk,
 light and dark: variant 1 in `none`, `saved`, `switched`, `removed`; variant 2
 in `entry` (the Keys page with its row), `none`, `saved`, `switched`,
 `removed` and `popover` (a remembered feature's dot pressed); variant 3 in
-`none`, `none-page`, `saved`, `switched` (the dictation settings), `removed`
-and `removed-page`; plus each variant's `switched` at 820 px in en and uk,
-light. Frames are named `variant-<n>-<width>-<lang>-<theme>-<state>.png`.
+`none`, `none-page`, `saved`, `switched` (the Keys list),
+`switched-dictation`, `switched-asks`, `switched-voice` (those features' own
+settings), `removed` and `removed-page`. Every state covers all three widths,
+both languages and both themes. Frames are named `variant-<n>-<width>-<lang>-<theme>-<state>.png`.
+Phone rows and footnotes below the fold also get `-detail-<n>` frames after
+scrolling them wholly into view; their text-range checks are in `readings.json`.
 
 ```
 LLV_CONVERSATION_BROWSER_TEST=1 LLV_OPENAI_KEYS_PROTOTYPE=1 CHROME_BIN=<chrome> \
@@ -85,7 +90,10 @@ Before each capture the case checks, from text ranges: the element that defines
 the state (the no-key line or notice, the first or the switched feature, the
 remembered feature, the open note) is whole on the first screen; no text lies
 outside the window or is cut by a clipping ancestor; no line ends in an
-ellipsis; no line ends on a one-letter word; no sideways overflow; the dot's
+ellipsis; no line ends on a one-letter word; no sideways overflow; a group under the OpenAI row nests inside its name and,
+on the phone, ends its switches on the row actions' right edge; a feature's
+lines and choices on the «who serves what» page start on its name, which keeps
+one line; the notice keeps its side inset under the back row; the dot's
 note stays inside the surface; every control is at least 44 px under a finger
 and 24 px under a pointer; a Ukrainian frame carries no Latin word outside
 provider and product names; neighbouring states of one variant, and the three

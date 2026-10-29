@@ -232,15 +232,15 @@ function Notice({ text, action }: { text: string; action?: { label: string; run:
   );
 }
 
-/** The Keys row's dot (KeysSection's StatusDot): a dot whose short note opens in the row's flow, under its line. */
-function Dot({ id, tone, label }: { id: FeatureId; tone: "ok" | "waiting"; label: string }) {
+/** The Keys row's dot (KeysSection's StatusDot), amber: a dot whose short note opens in the row's flow, under its line. */
+function Dot({ id, label }: { id: FeatureId; label: string }) {
   const sheet = useSheet();
   const state = useProto();
   const open = state.openDot === id;
   return (
     <button type="button" data-proto-dot={id} aria-label={label} aria-expanded={open} onClick={() => update({ openDot: open ? null : id })}
       className={`relative inline-flex shrink-0 items-center justify-center rounded-full ${FOCUS} ${sheet ? "-ml-3 h-11 w-11" : "-ml-1 h-6 w-6"}`}>
-      <span aria-hidden className={`h-[7px] w-[7px] rounded-full ${tone === "ok" ? "bg-success" : "bg-warning"}`} />
+      <span aria-hidden className="h-[7px] w-[7px] rounded-full bg-warning" />
     </button>
   );
 }
@@ -284,9 +284,11 @@ function UnderOpenAiRow() {
   const slot = useSlot("variant-1", afterOpenAiRow.find, afterOpenAiRow.place);
   if (!slot) return null;
   const rows = state.keySaved ? FEATURES : FEATURES.filter((feature) => waiting(state, feature.id));
-  const box = sheet ? "ml-4 mr-4 mb-2" : "ml-2 mr-1 mb-1";
+  /* On the phone the group hangs from the OpenAI row's label column (its 44 px dot cell, then the name at 52 px), and each
+     switch's track ends on the row actions' right edge: the rows' right padding gives the switch's 6 px of hit area beyond its track. */
+  const box = sheet ? "ml-[52px] mb-2 [&_[data-proto-feature]]:pr-2.5" : "ml-2 mr-1 mb-1";
   const body = !state.keySaved && rows.length === 0 ? (
-    <div className={`${box} ${WITHIN} ${sheet ? "px-4 py-1" : "px-2 py-0.5"}`}>
+    <div className={`${box} ${WITHIN} ${sheet ? "mr-4 px-4 py-1" : "px-2 py-0.5"}`}>
       <Muted data={{ "data-proto-defining": "" }}>{L("Add the key to choose what OpenAI serves.", "Додайте ключ, щоб вибрати, що обслуговує OpenAI.")}</Muted>
     </div>
   ) : (
@@ -305,7 +307,8 @@ function UnderOpenAiRow() {
             switchProps={{ "data-proto-switch": feature.id, onClick: () => choose(feature.id, on ? base : OPENAI) }} />
         );
       })}
-      {state.keySaved ? <div className={sheet ? "px-4 pb-1" : "px-2 pb-0.5"}><Muted>{CODEX_LINE()}</Muted></div> : null}
+      {/* The group's footnote, apart from the last row: the divider recipe the other variants' pages use. */}
+      {state.keySaved ? <div data-proto-codex="" className={`mt-1 border-t border-border ${sheet ? "ml-4 mr-4 pb-1 pt-2" : "ml-2 mr-1 pb-0.5 pt-1.5"}`}><Muted>{CODEX_LINE()}</Muted></div> : null}
     </div>
   );
   return createPortal(body, slot);
@@ -355,7 +358,7 @@ function Segments({ feature }: { feature: Feature }) {
         return (
           <button key={provider} type="button" role="radio" aria-checked={checked} disabled={refused} data-proto-choice={provider}
             title={refused ? L("Add the OpenAI key first", "Спершу додайте ключ OpenAI") : provider}
-            onClick={() => { if (!checked && !refused) choose(feature.id, provider); }}
+            onClick={() => { if (!refused && (!checked || waiting(state, feature.id))) choose(feature.id, provider); }}
             className={`inline-flex min-w-0 flex-1 items-center justify-center rounded-[6px] px-1.5 font-semibold ${FOCUS} ${sheet ? "min-h-11 text-body" : "text-ui"} ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : refused ? "cursor-not-allowed text-muted opacity-50" : "text-muted hover:text-primary"}`}>
             {provider}
           </button>
@@ -365,41 +368,53 @@ function Segments({ feature }: { feature: Feature }) {
   );
 }
 
+/* What OpenAI runs for a feature: the fact a remembered feature's dot adds to its row (docs/design/openai-key-services.md, «Every caller»). */
+const OPENAI_RUNS: Record<FeatureId, () => string> = {
+  asks: () => L("On OpenAI: gpt-6-luna in Decisions.", "На OpenAI: gpt-6-luna у Decisions."),
+  memory: () => L("On OpenAI: gpt-6-luna in Decisions.", "На OpenAI: gpt-6-luna у Decisions."),
+  rules: () => L("On OpenAI: gpt-6-luna in Decisions.", "На OpenAI: gpt-6-luna у Decisions."),
+  dictation: () => L("On OpenAI: gpt-transcribe for a recording, gpt-live-transcribe live.", "На OpenAI: gpt-transcribe для запису, gpt-live-transcribe наживо."),
+  read: () => L("On OpenAI: gpt-4o-mini-tts.", "На OpenAI: gpt-4o-mini-tts."),
+  voice: () => L("On OpenAI: GPT-Live 1, with gpt-6-luna for its tools.", "На OpenAI: GPT-Live 1, а для інструментів gpt-6-luna."),
+};
+
 function WhoPage() {
   const sheet = useSheet();
   const state = useProto();
+  /* A dot only where a feature needs attention: one moved to OpenAI whose key is gone. When any row has one, every row
+     keeps its cell, so the names, lines and choices of all rows start on one column. */
+  const dots = FEATURES.some((feature) => waiting(state, feature.id));
+  const column = dots ? (sheet ? "pl-9" : "pl-6") : "";
   return (
     <div data-proto-who="" className={`flex flex-col ${sheet ? "gap-1 pb-4" : "gap-0.5 pb-1"}`}>
       {!state.keySaved ? (
-        <div className={sheet ? "px-4 pb-1 pt-2" : "px-2 pb-1"}>
-          <Notice text={state.chosen.size ? L("The OpenAI key was removed.", "Ключ OpenAI прибрано.") : L("There is no OpenAI key yet.", "Ключа OpenAI ще немає.")}
+        <div className={sheet ? "px-4 pb-1 pt-2" : "px-2 pb-1 pt-2"}>
+          <Notice text={state.chosen.size ? L("The OpenAI key was removed. What you moved to OpenAI runs on its previous provider until the key is back.", "Ключ OpenAI прибрано. Перенесене на OpenAI працює на попередньому провайдері, доки ключ не повернеться.") : L("There is no OpenAI key yet.", "Ключа OpenAI ще немає.")}
             action={{ label: L("Add the key", "Додати ключ"), run: openKeyField }} />
         </div>
       ) : (
-        <div className={sheet ? "px-4 pt-2" : "px-2 pt-0.5"}><Muted data={{ "data-proto-served": "" }}>{servedLine(state)}</Muted></div>
+        <div className={sheet ? "px-4 pt-2" : "px-2 pt-2"}><Muted data={{ "data-proto-served": "" }}>{servedLine(state)}</Muted></div>
       )}
       {FEATURES.map((feature, index) => {
-        const now = effective(state, feature.id);
         const held = waiting(state, feature.id);
-        const note = held ? L(`No OpenAI key, so ${now} serves it.`, `Ключа OpenAI немає, тому працює ${now}.`)
-          : L(`${now} serves it.`, `Обслуговує ${now}.`);
+        const note = OPENAI_RUNS[feature.id]();
         const defining = STATE === "switched" ? feature.id === "asks" : state.keySaved && index === 0;
         return (
           <div key={feature.id} data-proto-feature={feature.id} data-proto-defining={defining ? "" : undefined} className={`flex flex-col ${sheet ? "gap-1.5 px-4 py-1.5" : "gap-1 px-2 py-1"}`}>
-            {/* On the phone the two choices stand beside the name; the 232 px panel puts them under it. */}
-            <div className={`flex items-center gap-1 ${sheet ? "min-h-11" : "min-h-6"}`}>
-              <Dot id={feature.id} tone={held ? "waiting" : "ok"} label={`${feature.name}: ${note}`} />
-              <span className={`min-w-0 flex-1 font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{feature.name}</span>
-              {sheet ? <div className="w-[196px] shrink-0"><Segments feature={feature} /></div> : null}
+            {/* The name on its own line, its two choices under it: a Ukrainian name keeps one line at 390 px. On the phone the
+                row keeps 44 px for the dot's hit area and gives back 8 px below it, so a name sits close to its own choices. */}
+            <div className={`flex items-center gap-1 ${sheet ? "-mb-2 min-h-11" : "min-h-6"} ${dots && !held ? column : ""}`}>
+              {held ? <Dot id={feature.id} label={`${feature.name}: ${note}`} /> : null}
+              <span data-proto-name="" className={`min-w-0 flex-1 font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{feature.name}</span>
             </div>
-            {sheet ? null : <Segments feature={feature} />}
-            {feature.id === "dictation" ? <Muted>{L("Recording and live text", "Запис і живий текст")}</Muted> : null}
-            {held ? <Muted>{L("OpenAI returns with the key", "З ключем повернеться OpenAI")}</Muted> : null}
-            <DotNote id={feature.id} text={note} />
+            {feature.id === "dictation" ? <div data-proto-col="" className={`${column} ${sheet ? "" : "-mt-1"}`}><Muted>{L("Recording and live text", "Запис і живий текст")}</Muted></div> : null}
+            <div data-proto-col="" className={column}><Segments feature={feature} /></div>
+            {held ? <p data-proto-held="" data-proto-col="" className={`${column} font-medium text-warning ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{L("Was on OpenAI", "Було на OpenAI")}</p> : null}
+            {state.openDot === feature.id ? <div className={column}><DotNote id={feature.id} text={note} /></div> : null}
           </div>
         );
       })}
-      <div className={`mt-1 border-t border-border ${sheet ? "px-4 pt-2" : "px-2 pt-1"}`}><Muted>{CODEX_LINE()}</Muted></div>
+      <div data-proto-codex="" className={`mt-1 border-t border-border ${sheet ? "px-4 pt-2" : "px-2 pt-1"}`}><div className={column}><Muted>{CODEX_LINE()}</Muted></div></div>
     </div>
   );
 }
@@ -415,8 +430,9 @@ function FeatureLinks() {
     ? "flex min-h-11 w-full items-center gap-3 px-4 py-1 text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
     : `flex w-full min-h-[30px] items-center gap-2 rounded-[8px] px-2 py-1 text-left text-[12px] font-semibold text-primary hover:bg-sunken ${FOCUS}`;
   return createPortal(
-    <div data-proto-group="" className={`${sheet ? "mx-4 mb-2" : "ml-2 mr-1 mb-1"} ${WITHIN} flex flex-col`}>
-      <p data-proto-defining={STATE === "removed" ? undefined : ""} className={`font-semibold text-secondary ${sheet ? "px-4 pt-1 text-label" : "px-2 pt-0.5 text-[11px] leading-[14px]"}`}>
+    /* On the phone the list hangs from the OpenAI row's name column, as variant 1's group does; its chevrons end on the ⋯ glyph's edge. */
+    <div data-proto-group="" className={`${sheet ? "ml-[52px] mr-4 mb-2" : "ml-2 mr-1 mb-1"} ${WITHIN} flex flex-col`}>
+      <p data-proto-defining={STATE === "removed" || STATE === "switched" ? undefined : ""} className={`font-semibold text-secondary ${sheet ? "px-4 pt-1 text-label" : "px-2 pt-0.5 text-[11px] leading-[14px]"}`}>
         {L("Choose OpenAI in each setting", "OpenAI вибирається в налаштуваннях")}
       </p>
       {FEATURES.map((feature) => {
@@ -424,7 +440,7 @@ function FeatureLinks() {
         const held = waiting(state, feature.id);
         const Icon = feature.icon;
         return (
-          <button key={feature.id} type="button" data-proto-open={feature.id} data-proto-defining={STATE === "removed" && feature.id === "asks" ? "" : undefined} className={row} onClick={() => update({ page: feature.id })}>
+          <button key={feature.id} type="button" data-proto-open={feature.id} data-proto-defining={(STATE === "removed" || STATE === "switched") && feature.id === "asks" ? "" : undefined} className={row} onClick={() => update({ page: feature.id })}>
             <Icon className={sheet ? "h-[18px] w-[18px] shrink-0 text-secondary" : "h-4 w-4 shrink-0 text-secondary"} aria-hidden />
             <span className="flex min-w-0 flex-1 flex-col gap-px">
               <span className="truncate leading-4">{feature.name}</span>
@@ -436,12 +452,15 @@ function FeatureLinks() {
           </button>
         );
       })}
+      {state.keySaved ? <div data-proto-codex="" className={`mt-1 border-t border-border ${sheet ? "mx-4 pb-1 pt-2" : "mx-2 pb-0.5 pt-1.5"}`}><Muted>{CODEX_LINE()}</Muted></div> : null}
     </div>,
     slot,
   );
 }
 
-/** One provider row of a feature's own settings: the onboarding dictation step's radio list recipe. */
+/** One provider row of a feature's own settings: the onboarding dictation step's radio list recipe. A choice it cannot take
+    says why on its own last line (amber only when something the operator chose stopped working) and, for a missing OpenAI
+    key, carries the one «Add the key» link: beside the row on the phone, under the words in the 232 px panel. */
 function OptionRow({ feature, option, name }: { feature: Feature; option: Option; name: string }) {
   const sheet = useSheet();
   const state = useProto();
@@ -450,31 +469,28 @@ function OptionRow({ feature, option, name }: { feature: Feature; option: Option
   const openai = option.id === OPENAI;
   const refused = openai && !state.keySaved ? (state.chosen.has(feature.id) ? "removed" : "none") : null;
   const disabled = Boolean(refused) || Boolean(option.disabled);
+  const reason = refused === "none" ? L("No OpenAI key yet", "Ключа OpenAI ще немає")
+    : refused === "removed" ? L("Chosen before the key was removed", "Було вибрано, доки ключ не прибрали")
+    : option.disabled ?? null;
+  const link = refused ? (
+    <button type="button" data-proto-add-key="" onClick={openKeyField}
+      className={`shrink-0 self-start rounded-[6px] font-semibold text-accent hover:underline ${FOCUS} ${sheet ? "min-h-11 px-1 text-label" : "ml-6 min-h-6 text-[11px]"}`}>
+      {L("Add the key", "Додати ключ")}
+    </button>
+  ) : null;
   return (
     <div data-proto-option={option.id} data-proto-defining={openai ? "" : undefined} data-selected={selected ? "" : undefined}
-      className={`flex flex-col gap-1.5 border-b border-border last:border-b-0 ${sheet ? "px-3 py-1.5" : "px-2 py-1.5"} ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
-      <label className={`flex items-start gap-2 ${sheet ? "min-h-11 items-center" : "min-h-6"} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
+      className={`flex border-b border-border last:border-b-0 ${sheet ? "items-center gap-1 px-3 py-1.5" : "flex-col px-2 py-1.5"} ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
+      <label className={`flex min-w-0 flex-1 items-start gap-2 ${sheet ? "min-h-11 items-center" : "min-h-6"} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
         <input type="radio" name={name} value={option.id} checked={selected} disabled={disabled} onChange={() => choose(feature.id, option.id)}
           className={`shrink-0 accent-[var(--color-accent)] ${sheet ? "h-5 w-5" : "mt-0.5 h-4 w-4"} ${disabled ? "opacity-50" : ""}`} />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className={`font-semibold ${disabled ? "text-muted" : "text-primary"} ${sheet ? "text-body" : "text-[12px] leading-4"}`}>{option.name}</span>
-          <span className={`text-secondary ${sheet ? "text-label" : "text-[11px] leading-[14px]"}`}>{option.note}</span>
+          <span className={`font-semibold ${disabled ? "text-muted" : "text-primary"} ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{option.name}</span>
+          <span className={`text-secondary ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{option.note}</span>
+          {reason ? <span data-proto-reason="" className={`font-medium ${refused === "removed" ? "text-warning" : "text-muted"} ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{reason}</span> : null}
         </span>
       </label>
-      {refused === "none" ? (
-        <button type="button" data-proto-add-key="" onClick={openKeyField}
-          className={`self-start rounded-[6px] text-left font-semibold text-warning hover:underline ${FOCUS} ${sheet ? "-mt-2 ml-7 min-h-11 text-label" : "ml-6 min-h-6 text-[11px]"}`}>
-          {L("Add the OpenAI key first", "Спершу додайте ключ OpenAI")}
-        </button>
-      ) : refused === "removed" ? (
-        <div className={`flex flex-col items-start ${sheet ? "ml-7 text-label" : "ml-6 text-[11px] leading-[14px]"}`}>
-          <span className="text-warning">{L(`The key was removed, so ${state.base[feature.id]} serves it. With the key, this choice returns.`, `Ключ прибрано, тому працює ${state.base[feature.id]}. З ключем цей вибір повернеться.`)}</span>
-          <button type="button" data-proto-add-key="" onClick={openKeyField}
-            className={`rounded-[6px] font-semibold text-accent hover:underline ${FOCUS} ${sheet ? "min-h-11" : "min-h-6"}`}>{L("Add the key", "Додати ключ")}</button>
-        </div>
-      ) : option.disabled ? (
-        <span className={`text-muted ${sheet ? "ml-7 text-label" : "ml-6 text-[11px] leading-[14px]"}`}>{option.disabled}</span>
-      ) : null}
+      {link}
     </div>
   );
 }
@@ -482,7 +498,6 @@ function OptionRow({ feature, option, name }: { feature: Feature; option: Option
 function FeaturePage({ feature }: { feature: Feature }) {
   const { t } = useLocale();
   const sheet = useSheet();
-  const state = useProto();
   /* Dictation and voice name their choices with the product's own messages (the onboarding step, the voice settings). */
   const options: Option[] = feature.id === "dictation" ? [
     ...(["local", "chatgpt", "elevenlabs", "soniox"] as const).map((id) => ({
@@ -497,7 +512,7 @@ function FeaturePage({ feature }: { feature: Feature }) {
   const groupLabel = feature.id === "dictation" ? t("onboarding.voice.heading") : feature.id === "voice" ? t("voiceCompanion.settings.backend") : L("Who serves it", "Хто це обслуговує");
   const [voiceOn, setVoiceOn] = useState(true);
   return (
-    <div data-proto-feature-page={feature.id} className={`flex flex-col ${sheet ? "gap-2 px-4 pb-4 pt-1" : "gap-1.5 px-2 pb-1.5"}`}>
+    <div data-proto-feature-page={feature.id} className={`flex flex-col ${sheet ? "gap-2 px-4 pb-4 pt-2" : "gap-1.5 px-2 pb-1.5 pt-2"}`}>
       <Muted>{feature.what}</Muted>
       {feature.id === "voice" ? (
         <div className={`flex items-center gap-2 ${sheet ? "min-h-11" : "min-h-8"}`}>
@@ -509,7 +524,6 @@ function FeaturePage({ feature }: { feature: Feature }) {
       <div role="radiogroup" aria-label={groupLabel} className="flex flex-col overflow-hidden rounded-[12px] border border-border">
         {options.map((option) => <OptionRow key={option.id} feature={feature} option={option} name={`proto-${feature.id}`} />)}
       </div>
-      {state.keySaved && effective(state, feature.id) === OPENAI ? <Muted>{CODEX_LINE()}</Muted> : null}
     </div>
   );
 }
