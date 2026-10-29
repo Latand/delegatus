@@ -280,6 +280,42 @@ test("release receipts replay unchanged and refuse a different policy for the sa
   } finally { await f.close(); }
 });
 
+test.each(["approved", "refused", "changed head", "successor"])("a rehost preserves the release binding after restart: %s", async scenario => {
+  const f = await fixture();
+  try {
+    if (scenario === "refused") f.pipeline.delivery!.active = false;
+    await f.bind(); await f.tag();
+    const launch = `${f.pipeline.id}-attempt-1`;
+    const file = path.join(stageGitReceiptDirectory(launch), "start.json");
+    const before = await fs.readFile(file, "utf8");
+    if (scenario === "changed head") await f.git("commit", "--allow-empty", "-m", "unreviewed rehost head");
+    if (scenario === "successor") await f.bind(true);
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const {restoreStageGitGuard}=await import("./src/lib/git/stageAttemptGuard.ts");
+      const {realExec}=await import("./src/lib/workflows/provision.ts");
+      process.stdout.write(JSON.stringify(await restoreStageGitGuard(process.env.RELEASE_LAUNCH,process.env.RELEASE_WORKTREE,realExec)));
+    `], { cwd: process.cwd(), env: { ...f.source, RELEASE_LAUNCH: launch, RELEASE_WORKTREE: f.lane }, stdout: "pipe", stderr: "pipe" });
+    const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(await fs.readFile(file, "utf8")).toBe(before);
+    if (scenario === "successor") {
+      expect(code).not.toBe(0);
+      expect(error).toContain("superseded by another attempt");
+    } else {
+      expect(code, error).toBe(0);
+      const restored = { ...f.source, ...JSON.parse(output) };
+      const result = await f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...restored, ...agentPublicationIdentityEnv(restored) });
+      if (scenario === "approved") {
+        expect(result.code, result.stderr).toBe(0);
+        expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"], f.source)).stdout.trim()).toBe(f.head);
+      } else {
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain(scenario === "refused" ? "active delivery owner" : "HEAD changed");
+      }
+    }
+    if (scenario !== "approved") expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+  } finally { await f.close(); }
+});
+
 const refusals = [
   "wrong commit", "lightweight", "other version", "nested tag", "moved tag", "deleted tag", "branch", "mixed refs",
   "changed head", "changed publication", "unpublished head", "comparison", "disabled publication", "foreign remote", "foreign owner", "inactive delivery", "missing delivery",
