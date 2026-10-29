@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 afterEach(() => setSystemTime());
@@ -201,7 +202,7 @@ test("a role-memory change after inbox binding fences the stale member", async (
   }
 });
 
-test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordinary-send", "delivery-auto-retry", "read-retry", "delivery-wins", "uncertainty-wins"] as const)(
+test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordinary-send", "delivery-auto-retry", "retry-handoff", "legacy-handoff", "retry-race", "refusal-status-unreadable", "refusal-status-missing", "read-retry", "delivery-wins", "uncertainty-wins"] as const)(
   "stale privacy fencing preserves durable %s evidence", async mode => {
     setSystemTime(new Date("2026-10-29T00:00:00Z"));
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-privacy-evidence-"));
@@ -234,11 +235,38 @@ test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordina
         journal.transitionOperation(operationId, "delivering", { reason: "delivering-owner:earlier@owner:old" });
         if (mode !== "delivering") journal.transitionOperation(operationId, mode, { reason: "prior native outcome" });
       }
-      if (mode === "delivery-auto-retry") {
+      if (mode === "delivery-auto-retry" || mode === "retry-handoff") {
         journal.transitionOperation(operationId, "delivering");
         journal.transitionOperation(operationId, "queued", { reason: "delivery-auto-retry" });
       }
+      if (mode === "retry-handoff") {
+        let held = false;
+        const handoff = new StructuredDeliveryQueue({
+          effects: async () => journal.effectBatch(100, ["runtime.send"]),
+          status: async id => journal.operationResult(id)?.receipt ?? null,
+          hostClaim: async () => "owner:handoff",
+          handoffHeld: () => held,
+          transition: async (id, status, details, options) => {
+            journal.transitionOperation(id, status, details, options);
+            if (status === "delivering") held = true;
+          },
+        }, () => host(async () => { throw new Error("handoff must prevent dispatch"); }));
+        await handoff.drain();
+        expect(journal.operationResult(operationId)?.receipt).toMatchObject({ status: "queued", reason: "automatic-update-handoff" });
+      }
+      if (mode === "legacy-handoff") {
+        journal.transitionOperation(operationId, "delivering");
+        journal.transitionOperation(operationId, "queued", { reason: "delivery-auto-retry" });
+        journal.transitionOperation(operationId, "delivering");
+        journal.transitionOperation(operationId, "queued", { reason: "automatic-update-handoff" });
+      }
       journal.close();
+      if (mode === "legacy-handoff") {
+        const database = new Database(filename);
+        try {
+          database.query("UPDATE operations SET receipt_json = json_remove(receipt_json, '$.deliveryUnverified') WHERE operation_id = ?").run(operationId);
+        } finally { database.close(); }
+      }
       journal = new RuntimeJournal(filename, { structuredHosts: true });
       if (mode === "privacy-unreadable") {
         // Exercise an actual store-read refusal with the fixture's own file.
@@ -247,16 +275,34 @@ test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordina
         changePrivacy();
       }
       let sends = 0;
+      let refuseStatus = false;
+      let refusedReads = 0;
       const queue = new StructuredDeliveryQueue({
         // A stale page retained across restart must still consult the receipt.
         effects: async () => effects,
-        status: async id => journal.operationResult(id)?.receipt ?? null,
+        status: async id => {
+          if (refuseStatus) {
+            refuseStatus = false;
+            refusedReads++;
+            if (mode === "refusal-status-missing") return null;
+            throw new Error("receipt temporarily unreadable");
+          }
+          return journal.operationResult(id)?.receipt ?? null;
+        },
         hostClaim: async () => "owner:current",
         transition: async (id, status, details, options) => {
+          if (mode === "retry-race" && status === "delivering") {
+            // A peer's ambiguous send completes its requeue after our status
+            // snapshot, but before our pending/queued compare-and-set wins.
+            journal.transitionOperation(id, "delivering");
+            const retry: import("./contracts").RuntimeTransitionDetails = { reason: "delivery-auto-retry", deliveryUnverified: true };
+            journal.transitionOperation(id, "queued", retry);
+          }
           if (status === "failed" && (mode === "delivery-wins" || mode === "uncertainty-wins")) {
             journal.transitionOperation(id, mode === "delivery-wins" ? "delivered" : "uncertain", { reason: "native winner" });
           }
           journal.transitionOperation(id, status, details, options);
+          if ((mode === "refusal-status-unreadable" || mode === "refusal-status-missing") && status === "delivering") refuseStatus = true;
         },
       }, () => host(async () => {
         sends++;
@@ -269,6 +315,7 @@ test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordina
       await queue.drain();
       await queue.drain();
       const receipt = journal.operationResult(operationId)!.receipt;
+      if (mode === "refusal-status-unreadable" || mode === "refusal-status-missing") expect(refusedReads).toBe(1);
       expect(sends).toBe(mode === "ordinary-send" || mode === "read-retry" ? 1 : 0);
       expect(receipt.status).toBe(["delivered", "ordinary-send", "delivery-wins"].includes(mode) ? "delivered" : "uncertain");
       if (mode !== "ordinary-send") expect(receipt.reason).not.toBe(ROLE_MEMORY_CHANGED_MESSAGE);

@@ -30,6 +30,33 @@ function sandbox(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `llv-runtime-${name}-`));
 }
 
+test("unverified send evidence survives requeues, attempted clearing, compaction and reopen", () => {
+  const dir = sandbox("unverified-send"), filename = path.join(dir, "events.sqlite");
+  const options = { structuredHosts: true, now: () => Date.parse("2026-10-29T00:00:00Z") };
+  let journal = new RuntimeJournal(filename, options);
+  try {
+    journal.append({ scope: runtimeScope("session", "unverified-send"), kind: "session-status", payload: {
+      sessionKey: { engine: "codex", sessionId: "unverified-thread" }, hostKind: "codex-app-server",
+      host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+    } });
+    const command = { kind: "send" as const, operationId: "unverified-send", idempotencyKey: "unverified-send",
+      conversationId: "unverified-send", text: "durable input", policy: "queue" as const };
+    expect(journal.executeOperation(command).receipt.deliveryUnverified).toBe(false);
+    journal.transitionOperation(command.operationId, "delivering");
+    const retry: import("@/lib/runtime/contracts").RuntimeTransitionDetails = { reason: "delivery-auto-retry", deliveryUnverified: true };
+    journal.transitionOperation(command.operationId, "queued", retry);
+    journal.transitionOperation(command.operationId, "delivering");
+    const clearing = { reason: "automatic-update-handoff", deliveryUnverified: false } as unknown as typeof retry;
+    journal.transitionOperation(command.operationId, "queued", clearing);
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, options);
+    expect(journal.executeOperation(command).receipt).toMatchObject({
+      status: "queued", reason: "automatic-update-handoff", deliveryUnverified: true,
+    });
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("native custody survives receipt and event retention, reopen, and older or foreign terminals", () => {
   const dir = sandbox("native-custody"), filename = path.join(dir, "events.sqlite");
   let journal = new RuntimeJournal(filename, { structuredHosts: true });

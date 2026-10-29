@@ -14,6 +14,7 @@ import { StructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryQueue";
 import type { QueueEntry } from "@/lib/runtime/engineHost";
 import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
 import type { RuntimeSendCommand } from "@/lib/runtime/contracts";
+import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 
 const oldRule = "Preserve fixtureword receipts until the owning operation completes";
 const newRule = "Verify silver orchard evidence before the operation completes";
@@ -26,13 +27,29 @@ function write(rule: string) {
 }
 afterEach(shutdownTaskPageWorker);
 
-test("an immutable stale first-message effect is fenced and launch recovery delivers its successor once", async () => {
+test.each(["before-dispatch", "before-handoff", "after-handoff"] as const)(
+  "an immutable stale first-message effect preserves execution evidence: %s", async timing => {
+  if (process.env.LLV_PRIVACY_TEST_CASE !== timing) {
+    // Registry and membership caches are process-wide. Each production launch
+    // scenario starts with its own handles, including when run by itself.
+    const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "privacy-launch-case-"));
+    try {
+      const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path,
+        "-t", `^an immutable stale first-message effect preserves execution evidence: ${timing}$`], {
+        env: { ...process.env, LLV_STATE_DIR: directory, LLV_PRIVACY_TEST_CASE: timing },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(code, output + errors).toBe(0);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    return;
+  }
   setSystemTime(new Date("2026-10-29T00:00:00Z"));
   savePipelines([]);
   write(oldRule);
-  let nextId = 100;
+  let nextId = 100 + ["before-dispatch", "before-handoff", "after-handoff"].indexOf(timing) * 1000;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`);
-  const root = path.join(process.env.LLV_STATE_DIR!, "persisted-privacy-launch");
+  const root = path.join(process.env.LLV_STATE_DIR!, `persisted-privacy-launch-${timing}`);
   fs.mkdirSync(root, { recursive: true });
   const registry = new AgentRegistry(path.join(root, "registry.json"));
   setAgentRegistryForTests(registry);
@@ -48,12 +65,17 @@ test("an immutable stale first-message effect is fenced and launch recovery deli
   let changed = false;
   let originalEffect: string | undefined;
   let originalCommand: RuntimeSendCommand | undefined;
-  const drain = async () => {
+  let held = false;
+  const drain = async (holdAfterFence = false) => {
     const queue = new StructuredDeliveryQueue({
+      handoffHeld: () => held,
       effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
       status: async id => journal.operationResult(id)?.receipt ?? null,
       hostClaim: async () => "privacy-fixture-owner",
-      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+      transition: async (id, status, details, options) => {
+        journal.transitionOperation(id, status, details, options);
+        if (holdAfterFence && status === "delivering") held = true;
+      },
     }, id => hosts.get(id) ?? null);
     await queue.drain();
   };
@@ -73,6 +95,27 @@ test("an immutable stale first-message effect is fenced and launch recovery deli
         const effect = journal.effectBatch(100, ["runtime.send"])[0]!;
         originalEffect = JSON.stringify(effect);
         originalCommand = structuredClone(command);
+        if (timing === "before-handoff") {
+          await drain(true);
+          expect(journal.operationResult(result.operationId)?.receipt).toMatchObject({ status: "queued", reason: "automatic-update-handoff" });
+          expect(sent).toHaveLength(0);
+          originalEffect = JSON.stringify(journal.effectBatch(100, ["runtime.send"])[0]!);
+          held = false;
+        }
+        if (timing === "after-handoff") {
+          // The host accepts the key once, but cannot confirm it. The next
+          // drain acquires delivery before the update hold becomes visible.
+          await drain();
+          expect(journal.operationResult(result.operationId)?.receipt).toMatchObject({ status: "queued", reason: "delivery-auto-retry" });
+          expect(sent).toHaveLength(1);
+          await drain(true);
+          expect(journal.operationResult(result.operationId)?.receipt).toMatchObject({ status: "queued", reason: "automatic-update-handoff" });
+          const retained = journal.effectBatch(100, ["runtime.send"])[0]!;
+          expect(retained.payload.text).toBe(command.text);
+          expect(retained.payload.roleMemoryRevision).toBe(command.roleMemoryRevision);
+          originalEffect = JSON.stringify(retained);
+          held = false;
+        }
         write(newRule);
         // A new consumer process gets only the unchanged, admitted payload.
         journal.close();
@@ -109,11 +152,12 @@ test("an immutable stale first-message effect is fenced and launch recovery deli
         expect(code, errors).toBe(0);
         const observed = JSON.parse(output);
         expect(observed.sends).toBe(0);
-        expect(observed.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+        expect(observed.receipt.status).toBe(timing === "after-handoff" ? "uncertain" : "failed");
+        if (timing !== "after-handoff") expect(observed.receipt.reason).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
       }
       await drain();
       if (result.operationId === `spawn_message_${launches[0]}`) {
-        expect(journal.operationResult(result.operationId)?.receipt.status).toBe("failed");
+        expect(journal.operationResult(result.operationId)?.receipt.status).toBe(timing === "after-handoff" ? "uncertain" : "failed");
       }
       // The admission ACK retains the receipt produced by that transaction;
       // dispatch settlement is observed through the subsequent status read.
@@ -141,9 +185,10 @@ test("an immutable stale first-message effect is fenced and launch recovery deli
       interrupt: async () => {}, answer: async () => {}, release: async () => { dead = true; },
       send: async (entry, _proof, authorize) => {
         authorize?.();
-        sent.push(entry);
+        if (!sent.some(previous => previous.id === entry.id)) sent.push(entry);
         fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n"
           + JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: entry.text } }) + "\n");
+        if (timing === "after-handoff") throw new Error("request timed out: thread/read");
         return { outcome: "turn-started", turnId: "privacy-current-turn" };
       },
     };
@@ -178,9 +223,28 @@ test("an immutable stale first-message effect is fenced and launch recovery deli
     fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
     await tickPipelines([], h.ports);
     expect(changed).toBe(true);
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches).toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
+    if (timing === "after-handoff") {
+      expect(journal.operationResult(originalId)?.receipt.status).toBe("uncertain");
+      expect(defaults.spawnReceipt(launches[0]!)?.roleMemoryRetrySafe).not.toBe(true);
+      journal.close();
+      journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+      expect(journal.executeOperation(originalCommand!).receipt.status).toBe("uncertain");
+      const receipt = await resolveSendReceipt(originalId, { registry, client });
+      expect(receipt).toMatchObject({ resend: "verify-first", duplicateRisk: true });
+      for (let pass = 0; pass < 3; pass++) {
+        await drain();
+        h.advanceWallClock(60_000);
+        await tickPipelines([], h.ports);
+      }
+      expect(launches).toHaveLength(1);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.text).toBe(originalCommand!.text);
+      expect(originalCommand!.roleMemoryRevision).not.toBe(roleMemoryRevisionToken());
+      return;
+    }
     expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
     expect(defaults.spawnReceipt(launches[0]!)).toMatchObject({ state: "failed", roleMemoryRetrySafe: true });
     // A fresh reader cannot revive the fenced effect or reset a retry counter.
