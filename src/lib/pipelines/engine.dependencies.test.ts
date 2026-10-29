@@ -10,9 +10,12 @@ test.each(["missing", "lagging-link", "matching", "unrepairable"])("resumed stag
     const pipeline = await create(h.ports, [
       { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
     ] as never, { repoDir: f.repoDir });
+    await f.run(["git", "worktree", "move", f.worktreeDir, pipeline.worktreeDir]);
+    f.worktreeDir = pipeline.worktreeDir;
+    f.pipeline.worktreeDir = pipeline.worktreeDir;
+    await f.run(["git", "branch", "--move", pipeline.branch], f.worktreeDir);
     // Resume a persisted, already-provisioned lane through the real controller.
-    Object.assign(pipeline, { worktreeDir: f.worktreeDir, branch: f.pipeline.branch,
-      baseBranch: f.pipeline.baseBranch, baseRef: f.pipeline.baseRef,
+    Object.assign(pipeline, { baseBranch: f.pipeline.baseBranch, baseRef: f.pipeline.baseRef,
       lastPassedCommit: f.pipeline.baseRef, state: "running" });
     const source = path.join(f.repoDir, "node_modules"), local = path.join(f.worktreeDir, "node_modules");
     if (shape === "matching") await prepareWorktreeDependencies(f.pipeline);
