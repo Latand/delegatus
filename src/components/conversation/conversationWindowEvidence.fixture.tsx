@@ -1251,6 +1251,14 @@ function agentImageFeeds(): { engine: keyof typeof IMAGE_FILES; items: Item[] }[
       output: [{ type: "input_text", text: "Script completed" }, { type: "input_image", image_url: `data:image/png;base64,${chart}` }] } }),
     JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageView", id: "exec-view-1", path: "/w/shot.png" } } }),
     JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageView", id: "exec-view-2", path: "/w/deleted.png" } } }),
+    /* Generated pictures in both 0.164 representations, an attachment-store id alone and the migration's id beside an
+       empty result, and an older inline result; each draws its saved file. */
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageGeneration", id: "image-file", status: "completed",
+      revisedPrompt: "A compact widget", fileId: "file_generated_1", savedPath: "/w/generated/widget.png" } } }),
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageGeneration", id: "image-migrated", status: "completed",
+      revisedPrompt: "The same widget, migrated", fileId: "file_generated_2", result: "", savedPath: "/w/generated/migrated.png" } } }),
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageGeneration", id: "image-inline", status: "completed",
+      revisedPrompt: "An older inline widget", result: chart, savedPath: "/w/generated/inline.png" } } }),
   ];
   const copilotRecord = (type: string, data: Record<string, unknown>) => JSON.stringify({ type, data, id: `${type}-1`, timestamp: at, parentId: null });
   const copilot = [
@@ -1503,6 +1511,16 @@ const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
   /* A Fable stage whose transcript names the release the alias resolved to. */
   fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
+  /* Saved on a Codex model fresh menus retired: it stays listed and checked. */
+  "legacy-sol": { engine: "codex", model: "gpt-5.6-sol", launchModel: "gpt-5.6-sol" },
+  /* The new Terra at its top effort tier. */
+  "terra-ultra": { engine: "codex", model: "gpt-6.1-terra", launchModel: "gpt-6.1-terra", effort: "ultra" },
+  /* Luna's ladder tops out at max. */
+  "luna-max": { engine: "codex", model: "gpt-6-luna", launchModel: "gpt-6-luna", effort: "max" },
+  /* A Claude conversation saved on the retired Haiku 4.5. */
+  "haiku-legacy": { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-haiku-4-5-20251001", launchModel: "claude-haiku-4-5", effort: "max" },
+  /* Haiku 5.5 launched through the alias: one Haiku 5.5 row. */
+  haiku: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-haiku-5-5", launchModel: "haiku" },
 };
 
 function modelFaceFile(which: string): FileEntry {
