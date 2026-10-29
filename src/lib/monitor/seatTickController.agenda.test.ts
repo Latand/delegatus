@@ -1,6 +1,105 @@
 import { expect, spyOn, test, fs, path, spawn, Database, SANDBOX, SESSIONS, SEAT_TICK_NO_SELF_SCHEDULE, reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, readSeatTickState, writeSeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, outcomeIdentity, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, ORCHESTRATOR_SHIPPED_CLOCK_OPENING, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, OVERDUE, outstandingWake, OPEN_LANE, terminalEvent, FINISHED_LANE, standingGap, MONITOR_PROMPT, PROMPT_HEADING, seatTickNoteRevisionForTest, promptSettings, LEDGER_NOTE, busyBoard, CURRENT_SEAT, REPLACEMENT_PROMPT, reservationLayer, HELD, heldWake, nextCheck, childFixture, childRig, ago, recordedWake } from "./seatTickController.fixture";
 import type { SeatTickRunRecord, AgentLivenessRecord, ConversationMessage } from "./seatTickController.fixture";
 
+for (const issueRead of ["pending", "refused"] as const) test(`a ${issueRead} sweep issue read cannot hold a due proposal, refusal journal or refreshed replay`, async () => {
+  const { sweepForgeLinks, FORGE_LIVE_INTERVAL_MS } = await import("@/lib/forge/sweep");
+  const { forgeCacheFile, resetForgeCacheForTests } = await import("@/lib/forge/cache");
+  const { recordProjectRemote } = await import("@/lib/projects/aliases");
+  const evidence = await import("./githubEvidence");
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(SANDBOX, "proposal-cache-"));
+  process.env.LLV_STATE_DIR = root;
+  const project = `repo-${"c".repeat(32)}`;
+  const repository = "acme/proposals";
+  recordProjectRemote({ project, canonicalRemote: `github.com/${repository}` });
+  const checkedAt = NOW - 10 * MINUTE;
+  let clock = checkedAt;
+  let issueCalls = 0;
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const issueRPC = async () => {
+    issueCalls++;
+    entered();
+    if (issueRead === "pending") await held;
+    throw new Error("issue service unavailable");
+  };
+  const ports = { now: () => clock, loadPipelines: () => [], loadTasks: () => [], loadSeatProjects: () => [project], file: forgeCacheFile(),
+    run: async (args: string[]) => args[0] === "issue"
+      ? JSON.stringify([{ number: 3, title: "Cached design", labels: [{ name: "design" }], updatedAt: null }]) : "[]" };
+  let sweep: Promise<string[]> | undefined;
+  let liveRead: ReturnType<typeof spyOn> | undefined;
+  try {
+    await sweepForgeLinks(ports);
+    resetForgeCacheForTests();
+    clock += FORGE_LIVE_INTERVAL_MS;
+    ports.run = async args => args[0] === "issue" ? issueRPC() : "[]";
+    // Positive control: the real sweep reaches the same unavailable issue RPC.
+    sweep = sweepForgeLinks(ports);
+    await started;
+    liveRead = spyOn(evidence, "openIssuesForProposal").mockImplementation(issueRPC);
+    const stateFile = path.join(root, "tick.json");
+    writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7 }, stateFile);
+    const check = (retry: boolean) => {
+      const rig = harness({ stateFile, now: NOW + (retry ? 5 * MINUTE : 0), wakeState: "absent",
+        pipelines: FINISHED_LANE.map(lane => ({ ...lane, project })),
+        settings: { ...defaultSeatTickSettings(project), monitorPrompt: "" },
+        ...(retry ? {} : { delivery: { ok: false as const, outcome: "failed" as const, error: "delivery refused", status: 503 } }) });
+      delete rig.deps.proposalIssues;
+      rig.deps.workBudgetMs = 2_000;
+      rig.deps.appendRecord = record => { appendSeatTickRecord(record); rig.journal.push(record); };
+      rig.deps.readRecords = (key, limit) => readSeatTickRecords(limit, undefined, key);
+      return rig;
+    };
+    const first = check(false);
+    const record = await runSeatTickCheck(project, first.deps);
+    expect(first.sent).toHaveLength(1);
+    expect(record?.delivery?.outcome).toBe("failed");
+    expect(readSeatTickRecords(10, undefined, project).some(row => row.delivery?.outcome === "failed")).toBe(true);
+    const original = readSeatTickState(project, stateFile).outstandingWake!;
+    expect(original).toBeTruthy();
+    expect(first.sent[0]!.text).toContain(`- #3 Cached design [design] (cached ${new Date(checkedAt).toISOString()}; age 10m)`);
+    const retry = check(true);
+    await runSeatTickCheck(project, retry.deps);
+    expect(retry.sent).toHaveLength(1);
+    expect(retry.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+    expect(retry.sent[0]!.text).toContain("age 15m");
+    expect(readSeatTickState(project, stateFile).outstandingWake).toBeNull();
+    expect(readSeatTickRecords(10, undefined, project).some(row => row.delivery?.outcome === "landed")).toBe(true);
+    expect(issueCalls).toBe(1);
+    expect(liveRead).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await sweep;
+    liveRead?.mockRestore();
+    resetForgeCacheForTests();
+    process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+for (const remote of [null, "gitlab.com/acme/proposals", "github.com/acme/uncached"]) test(`proposal fallback delivers without issue RPC for ${remote ?? "a directory"}`, async () => {
+  const { recordProjectRemote } = await import("@/lib/projects/aliases");
+  const evidence = await import("./githubEvidence");
+  const project = `repo-${"d".repeat(32)}`;
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "proposal-fallback-"));
+  const rpc = spyOn(evidence, "openIssuesForProposal").mockRejectedValue(new Error("unexpected issue RPC"));
+  try {
+    if (remote) recordProjectRemote({ project, canonicalRemote: remote });
+    const rig = harness({ settings: { ...defaultSeatTickSettings(project), monitorPrompt: "" } });
+    delete rig.deps.proposalIssues;
+    await runSeatTickCheck(project, rig.deps);
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]!.text).toContain("(none readable; rank from the board and the signals below)");
+    expect(rpc).not.toHaveBeenCalled();
+    expect(rig.journal.some(record => record.delivery?.outcome === "delivered")).toBe(true);
+  } finally {
+    rpc.mockRestore();
+    process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 function budgetLanes(long = false, count = 20) {
   return Array.from({ length: count }, (_, n) => ({
     id: `lane${String(n).padStart(4, "0")}`,

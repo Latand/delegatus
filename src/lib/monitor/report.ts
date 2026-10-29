@@ -8,6 +8,7 @@ import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } fr
 
 import { MONITOR_REF_PREFIX, seatTickProposalRef, stateLabel } from "./cards";
 import type { ProposalIssue } from "./githubEvidence";
+
 import { redactMonitorText } from "./redact";
 import { MONITOR_MARKER } from "./requests";
 import type {
@@ -23,6 +24,12 @@ import type {
   SeatTickUnreadableChild,
   SeatTickWakeReason,
 } from "./types";
+
+function proposalObservation(issue: ProposalIssue, snapshotAt?: string): string {
+  if (!issue.checkedAt) return "";
+  const age = snapshotAt ? Date.parse(snapshotAt) - Date.parse(issue.checkedAt) : Number.NaN;
+  return ` (cached ${issue.checkedAt}${Number.isFinite(age) ? `; age ${Math.max(0, Math.floor(age / 60_000))}m` : ""})`;
+}
 
 /**
  * The message the monitor delivers to the orchestrator (issue #741).
@@ -335,7 +342,7 @@ export function seatTickWakeMessage(input: {
   if (input.gaps && input.gaps.length > 0) {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
-  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]`)] : [];
+  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]${proposalObservation(issue, input.snapshotAt)}`)] : [];
   if (!input.seatOwnedLanes?.length) lines.push(...issues);
   lines.push("", "Items:", ...input.items.map(item => input.compactCatchUpManifest
     ? item.manifestLine ?? `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}`
@@ -556,7 +563,7 @@ export function seatTickProposalMessage(input: {
     "",
     "Open issues:",
     ...(input.issues.length > 0
-      ? input.issues.map((issue) => `- #${issue.number} ${issue.title}${issue.labels.length > 0 ? ` [${issue.labels.join(", ")}]` : ""}`)
+      ? input.issues.map((issue) => `- #${issue.number} ${issue.title}${issue.labels.length > 0 ? ` [${issue.labels.join(", ")}]` : ""}${proposalObservation(issue, input.snapshotAt)}`)
       : ["- (none readable; rank from the board and the signals below)"]),
   ];
   if (input.signals.length > 0) {

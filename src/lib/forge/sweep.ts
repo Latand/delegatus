@@ -4,8 +4,9 @@ import os from "node:os";
 import { githubRunner, githubUnavailableFromError, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 
-import { emptyRepositoryEntry, forgeCacheFile, clearForgeNudges, pendingForgeNudges, readForgeCache, updateForgeCache, type ForgeRepositoryEntry, type ForgeSweepError, type StoredPullRequest } from "./cache";
+import { emptyRepositoryEntry, forgeCacheFile, clearForgeNudges, pendingForgeNudges, readForgeCache, updateForgeCache, proposalIssueSnapshot, PROPOSAL_ISSUE_LIMIT, type ForgeRepositoryEntry, type ForgeSweepError, type StoredPullRequest } from "./cache";
 import { pipelineRepository, taskRepository } from "./resolve";
 import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
 
@@ -15,6 +16,8 @@ import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
  * second, so the sweep reads each repository instead of each lane. It takes no
  * pipeline or task lock and writes nothing but the forge cache: records are
  * read through the same lease-free loads a stage report uses.
+ * Seated repositories also replace one bounded proposal-issue page here;
+ * wake composition reads that persisted observation without contacting GitHub.
  */
 
 export const FORGE_LIVE_INTERVAL_MS = 3 * 60_000;
@@ -35,6 +38,7 @@ export interface ForgeSweepPorts {
   run: GithubRunner;
   loadPipelines: () => readonly Pipeline[];
   loadTasks: () => readonly BoardTask[];
+  loadSeatProjects?: () => readonly string[];
   file?: string;
   log?: (message: string, error?: unknown) => void;
 }
@@ -87,7 +91,7 @@ function repositoryOfUrl(url: string): string | null {
   return match ? githubRepositoryOfRemote(`github.com/${match[1]}/${match[2]}`) : null;
 }
 
-type Demand = { live: boolean; numbers: Set<number> };
+type Demand = { live: boolean; numbers: Set<number>; proposals?: boolean };
 
 /** Every repository the board's records name, whether it holds something that
     can still change, and the numbers a record names outright. */
@@ -109,6 +113,10 @@ function collectDemand(ports: ForgeSweepPorts): Map<string, Demand> {
     if (!task.workLinks?.length) continue;
     want(taskRepository(task));
     for (const link of task.workLinks) want(link.repository)?.numbers.add(link.number);
+  }
+  for (const project of ports.loadSeatProjects?.() ?? []) {
+    const own = want(taskRepository({ project }));
+    if (own) { own.live = true; own.proposals = true; }
   }
   return demand;
 }
@@ -270,6 +278,7 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
     if (!alias || alias === name) continue;
     const target = demand.get(alias) ?? { live: false, numbers: new Set<number>() };
     target.live ||= wanted.live;
+    target.proposals ||= wanted.proposals;
     for (const number of wanted.numbers) target.numbers.add(number);
     demand.set(alias, target);
     demand.delete(name);
@@ -280,6 +289,22 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
     const startedAt = new Date(ports.now()).toISOString();
     const outcome = await readRepository(name, readForgeCache(file).data.repositories[name], wanted, ports, startedAt);
     updateForgeCache((next) => applyOutcome(next.repositories[name] ??= emptyRepositoryEntry(), outcome, startedAt), file);
+    // Commit PR evidence first: a pending proposal read cannot hold it back.
+    // The existing runner gives this separate request its own 20-second bound.
+    if (wanted.proposals) {
+      const checkedAt = new Date(ports.now()).toISOString();
+      try {
+        const repository = readForgeCache(file).data.repositories[name]?.canonical ?? name;
+        const rows: unknown = JSON.parse(await ports.run(["issue", "list", "--repo", repository, "--state", "open", "--limit", String(PROPOSAL_ISSUE_LIMIT), "--json", "number,title,labels,updatedAt"]));
+        const proposals = proposalIssueSnapshot({ checkedAt, issues: Array.isArray(rows) ? rows.slice(0, PROPOSAL_ISSUE_LIMIT).map(row => ({ ...row,
+          labels: Array.isArray(row?.labels) ? row.labels.slice(0, 20).map((label: { name?: unknown } | null) => label?.name) : null })) : null });
+        if (!proposals) throw new Error("malformed proposal issues");
+        updateForgeCache(next => { (next.repositories[name] ??= emptyRepositoryEntry()).proposals = proposals; }, file);
+      } catch (error) {
+        // Keep the previous observation and its age, including after restart.
+        ports.log?.(`[forge proposals] ${name}: unavailable`, error instanceof Error ? error.name : "unknown");
+      }
+    }
     clearForgeNudges([name, data.repositories[name]?.canonical ?? name]);
     if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.error}`);
     read.push(name);
@@ -305,6 +330,7 @@ export function scheduleForgeSweep(ports: Partial<ForgeSweepPorts> & Pick<ForgeS
   const run = sweepForgeLinks({
     now: ports.now ?? Date.now,
     run: ports.run ?? githubRunner(os.tmpdir(), FORGE_TIMEOUT_MS),
+    loadSeatProjects: () => activeSeatsByCurrentProject().map(seat => seat.project),
     ...ports,
     log,
   }).catch((error) => log("[forge links] sweep failed", error)).finally(() => {

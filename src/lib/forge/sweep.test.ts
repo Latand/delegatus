@@ -2,28 +2,34 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests } from "./cache";
+import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests, PROPOSAL_ISSUE_LIMIT } from "./cache";
+import { recordProjectRemote } from "@/lib/projects/aliases";
 import { FORGE_FILL_LIMIT, FORGE_IDLE_INTERVAL_MS, FORGE_LIVE_INTERVAL_MS, FORGE_NUDGE_DEBOUNCE_MS, FORGE_PAGE_LIMIT, sweepForgeLinks, type ForgeSweepPorts } from "./sweep";
 
 /* The forge sweep (#2059) against an injected `gh` and clock, in a private
-   directory: invented repositories and branches, no network, no state store. */
+   directory: invented repositories and branches, no network. */
 
 const REPO = "acme/widgets";
 const T0 = Date.parse("2026-09-23T10:00:00Z");
 
 let dir: string;
 let file: string;
+let previousState: string | undefined;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-sweep-"));
   file = path.join(dir, "forge-links.json");
+  previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = dir;
   resetForgeCacheForTests();
 });
 afterEach(() => {
+  process.env.LLV_STATE_DIR = previousState;
   fs.rmSync(dir, { recursive: true, force: true });
   resetForgeCacheForTests();
 });
@@ -86,6 +92,67 @@ const entry = () => readForgeCache(file).data.repositories[REPO]!;
 const isSearch = (args: string[]) => args.includes("--search");
 
 describe("the sweep", () => {
+  test("seated repositories without lanes refresh a bounded replaceable proposal page", async () => {
+    const project = `repo-${"a".repeat(32)}`;
+    recordProjectRemote({ project, canonicalRemote: "github.com/acme/widgets" });
+    let issues = Array.from({ length: PROPOSAL_ISSUE_LIMIT + 5 }, (_, index) => ({ number: index + 1,
+      title: "x".repeat(250), labels: Array.from({ length: 25 }, () => ({ name: "y".repeat(70) })), updatedAt: null }));
+    const h = harness(args => args[0] === "issue" ? issues : [], { pipelines: [] });
+    h.ports.loadSeatProjects = () => [project];
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(h.calls.filter(args => args[0] === "issue")).toEqual([["issue", "list", "--repo", REPO, "--state", "open", "--limit", "40", "--json", "number,title,labels,updatedAt"]]);
+    resetForgeCacheForTests();
+    const proposals = forgeCacheView(file).repository(REPO)!.proposalIssues!;
+    expect(proposals).toHaveLength(PROPOSAL_ISSUE_LIMIT);
+    expect(proposals[0]).toEqual({ number: 1, title: "x".repeat(200), labels: Array(20).fill("y".repeat(60)), updatedAt: null, checkedAt: new Date(T0).toISOString() });
+    const script = `import { forgeCacheView } from ${JSON.stringify(path.join(import.meta.dir, "cache.ts"))};
+      console.log(JSON.stringify(forgeCacheView(process.argv[1]).repository("acme/widgets").proposalIssues));`;
+    const child = spawn(process.execPath, ["-e", script, file], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
+    let output = "", error = "";
+    child.stdout!.on("data", chunk => { output += chunk; });
+    child.stderr!.on("data", chunk => { error = (error + chunk).slice(-8_000); });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", code => code === 0 ? resolve() : reject(new Error(`fresh cache reader exited ${code}: ${error}`)));
+    });
+    expect(JSON.parse(output)).toEqual(proposals);
+    issues = [];
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(entry().proposals).toEqual({ checkedAt: new Date(T0 + FORGE_LIVE_INTERVAL_MS).toISOString(), issues: [] });
+  });
+
+  for (const failure of ["refused", "timed-out", "malformed"] as const) test(`proposal ${failure} keeps the prior age and PR membership`, async () => {
+    const project = `repo-${"a".repeat(32)}`;
+    recordProjectRemote({ project, canonicalRemote: "github.com/acme/widgets" });
+    let fail = false;
+    const h = harness(args => {
+      if (args[0] !== "issue") return [row({ number: 7, closes: [3] })];
+      if (!fail) return [{ number: 3, title: "A proposal", labels: [{ name: "design" }], updatedAt: null }];
+      if (failure === "malformed") return [{ number: 3, title: "Missing labels" }];
+      return Object.assign(new Error("issue read failed"), failure === "timed-out" ? { killed: true, signal: "SIGTERM" } : {});
+    });
+    h.ports.loadSeatProjects = () => [project];
+    await h.sweep();
+    const prior = entry().proposals;
+    fail = true;
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    resetForgeCacheForTests();
+    expect(entry().proposals).toEqual(prior);
+    expect(entry().lastSweepAt).toBe(new Date(T0 + FORGE_LIVE_INTERVAL_MS).toISOString());
+    expect(entry().prs["7"]!.closes).toEqual([3]);
+    expect(forgeCacheView(file).repository(REPO)!.isIssue(7)).toBe(false);
+  });
+
+  test("directory and other-forge seats make no proposal request", async () => {
+    recordProjectRemote({ project: `repo-${"b".repeat(32)}`, canonicalRemote: "gitlab.com/acme/widgets" });
+    const h = harness(() => { throw new Error("unexpected network request"); }, { pipelines: [] });
+    h.ports.loadSeatProjects = () => ["dir-work", `repo-${"b".repeat(32)}`];
+    expect(await h.sweep()).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
   test("gh 2.23 rejecting closingIssuesReferences still completes the repository cache", async () => {
     const h = harness((args) => {
       if (args[0] === "api" && args[1] === "graphql") {
