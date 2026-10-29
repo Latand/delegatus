@@ -35,10 +35,13 @@ test("media metadata and extracted documents survive negotiated parsing only", (
   expect(legacy.input.documents[0]).toEqual({ title: "Document", text: "Extracted" });
 });
 test("all inbound metadata limits fail closed with exact errors", () => {
-  validateMediaInput(request(Array.from({ length: 4 }, (_, i) => ref(`media_${i}`, 10 * MiB))));
-  refuses(() => validateMediaInput(request(Array.from({ length: 5 }, (_, i) => ref(`media_${i}`)))), "too_large", 413);
+  const album = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 10 * MiB)));
+  expect(validateMediaInput(requestSchema.parse(album))).toHaveLength(10);
+  const extra = request(Array.from({ length: 11 }, (_, i) => ref(`media_${i}`)));
+  refuses(() => validateMediaInput(extra), "too_large", 413);
+  expect(requestSchema.safeParse(extra).success).toBe(false);
   refuses(() => validateMediaInput(request([ref("media_a", 20 * MiB + 1)])), "too_large", 413);
-  refuses(() => validateMediaInput(request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB), ref("media_c", 1)])), "too_large", 413);
+  refuses(() => validateMediaInput(request([...Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)])), "too_large", 413);
   for (const changed of [{ ref: "../secret" }, { ref: "https://example.com/x" }, { filename: "../secret" }, { filename: "a\\secret" }, { filename: "a\u0000b" }, { byte_size: 0 }, { byte_size: undefined }, { mime_type: undefined }, { expires_at: undefined }, { expires_at: "bad" }]) {
     const r = request(); Object.assign(r.input.conversation[0]!.media![0]!, changed);
     refuses(() => validateMediaInput(r), "malformed", 400);
@@ -160,7 +163,7 @@ test("Windows device names and unsafe characters are sanitized on every host pla
 test("any-document feature preserves metadata limits, photo restrictions and unavailable extraction", () => {
   const binary = (id: string, size: number) => ({ ...ref(id, size), mime_type: "application/octet-stream" });
   validateMediaInput(documentRequest([binary("a", 20 * MiB), binary("b", 20 * MiB)]));
-  for (const items of [[binary("a", 20 * MiB + 1)], [binary("a", 20 * MiB), binary("b", 20 * MiB), binary("c", 1)], Array.from({ length: 5 }, (_, i) => binary(`m_${i}`, 1))]) {
+  for (const items of [[binary("a", 20 * MiB + 1)], [...Array.from({ length: 5 }, (_, i) => binary(`m_${i}`, 20 * MiB)), binary("extra", 1)], Array.from({ length: 11 }, (_, i) => binary(`m_${i}`, 1))]) {
     refuses(() => validateMediaInput(documentRequest(items)), "too_large", 413);
   }
   for (const mime_type of ["application/octet-stream", "image/svg+xml", "application/pdf", "text/plain"]) {
@@ -285,7 +288,7 @@ test("PDF memory exhaustion kills only the bounded parser process and removes al
   } finally { await f.close(); }
 });
 test.each([false, true])("stream accepts exact file and total limits without accumulating original buffers (any-document=%s)", async enabled => {
-  const r = request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)]);
+  const r = request(Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
   const mime = enabled ? "application/octet-stream" : "text/plain";
   if (enabled) { r.features!.push(RELAY_MEDIA_ANY_DOCUMENT); for (const media of r.input.conversation[0]!.media!) media.mime_type = mime; }
   const f = await fixture(async (_req, res) => {
@@ -294,16 +297,16 @@ test.each([false, true])("stream accepts exact file and total limits without acc
     for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
   });
-  try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(2); await result.dispose(); }
+  try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(5); await result.dispose(); }
   finally { await f.close(); }
 });
 test("stream byte budgets reset after restarting the real downloader process", async () => {
   let downloads = 0;
   const f = await fixture(async (_req, res) => {
     downloads++;
-    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 20 * MiB });
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 10 * MiB });
     const chunk = Buffer.alloc(65536, 120);
-    for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
+    for (let i = 0; i < 160; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
   });
   const script = `import { prepareInboundMedia } from "./src/lib/externalRelay/mediaInput.ts";
@@ -319,14 +322,14 @@ test("stream byte budgets reset after restarting the real downloader process", a
       const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env,
         HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), LLV_STATE_DIR: path.join(sandbox, "state"), TMPDIR: path.join(sandbox, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)].map(media => ({ ...media, mime_type: "application/octet-stream" }))), directory: f.directory }));
+      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest(Array.from({ length: 10 }, (_, i) => ({ ...ref(`media_${i}`, 10 * MiB), mime_type: "application/octet-stream" }))), directory: f.directory }));
       child.stdin.end();
       const [output, errors, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ status, errors }).toEqual({ status: 0, errors: "" });
-      expect(output.trim()).toBe("2");
+      expect(output.trim()).toBe("10");
       expect((await fs.readdir(f.directory)).some(name => name.startsWith("media-"))).toBe(false);
     }
-    expect(downloads).toBe(4);
+    expect(downloads).toBe(20);
   } finally { await f.close(); }
 });
 test.each([false, true])("hostile responses preserve errors and delete every partial file (any-document=%s)", async enabled => {
@@ -483,12 +486,85 @@ test("Claude image input spools a native stream-json frame and preserves image b
   const f = await fixture((_req, res) => { res.end(); });
   try {
     const image = path.join(f.directory, "image.png");
-    const bytes = Buffer.alloc(98305, 42); await fs.writeFile(image, bytes);
+    const sharp = (await import("sharp")).default;
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+    const bytes = Buffer.concat([png, Buffer.alloc(98305 - png.length)]); await fs.writeFile(image, bytes);
     const input = await writeInboundAgentInput([{ ref: "photo", path: image, kind: "photo", mime_type: "image/png" }], "Read the attached photo", f.directory, new AbortController().signal, () => {});
     const frame = JSON.parse(await fs.readFile(input!, "utf8"));
     expect(frame).toMatchObject({ type: "user", message: { role: "user", content: [{ type: "text", text: "Read the attached photo" }, { type: "image", source: { type: "base64", media_type: "image/png" } }] } });
     expect(Buffer.from(frame.message.content[1].source.data, "base64")).toEqual(bytes);
     expect((await fs.stat(input!)).mode & 0o777).toBe(0o600);
+  } finally { await f.close(); }
+});
+
+test("Claude previews bound noisy large images, preserve originals and emit decodable JPEG", async () => {
+  const f = await fixture((_req, res) => { res.end(); });
+  try {
+    const sharp = (await import("sharp")).default;
+    const pixels = Buffer.alloc(2048 * 2048 * 3);
+    let seed = 17;
+    for (let i = 0; i < pixels.length; i++) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; pixels[i] = seed & 255; }
+    const original = await sharp(pixels, { raw: { width: 2048, height: 2048, channels: 3 } }).png().toBuffer();
+    const filename = path.join(f.directory, "large.png"); await fs.writeFile(filename, original);
+    const input = await writeInboundAgentInput([{ ref: "large", path: filename, kind: "photo", mime_type: "image/png" }], "Read image", f.directory, options().signal, () => {});
+    const source = JSON.parse(await fs.readFile(input!, "utf8")).message.content[1].source;
+    expect(source.media_type).toBe("image/jpeg");
+    const preview = Buffer.from(source.data, "base64");
+    expect(preview.length).toBeLessThanOrEqual(MiB);
+    const metadata = await sharp(preview).metadata();
+    expect(metadata.width).toBeLessThanOrEqual(1568); expect(metadata.height).toBeLessThanOrEqual(1568);
+    await sharp(preview).stats();
+    expect(await fs.readFile(filename)).toEqual(original);
+  } finally { await f.close(); }
+});
+
+test("image count, escaped prompt budget and revocation refuse before a frame survives", async () => {
+  const f = await fixture((_req, res) => { res.end(); });
+  try {
+    const sharp = (await import("sharp")).default;
+    const image = path.join(f.directory, "image.png");
+    await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toFile(image);
+    const file = { ref: "image", path: image, kind: "photo" as const, mime_type: "image/png" };
+    await expect(writeInboundAgentInput(Array.from({ length: 11 }, () => file), "Read", f.directory, options().signal, () => {})).rejects.toMatchObject({ code: "too_large", status: 413 });
+    await expect(writeInboundAgentInput([file], "\u0000".repeat(Math.ceil(MiB / 6)), f.directory, options().signal, () => {})).rejects.toMatchObject({ code: "too_large", status: 413 });
+    let live = true;
+    const pending = writeInboundAgentInput([file], "Read", f.directory, options().signal, () => {
+      if (!live) throw new ExternalRelayError("lease_lost", 409);
+    });
+    live = false;
+    await expect(pending).rejects.toMatchObject({ code: "lease_lost", status: 409 });
+    expect(await fs.readdir(f.directory)).toEqual(["image.png"]);
+  } finally { await f.close(); }
+});
+
+test("ten exact-size native images and the exact serialized text budget fit one frame", async () => {
+  const f = await fixture((_req, res) => { res.end(); });
+  try {
+    const sharp = (await import("sharp")).default;
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+    const bytes = Buffer.concat([png, Buffer.alloc(MiB - png.length)]);
+    const image = path.join(f.directory, "image.png"); await fs.writeFile(image, bytes);
+    const files = Array.from({ length: 10 }, (_, i) => ({ ref: `image_${i}`, path: image, kind: "photo" as const, mime_type: "image/png" }));
+    const overhead = Buffer.byteLength(JSON.stringify({ type: "text", text: "" }));
+    const prompt = "x".repeat(MiB - overhead);
+    const input = await writeInboundAgentInput(files, prompt, f.directory, options().signal, () => {});
+    expect((await fs.stat(input!)).size).toBeLessThan(16 * MiB);
+    const frame = JSON.parse(await fs.readFile(input!, "utf8"));
+    expect(frame.message.content[0].text).toBe(prompt);
+    expect(frame.message.content.slice(1)).toHaveLength(10);
+    for (const image of frame.message.content.slice(1)) expect(Buffer.from(image.source.data, "base64")).toEqual(bytes);
+  } finally { await f.close(); }
+});
+
+test("an eleventh ref or excess aggregate bytes sends no download", async () => {
+  let downloads = 0;
+  const f = await fixture((_req, res) => { downloads++; res.end(); });
+  try {
+    for (const items of [Array.from({ length: 11 }, (_, i) => ref(`media_${i}`)),
+      [...Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)]]) {
+      await expect(prepareInboundMedia(f.relay, request(items), f.directory, options())).rejects.toMatchObject({ code: "too_large", status: 413 });
+    }
+    expect(downloads).toBe(0); expect(await fs.readdir(f.directory)).toEqual([]);
   } finally { await f.close(); }
 });
 

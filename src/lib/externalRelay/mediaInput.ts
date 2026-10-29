@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { Transform } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
 import type { PairedRelay } from "./store";
 
-import { inputMediaExtensions as extensions, isInboundImage, RELAY_MEDIA_ANY_DOCUMENT, validateMediaInput, type MediaRequest } from "./mediaInputValidation";
+import { inputMediaExtensions as extensions, isInboundImage, MAX_INPUT_MEDIA_REFS, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, RELAY_MEDIA_ANY_DOCUMENT, validateMediaInput, type MediaRequest } from "./mediaInputValidation";
 export { hasInboundMedia, validateMediaInput } from "./mediaInputValidation";
 const MiB = 1024 * 1024;
 const fail = (code: string, status: number): never => { throw new ExternalRelayError(code, status); };
@@ -135,6 +135,28 @@ export async function validatePdfStructure(filename: string, signal: AbortSignal
     if (signal.aborted) onAbort();
   });
 }
+/** Keep a ten-photo turn below Claude's inline request budget. Originals stay
+ * on disk for tools; native vision input uses a smaller JPEG when needed.
+ * Decode one image at a time under admission's pixel and decoder limits. */
+async function agentImage(image: InboundFile, signal: AbortSignal, check: () => void) {
+  const sharp = (await import("sharp")).default;
+  check();
+  const decoder = () => sharp(image.path, { limitInputPixels: 20_000_000, failOn: "warning" }).timeout({ seconds: 3 });
+  const metadata = await decoder().metadata();
+  check();
+  if ((await fs.promises.stat(image.path)).size <= MiB && metadata.width! <= 1568 && metadata.height! <= 1568) {
+    check();
+    return { mime: image.mime_type, stream: fs.createReadStream(image.path, { highWaterMark: 49152, signal }) };
+  }
+  let bytes = await decoder().rotate().resize({ width: 1568, height: 1568, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
+  check();
+  if (bytes.length > MiB) {
+    bytes = await decoder().rotate().resize({ width: 768, height: 768, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer();
+    check();
+  }
+  if (bytes.length > MiB) fail("too_large", 413);
+  return { mime: "image/jpeg", stream: Readable.from([bytes]) };
+}
 /** Claude's native image input is a stream-json user message. Spool its
  * base64 representation in chunks; the launcher streams the file to stdin. */
 export async function writeInboundAgentInput(files: readonly InboundFile[], prompt: string, runDir: string, signal: AbortSignal, authorize: () => void) {
@@ -143,18 +165,22 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
   return withViewerOperation("relay.media-input", async () => {
     const check = () => { signal.throwIfAborted(); authorize(); };
     check();
+    if (images.length > MAX_INPUT_MEDIA_REFS) fail("too_large", 413);
+    const text = JSON.stringify({ type: "text", text: prompt });
+    if (Buffer.byteLength(text) > MiB) fail("too_large", 413);
     const destination = path.join(runDir, "media-input.jsonl");
     const handle = await fs.promises.open(destination, "wx", 0o600);
     const chunks = async function* () {
       yield '{"type":"user","message":{"role":"user","content":[';
-      yield JSON.stringify({ type: "text", text: prompt });
+      yield text;
       for (const image of images) {
         check();
-        yield ',{"type":"image","source":{"type":"base64","media_type":' + JSON.stringify(image.mime_type) + ',"data":"';
+        const source = await agentImage(image, signal, check);
+        yield ',{"type":"image","source":{"type":"base64","media_type":' + JSON.stringify(source.mime) + ',"data":"';
         let carry = Buffer.alloc(0), bytes = 0;
-        for await (const chunk of fs.createReadStream(image.path, { highWaterMark: 49152, signal })) {
+        for await (const chunk of source.stream) {
           check(); const buffer = Buffer.concat([carry, chunk]); bytes += chunk.length;
-          if (bytes > 20 * MiB) fail("too_large", 413);
+          if (bytes > MiB) fail("too_large", 413);
           const end = buffer.length - buffer.length % 3;
           yield buffer.subarray(0, end).toString("base64"); carry = buffer.subarray(end);
         }
@@ -163,7 +189,15 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
       }
       yield ']}}\n';
     };
-    try { check(); await pipeline(chunks(), handle.createWriteStream(), { signal }); check(); return destination; }
+    let serializedBytes = 0;
+    const budget = new Transform({ transform(chunk: Buffer, _encoding, done) {
+      try {
+        check(); serializedBytes += chunk.length;
+        if (serializedBytes > 16 * MiB) fail("too_large", 413);
+        done(null, chunk);
+      } catch (error) { done(error as Error); }
+    } });
+    try { check(); await pipeline(chunks(), budget, handle.createWriteStream(), { signal }); check(); return destination; }
     catch (error) { await fs.promises.rm(destination, { force: true }); throw error; }
     finally { await handle.close().catch(() => {}); }
   });
@@ -203,7 +237,7 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
           const declared = response.headers["content-length"];
           if (typeof declared !== "string" || !/^[1-9][0-9]*$/.test(declared)) fail("malformed", 400);
           const length = Number(declared);
-          if (length > 20 * MiB || total + length > 40 * MiB) fail("too_large", 413);
+          if (length > MAX_INPUT_MEDIA_FILE_BYTES || total + length > MAX_INPUT_MEDIA_TOTAL_BYTES) fail("too_large", 413);
           if (length !== media.byte_size) fail("malformed", 400);
           if (response.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== mime || response.headers["content-encoding"]) fail("unsupported_media_type", 415);
           let size = 0; const content = Object.hasOwn(extensions, mime) ? contentGuard(mime) : undefined;
@@ -212,7 +246,7 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
               check(); signal.throwIfAborted();
               if (Date.parse(media.expires_at!) <= now()) fail("media_unavailable", 422);
               size += chunk.length; total += chunk.length;
-              if (size > 20 * MiB || total > 40 * MiB) fail("too_large", 413);
+              if (size > MAX_INPUT_MEDIA_FILE_BYTES || total > MAX_INPUT_MEDIA_TOTAL_BYTES) fail("too_large", 413);
               if (size > length) fail("malformed", 400);
               content?.add(chunk); done(null, chunk);
             } catch (error) { done(error as Error); }

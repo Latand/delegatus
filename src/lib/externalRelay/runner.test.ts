@@ -4675,42 +4675,47 @@ test("lease loss during an active inbound stream stops consumption before agent 
   }
 });
 
-test.each(["codex", "claude"])("inbound originals reach the %s native image input and are removed after the answer", async engine => {
+test.each([["codex", 1], ["claude", 1], ["codex", 10], ["claude", 10]] as const)("inbound originals reach the %s native image input and are removed after the answer (%s photos)", async (engine, count) => {
   const { richRequest } = await import("./rich.fixture");
   const sharp = (await import("sharp")).default;
-  const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
-  const request = richRequest(true); request.request_id = `inbound_original_${engine}`;
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+  const bytes = count === 10 ? Buffer.concat([png, Buffer.alloc(10 * 1024 * 1024 - png.length)]) : png;
+  const request = richRequest(true); request.request_id = `inbound_original_${engine}_${count}`;
   const { RELAY_MEDIA_ANY_DOCUMENT } = await import("./mediaInputValidation");
   request.features!.push("requester_context", "relay_media_in", RELAY_MEDIA_ANY_DOCUMENT);
-  request.input.conversation[0]!.media = [{ ref: "inbound_photo", kind: "photo", availability: "ready", mime_type: "image/png", byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }];
+  request.input.conversation[0]!.media = Array.from({ length: count }, (_, i) => ({ ref: `inbound_photo_${i}`, kind: "photo", availability: "ready", mime_type: "image/png", byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }));
+  const parsed = requestSchema.parse(request);
   let downloads = 0;
   const server = await startTestRelay((req) => {
-    if (req.url?.endsWith("/media/inbound_photo")) {
+    if (req.url?.includes("/media/inbound_photo_")) {
       downloads++; expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
       return { raw: bytes, headers: { "content-type": "image/png", "content-length": String(bytes.length) } };
     }
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
-  const marker = path.join(root, `inbound-path-${engine}`);
+  const marker = path.join(root, `inbound-path-${engine}-${count}`);
   const fake = stub(`const a=process.argv.slice(2), input=await Bun.stdin.text();
     const prompt=${engine === "claude" ? "JSON.parse(input).message.content.find(p=>p.type==='text').text" : "input"};
     const media=JSON.parse(prompt.split('<inbound_media>')[1].split('</inbound_media>')[0]);
-    if(await Bun.file(media[0].local_path).size!==${bytes.length})process.exit(2);
+    if(media.length!==${count})process.exit(2);
+    for(const item of media)if(await Bun.file(item.local_path).size!==${bytes.length})process.exit(2);
     await Bun.write(${JSON.stringify(marker)},media[0].local_path);
     const answer={action:'reply',text:'Photo received',reply_to:null,format:'plain',buttons:[],mentions:[],attachments:[]};
     if(a.includes('--output-last-message')) {
-      if(!a.includes('--image')||!a.includes(media[0].local_path))process.exit(3);
+      if(a.filter(arg=>arg==='--image').length!==${count}||media.some(item=>!a.includes(item.local_path)))process.exit(3);
       await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
     }else{
-      const frame=JSON.parse(input); if(frame.message.content.find(p=>p.type==='image').source.data!==${JSON.stringify(bytes.toString("base64"))})process.exit(4);
+      const frame=JSON.parse(input), images=frame.message.content.filter(p=>p.type==='image');
+      if(images.length!==${count}||Buffer.byteLength(input)>16*1024*1024)process.exit(4);
+      ${count === 1 ? `if(images[0].source.data!==${JSON.stringify(png.toString("base64"))})process.exit(4);` : "for(const image of images){const data=Buffer.from(image.source.data,'base64');if(data.length>1024*1024||image.source.media_type!=='image/jpeg'||data[0]!==255||data[1]!==216)process.exit(4);}"}
       console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
       console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
     }`);
   try {
-    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    const result = await runClaimedRequest(paired, parsed, undefined, { command: fake });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo received" } });
-    expect(downloads).toBe(1); expect(fs.existsSync(fs.readFileSync(marker, "utf8"))).toBe(false);
+    expect(downloads).toBe(count); expect(fs.existsSync(fs.readFileSync(marker, "utf8"))).toBe(false);
   } finally { await server.close(); }
 });
 test.each([["codex", false], ["claude", false], ["codex", true], ["claude", true]] as const)("any-document originals reach the %s agent and are removed at run end (agent failure=%s)", async (engine, failAgent) => {
