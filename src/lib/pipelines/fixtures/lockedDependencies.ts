@@ -22,8 +22,8 @@ export async function lockedFixture() {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => new Response(request.url.endsWith("/next.tgz") ? payloads.next : payloads.old) });
   const env = { ...process.env, NODE_ENV: "development" };
   const run = async (args: string[], cwd = repoDir) => {
-    const child = Bun.spawn(args, { cwd, env, stdout: "pipe", stderr: "pipe" });
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    const child = Bun.spawn(args, { cwd, env, stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGKILL" });
+    const [code, , stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (code) throw new Error(stderr);
   };
   try {
