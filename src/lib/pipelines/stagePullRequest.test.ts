@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ensureStagePullRequest } from "./stagePullRequest";
+import { ensureStagePullRequest, inspectPullRequestText } from "./stagePullRequest";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import type { ExecPort } from "@/lib/workflows/provision";
