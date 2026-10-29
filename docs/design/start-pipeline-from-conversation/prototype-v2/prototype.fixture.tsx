@@ -263,6 +263,8 @@ const WORDS = {
   removeStageWhy: L(`${BUILD_NAME} stays the only stage`, `Лишиться один етап: ${BUILD_NAME}`),
   fromConversationRow: L("Pipeline from conversation…", "Пайплайн з розмови…"),
   startDraft: L("Start", "Запустити"),
+  /* The phone Send button's word: the toolbar row keeps the model chip whole beside it. */
+  startSend: L("Start", "Старт"),
   startDraftLong: L("Start pipeline", "Запустити пайплайн"),
   firstMessage: L(`${BUILD_NAME}'s first message`, `Перше повідомлення: ${BUILD_NAME}`),
   firstMessageWhy: L("The brief from the conversation · not sent yet", "Опис із розмови · ще не надіслано"),
@@ -700,20 +702,25 @@ function TemplatePickerFromConversation({ phone }: { phone: boolean }) {
 
 const findSendButton = () => document.querySelector("[data-composer-send]");
 const findComposerForm = () => document.querySelector("[data-conversation-body] form") ?? document.querySelector("form:has([data-composer-field])");
+/** The phone's composer box: the sunken field with the typed brief and the tools row (the form also holds the transcript navigator above it). */
+const findComposerBox = () => document.querySelector("[data-mobile2-composer]");
 
 /** The composer's own Send menu (ComposerBar.tsx `ComposerMenu`), with the new
     action among its rows, its right edge on the composer's (over the Send
     button the transcript's timestamps poked out beside it). On the desktop it
     opens where the product opens it, over the Send button; on the phone the
-    typed brief is right above that button, so the menu opens over the
-    composer's top edge instead and the brief stays readable while the operator
-    chooses. */
+    typed brief is right above that button, so the menu opens over the top
+    edge of the composer's box (the sunken field with the brief and the tools
+    row, under the transcript navigator the menu covers), so the menu stands
+    right above the Send button's chevron and the brief stays readable while
+    the operator chooses. */
 function SendMenuWithPipeline({ phone }: { phone: boolean }) {
   const rect = useRect(findSendButton);
   const form = useRect(findComposerForm);
-  useMarkMenu("composer-send-menu", "protoSendMenu", Boolean(rect && form));
-  if (!rect || !form) return null;
-  const top = phone ? form.top : rect.top;
+  const box = useRect(findComposerBox);
+  useMarkMenu("composer-send-menu", "protoSendMenu", Boolean(rect && form && (box || !phone)));
+  if (!rect || !form || (phone && !box)) return null;
+  const top = phone ? box!.top : rect.top;
   return (
     <ComposerMenu
       label={t("composer.sendMenuTitle")}
@@ -744,7 +751,7 @@ function SendAsStart({ phone }: { phone: boolean }) {
       label.dataset.protoNew = "";
       label.className = phone ? "pr-1 text-ui font-semibold" : "pl-1.5 pr-1 text-ui font-semibold";
       /* The phone's toolbar row holds the model chip, the clip and the mic beside it: the short word. */
-      label.textContent = phone ? WORDS.startDraft : WORDS.start;
+      label.textContent = phone ? WORDS.startSend : WORDS.start;
       (visual ?? button).append(label);
       if (phone) {
         /* The product's wide slot: the 44 px target keeps its height and grows to its words. */
@@ -802,7 +809,7 @@ function ChainStrip({ phone, onPill }: { phone: boolean; onPill: (element: HTMLE
               <span className="pb-name">{stage.name}</span>
             </button>
             {/* The review's fail edge, the glyph the block's own edge lines use («↺ …»). */}
-            {stage.id === "reviewer" ? <span className="pb-arrow" aria-hidden title={t("kanban.loopRest", { from: REVIEW_NAME, to: BUILD_NAME, count: 2 })}>↺</span> : null}
+            {stage.id === "reviewer" ? <span className="pb-arrow relative top-px" aria-hidden title={t("kanban.loopRest", { from: REVIEW_NAME, to: BUILD_NAME, count: 2 })}>↺</span> : null}
           </span>
         ))}
         <span className="pb-step">
@@ -814,7 +821,7 @@ function ChainStrip({ phone, onPill }: { phone: boolean; onPill: (element: HTMLE
     </div>
   );
   const heading = (
-    <span className="flex min-w-0 items-center gap-1.5 text-label font-semibold text-secondary">
+    <span className={`flex min-w-0 items-center gap-1.5 text-label font-semibold text-secondary${phone ? "" : " relative top-px"}`}>
       <Workflow className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
       <span className="whitespace-nowrap">{WORDS.runAsPipeline}</span>
     </span>
@@ -832,7 +839,7 @@ function ChainStrip({ phone, onPill }: { phone: boolean; onPill: (element: HTMLE
       {heading}
       {/* The block sizes itself from its container, so its slot is the row's remaining width. */}
       <div className="min-w-[320px] flex-1">{pills}</div>
-      <span className="ml-auto text-caption text-muted">{WORDS.pinned} {WORDS.enterStarts}</span>
+      <span className="relative top-[2px] ml-auto text-caption text-muted">{WORDS.pinned} {WORDS.enterStarts}</span>
     </div>
   );
 }
@@ -856,9 +863,54 @@ function useMarkMenu(testId: string, mark: string, ready: boolean) {
 
 const findStrip = () => document.querySelector("[data-proto-strip]");
 
+/** The phone's role choice: the composer menu's own frame and row recipe
+    (`ComposerMenu`, ComposerBar.tsx), with the single-choice kind a stage's
+    role needs (the menu's checkbox kind reads as «pick several»): a radio dot
+    in the accent colour, as the desktop popover's chosen row carries its
+    accent tick. The implementation gives `ComposerMenu` this kind. */
+function PhoneRoleMenu({ label, position }: { label: string; position: { bottom: number; right: number } }) {
+  const rows = [
+    ...ROLES.map((roleId) => ({ id: roleId, label: roleNameById(t as never, roleId), why: ROLE_WHY[roleId], chosen: roleId === "reviewer" })),
+    { id: "remove", label: WORDS.removeStage, why: WORDS.removeStageWhy, chosen: null },
+  ];
+  return createPortal(
+    <div
+      role="menu"
+      aria-label={label}
+      data-testid="proto-role-menu"
+      style={{ bottom: position.bottom, right: position.right, maxHeight: `calc(100dvh - ${position.bottom}px - 16px)` }}
+      className={`fixed ${Z.popover} w-[220px] overflow-y-auto rounded-surface border border-border bg-raised p-1.5 shadow-2`}
+    >
+      <div className="px-2 pb-1 pt-1.5 text-label font-semibold text-secondary">{label}</div>
+      {rows.map((row) => (
+        <button
+          key={row.id}
+          type="button"
+          role={row.chosen === null ? "menuitem" : "menuitemradio"}
+          aria-checked={row.chosen ?? undefined}
+          className="flex w-full items-start gap-2 rounded-control px-2 py-1.5 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {row.chosen === null ? (
+            <X className="mt-[2px] h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          ) : (
+            <span aria-hidden className={`mt-[2px] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ${row.chosen ? "border-accent" : "border-border"}`}>
+              {row.chosen ? <span className="h-1.5 w-1.5 rounded-full bg-accent" /> : null}
+            </span>
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block text-ui font-semibold text-primary">{row.label}</span>
+            <span className="block text-caption leading-snug text-muted">{row.why}</span>
+          </span>
+        </button>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 /** The role rows of one pill: the board's popover on the desktop
-    (kanbanMenus.tsx); on the phone the composer's own menu (`ComposerMenu`,
-    the one its Send button opens in frame 2a), standing above the strip so
+    (kanbanMenus.tsx); on the phone the composer menu's frame
+    (`PhoneRoleMenu`, the Send button's menu in frame 2a), standing above the strip so
     the chain, «+ Stage» and the Send button's «Start» stay in view while the
     operator chooses. A sheet would cover the composer, and with it the very
     thing this frame is about. */
@@ -874,16 +926,9 @@ function RoleChoice({ phone, anchor }: { phone: boolean; anchor: HTMLElement | n
     /* The menu's left edge on the pill's, its right edge no further than the strip's. */
     const right = Math.round(window.innerWidth - Math.min(pill.left + 220, strip.right));
     return (
-      <ComposerMenu
+      <PhoneRoleMenu
         label={title}
-        testId="proto-role-menu"
-        actions={[
-          ...ROLES.map((roleId) => ({ id: roleId, label: roleNameById(t as never, roleId), description: ROLE_WHY[roleId], checked: roleId === "reviewer", onSelect: () => {} })),
-          { id: "remove", label: WORDS.removeStage, description: WORDS.removeStageWhy, icon: X, onSelect: () => {} },
-        ]}
-        onClose={() => {}}
         position={{ bottom: Math.round(window.innerHeight - strip.top + 6), right }}
-        owner={document}
       />
     );
   }
@@ -1039,7 +1084,7 @@ function DesktopScreen() {
       {VARIANT === 1 && FRAME === "b" ? <TemplatePickerFromConversation phone={false} /> : null}
       {VARIANT === 2 && FRAME === "a" ? <SendMenuWithPipeline phone={false} /> : null}
       {VARIANT === 2 && FRAME === "b" ? <ChainOverComposer phone={false} /> : null}
-      {VARIANT === 3 && FRAME === "a" ? <DesktopMenuRow label={WORDS.fromConversationRow} why={<>{SOURCE_TITLE} · <span className="whitespace-nowrap">{BRANCH}</span></>} find={findCardMenuSpot} /> : null}
+      {VARIANT === 3 && FRAME === "a" ? <DesktopMenuRow label={WORDS.fromConversationRow} why={<><span className="block">{SOURCE_TITLE}</span><span className="block">{BRANCH}</span></>} find={findCardMenuSpot} /> : null}
       {VARIANT === 3 && FRAME === "b" ? <LaneStart /> : null}
     </div>
   );

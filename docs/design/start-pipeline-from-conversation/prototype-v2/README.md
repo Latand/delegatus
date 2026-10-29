@@ -10,7 +10,7 @@ and carries its numbered caption inside the frame. No product code changes.
 | Variant | Where the action lives | How the stages are chosen |
 |---|---|---|
 | 1 | The conversation's ⋯ menu: a row «Start pipeline» whose hint says the brief and the branch come from this conversation. Desktop: the reader's compact menu; phone: the conversation's sheet. | The existing «New pipeline» template picker (`PipelineTemplatePicker.tsx`): the conversation and its branch stand where the repository field was, the status line says what was taken from it, and a template row (Plan → Build → Review, Build → Review, Build → Verify, blank canvas) drops the lane on the card. |
-| 2 | The composer: the operator types the brief as a message and the Send button's own menu (`ComposerMenu`) offers «Run as a pipeline». | A chain of stage pills over the composer (`PipelineBlock`'s pills): a pill opens its role (the board's popover on the desktop; on the phone the composer's own menu, the one its Send button opens, standing above the strip so the chain and the Send button stay in view), «+» adds a stage, and the Send button now reads «Start pipeline» (Enter on the desktop). The typed message becomes the pinned task. |
+| 2 | The composer: the operator types the brief as a message and the Send button's own menu (`ComposerMenu`) offers «Run as a pipeline». | A chain of stage pills over the composer (`PipelineBlock`'s pills): a pill opens its role (the board's popover on the desktop; on the phone a menu in the composer menu's frame with single-choice rows, standing above the strip so the chain and the Send button stay in view), «+» adds a stage, and the Send button now reads «Start pipeline» (Enter on the desktop; «Start» / «Старт» on the phone, where the model chip keeps its whole name beside it). The typed message becomes the pinned task. |
 | 3 | The task card's ⋯ menu: a row «Pipeline from conversation…» naming the conversation and its branch. Desktop: the card's compact menu; phone: the task screen's menu sheet. | A draft lane lands on the card (`PipelineBlock` at task density with dashed waiting pills) and the builder stage's draft panel (`StageDraftPanel`) shows the brief from the conversation as the first message, editable in place; «Start» launches it. Phone: the pipeline screen (the stage list with roles, then the first message with Edit) with «Start pipeline» at its foot. |
 
 Each variant is two frames: **a**, where the action lives; **b**, how the
@@ -32,9 +32,10 @@ template picker with the conversation in place of the repository field (its
 state dot and word come from the helper the header behind it reads:
 `mobileRowState` on the desktop, `chatStateBits` on the phone), the strip over
 the composer with the block's own pills, the role rows in the popover and in
-the composer's menu (the menu's rows are its checkbox kind; the implementation
-gives it a radio kind, as the desktop popover's rows are), the words «Start
-pipeline» beside the Send button's arrow, the phone's first-message section
+the composer menu's frame on the phone (the product's menu has only a
+checkbox kind, which reads as «pick several»; a stage takes one role, so the
+rows carry an accent radio dot and the implementation gives `ComposerMenu`
+that kind), the words «Start pipeline» beside the Send button's arrow, the phone's first-message section
 under the stage list, and the «Start» button (`btn primary`, the brand fill
 on the phone).
 
@@ -61,8 +62,9 @@ conversation sheet offers «Interrupt current turn» whenever the host is alive,
 a finished turn included (the row is the product's `MobileConversationMenu`,
 unchanged); and the Send menu opened over the desktop composer stands over the
 transcript's last lines, as every menu over a transcript does. On the phone
-the prototype opens that menu over the composer's top edge, so the typed brief
-stays readable while the operator chooses.
+the prototype opens that menu with its bottom edge on the composer box's top
+edge, right above the Send button's chevron and over the own-message
+navigator, so the typed brief stays readable while the operator chooses.
 
 ## Files
 

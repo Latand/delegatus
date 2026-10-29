@@ -36,6 +36,11 @@
   [role="menu"][data-testid="composer-send-menu"] > button, [role="menu"][data-testid="proto-role-menu"] > button { min-height: 44px; }
 }
 
+/* The strip's pills stand on the strip's own line: the block's task density
+   keeps 6 px above and 2 px under its pills for the card it lives on, which
+   sat the pills about 3 px under the strip's label and note. */
+[data-proto-strip] .pblock[data-density="task"] { margin-top: 0; padding-bottom: 0; }
+
 /* The frames are still pictures: every transcript row is drawn, so the
    desktop feed's off-screen rows (content-visibility: auto, globals.css) do
    not swap their drawn height for a placeholder's as the alignment moves
