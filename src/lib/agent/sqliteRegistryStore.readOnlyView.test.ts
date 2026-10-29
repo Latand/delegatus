@@ -77,20 +77,22 @@ test("metadata refresh shares immutable history and equals a fresh full read, in
   const beforeRevision = before.engineRouting.codex.revision;
   for (let index = 1; index <= 3; index++) {
     writer.mutate(file => { file.engineRouting.codex = { activeAccountId: `account-${index}`, revision: index }; }, false);
-    const db = (reader as unknown as { db: Database }).db;
-    const query = db.query.bind(db);
+    const query = Database.prototype.query;
     const historyReads: string[] = [];
-    const reads = spyOn(db, "query").mockImplementation(((sql: string, ...args: unknown[]) => {
+    const reads = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string, ...args: unknown[]) {
       if (/\bregistry_(?:rows|cold|archive)\b/.test(sql)) historyReads.push(sql);
-      return query(sql, ...args as []);
-    }) as typeof db.query);
+      return query.call(this, sql, ...args as []);
+    }) as typeof Database.prototype.query);
     let after!: RegistryFile;
+    let revision!: number;
     try {
       const refreshed = reader.readOnlySnapshot();
       after = refreshed.file;
-      expect(refreshed.revision).toBe(writer.readOnlySnapshot().revision);
+      revision = refreshed.revision;
+      expect(reads).toHaveBeenCalled();
       expect(historyReads).toEqual([]);
     } finally { reads.mockRestore(); }
+    expect(revision).toBe(writer.readOnlySnapshot().revision);
     expect(registryHasLookupIndex(after)).toBe(true);
     expect(registryRowsMatching(after, "receipts", "launchId", kept)).toEqual([before.receipts[kept]!]);
     const fresh = open();
