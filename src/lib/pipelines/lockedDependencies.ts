@@ -124,11 +124,35 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
       const target = path.join(cache, plan.key);
       const modules = path.join(target, "node_modules");
       const receipt = path.join(target, "installed.json");
+      // Reserve room before publishing: even refused or interrupted setup
+      // keeps at most four unused completed graphs in this repository.
+      const prune = async (keep: number) => {
+        const listing = await run("git", ["worktree", "list", "--porcelain", "-z"]);
+        const referenced = new Set<string>([modules]);
+        for (const row of listing.split("\0")) {
+          if (row.startsWith("worktree ")) {
+            const resolved = await fs.realpath(path.join(row.slice(9), "node_modules")).catch(() => null);
+            if (resolved) referenced.add(resolved);
+          }
+        }
+        const unused: { directory: string; used: number }[] = [];
+        for (const name of await fs.readdir(cache)) {
+          if (!/^[a-f0-9]{64}$/.test(name)) continue;
+          const directory = path.join(cache, name);
+          if (referenced.has(path.join(directory, "node_modules"))) continue;
+          const record = path.join(directory, "installed.json");
+          if (JSON.parse(await fs.readFile(record, "utf8")).key !== name) continue;
+          unused.push({ directory, used: (await fs.stat(record)).mtimeMs });
+        }
+        unused.sort((a, b) => b.used - a.used || a.directory.localeCompare(b.directory));
+        for (const old of unused.slice(keep)) { remaining(); await fs.rm(old.directory, { recursive: true }); }
+      };
       let installed = false;
       try { installed = JSON.parse(await fs.readFile(receipt, "utf8")).key === plan.key && (await stat(modules))?.isDirectory() === true; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       if (!installed) {
         if (await stat(target)) throw new Error("incomplete shared dependency entry; preserve it for inspection");
+        await prune(3);
         const build = path.join(cache, `building-${plan.key}`);
         if (await stat(build)) throw new Error("unowned dependency build directory; preserve it for inspection");
         await fs.writeFile(activeBuild, JSON.stringify({ key: plan.key }));
@@ -157,6 +181,11 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
       const local = path.join(cwd, "node_modules");
       const before = await stat(local);
       if (before?.isSymbolicLink() && await fs.realpath(local).catch(() => "") === modules) return true;
+      if (installed) {
+        await prune(3);
+        remaining();
+        if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed during preparation; retry setup");
+      }
       const linkRoot = await fs.mkdtemp(path.join(cwd, ".delegatus-dependencies-"));
       try {
         const link = path.join(linkRoot, "node_modules");
@@ -172,27 +201,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
         await fs.rename(link, local);
       } finally { await fs.rm(linkRoot, { recursive: true, force: true }); }
       if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed while linking; retry setup");
-      // Bound unused completed entries. Active worktrees retain their install;
-      // the four most recent unused graphs cover brief lockfile reversals.
-      const listing = await run("git", ["worktree", "list", "--porcelain", "-z"]);
-      const referenced = new Set<string>([modules]);
-      for (const row of listing.split("\0")) {
-        if (row.startsWith("worktree ")) {
-          const resolved = await fs.realpath(path.join(row.slice(9), "node_modules")).catch(() => null);
-          if (resolved) referenced.add(resolved);
-        }
-      }
-      const unused: { directory: string; used: number }[] = [];
-      for (const name of await fs.readdir(cache)) {
-        if (!/^[a-f0-9]{64}$/.test(name)) continue;
-        const directory = path.join(cache, name);
-        if (referenced.has(path.join(directory, "node_modules"))) continue;
-        const record = path.join(directory, "installed.json");
-        if (JSON.parse(await fs.readFile(record, "utf8")).key !== name) continue;
-        unused.push({ directory, used: (await fs.stat(record)).mtimeMs });
-      }
-      unused.sort((a, b) => b.used - a.used || a.directory.localeCompare(b.directory));
-      for (const old of unused.slice(4)) { remaining(); await fs.rm(old.directory, { recursive: true }); }
+      await prune(4);
       return true;
     } finally { held?.release(); await fd.close(); }
   } catch (error) {

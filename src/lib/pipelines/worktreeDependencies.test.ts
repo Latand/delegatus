@@ -6,7 +6,7 @@ import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./work
 import type { Pipeline } from "./types";
 import { lockedFixture } from "./fixtures/lockedDependencies";
 import { provisionPipelineWorktree, provisionPipelineWorktreeAsync } from "./git";
-import { realExec } from "../workflows/provision";
+import { realExec, type ExecPort } from "../workflows/provision";
 
 function fixture(writable = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-dependencies-"));
@@ -292,6 +292,24 @@ test("a mismatched completion receipt refuses reuse in a fresh process", async (
     await expect(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir))
       .rejects.toThrow("stage environment: dependency preparation failed: incomplete shared dependency entry");
     expect(fs.readlinkSync(local)).toBe(before);
+  } finally { f.close(); }
+}, 30_000);
+
+test("input changes during real installs refuse linking and bound unused completed entries", async () => {
+  const f = await lockedFixture();
+  try {
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    const execute: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (command === "bun") fs.appendFileSync(path.join(f.worktreeDir, "bun.lock"), "\n");
+      return result;
+    };
+    for (let revision = 0; revision < 7; revision++) {
+      await expect(prepareLockedDependencies(f.worktreeDir, { exec: execute })).rejects.toThrow("dependency inputs changed");
+      expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
+    }
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v1");
+    expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name)).length).toBeLessThanOrEqual(4);
   } finally { f.close(); }
 }, 30_000);
 
