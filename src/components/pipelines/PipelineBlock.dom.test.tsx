@@ -40,6 +40,7 @@ const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
 const { WorkLinksProvider } = await import("@/components/workLinks/workLinksContext");
 const { setLocale, translate } = await import("@/lib/i18n");
 const { stageNames } = await import("./pipelineModel");
+const { pipelineProgress } = await import("@/components/kanban/PipelineSection");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -597,5 +598,49 @@ test("screen stage rows disclose only the latest attempt memory cap", () => {
       ? `${translate("en", "agentMemory.cap", { size: 8 })} ${translate("en", "agentMemory.clamped", { size: 12 })}`
       : translate("en", "agentMemory.unenforced"));
     expect(host.querySelector('[data-stage="review"] [data-agent-memory-cap]')).toBeNull();
+  }
+});
+
+
+test.each(["en", "uk"] as const)("%s capacity backoff and exhaustion are visible at every lane density", locale => {
+  setLocale(locale);
+  for (const state of ["running", "needs_decision"] as const) for (const density of ["card", "task", "screen"] as const) {
+    const pipeline = searchPipeline({ state });
+    const attempt = pipeline.runs.find(run => run.stageId === "verify")!.attempts.at(-1)!;
+    attempt.state = state;
+    pipeline.stageReports = [{seq:1,at:iso(3000),actor:{kind:"agent",role:"verifier",conversationId:"prior-turn"},
+      stageId:"verify",attempt:1,status:"fail",findings:0,replaces:null,summary:"Prior stage report"}];
+    attempt.providerWait = {
+      condition: { kind: "transient", label: "model at capacity", scope: null, resetLabel: null },
+      text: "Selected model is at capacity. Please try again later.", turnTs: NOW_MS, accountId: null,
+      tries: state === "running" ? 0 : 3, startedAt: iso(0), resumeAt: "2026-09-23T12:01:00.000Z", resetsAt: null,
+    };
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
+    const text = host.textContent!.replaceAll("\u00a0", " ").replaceAll("\u2011", "-");
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(locale, key, params);
+    expect(pipelineProgress(t, summarizePipeline(pipeline), stage => stage.id)).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
+    expect(text).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
+    expect(text).toContain(state === "running" ? "2026-09-23 12:01 UTC" : locale === "en" ? "retry budget exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
+    if (state === "running") {
+      expect(host.querySelector('.pb-pill.st-running')).toBeNull();
+      expect(host.querySelector('[data-stage-now]')?.textContent ?? "").not.toMatch(/running|працює/);
+      const header = mount(<PipelineStateLine summary={summarizePipeline(pipeline)} nowMs={NOW_MS} />);
+      expect(header.querySelector('[data-pstate="waiting"]')?.textContent).toBe(locale === "en" ? "Waiting" : "Очікує");
+    }
+  }
+});
+
+
+test("a cancelled capacity retry keeps the ended turn visibly stopped", () => {
+  const pipeline = searchPipeline();
+  pipeline.runs.find(run => run.stageId === "verify")!.attempts.at(-1)!.providerWait = {
+    condition: {kind:"transient",label:"model at capacity",scope:null,resetLabel:null}, text:"capacity", turnTs:NOW_MS,
+    accountId:null, tries:0, startedAt:iso(0), resumeAt:iso(0), resetsAt:null, retryCancelled:true,
+  };
+  for (const density of ["card","task","screen"] as const) {
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
+    expect(host.textContent).toContain("Model at capacity · recovery needs a decision");
+    expect(host.textContent).not.toContain("next try");
+    expect(host.querySelector('.st-running, [data-stage-state="running"]')).toBeNull();
   }
 });
