@@ -21,7 +21,8 @@ test.each(["missing", "lagging-link", "matching", "unrepairable"])("resumed stag
     if (shape === "matching") await prepareWorktreeDependencies(f.pipeline);
     if (shape === "missing") fs.rmSync(source, { recursive: true });
     if (shape === "lagging-link") {
-      fs.writeFileSync(path.join(source, "fixture-tool/package.json"), JSON.stringify({ name: "fixture-tool", version: "1.0.0" }));
+      await f.makeLagging();
+      expect(JSON.parse(fs.readFileSync(path.join(source, "fixture-tool/package.json"), "utf8")).version).toBe("1.0.0");
       fs.symlinkSync(source, local, "dir");
     }
     if (shape === "unrepairable") fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");

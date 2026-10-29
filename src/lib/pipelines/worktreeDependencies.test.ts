@@ -139,7 +139,8 @@ test.each(["missing", "lagging-link", "lagging-directory", "matching"].flatMap(s
     const source = path.join(f.repoDir, "node_modules"), local = path.join(f.worktreeDir, "node_modules");
     if (shape === "missing") fs.rmSync(source, { recursive: true });
     if (shape === "lagging-link" || shape === "lagging-directory") {
-      fs.writeFileSync(path.join(source, "fixture-tool/package.json"), JSON.stringify({ name: "fixture-tool", version: "1.0.0" }));
+      await f.makeLagging();
+      expect(JSON.parse(fs.readFileSync(path.join(source, "fixture-tool/package.json"), "utf8")).version).toBe("1.0.0");
       if (shape === "lagging-link") fs.symlinkSync(source, local, "dir");
       else fs.cpSync(source, local, { recursive: true });
     }

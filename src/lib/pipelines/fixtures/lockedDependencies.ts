@@ -15,11 +15,13 @@ export async function lockedFixture() {
   fs.mkdirSync(repoDir); fs.mkdirSync(worktreeDir);
   const archive = async (version: string) => await new Bun.Archive({
     "package/package.json": JSON.stringify({ name: "fixture-tool", version, bin: { "fixture-tool": "cli.js" } }),
-    "package/index.js": "module.exports = 2;\n",
+    "package/index.js": `module.exports = ${JSON.stringify(version)};\n`,
     "package/cli.js": "#!/usr/bin/env node\nprocess.exit(0);\n",
   }, { compress: "gzip" }).bytes();
-  const payloads = { old: await archive("2.0.0"), next: await archive("3.0.0") };
-  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => new Response(request.url.endsWith("/next.tgz") ? payloads.next : payloads.old) });
+  const payloads = { previous: await archive("1.0.0"), current: await archive("2.0.0"), next: await archive("3.0.0") };
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => new Response(
+    request.url.endsWith("/next.tgz") ? payloads.next : request.url.endsWith("/previous.tgz") ? payloads.previous : payloads.current,
+  ) });
   const env = { ...process.env, NODE_ENV: "development" };
   const run = async (args: string[], cwd = repoDir) => {
     const child = Bun.spawn(args, { cwd, env, stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGKILL" });
@@ -42,7 +44,20 @@ export async function lockedFixture() {
     pipeline.baseBranch = "main";
     pipeline.baseRef = (await realExec("git", ["rev-parse", "HEAD"], repoDir)).stdout.trim();
     await run(["git", "worktree", "add", "-b", pipeline.branch, worktreeDir]);
-    return { root, repoDir, worktreeDir, run, server, pipeline,
+    const makeLagging = async () => {
+      const manifestFile = path.join(repoDir, "package.json"), lockFile = path.join(repoDir, "bun.lock");
+      const manifestBytes = fs.readFileSync(manifestFile), lockBytes = fs.readFileSync(lockFile);
+      const manifest = JSON.parse(manifestBytes.toString());
+      manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${server.port}/previous.tgz`;
+      try {
+        fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+        await run(["bun", "install", "--ignore-scripts", "--backend=copyfile"]);
+      } finally {
+        // A checkout update moves the inputs without refreshing the real old install.
+        fs.writeFileSync(manifestFile, manifestBytes); fs.writeFileSync(lockFile, lockBytes);
+      }
+    };
+    return { root, repoDir, worktreeDir, run, server, pipeline, makeLagging,
       close: () => { server.stop(true); fs.rmSync(root, { recursive: true, force: true }); } };
   } catch (error) { server.stop(true); fs.rmSync(root, { recursive: true, force: true }); throw error; }
 }
