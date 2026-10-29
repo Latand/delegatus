@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
+import { BranchName } from "@/components/pipelines/BranchName";
 
 /* Menus and popovers of the kanban board, ported from the approved prototype
    (`prototypes/kanban-board/app.js` openMenu/openTray): fixed to the viewport
@@ -26,6 +27,8 @@ export type KanbanMenuItem =
     type: "item" | "radio" | "check";
     label: string;
     why?: string | null;
+    /** A branch the choice works from, on its own line under the hint. */
+    branch?: string | null;
     /** A second hint, in warning ink: something the choice waits on. */
     warn?: string | null;
     kbd?: string;
@@ -159,6 +162,7 @@ export function KanbanMenu({ anchor, label, items, onClose }: KanbanMenuProps) {
             <span className="lbl">
               {item.label}
               {item.why ? <span className="why">{item.why}</span> : null}
+              {item.branch ? <BranchName branch={item.branch} className="why" /> : null}
               {item.warn ? <span className="why warn">{item.warn}</span> : null}
             </span>
             {item.kbd ? <span className="kbd">{item.kbd}</span> : null}
