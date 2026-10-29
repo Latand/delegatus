@@ -54,12 +54,14 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
       const store = await import("./store");
       const readVersion = store.controllerPipelineVersion;
       let rejected = 0;
+      let resumedReservation: string | undefined;
       const versionSpy = spyOn(store, "controllerPipelineVersion").mockImplementation(async id => {
         const lane = loadPipelines().find(row => row.id === id);
         if (!rejected && lane?.lastPassedCommit === publisher.passedSha && lane.delivery?.operation?.state === "pending") {
           rejected++;
           throw new Error("publication startup version unavailable");
         }
+        if (rejected && lane?.delivery?.operation?.state === "pending") resumedReservation ??= lane.delivery.operation.id;
         return readVersion(id);
       });
       try {
@@ -68,13 +70,15 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         expect(rejected).toBe(1);
         expect(pipelineControllerJobLanes()).toHaveLength(0);
         expect(publisher.order.some(value => value.startsWith("push:"))).toBe(false);
-        const reservation = loadPipelines()[0]!.delivery!.operation!.id;
+        const reservation = loadPipelines()[0]!.delivery!.operation!;
         for (let n = 0; n < 3; n++) {
           await tickPipelinesController([], h.ports);
           await settlePipelineControllerJobs();
         }
         const lane = loadPipelines()[0]!;
-        expect(lane.delivery!.operation!.id).toBe(reservation);
+        expect(resumedReservation).toBe(reservation.id);
+        expect(lane.delivery!.operation!.sha).toBe(reservation.sha);
+        expect(lane.delivery!.operation!.requestKey).toBe(reservation.requestKey);
         expect(lane.delivery!.operation!.result?.ok).toBe(true);
         expect(publisher.order.filter(value => value === "commit")).toHaveLength(1);
         expect(publisher.order.filter(value => value.startsWith("push:"))).toHaveLength(1);
@@ -209,6 +213,7 @@ test.skipIf(process.platform === "win32")("the production authority signal cance
   const cleanup = new AbortController();
   const watchdog = setTimeout(() => cleanup.abort(), 30_000);
   const root = path.join(fixture.repo, ".git");
+  fs.mkdirSync(path.join(root, "hooks"), { recursive: true });
   const watcher = fs.watch(root, (_event, name) => {
     if (!armed && String(name) === "mechanical-hook-ready") { armed = true; rejectNext = true; }
   });
