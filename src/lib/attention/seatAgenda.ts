@@ -114,6 +114,25 @@ function returnedNote(route: { returnedFrom?: string }): string {
     : "";
 }
 
+/** Completion releases publication, while the latest claim still names the
+ * lane delivering that target. Index the projection once, without store reads. */
+function deliveryOwners(pipelines: readonly Pipeline[]): Map<string, Pipeline> {
+  const owners = new Map<string, Pipeline>();
+  for (const pipeline of pipelines) {
+    const delivery = pipeline.delivery;
+    if (!delivery || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id) continue;
+    const key = deliveryTargetKey(pipeline);
+    const previous = owners.get(key);
+    if (!previous || delivery.epoch > previous.delivery!.epoch) owners.set(key, pipeline);
+  }
+  return owners;
+}
+
+function deliveryTargetKey(pipeline: Pipeline): string {
+  const target = pipeline.delivery!.target;
+  return JSON.stringify([canonicalOrchestratorProject(target.repository), target.branch]);
+}
+
 /** Every wait the board routes to this project's seat, oldest first. */
 export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }, now: number, project: string): SeatTickWorkerAskInput[] {
   const canonical = canonicalOrchestratorProject(project);
@@ -124,9 +143,15 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
     asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
   }
+  const owners = deliveryOwners(body.pipelines);
   const lanes = body.pipelines
     .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
     .flatMap((pipeline) => {
+      if (laneNeedKind(pipeline) === "lane-merge" && pipeline.delivery && pipeline.merge?.prNumber != null) {
+        const owner = owners.get(deliveryTargetKey(pipeline));
+        if (owner && owner.id !== pipeline.id && owner.state !== "closed"
+          && owner.delivery!.target.pr === pipeline.merge?.prNumber) return [];
+      }
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];
