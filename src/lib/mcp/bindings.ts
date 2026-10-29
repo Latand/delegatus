@@ -2141,7 +2141,8 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   // Caller attribution proves this seat. Extend approval custody only through
   // the durable lineage of its current project, from one consistent read.
   const seats = readOrchestratorSeatFileOrNull();
-  const project = Object.values(seats?.seats ?? {}).find((row) => row.conversationId === seat)?.project;
+  const held = Object.values(seats?.seats ?? {}).filter((row) => row.conversationId === seat);
+  const project = held.length === 1 ? held[0]!.project : undefined;
   const lineage = new Set([seat, ...[...(seats?.seatLineage ?? []), ...(seats?.revocations ?? [])]
     .filter((row) => project !== undefined && row.project === project)
     .map((row) => row.conversationId)]);

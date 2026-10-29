@@ -622,7 +622,7 @@ test("an approval survives another rotation without a new show or question", asy
   expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
 });
 
-test("unreadable seat lineage cannot transfer a predecessor's approval", async () => {
+test.each(["unreadable", "ambiguous"] as const)("%s seat lineage cannot transfer a predecessor's approval", async (kind) => {
   designate(PROJECT, SEAT);
   const h = harness();
   const digest = await previewed(h);
@@ -630,7 +630,8 @@ test("unreadable seat lineage cannot transfer a predecessor's approval", async (
   tick();
   designate(PROJECT, OTHER_SEAT);
   await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
-  fs.writeFileSync(path.join(privacyState, "orchestrator-seats.json"), "{broken");
+  if (kind === "unreadable") fs.writeFileSync(path.join(privacyState, "orchestrator-seats.json"), "{broken");
+  else designate("repo-foreign", OTHER_SEAT);
   expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "no_form" } });
   expect(h.published).toEqual([]);
 });
