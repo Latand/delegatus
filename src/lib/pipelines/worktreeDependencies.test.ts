@@ -220,7 +220,14 @@ test("a worktree install preserves an already shared input graph", async () => {
     const local = path.join(f.worktreeDir, "node_modules"), shared = fs.realpathSync(local);
     expect(fs.lstatSync(local).isSymbolicLink()).toBe(true);
     const version = (directory: string) => JSON.parse(fs.readFileSync(path.join(directory, "fixture-tool/package.json"), "utf8")).version;
+    const exportedVersion = async (directory: string) => {
+      const result = await realExec("node", ["-p", "require(process.argv[1])", path.join(directory, "fixture-tool")], f.worktreeDir,
+        undefined, { timeoutMs: 20_000 });
+      expect(result.code).toBe(0);
+      return result.stdout.trim();
+    };
     expect(version(shared)).toBe("2.0.0");
+    expect(await exportedVersion(shared)).toBe("2.0.0");
     const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
     manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${f.server.port}/next.tgz`;
     fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify(manifest));
@@ -230,9 +237,12 @@ test("a worktree install preserves an already shared input graph", async () => {
     expect([0, 1].includes(installed.code ?? -1)).toBe(true);
     if (installed.code === 0) expect(version(local)).toBe("3.0.0");
     expect(version(shared)).toBe("2.0.0");
+    expect(await exportedVersion(shared)).toBe("2.0.0");
     await prepareWorktreeDependencies(f.pipeline);
     expect(version(local)).toBe("3.0.0");
+    expect(await exportedVersion(local)).toBe("3.0.0");
     expect(version(shared)).toBe("2.0.0");
+    expect(await exportedVersion(shared)).toBe("2.0.0");
   } finally { f.close(); }
 }, 30_000);
 
