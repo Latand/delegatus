@@ -30,6 +30,10 @@ account retirement and conversation reconciliation continue to write the same
 metadata through registry mutations. `engineRoutingSnapshot` reads all engine
 routes in one transaction, preserving a consistent pair for compatibility
 routing. It changes neither the metadata schema nor its default engine slots.
+Each production registry mutation also journals its `revision` control row.
+The metadata fast path admits that counter and updates the snapshot revision;
+it does not add a `revision` property to the registry file. Unknown metadata
+keys and row changes retain the existing refresh path.
 
 Each `RuntimeJournal` owns its parsed-entity LRU. It retains at most 8,192
 variants and 16 MiB of encoded payload; JavaScript object and key overhead is
@@ -88,6 +92,12 @@ alternating base and candidate for three pairs. Each process performs the same
 warmup, unchanged reads and deterministic mutations. Record elapsed time, CPU,
 Linux userspace read bytes and host load. Output digests compare corresponding
 answers outside the timed section.
+Complete JSON and SQLite registry answers are also hashed after all timed
+calls, so comparison includes the full fixture rather than only selected keys.
+The default changed-catalog case changes 32 paths; `--single-change` changes
+one path. The driver also records the controller's inventory-call trace, cold
+runtime collection and the first full and summary frames. Run each condition
+for three alternating pairs against the same seeded corpus.
 
 The driver's worktree projection measurement uses this synthetic copy and a
 deterministic process-proof callback. It changes no worktree-sweep source and
@@ -101,8 +111,16 @@ reads and existing inventory races. Runtime tests cover output mutation,
 one-entity invalidation, full/summary/targeted voice equivalence, peer edits that
 keep their revision, deletion, reinsertion, rollback, failed reads, cache limits,
 retry receipt presentation and a fresh-process read of the same database.
+Metadata work bounds use the real writer, including its revision journal row,
+and reject historical row/header queries during refresh. A receipt key that
+matches a metadata field and an unknown metadata key exercise the fallback
+boundaries. The interprocess compatibility-routing race pauses the paired
+routing read before concurrent selection and verifies the admission recheck.
 
 The importer campaign runs explicit test files serially, with a new isolated
 environment for each file. Each file retains its complete output and exit status;
 the campaign records its final ran count. A red file is rerun in the pinned base
 under the same isolation before attribution.
+The inventory contains 417 directly resolved importer files plus 12 explicit
+child-script, evaluation and adjacent controls. Discovery resolves relative
+imports and the `@/` alias across static, literal dynamic and `require` imports.

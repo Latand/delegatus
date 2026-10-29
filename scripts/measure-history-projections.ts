@@ -74,10 +74,14 @@ if (mode === "seed") {
       runtimePayloads: typeof runtimeReader.journal?.snapshotProjectionReads === "number" ? runtimeReader.journal.snapshotProjectionReads - before.runtime : null }));
     return value;
   }
+  function recordFullValue(site: string, value: unknown) {
+    const encoded = JSON.stringify(value);
+    console.log(JSON.stringify({ site, kind: "full-value", bytes: Buffer.byteLength(encoded),
+      digest: createHash("sha256").update(encoded).digest("hex") }));
+  }
   const json = new AgentRegistry(path.join(copy, "registry.json"), undefined, undefined, { sqliteMode: "off", now: () => at });
   await measure("registry-json", "cold", () => Object.keys(json.readOnlySnapshot().conversations).length);
   await measure("registry-json", "unchanged", () => Object.keys(json.readOnlySnapshot().conversations).length);
-  json.close();
   const filename = path.join(copy, "registry", "agent-registry.sqlite");
   // The dataset's returned filename is recorded independently of naming.
   const sqliteFile = fs.readdirSync(path.join(copy, "registry")).find(name => name.endsWith(".sqlite"))!;
@@ -122,7 +126,6 @@ if (mode === "seed") {
   await measure("migration-controller", changeKind, async () => { await controller.poll(); return inventoryCalls; });
   console.log(JSON.stringify({ site: "migration-controller", kind: changeKind, mutationPaths: selected.size, contextReads }));
   await measure("worktree-cwd-deferred", "unchanged", () => conversationCwdStatus(registry.readOnlySnapshot(), at, () => true));
-  writer.close(); registry.close();
   const journal = new RuntimeJournal(path.join(copy, "journal.sqlite"), { now: () => at });
   runtimeReader.journal = journal;
   // Finish the existing asynchronous metadata migration before each measured
@@ -145,5 +148,10 @@ if (mode === "seed") {
   await measure("journal-summary", "one-row-change", () => journal.snapshotJson([]));
   console.log(JSON.stringify({ site: "journal", selectedSessions: journal.snapshot().sessions.length,
     projectionReads: (journal as unknown as { snapshotProjectionReads?: number }).snapshotProjectionReads ?? null }));
+  // Compare the complete registry answers after every timed call. Keeping the
+  // hashes outside those calls avoids charging validation to a read site.
+  recordFullValue("registry-json-output", json.readOnlySnapshot());
+  recordFullValue("registry-sqlite-output", registry.readOnlySnapshot());
+  json.close(); writer.close(); registry.close();
   journal.close();
 }
