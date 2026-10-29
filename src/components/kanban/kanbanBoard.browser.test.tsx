@@ -41054,3 +41054,375 @@ describe("task summary and timeline prototype v2", () => {
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
+
+/*
+ * A pipeline drafted from a card's conversation
+ * (docs/design/start-pipeline-from-conversation/implementation.md, variant 3):
+ * the card's ⋯ row naming the conversation and its branch, the draft being
+ * prepared, the draft on the card with the Builder's first message, editing
+ * it, an edit conflict, choosing stages, a refused and a lost creation, a
+ * refused Start and the started lane. Desktop at 1440 and 915, the phone at
+ * 390 with a coarse pointer, in en and uk, light and dark. The page's
+ * `/api/pipelines/from-conversation` reaches this driver, which holds,
+ * refuses or loses the answers; pictures go to
+ * `.artifacts/start-pipeline-from-conversation/`.
+ */
+describe("start a pipeline from a conversation", () => {
+  const BRANCH = "fix/csv-export-retry-after-503-streaming";
+  const HEAD = "4f1c2a9b7e3d5f6a8b0c1d2e3f4a5b6c7d8e9f01";
+  const SOURCE_TITLE = { en: "CSV export retry and streaming writes", uk: "Повтор експорту CSV і потоковий запис" } as const;
+  const BRIEF = {
+    en: "CSV export fails on large projects (over 50k rows): the worker runs out of memory.\nDecided in the conversation: the file format stays byte for byte, customers parse it.\nDone: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass).\nLeft: a test for the retry after 503, then a review of the three changed files.",
+    uk: "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті.\nУ розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають.\nЗроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли).\nЛишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів.",
+  } as const;
+  const THEIRS = { en: "Keep the header row exactly as customers parse it today.", uk: "Лишити рядок заголовків таким, як його розбирають клієнти сьогодні." } as const;
+  const role = (roleId: string, engine: string, model: string, effort: string) => ({ roleId, engine, model, effort, access: "read-write", promptScaffold: null });
+  const draftRecord = (locale: "en" | "uk") => ({
+    id: "p-export", task: locale === "uk" ? "Експорт CSV падає на великих проєктах: воркеру бракує пам’яті понад 50 тис. рядків" : "CSV export fails on large projects: the worker runs out of memory past 50k rows",
+    taskIds: ["t-csv-export"], finishesTaskIds: [], project: "atlas", repoDir: "/repo/atlas", worktreeDir: null, branch: "pipeline/csv-export-fails-p-export",
+    baseBranch: BRANCH, baseRef: HEAD, lastPassedCommit: HEAD, state: "draft", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    stages: [
+      { id: "builder", kind: "run", role: { roleId: "builder" }, prompt: `{{task}}\n\n${BRIEF[locale]}`, next: "reviewer", onFail: null, access: "read-write", effectiveRole: role("builder", "claude", "opus", "high") },
+      { id: "reviewer", kind: "run", role: { roleId: "reviewer" }, prompt: "{{prev.output}}", next: null, onFail: { to: "builder", maxRounds: 2, onExhausted: "advance" }, access: "read-only", effectiveRole: role("reviewer", "codex", "gpt-5.6", "xhigh") },
+    ],
+    runs: [], cursor: null, createdAt: new Date(Date.now() - 30_000).toISOString(), closedAt: null,
+    conversationSource: { conversationId: "conversation_csv-export", branch: BRANCH, head: HEAD, capturedAt: new Date(Date.now() - 30_000).toISOString() },
+  });
+
+  type Combo = { width: number; height: number; locale: "en" | "uk"; scheme: "light" | "dark" };
+  const phone = (combo: Combo) => combo.width < 600;
+
+  /* Text ranges of each element against the window and every clipping ancestor, and the element's box. */
+  const measure = (page: Page, selectors: string[]) => page.evaluate((list) => list.map((selector) => {
+    const element = document.querySelector<HTMLElement>(selector);
+    if (!element) return { selector, missing: true, cut: true, width: 0, height: 0, text: "" };
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+    const clips: DOMRect[] = [new DOMRect(0, 0, innerWidth, innerHeight)];
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (/hidden|auto|scroll|clip/.test(style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+    }
+    const cut = rects.some((rect) => clips.some((clip) => rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5 || rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5));
+    const box = element.getBoundingClientRect();
+    return { selector, missing: false, cut, width: Math.round(box.width), height: Math.round(box.height), text: (element.textContent ?? "").replace(/\s+/g, " ").trim() };
+  }), selectors);
+
+  async function capture(browser: Browser, base: string, combo: Combo, out: string) {
+    const label = `${combo.width}-${combo.locale}-${combo.scheme}`;
+    const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=from-conversation`, { width: combo.width, height: combo.height }, combo.scheme, combo.locale, "reduce", phone(combo));
+    const states: Record<string, unknown> = {};
+    let post: "hold" | "ok" | "refuse" | "lose" | "changed" = "ok";
+    const held: Array<() => Promise<void>> = [];
+    /* What the source reads as; a check after a refusal may find it on another branch. */
+    let read = { branch: BRANCH, revision: "rev-1", hold: false };
+    const heldReads: Array<() => Promise<void>> = [];
+    const posted: Array<{ clientRequestId: string; sourceRevision: string }> = [];
+    await page.route("**/api/pipelines/from-conversation**", async (route) => {
+      if (route.request().method() === "GET") {
+        const { branch, revision } = read;
+        const answer = () => route.fulfill({ json: { ok: true, source: { conversationId: "conversation_csv-export", title: SOURCE_TITLE[combo.locale], branch, head: HEAD, sourceRevision: revision, canCreate: true } } });
+        if (read.hold) heldReads.push(answer);
+        else await answer();
+        return;
+      }
+      const body = route.request().postDataJSON() as { clientRequestId: string; sourceRevision: string };
+      posted.push({ clientRequestId: body.clientRequestId, sourceRevision: body.sourceRevision });
+      const answer = () => route.fulfill({ status: 201, json: { ok: true, pipeline: draftRecord(combo.locale) } });
+      if (post === "hold") held.push(answer);
+      else if (post === "refuse") await route.fulfill({ status: 409, json: { error: "card no longer holds source", code: "SOURCE_NOT_ON_TASK" } });
+      else if (post === "changed") await route.fulfill({ status: 409, json: { error: "source changed after preview", code: "SOURCE_CHANGED" } });
+      else if (post === "lose") await route.abort("connectionreset");
+      else await answer();
+    });
+    const shot = async (state: string, defining: string[], targets: string[] = []) => {
+      const first = page.locator(defining[0]!).first();
+      await first.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(150);
+      const read = await measure(page, defining);
+      const sizes = await measure(page, targets);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 0.5);
+      await page.screenshot({ path: path.join(out, `${label}-${state}.png`) });
+      states[state] = { defining: read, targets: sizes, overflow };
+      expect(read.filter((entry) => entry.missing || entry.cut).map((entry) => entry.selector)).toEqual([]);
+      const floor = phone(combo) ? 44 : 24;
+      expect(sizes.filter((entry) => entry.missing || entry.height < floor - 0.5).map((entry) => `${entry.selector} ${entry.height}`)).toEqual([]);
+      expect(overflow).toBe(false);
+      if (combo.locale === "uk") expect(read.map((entry) => entry.text).join(" ")).toMatch(/[А-Яа-яІіЇїЄєҐґ]/);
+    };
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(combo.locale, key, params);
+    /* The menu row's conversation name, and its branch on the line under it, broken only after a «/» (frame 3a). */
+    const hintLines = (scope: string) => page.evaluate((scope) => {
+      const branch = document.querySelector<HTMLElement>(`${scope} [data-branch-name]`);
+      const title = branch?.previousElementSibling ?? null;
+      const segments = [...(branch?.querySelectorAll<HTMLElement>("[data-branch-segment]") ?? [])];
+      return {
+        title: title?.textContent ?? null,
+        branch: branch?.textContent ?? null,
+        titleAbove: Boolean(title && branch && title.getBoundingClientRect().bottom <= branch.getBoundingClientRect().top + 0.5),
+        brokenSegments: segments.filter((segment) => segment.getClientRects().length !== 1 || segment.scrollWidth > segment.clientWidth + 0.5).map((segment) => segment.textContent),
+        lines: new Set(segments.map((segment) => Math.round(segment.getBoundingClientRect().top))).size,
+      };
+    }, scope);
+    const hintScope = phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"]';
+    const expectHint = async (record: string) => {
+      const hint = await hintLines(hintScope);
+      states[record] = hint;
+      expect({ title: hint.title, branch: hint.branch, titleAbove: hint.titleAbove, brokenSegments: hint.brokenSegments }).toEqual({ title: SOURCE_TITLE[combo.locale], branch: BRANCH, titleAbove: true, brokenSegments: [] });
+    };
+    /* The opened configuration: the stage's own role selected, every header control inside the pane, no header line holding the × alone, nothing clipped in its body. */
+    const expectConfigure = async (pane: string) => {
+      const read = await page.evaluate(([pane, removeLabel]) => {
+        const root = document.querySelector<HTMLElement>(pane)!;
+        const card = root.querySelector<HTMLElement>("[data-pipeline-stage-card]")!;
+        const box = card.getBoundingClientRect();
+        const select = root.querySelector<HTMLSelectElement>("select");
+        const body = root.querySelector<HTMLElement>("[data-stage-pane-body]")!;
+        return {
+          role: select?.value ?? null,
+          roleText: select?.selectedOptions[0]?.textContent ?? null,
+          headerOutside: [...card.querySelectorAll<HTMLElement>("header button")].filter((button) => {
+            const rect = button.getBoundingClientRect();
+            return rect.left < box.left - 0.5 || rect.right > box.right + 0.5;
+          }).map((button) => button.getAttribute("aria-label")),
+          removeAlone: (() => {
+            const header = card.querySelector<HTMLElement>("header")!;
+            const remove = header.querySelector<HTMLElement>(`button[aria-label="${removeLabel}"]`);
+            if (!remove) return null;
+            const own = remove.getBoundingClientRect();
+            const others = [...header.querySelectorAll<HTMLElement>(":scope > *, button")].filter((item) => !item.contains(remove));
+            return !others.some((item) => {
+              const rect = item.getBoundingClientRect();
+              return rect.width > 0 && rect.top < own.bottom - 0.5 && rect.bottom > own.top + 0.5;
+            });
+          })(),
+          bodyClipped: body.scrollHeight > body.clientHeight + 1,
+        };
+      }, [pane, t("groupOverride.removeStage")] as const);
+      states.configureRead = read;
+      expect(read).toEqual({ role: "reviewer", roleText: read.roleText, headerOutside: [], removeAlone: false, bodyClipped: false });
+      expect(read.roleText).not.toBe(t("draft.noRole"));
+    };
+    const openTask = async () => {
+      if (phone(combo)) {
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await page.locator('[data-phone-card="task:t-csv-export"]').first().click();
+        await page.locator('[data-phone-task-body="t-csv-export"]').waitFor();
+      } else {
+        await page.locator('.card[data-id="task:t-csv-export"]').waitFor();
+      }
+    };
+    const openMenu = async () => {
+      if (phone(combo)) await page.locator('[data-mobile2-open="menu"]').click();
+      else await page.locator('.card[data-id="task:t-csv-export"] [data-menu]').first().click();
+      const row = phone(combo) ? page.locator('[data-phone-task-menu="fromConversation"][data-phone-from-conversation="ready"]') : page.locator('.menu [data-cm-item="fromConversation"]:not([aria-disabled="true"])');
+      await row.waitFor();
+      return row;
+    };
+    try {
+      await openTask();
+      /* 1. The menu names the conversation and its branch. */
+      const row = await openMenu();
+      await expectHint("menuHint");
+      await shot("menu", [phone(combo) ? '[data-phone-from-conversation-hint]' : '.menu [data-cm-item="fromConversation"] .lbl', `${hintScope} [data-branch-name]`], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      /* 2. Preparing, held until the driver answers. */
+      post = "hold";
+      await row.click();
+      await page.locator('[data-conversation-draft="creating"]').waitFor();
+      expect(await page.locator('[data-conversation-draft="creating"]').textContent()).toBe(t("kanban.fromConversation.preparing", { title: SOURCE_TITLE[combo.locale], branch: BRANCH }));
+      await shot("preparing", ['[data-conversation-draft="creating"]']);
+      /* 3. The draft: the Builder's first message and Start. */
+      await held.shift()!();
+      const message = page.locator('[data-draft-message="p-export:builder"]').first();
+      await message.waitFor();
+      await page.locator('[data-draft-start="p-export"]').first().waitFor();
+      const startTarget = phone(combo) ? '[data-mobile2-dock] [data-draft-start="p-export"]' : '[data-draft-start="p-export"]';
+      await shot("draft", ['[data-draft-message="p-export:builder"] .btext', startTarget], [startTarget, '[data-draft-edit="p-export:builder"]']);
+      /* The phone's Edit sits in the message box's footer row: no line of the message wraps around it (frame 3b). */
+      const editLayout = await page.evaluate(() => {
+        const message = document.querySelector('[data-draft-message="p-export:builder"]')!;
+        const text = message.querySelector<HTMLElement>(".btext")!;
+        const edit = message.querySelector<HTMLElement>("[data-draft-edit]")!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        const firstTop = Math.min(...rects.map((rect) => rect.top));
+        const firstRight = Math.max(...rects.filter((rect) => Math.abs(rect.top - firstTop) < 2).map((rect) => rect.right));
+        return { editBelowText: edit.top >= Math.max(...rects.map((rect) => rect.bottom)) - 0.5, firstLineRight: Math.round(firstRight), textRight: Math.round(text.getBoundingClientRect().right), editRight: Math.round(edit.right) };
+      });
+      states.editLayout = editLayout;
+      if (phone(combo)) expect(editLayout.editBelowText).toBe(true);
+      /* The phone's heading names the first message, so its status line names the source instead (frame 3b); the card has no heading. */
+      const firstMessageStatus = await page.locator('[data-draft-message="p-export:builder"] .bstatus').first().textContent();
+      states.firstMessageStatus = firstMessageStatus;
+      expect(firstMessageStatus).toBe(t(phone(combo) ? "kanban.fromConversation.status" : "kanban.draft.status"));
+      /* 4. Editing the first message. */
+      await page.locator('[data-draft-edit="p-export:builder"]').first().click();
+      const field = page.locator('[data-draft-field="p-export:builder"]').first();
+      await field.waitFor();
+      await field.press("End");
+      await field.type(combo.locale === "uk" ? " Не змінювати заголовки колонок." : " Do not rename the column headers.");
+      expect(await page.locator('[data-draft-start="p-export"]').first().isDisabled()).toBe(true);
+      /* ⌘/Ctrl+Enter and Esc are told where a keyboard is: on the board, never on the phone. */
+      const keysHint = page.locator('[data-draft-message="p-export:builder"] .draft-acts .hint.keys').first();
+      expect(await keysHint.isVisible()).toBe(!phone(combo));
+      await shot("editing", ['[data-draft-save="p-export:builder"]', '[data-draft-start-note="blocked"]'], ['[data-draft-save="p-export:builder"]', '[data-draft-cancel="p-export:builder"]']);
+      /* 5. Another client changed the message first: the conflict says so. */
+      await page.evaluate((prompt) => { (window as unknown as { evidence: { changeStageBeforeNextPatch: unknown } }).evidence.changeStageBeforeNextPatch = { pipelineId: "p-export", stageId: "builder", prompt }; }, `{{task}}\n\n${THEIRS[combo.locale]}`);
+      await page.locator('[data-draft-save="p-export:builder"]').first().click();
+      await page.locator("[data-draft-changed]").first().waitFor();
+      /* The conflict notice is the board's own; its links are measured where a finger presses them. */
+      expect(await keysHint.isVisible()).toBe(!phone(combo));
+      await shot("conflict", ["[data-draft-changed] .msg-text"], phone(combo) ? ["[data-draft-changed] button"] : []);
+      await page.locator("[data-draft-changed] button").first().click();
+      await page.locator("[data-draft-changed]").waitFor({ state: "detached" });
+      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. */
+      if (!phone(combo)) {
+        await page.locator('.card[data-id="task:t-csv-export"] [data-open-stages="p-export"]').first().click();
+        await page.locator("[data-stages-sheet]").waitFor();
+      }
+      await page.locator("[data-draft-add-stage-toggle]").first().click();
+      await page.locator("[data-draft-add-stage-roles]").waitFor();
+      /* On the phone «+ Stage» follows the last stage row, before the loop note and Attach. */
+      if (phone(combo)) expect(await page.evaluate(() => document.querySelector("[data-draft-add-stage]")?.previousElementSibling?.matches("ol.pb-stages") ?? false)).toBe(true);
+      await shot("stages", ["[data-draft-add-stage-roles]", "[data-draft-add-stage-toggle]"], ["[data-draft-add-stage-toggle]", '[data-draft-add-role="verifier"]']);
+      await page.locator('[data-draft-add-role="verifier"]').first().click();
+      await page.locator("[data-draft-add-stage-roles]").waitFor({ state: "detached" });
+      await page.locator(phone(combo) ? '[data-stage-configure="verifier"]' : '[data-stages-sheet] .pane[data-stage="verifier"]').first().waitFor();
+      if (phone(combo)) {
+        await page.locator('[data-stage-configure="reviewer"]').first().click();
+        await page.locator('[data-mobile2-stage-config="reviewer"]').waitFor();
+        await page.locator(`[data-mobile2-stage-config="reviewer"] button[aria-label="${t("groupOverride.applyStage")}"]`).click();
+        await page.locator('[data-mobile2-stage-config="reviewer"] [role="radiogroup"]').first().waitFor();
+        await expectConfigure('[data-mobile2-stage-config="reviewer"]');
+        await shot("configure", ["[data-mobile2-sheet-header] h2", '[data-mobile2-stage-config="reviewer"] [role="radiogroup"]'], ['[data-mobile2-stage-config="reviewer"] [role="radiogroup"] [role="radio"]']);
+        await page.locator("[data-mobile2-close]").first().click();
+        await page.locator('[data-mobile2-stage-config="reviewer"]').waitFor({ state: "detached" });
+      } else {
+        await page.locator('[data-draft-configure="reviewer"]').first().click();
+        await page.locator('[data-draft-configure-pane="reviewer"]').waitFor();
+        /* The existing pane opens its role and runtime choices behind its own settings button. */
+        await page.locator(`[data-draft-configure-pane="reviewer"] button[aria-label="${t("groupOverride.applyStage")}"]`).click();
+        await page.locator('[data-draft-configure-pane="reviewer"] [role="radiogroup"]').first().waitFor();
+        await expectConfigure('[data-draft-configure-pane="reviewer"]');
+        await shot("configure", ['[data-draft-configure="reviewer"]', '[data-draft-configure-pane="reviewer"] [role="radiogroup"]'], ['[data-draft-configure="reviewer"]']);
+        await page.locator("[data-sheet-close]").first().click();
+        await page.locator("[data-stages-sheet]").waitFor({ state: "detached" });
+      }
+      /* 7. A refused Start keeps the draft and says why beside Start. */
+      await page.evaluate(() => { (window as unknown as { evidence: { refuseNextPipelinePatch: unknown } }).evidence.refuseNextPipelinePatch = { status: 409, error: "no signed-in account can run claude for this project" }; });
+      await page.locator('[data-draft-start="p-export"]').first().click();
+      await page.locator('[data-draft-start-note="refused"]').first().waitFor();
+      await shot("start-refused", ['[data-draft-start-note="refused"]', startTarget], [startTarget]);
+      /* 8. Started: the lane leaves its draft and the draft-only controls go. */
+      await page.locator('[data-draft-start="p-export"]').first().click();
+      await page.locator('[data-pipeline="p-export"][data-lane-state="running"]').first().waitFor();
+      expect(await page.locator("[data-draft-start]").count()).toBe(0);
+      await shot("started", ['[data-pipeline="p-export"][data-lane-state="running"]']);
+
+      /* 9-10. A refused creation, then one whose answer was lost, from a fresh page. */
+      await page.goto(`${base}?scenario=from-conversation`);
+      await openTask();
+      post = "refuse";
+      await (await openMenu()).click();
+      await page.locator('[data-conversation-draft="refused"]').waitFor();
+      expect(await page.locator('[data-pipeline="p-export"]').count()).toBe(0);
+      await shot("create-refused", ['[data-conversation-draft="refused"]'], ['[data-conversation-draft-retry]']);
+      await page.locator("[data-conversation-draft-dismiss]").click();
+      post = "lose";
+      await (await openMenu()).click();
+      await page.locator('[data-conversation-draft="unknown"]').waitFor();
+      await shot("create-unknown", ['[data-conversation-draft="unknown"]'], [phone(combo) ? "[data-conversation-draft-retry]" : "[data-conversation-draft-check]"]);
+      /* 11. The menu while that answer is lost names the request's own source and asks for it again. */
+      const lostKey = posted.at(-1)!.clientRequestId;
+      read = { branch: `${BRANCH}-v2`, revision: "rev-2", hold: false };
+      const cardMenu = '.card[data-id="task:t-csv-export"] [data-menu]';
+      const desktopCard = page.locator('.card[data-id="task:t-csv-export"]').first();
+      let again: Locator;
+      if (phone(combo)) again = await openMenu();
+      else {
+        /* Folded, the card hides its notices: asking again opens it, so the preparing notice and the refusal show. */
+        await desktopCard.locator(".tools .fold").click();
+        expect(await desktopCard.getAttribute("data-collapsed")).toBe("1");
+        /* By keyboard: ⋯ with Enter, the row with Enter. */
+        await page.locator(cardMenu).first().focus();
+        await page.keyboard.press("Enter");
+        again = page.locator('.menu [data-cm-item="fromConversation"]:not([aria-disabled="true"])');
+        await again.waitFor();
+      }
+      await expectHint("unknownMenuHint");
+      expect(await again.textContent()).not.toContain(`${BRANCH}-v2`);
+      const unknownNote = phone(combo) ? '[data-phone-task-menu-note="fromConversation"]' : '.menu [data-cm-item="fromConversation"] .why.warn';
+      expect(await page.locator(unknownNote).textContent()).toBe(t("kanban.fromConversation.unknownRow"));
+      await shot("unknown-menu", [phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"] .why:not(.warn)', `${hintScope} [data-branch-name]`, unknownNote], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      post = "changed";
+      if (phone(combo)) await again.click();
+      else {
+        await again.focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.locator('[data-conversation-draft="refused"][data-conversation-draft-code="SOURCE_CHANGED"]').waitFor();
+      expect(posted.slice(-2).map((entry) => entry.clientRequestId)).toEqual([lostKey, lostKey]);
+      if (!phone(combo)) expect(await desktopCard.getAttribute("data-collapsed")).toBe("0");
+      /* Keyboard focus is back on the card's ⋯, beside the notice. */
+      const focus = () => page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        if (active?.hasAttribute("data-menu")) return `⋯ ${active.getAttribute("data-menu")}`;
+        if (active?.hasAttribute("data-conversation-draft-create")) return "Create";
+        return active?.tagName ?? null;
+      });
+      if (!phone(combo)) expect(await focus()).toBe("⋯ task:t-csv-export");
+      expect(await page.locator("[data-conversation-draft-retry]").textContent()).toBe(t("kanban.fromConversation.refresh"));
+      await shot("create-changed", ['[data-conversation-draft="refused"] ' + (phone(combo) ? "p" : ".msg-text")], ["[data-conversation-draft-retry]", "[data-conversation-draft-dismiss]"]);
+      /* 12. Check again reads the source while saying so, then shows the branch it found; it posts nothing. */
+      const postsBefore = posted.length;
+      read = { ...read, hold: true };
+      if (phone(combo)) await page.locator("[data-conversation-draft-retry]").click();
+      else {
+        await page.locator("[data-conversation-draft-retry]").focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.locator('[data-conversation-draft="checking"]').waitFor();
+      expect(await page.locator('[data-conversation-draft="checking"]').textContent()).toBe(t("kanban.fromConversation.checking", { title: SOURCE_TITLE[combo.locale] }));
+      await shot("create-checking", ['[data-conversation-draft="checking"]']);
+      read = { ...read, hold: false };
+      await heldReads.shift()!();
+      await page.locator('[data-conversation-draft="checked"]').waitFor();
+      expect(posted.length).toBe(postsBefore);
+      const checkedText = '[data-conversation-draft="checked"] ' + (phone(combo) ? "p" : ".msg-text");
+      expect(await page.locator(checkedText).textContent()).toBe(t("kanban.fromConversation.checked", { title: SOURCE_TITLE[combo.locale], branch: `${BRANCH}-v2` }));
+      /* The Check button that held focus is gone: Create, where the answer is, takes it. */
+      if (!phone(combo)) expect(await focus()).toBe("Create");
+      await shot("create-checked", [checkedText, "[data-conversation-draft-create]"], ["[data-conversation-draft-create]", "[data-conversation-draft-dismiss]"]);
+      post = "hold";
+      await page.locator("[data-conversation-draft-create]").click();
+      await page.locator('[data-conversation-draft="creating"]').waitFor();
+      expect(posted.at(-1)?.sourceRevision).toBe("rev-2");
+      expect(posted.at(-1)?.clientRequestId).not.toBe(lostKey);
+      states.requestKeys = posted.map((entry, index) => ({ n: index + 1, sameAsLost: entry.clientRequestId === lostKey, sourceRevision: entry.sourceRevision }));
+      expect(pageErrors).toEqual([]);
+      return { label, states, pageErrors };
+    } finally {
+      await context.close();
+    }
+  }
+
+  /* The three named widths, and a 700 px-tall desktop between 1440 and 915. */
+  for (const [width, height] of [[1440, 900], [1000, 700], [915, 900], [390, 844]] as const) {
+    browserTest(`every state at ${width}×${height} in en and uk, light and dark`, async () => {
+      const out = path.resolve(".artifacts/start-pipeline-from-conversation");
+      fs.mkdirSync(out, { recursive: true });
+      const server = await serveEvidenceFixture(out);
+      const browser = await chromium.launch({ ...LAUNCH, ...(width < 600 ? {} : { ignoreDefaultArgs: ["--hide-scrollbars"] }) });
+      const cases: unknown[] = [];
+      try {
+        for (const locale of ["en", "uk"] as const) {
+          for (const scheme of ["light", "dark"] as const) cases.push(await capture(browser, server.base, { width, height, locale, scheme }, out));
+        }
+      } finally { await browser.close(); server.stop(); }
+      fs.mkdirSync("evidence/start-pipeline-from-conversation", { recursive: true });
+      fs.writeFileSync(`evidence/start-pipeline-from-conversation/rendered-${width}.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    }, 600_000);
+  }
+});

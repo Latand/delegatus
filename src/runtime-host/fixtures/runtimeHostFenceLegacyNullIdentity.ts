@@ -11,6 +11,12 @@ if (!role || !hostModule || !procModule || !fenceFilename || !sandbox) {
 }
 
 const releaseFilename = path.join(sandbox, "release");
+const publishOutcome = (outcome: string): void => {
+  const filename = path.join(sandbox, "contender-outcome");
+  // Existence is the reader's barrier. Publish only after all bytes are closed.
+  fs.writeFileSync(`${filename}.pending`, outcome);
+  fs.renameSync(`${filename}.pending`, filename);
+};
 const waitForRelease = async (): Promise<void> => {
   const deadline = Date.now() + 10_000;
   while (!fs.existsSync(releaseFilename)) {
@@ -54,13 +60,10 @@ if (role === "owner") {
       server!.once("error", reject);
       server!.listen(listenerFilename, resolve);
     });
-    fs.writeFileSync(path.join(sandbox, "contender-outcome"), "active");
+    publishOutcome("active");
     await waitForRelease();
   } catch (error) {
-    fs.writeFileSync(
-      path.join(sandbox, "contender-outcome"),
-      `blocked:${error instanceof Error ? error.message : String(error)}`,
-    );
+    publishOutcome(`blocked:${error instanceof Error ? error.message : String(error)}`);
   } finally {
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
     fence.release();

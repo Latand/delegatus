@@ -964,11 +964,24 @@ export function isStoredPipeline(value: unknown): value is Pipeline {
   return isPipeline(value);
 }
 
+export function isPipelineConversationSource(value: unknown): value is NonNullable<Pipeline["conversationSource"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  return Object.keys(source).length === 4
+    && typeof source.conversationId === "string" && /^conversation_[A-Za-z0-9_-]{1,180}$/.test(source.conversationId)
+    && typeof source.branch === "string" && source.branch.length > 0 && source.branch.length <= 1024
+    && !/[\s\x00-\x1f]/u.test(source.branch)
+    && typeof source.head === "string" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(source.head)
+    && typeof source.capturedAt === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(source.capturedAt)
+    && Number.isFinite(Date.parse(source.capturedAt)) && new Date(source.capturedAt).toISOString() === source.capturedAt;
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    (pipeline.conversationSource === undefined || isPipelineConversationSource(pipeline.conversationSource)) &&
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
@@ -1510,6 +1523,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       : []);
   return {
     ...pipeline,
+    conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
@@ -2054,15 +2068,33 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
     owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
 }
 
-export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean } = {}): Promise<Pipeline> {
-  return withDeliveryMutationAsync((tx) => {
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
+  requireOwner?: boolean;
+  /** Outside the lease; repeated after contention before another create attempt. */
+  prepare?: () => Promise<void>;
+  /** Synchronous creation-only freshness guard under the writer lease. */
+  admit?: () => void;
+  /** Live authority and result scope, independent of source freshness. */
+  admitReplay?: (pipeline: Pipeline) => void;
+  onReplay?: () => void;
+} = {}): Promise<Pipeline> {
+  const replay = (tx: StateBoundedTransaction<Pipeline>) => {
     if (pipeline.creationRequest) {
-      const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
-      if (replay) {
-        if (replay.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
-        return replay;
+      const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
+      if (existing) {
+        options.admitReplay?.(existing);
+        if (existing.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+        options.onReplay?.();
+        return existing;
       }
     }
+    return null;
+  };
+  const create = (tx: StateBoundedTransaction<Pipeline>, preparationFailure?: { error: unknown }) => {
+    const existing = replay(tx);
+    if (existing) return existing;
+    if (preparationFailure) throw preparationFailure.error;
+    options.admit?.();
     const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
@@ -2075,7 +2107,26 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);
     return pipeline;
-  }, options.requireOwner ? 4096 : 16);
+  };
+  const limit = options.requireOwner ? 4096 : 16;
+  const prepare = options.prepare;
+  if (!prepare) return withDeliveryMutationAsync(create, limit);
+  return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
+    const store = pipelineStore();
+    // A committed replay needs live authorization, but no fresh source capture.
+    const existing = store.boundedPatch(2, replay);
+    if (existing) { admitted(); return existing; }
+    let preparationFailure: { error: unknown } | undefined;
+    try { await prepare(); }
+    catch (error) { preparationFailure = { error }; }
+    // One non-waiting admission attempt follows preparation. Contention retries
+    // this whole operation, including preparation, with no Git under the lease.
+    return store.boundedPatch(limit, tx => {
+      admitted();
+      // A peer may have committed while preparation was running or refused.
+      return create(tx, preparationFailure);
+    });
+  }, { waitMs: pipelineLockWaitMs(), subject: "pipelines" }));
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
