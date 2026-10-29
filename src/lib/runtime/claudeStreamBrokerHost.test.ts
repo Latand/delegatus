@@ -1610,8 +1610,7 @@ describe("ClaudeStreamBrokerHost", () => {
       hostClaim: async () => "fixture-owner",
       transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => { journal.transitionOperation(...args); },
     };
-    const newQueue = () => new StructuredDeliveryQueue(queuePort, () => host,
-      undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    const newQueue = () => new StructuredDeliveryQueue(queuePort, () => host);
     let queue = newQueue();
     const wait = async (done: () => boolean) => {
       for (let attempt = 0; attempt < 200 && !done(); attempt++) await Bun.sleep(5);
@@ -1635,10 +1634,13 @@ describe("ClaudeStreamBrokerHost", () => {
     const result = () => child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
     const users = () => child.inputs.filter(frame => frame.type === "user");
     const deliver = async (command: (typeof commands)[number]) => {
-      await queue.drain();
-      await wait(() => users().some(frame => JSON.stringify(frame.message).includes(command.text)));
-      echo(command);
-      await wait(() => journal.operationResult(command.operationId)?.receipt.status === "delivered");
+      // The lane waits for the echo. Drive that echo while the drain runs,
+      // then join the lane before advancing the turn or replacing its queue.
+      await Promise.all([queue.drain(), (async () => {
+        await wait(() => users().some(frame => JSON.stringify(frame.message).includes(command.text)));
+        echo(command);
+      })()]);
+      expect(journal.operationResult(command.operationId)?.receipt.status).toBe("delivered");
       expect(journal.operationResult(command.operationId)?.receipt.turnId).toBe(command.operationId);
     };
     const idle = async () => {
@@ -1673,11 +1675,12 @@ describe("ClaudeStreamBrokerHost", () => {
           const attentionId = `permission-${batch}`;
           journal.executeOperation({ kind: "answer", operationId: `answer-${batch}`, idempotencyKey: `answer-${batch}`,
             conversationId, attentionId, resolution: { behavior: "allow" } });
-          await queue.drain();
-          await wait(() => child.inputs.some(frame => frame.type === "control_response"
-            && (frame.response as { request_id?: string })?.request_id === attentionId));
-          child.emitJson({ type: "control_response", response: { subtype: "success", request_id: attentionId } });
-          await wait(() => journal.operationResult(`answer-${batch}`)?.receipt.status === "answered");
+          await Promise.all([queue.drain(), (async () => {
+            await wait(() => child.inputs.some(frame => frame.type === "control_response"
+              && (frame.response as { request_id?: string })?.request_id === attentionId));
+            child.emitJson({ type: "control_response", response: { subtype: "success", request_id: attentionId } });
+          })()]);
+          expect(journal.operationResult(`answer-${batch}`)?.receipt.status).toBe("answered");
         }
         result(); await idle();
         for (const command of queued) {
@@ -1712,7 +1715,7 @@ describe("ClaudeStreamBrokerHost", () => {
         const written = users().length;
         queue = newQueue();
         await queue.drain(); await queue.drain();
-        await Bun.sleep(20); await queue.drain();
+        await queue.drain();
         expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(0);
         expect(users()).toHaveLength(written);
         expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe("queued");
@@ -1720,10 +1723,9 @@ describe("ClaudeStreamBrokerHost", () => {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
         }
         queue = newQueue();
-        result(); await idle(); await queue.drain();
-        await wait(() => users().length > written);
+        result(); await idle();
+        await deliver(replacement);
         expect(JSON.stringify(users()[written]?.message)).toContain(replacement.text);
-        echo(replacement); await wait(() => journal.operationResult(replacement.operationId)?.receipt.status === "delivered");
         for (const [index, command] of deferred.entries()) {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
           expect(journal.effectBatch(100).find(effect => effect.payload.operationId === command.operationId)?.payload.images ?? [])

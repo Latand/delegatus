@@ -357,7 +357,7 @@ export type SeatTickVerdict =
   | { kind: "quiet"; detail: string }
   | {
     kind: "wake";
-    catchUp?: { key: string; from: string; through: string; covers: string[] };
+    catchUp?: SeatTickCatchUp;
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
     /** Every lane the board routes to the seat, independent of detail credit. */
@@ -904,7 +904,7 @@ export interface SeatTickPolicy {
 export interface SeatTickWakeCommit {
   /** Interval at preparation, used to preserve an outage across a delayed landing. */
   wakeIntervalMs?: number;
-  catchUp?: { key: string; from: string; through: string; covers: string[] };
+  catchUp?: SeatTickCatchUp;
   diskPressure?: { episode: string; version: string };
   /** Latest settlement timestamp carried by this delivered deploy agenda. */
   deployResumeThrough?: string;
@@ -960,6 +960,15 @@ export interface SeatTickWakeCommit {
   reportedStalls?: string[];
 }
 
+export interface SeatTickCatchUp {
+  key: string;
+  from: string;
+  through: string;
+  covers: string[];
+  pending?: boolean;
+  after?: string;
+}
+
 /**
  * A wake the delivery layer accepted and has NOT landed, retained durably
  * against the conversation it was addressed to.
@@ -994,10 +1003,10 @@ export interface SeatTickOutstandingWake {
       here: an attempt still unresolved one wake interval later is put on the
       board. It ends nothing — an unresolved attempt keeps its identity. */
   preparedAt?: string;
-  /** Durable admission token for the one controller allowed inside transport.
-      A returned refusal can be released on fenced absence. Active or legacy
-      attempts cannot: a caller may still reserve the original key. */
-  dispatch?: { token: string; state: "active" | "refused" | "returned" };
+  /** The reservation guard rechecks this token. Expired callers are revoked
+      before destination reconciliation. Legacy calls keep their frozen key
+      and payload during idempotent recovery. */
+  dispatch?: { token: string; state: "active" | "refused" | "returned"; deadlineAt?: string; reason?: string; legacy?: boolean; uncertain?: boolean };
   /** Recovery progress survives a Viewer restart even while send admission is closed. */
   recovery?: {
     checkedAt: string;
@@ -1158,6 +1167,10 @@ export interface SeatTickProjectState {
   lastCheckAt: string | null;
   /** Last finished lane examined for local ancestry, persisted across checks. */
   localFinishedLaneCursor?: string | null;
+  wakeDecidedSince?: string | null;
+  /** A check-error notice may still be open, including a refused close. */
+  checkErrorAlarmPending?: boolean;
+  catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;
   lastWakeAt: string | null;
   lastWakeReasons: SeatTickWakeReasonKind[];
   /** Consecutive wakes carrying this reason that changed nothing. */
@@ -1377,6 +1390,9 @@ export interface SeatTickCheckInput {
       (docs/design/attention-auto-resolve.md), each with the line that says
       what was asked and how to answer it. Absent reads as none. */
   workerAsks?: readonly SeatTickWorkerAskInput[];
+  /** False when the source failed or was skipped. Omitted sources read as
+      empty; an unreadable source cannot prove a catch-up agenda complete. */
+  workerAsksObserved?: boolean;
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */
   events: readonly SeatTickEventInput[];
   /** Pull requests that finished lanes left open (#1289). Empty whenever the
@@ -1466,7 +1482,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
   detail: string;
   /**
    * Whether the condition still holds.
