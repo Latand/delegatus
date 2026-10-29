@@ -254,8 +254,8 @@ suffix. The next review receives that exact revision. A foreign head, a head
 made only on main, a rewrite of accepted history or a changed observation parks
 with the accepted commit preserved.
 
-If a publication repair's writable producer is confirmed dead, the controller
-can finish custody without a final producer answer. It verifies any committed
+If a publication repair's writable producer has no host, confirmed by the
+runtime, the controller can finish custody without a final producer answer. It verifies any committed
 suffix, commits staged repair through the ordinary stage committer, and restores
 tracked unstaged changes from the index, recording that discard on the attempt.
 Untracked files remain preserved and require staging before retry. The original

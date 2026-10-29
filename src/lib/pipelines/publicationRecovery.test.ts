@@ -1013,7 +1013,7 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-u
         cursor: { stageId: "review", state: "pending" } });
       expect(await f.git(f.remote, "rev-parse", result.delivery!.target.branch)).toBe(repaired);
       expect(attempt.publicationRepair?.committedSha).toBe(repaired);
-      expect(attempt.publicationRepairAbandonment?.reason).toContain("dead");
+      expect(attempt.publicationRepairAbandonment?.reason).toContain("host is gone");
       expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
       await tickPipelines([], f.h.ports);
       const reviewer = current().runs.find(run => run.stageId === "review")?.attempts[0];
@@ -1022,6 +1022,55 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-u
       expect(start.head).toBe(repaired);
       expect(start.worktree).toBe(f.lane());
     } finally { f.close(); }
+  });
+
+test.each(["dead", "unhosted", "conflict", "idle", "running", "missing", "attention", "unavailable"] as const)(
+  "publication repair uses native host absence with a completed turn (%s)", async state => {
+    const f = await fixture();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repair-host-proof-"));
+    const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+    const host = new RuntimeHost(journal);
+    const socketPath = path.join(root, "host.sock");
+    const priorSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+    let server: ReturnType<typeof serveRuntimeHost> | undefined;
+    process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+    try {
+      const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+      const worker = current().runs[0]!.attempts[0]!;
+      f.h.durableTurns.set(worker.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+      const repaired = await f.commit("producer repair");
+      fs.unlinkSync(path.join(f.hooks, "pre-push"));
+      if (state !== "unavailable") {
+        server = serveRuntimeHost(socketPath, { handle: request => host.handle(request) });
+        await once(server, "listening");
+      }
+      if (state !== "missing" && state !== "unavailable") {
+        journal.append({ scope: { type: "session", id: "repair-owner" }, kind: "session-status",
+          payload: { conversationId: worker.conversationId!, sessionKey: { engine: "codex", sessionId: "repair-owner" },
+            hostKind: "codex-app-server", host: state === "idle" || state === "running" ? "hosted" : state === "attention" ? "dead" : state,
+            turn: state === "running" ? "running" : "idle", attentionIds: state === "attention" ? ["repair-attention"] : [] },
+        });
+      }
+      const production = defaultPipelinePorts();
+      const gone = state === "dead" || state === "unhosted";
+      if (production.publicationRepairProducerGone) expect(await production.publicationRepairProducerGone(worker.conversationId!)).toBe(gone ? true
+        : state === "idle" || state === "running" ? false : null);
+      f.h.ports.conversationAgentActive = production.conversationAgentActive;
+      f.h.ports.publicationRepairProducerGone = production.publicationRepairProducerGone;
+      // A completed host turn suppresses the interruption probe. Custody
+      // still reads the native session's independent host-absence evidence.
+      f.h.ports.conversationTurnInterrupted = async () => null;
+      await tickPipelines([], f.h.ports);
+      expect(current().lastPassedCommit).toBe(gone ? repaired : accepted);
+      expect(current().cursor?.stageId).toBe(gone ? "review" : "build");
+    } finally {
+      if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
+      if (priorSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+      else process.env.LLV_RUNTIME_HOST_SOCKET = priorSocket;
+      journal.close(); fs.rmSync(root, { recursive: true, force: true }); f.close();
+    }
   });
 
 test("a controller restart adopts the dead producer repair checkpoint without another commit", async () => {
@@ -1050,6 +1099,7 @@ test("a controller restart adopts the dead producer repair checkpoint without an
       ports.deferStageGit = false;
       ports.scheduleTick = () => {};
       ports.conversationAgentActive = async () => false;
+      ports.publicationRepairProducerGone = undefined;
       ports.conversationTurnInterrupted = async () => "dead";
       ports.conversationDeliveryOutstanding = () => false;
       ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
@@ -1068,7 +1118,7 @@ test("a controller restart adopts the dead producer repair checkpoint without an
     expect(checkpoint.republishQueued).toBeUndefined();
     const abandonment = current().runs[0]!.attempts[0]!.publicationRepairAbandonment;
     expect(abandonment?.at).toBe(clock);
-    expect(abandonment?.reason).toContain("dead");
+    expect(abandonment?.reason).toContain("host is gone");
     expect(current().lastPassedCommit).toBe(accepted);
     const restarted = await controller(false);
     expect(restarted.code, restarted.stderr).toBe(0);

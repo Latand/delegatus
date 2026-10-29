@@ -452,6 +452,9 @@ export interface PipelinePorts {
   restartRecoveryBootStartedAt?(): number;
   /** Positive runtime evidence; silence alone never interrupts a live tool. */
   conversationTurnInterrupted?(conversationId: string): Promise<"idle" | "dead" | "stalled" | null>;
+  /** Repair custody needs host absence even when its last turn completed.
+      Null retains missing, conflicting or unavailable runtime evidence. */
+  publicationRepairProducerGone?(conversationId: string): Promise<boolean | null>;
   /** Whether a delivery for this conversation is still waiting to land. A
       continuation is never added on top of one (#1747). */
   conversationDeliveryOutstanding?(conversationId: string): boolean;
@@ -2259,6 +2262,20 @@ export function defaultPipelinePorts(
       }
       /* A hosted idle turn is an inter-turn state with unknown agent activity. */
       return null;
+    },
+    publicationRepairProducerGone: async (conversationId) => {
+      const client = runtimeHostClient();
+      if (!client) return null;
+      // Turn completion suppresses interruption recovery, but cannot leave a
+      // finished publication repair waiting for a host that is already gone.
+      try {
+        const sessions = await pipelineRuntimeReads({ conversationIds: [conversationId] }).sessions(client, conversationId);
+        if (!sessions.length || sessions.some(session => session.host === "conflict" || session.attentionIds.length > 0)
+          || exitStatusPending(conversationId)) return null;
+        const gone = sessions.every(session => ["dead", "unhosted"].includes(session.host));
+        if (gone) runtimeReads.reset();
+        return gone;
+      } catch { return null; }
     },
     restartRecoveryBootId: () => PIPELINE_RECOVERY_BOOT_ID,
     restartRecoveryBootStartedAt: () => PIPELINE_RECOVERY_BOOT_STARTED_AT,
@@ -5237,7 +5254,7 @@ async function readRepairDelivery(pipeline: Pipeline, stage: PipelineStage, atte
 }
 
 type RepairProducerEvidence = { conversationId: string | null; active: boolean | null; idle?: boolean;
-  repairIdentity: string; dead?: boolean; durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
+  repairIdentity: string; dead?: boolean; hostGone?: boolean | null; durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
 
 function publicationRepairIdentity(pipeline: Pipeline, attempt: PipelineStageAttempt): string {
   const repair = attempt.publicationRepair;
@@ -5248,7 +5265,7 @@ function publicationRepairIdentity(pipeline: Pipeline, attempt: PipelineStageAtt
 }
 
 async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  ports: PipelinePorts): Promise<RepairProducerEvidence | undefined> {
+  ports: PipelinePorts, confirmHostGone = false): Promise<RepairProducerEvidence | undefined> {
   const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
   const repairIdentity = publicationRepairIdentity(pipeline, attempt);
   if (!worker.conversationId) return { conversationId: null, repairIdentity, active: false, durable: null };
@@ -5256,8 +5273,10 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
   const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
+  const hostGone = confirmHostGone && ports.publicationRepairProducerGone
+    ? await ports.publicationRepairProducerGone(conversationId).catch(() => null) : undefined;
   const active = await ports.conversationAgentActive(conversationId).catch(() => null);
-  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead" };
+  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead", hostGone };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5396,8 +5415,9 @@ async function settlePublicationRepair(
   // A lost host cannot answer the repair prompt. Its output still belongs to
   // this attempt: settle it through the controller and send it to review.
   // Unknown activity and a live producer retain the ordinary repair protocol.
-  const evidence = !repair.committedSha && worker?.attempt.effectiveRole.access === "read-write" ? await readRepairProducerEvidence(pipeline, stage, attempt, ports) : undefined;
-  const producerGone = (observed: RepairProducerEvidence | undefined) => !!observed?.conversationId && observed.dead === true && observed.active === false
+  const evidence = !repair.committedSha && worker?.attempt.effectiveRole.access === "read-write" ? await readRepairProducerEvidence(pipeline, stage, attempt, ports, true) : undefined;
+  const producerGone = (observed: RepairProducerEvidence | undefined) => !!observed?.conversationId && observed.active === false
+    && observed.idle !== true && (observed.hostGone === true || observed.hostGone === undefined && observed.dead === true)
     && observed.conversationId === worker?.attempt.conversationId
     && observed.repairIdentity === publicationRepairIdentity(pipeline, attempt)
     && !ports.conversationDeliveryOutstanding?.(observed.conversationId!)
@@ -5425,7 +5445,7 @@ async function settlePublicationRepair(
     const writable = worker.attempt.effectiveRole.access === "read-write";
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (deadProducer && command === "git" && ["restore", "add", "commit"].includes(args[0])
-        && !producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports))) {
+        && !producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports, true))) {
         return { code: 1, stdout: "", stderr: "The publication repair producer changed while custody was being settled; preserve its work." };
       }
       return ports.exec(command, args, cwd, pipelineLiteralGitEnv(env), options);
@@ -5452,10 +5472,10 @@ async function settlePublicationRepair(
         const unstaged = await exec("git", ["diff", "--name-only", "--no-ext-diff", "--no-textconv", "-z"], pipeline.worktreeDir);
         if (unstaged.code !== 0) return fail("The dead producer's unstaged repair cannot be inspected.");
         const paths = unstaged.stdout.split("\0").filter(Boolean);
-        const reason = `The publication repair producer is dead; handing its owned head to review${paths.length ? `; discarded unstaged repair in ${paths.length} tracked path(s)` : ""}.`;
+        const reason = `The publication repair producer host is gone; handing its owned head to review${paths.length ? `; discarded unstaged repair in ${paths.length} tracked path(s)` : ""}.`;
         const abandonment = attempt.publicationRepairAbandonment;
         if (!abandonment) attempt.publicationRepairAbandonment = { at: ports.now(), reason };
-        else if (!abandonment.reason.includes("The publication repair producer is dead;")) abandonment.reason += `\n${reason}`;
+        else if (!abandonment.reason.includes("The publication repair producer host is gone;")) abandonment.reason += `\n${reason}`;
         // Keep the send's rejection as the abandoned turn's outcome.
         repair.settledAt ??= ports.now();
         repair.outcome ??= { status: "rejected", reason };
