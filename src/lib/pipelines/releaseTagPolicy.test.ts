@@ -26,7 +26,7 @@ async function fixture() {
     GIT_AUTHOR_DATE: NOW, GIT_COMMITTER_DATE: NOW };
   for (const key of Object.keys(source)) if (key.startsWith("LLV_STAGE_GIT_") || /^GIT_CONFIG_(KEY|VALUE)_/.test(key)) delete source[key];
   let env = source;
-  const run = (cwd: string, args: string[], environment = env) => realExec("git", args, cwd, environment);
+  const run = async (cwd: string, args: string[], environment = env) => realExec("git", args, cwd, environment);
   const git = async (...args: string[]) => { const r = await run(lane, args); expect(r.code, r.stderr).toBe(0); return r.stdout.trim(); };
   await fs.mkdir(lane);
   const bare = await run(root, ["init", "--bare", "--initial-branch=main", remote]);
@@ -210,7 +210,7 @@ const reasons: Record<typeof refusals[number], string> = {
   "foreign owner": "active delivery owner", "inactive delivery": "active delivery owner", "missing delivery": "active delivery owner",
   "no review": "successful review", "failed review": "successful review", "stale review": "successful review", "historical review": "successful review",
 };
-test.each(refusals)("release tag refuses %s without a remote change", async scenario => {
+test.each([...refusals])("release tag refuses %s without a remote change", async scenario => {
   const f = await fixture();
   try {
     let args = ["origin", "refs/tags/v1.2.3"];
