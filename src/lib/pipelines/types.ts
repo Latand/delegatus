@@ -646,6 +646,9 @@ export type PipelineStageAttempt = {
   backgroundWait?: BackgroundWait;
   /** A controller commit deadline keeps the passed attempt retrying itself. */
   stageCommitWait?: { retryAt: string; detail: string; failures: number };
+  /** Mechanical retries retain this attempt, its accepted head and receipts. */
+  settlementAdmissionRetry?: { retryAt: string; failures: number };
+  spawnInterruptionRetry?: { retryAt: string; failures: number };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn

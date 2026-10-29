@@ -5575,8 +5575,12 @@ async function commitPassedStage(
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl, attempt, ports.now())
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
-    if (result.commitTimeout) {
+    if (result.commitTimeout || result.commitCancelled) {
       const failures = (attempt.stageCommitWait?.failures ?? 0) + 1;
+      if (failures > 4) {
+        await parkStage(`${result.error}; stopped after 4 automatic retries; retry-stage to settle the preserved head`);
+        return;
+      }
       const delay = Math.min(5 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 4));
       const retryAt = new Date(unixMs(ports.now()) + delay).toISOString();
       const detail = `${result.error}; controller will retry the passed stage's commit at ${retryAt}`;
@@ -8871,6 +8875,10 @@ async function tickRunStage(
   }
 
   if (attempt.state === "pending") {
+    if (attempt.spawnInterruptionRetry) {
+      const delay = unixMs(attempt.spawnInterruptionRetry.retryAt) - unixMs(ports.now());
+      if (delay > 0) { ports.scheduleTick?.(delay); return; }
+    }
     /* A process that never bound the delivery controller cannot launch this
        stage, and no retry there can change that. Leave the attempt pending: the
        pass ends on a pending cursor, which wakes the process that owns the
@@ -9008,7 +9016,6 @@ async function tickRunStage(
     attempt.startedAt = activationNow;
     setCursorState(pipeline, stage.id, "spawning");
     spawnsThisProcess.add(attemptKey(pipeline, stage, attempt));
-    await persist();
     try {
       /* {{prev.output}} comes from the attempt's persisted relay input (#353),
          so the spawn digest is stable across restarts; a migrated pre-v3
@@ -9068,6 +9075,7 @@ async function tickRunStage(
         await persist();
         return;
       }
+      await persist();
       await spawnRunStage(pipeline, stage, attempt, spawnInput, activationNow, ports, persist, true);
     } catch (error) {
       await park(pipeline, error instanceof Error ? error.message : String(error), attempt);
@@ -9078,6 +9086,50 @@ async function tickRunStage(
 
   if (attempt.state === "spawning") {
     if (!spawnsThisProcess.has(attemptKey(pipeline, stage, attempt)) && !attempt.launchId) {
+      // No call was counted at the old pre-activation checkpoint. A counted
+      // call or any host evidence is uncertain work and retains today's park.
+      if (!attempt.spawnCalls && !attempt.controllerWait && !attempt.retiredLaunches?.length
+        && !attempt.conversationId && !attempt.sessionId && !attempt.agentPath && !attempt.paneId) {
+        const registry = agentRegistry();
+        const baseId = clientAttemptId(pipeline, stage, attempt);
+        // Older writers did not count calls. Reconcile every key they could
+        // have spent before authorizing the zero-call checkpoint to restart.
+        const receipts = [baseId, ...Array.from({ length: SPAWN_HANDSHAKE_MAX_ATTEMPTS - 1 }, (_, n) =>
+          `handshake_retry_${n + 1}_${baseId}`.slice(0, 128))]
+          .flatMap(key => { const receipt = registry.spawnReceiptForClientAttempt(key); return receipt ? [receipt] : []; });
+        if (receipts.length) {
+          const receipt = receipts.at(-1)!;
+          if (receipts.length !== 1 || receipt.engine !== attempt.effectiveRole.engine
+            || receipt.cwd !== pipeline.worktreeDir || receipt.transport !== "structured"
+            || !registry.conversationMemberships(receipt.conversationId).some(member => member.kind === "pipeline"
+              && member.containerId === pipeline.id && member.stageId === stage.id
+              && member.slot === `${stage.id}:${attempt.n}` && member.round === attempt.n
+              && member.role === (attempt.effectiveRole.roleId ?? "agent"))) {
+            await park(pipeline, "interrupted stage has conflicting launch evidence; preserve the original receipts", attempt);
+            return;
+          }
+          attempt.launchId = receipt.launchId;
+          attempt.conversationId = receipt.conversationId;
+          attempt.accountId = receipt.accountId ?? null;
+          await persist();
+          ports.scheduleTick?.(0);
+          return;
+        }
+        const failures = (attempt.spawnInterruptionRetry?.failures ?? 0) + 1;
+        if (failures <= 3) {
+          const delay = [60_000, 5 * 60_000, 15 * 60_000][failures - 1]!;
+          attempt.spawnInterruptionRetry = { failures, retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
+          attempt.state = "pending";
+          attempt.startedAt = null;
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.stateDetail = `stage spawn was interrupted before reservation; automatic retry ${failures}/3 at ${attempt.spawnInterruptionRetry.retryAt}`;
+          await persist();
+          ports.scheduleTick?.(delay);
+          return;
+        }
+        await park(pipeline, "stage spawn was interrupted before durable launch evidence after 3 automatic retries; retry-stage to reconcile", attempt);
+        return;
+      }
       await park(pipeline, "stage spawn was interrupted before durable launch evidence", attempt);
       return;
     }
@@ -12309,6 +12361,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const stage = currentStage(preview);
     const attempt = stage ? currentAttempt(preview, stage.id) : null;
     if (!stage || !attempt) continue;
+    if (attempt.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) {
+      ports.scheduleTick?.(unixMs(attempt.settlementAdmissionRetry.retryAt) - unixMs(ports.now()));
+      continue;
+    }
     const flow = stage.kind === "review-loop" && attempt.flowId ? ports.getFlow(attempt.flowId) : null;
     const approved = stage.kind === "review-loop" && flow?.state === "approved";
     if (preview.cursor?.state !== "committing" && !approved) continue;
@@ -12453,19 +12509,39 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 // The pass receipt supplies the durable clock, including after boot.
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
 
-async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts): Promise<boolean> {
+async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
   const attempt = preview.cursor && currentAttempt(preview, preview.cursor.stageId);
   if (preview.state !== "running" || preview.cursor?.state !== "committing" || attempt?.verdict?.status !== "pass"
-    || pipelineControllerJobLanes().includes(preview.id) || preview.delivery?.operation?.state === "running") return false;
-  const acceptedAt = unixMs(attempt.report?.at ?? attempt.completedAt ?? attempt.startedAt ?? preview.createdAt);
-  const remaining = acceptedAt + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now());
+    || (!publicationCapacityMissing && pipelineControllerJobLanes().includes(preview.id)) || preview.delivery?.operation?.state === "running") return false;
+  const acceptedAt = unixMs(attempt.settlementAdmissionRetry?.retryAt ?? attempt.completedAt ?? attempt.report?.at ?? attempt.startedAt ?? preview.createdAt);
+  const remaining = attempt.settlementAdmissionRetry
+    ? acceptedAt + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now()) : 0;
   if (remaining > 0) { ports.scheduleTick?.(remaining); return false; }
   const fence = controllerTickFingerprint(preview);
   return withPipelineMutation(async (pipelines, persist) => {
     const current = pipelines.find(pipeline => pipeline.id === preview.id);
-    if (!current || controllerTickFingerprint(current) !== fence || pipelineControllerJobLanes().includes(current.id)) return false;
+    if (!current || controllerTickFingerprint(current) !== fence
+      || (!publicationCapacityMissing && pipelineControllerJobLanes().includes(current.id))) return false;
     const recorded = currentAttempt(current, current.cursor!.stageId)!;
-    const detail = "no controller job became available for passed-stage settlement within 15 minutes; retry-stage to settle the preserved head";
+    if (!recorded.settlementAdmissionRetry) {
+      // A report can precede the end of the producer's turn by hours. Start
+      // this clock only when this stage actually asks for unavailable capacity.
+      recorded.settlementAdmissionRetry = { failures: 0, retryAt: ports.now() };
+      current.stateDetail = "passed-stage settlement is waiting for a controller job";
+      await persist([current]);
+      ports.scheduleTick?.(STAGE_SETTLEMENT_ADMISSION_WAIT_MS);
+      return true;
+    }
+    const failures = (recorded.settlementAdmissionRetry?.failures ?? 0) + 1;
+    if (failures <= 3) {
+      const delay = [60_000, 5 * 60_000, 15 * 60_000][failures - 1]!;
+      recorded.settlementAdmissionRetry = { failures, retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
+      current.stateDetail = `no controller job became available for passed-stage settlement within 15 minutes; automatic retry ${failures}/3 at ${recorded.settlementAdmissionRetry.retryAt}`;
+      await persist([current]);
+      ports.scheduleTick?.(delay);
+      return true;
+    }
+    const detail = "no controller job became available for passed-stage settlement within 15 minutes after 3 automatic retries; retry-stage to settle the preserved head";
     // Pending means no executor was admitted. Retire this reservation under
     // the same lane/epoch fence; a stale publisher can no longer consume it.
     const operation = current.delivery?.operation;
@@ -12666,10 +12742,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   }
   let completePhase!: () => void;
   const phaseDone = new Promise<void>(resolve => { completePhase = resolve; });
-  const queueControllerJob = (id: string, run: () => Promise<unknown>) => startPipelineControllerJob(id, async () => {
+  const queueControllerJob = (id: string, run: (waitOutsideCapacity: (wait: Promise<void>) => Promise<void>) => Promise<unknown>, kind: "settlement" | "publication" = "settlement") => startPipelineControllerJob(id, async waitOutsideCapacity => {
     await phaseDone;
-    return run();
-  }, () => controllerPipelineVersion(id));
+    return run(waitOutsideCapacity);
+  }, () => controllerPipelineVersion(id), kind);
   if (tickStore.__llvPipelineTick) {
     await ports.cpuAdmissionReconcile?.(ports);
     return { pipelines: [], changed: false };
@@ -12827,7 +12903,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         && delivery.operation?.state === "running" && delivery.operation.epoch === delivery.epoch
         && ["running", "needs_decision", "paused", "closed"].includes(pipeline.state)) {
         if (scoped) queueControllerJob(pipeline.id, () => withControllerPipelineScope([pipeline.id], () =>
-          reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null)));
+          reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null)), "publication");
         else await reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null);
       }
     }
@@ -13002,14 +13078,21 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const stage = currentStage(lane);
         const attempt = stage && currentAttempt(lane, stage.id);
         if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
+        if (attempt?.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) continue;
         const jobPorts = { ...ports };
-        const admitted = queueControllerJob(lane.id, () => withControllerPipelineScope([lane.id], async () => {
+        const admitted = queueControllerJob(lane.id, waitOutsideCapacity => withControllerPipelineScope([lane.id], async () => {
           const changed = await settlePendingStageGit(jobPorts);
           const current = findPipelineRecord(lane.id);
           const operation = current?.delivery?.operation;
           if (current?.delivery?.active && operation?.state === "pending") {
-            await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha });
-            return true;
+            let complete!: () => void;
+            const published = new Promise<void>(resolve => { complete = resolve; });
+            const admitted = startPipelineControllerJob(lane.id, async () => {
+              try { await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha }); }
+              finally { complete(); }
+            }, () => controllerPipelineVersion(lane.id), "publication");
+            if (admitted) await waitOutsideCapacity(published);
+            else await parkUnadmittedStageSettlement(current, jobPorts, true);
           }
           return changed;
         }));
@@ -13025,7 +13108,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       && pipeline.delivery.active);
     for (const pipeline of pending) {
       if (scoped) queueControllerJob(pipeline.id, () => withControllerPipelineScope([pipeline.id], () =>
-        publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha })));
+        publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha })), "publication");
       else await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha });
     }
     if (!scoped && pending.length && publicationPass < 3) {

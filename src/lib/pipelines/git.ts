@@ -45,6 +45,8 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   deferred?: true;
   /** The controller deadline expired before Git could commit; no file refusal. */
   commitTimeout?: true;
+  /** A cancelled child with no hook diagnostic; custody is re-read on retry. */
+  commitCancelled?: true;
   /** Set when Git or index validation refuses the proposed stage commit. */
   commitRefusal?: StageCommitRefusal;
 };
@@ -802,6 +804,9 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
     if (commit.code === null && /^command timed out after \d+ms(?:$|:)/.test(commit.stderr)) {
       return { ...failure("committing the passed stage", commit), deferred: true, commitTimeout: true };
+    }
+    if (commit.code === null && commit.stderr.trim() === "command cancelled" && !commit.stdout.trim()) {
+      return { ...failure("committing the passed stage", commit), deferred: true, commitCancelled: true };
     }
     return failure("committing the passed stage", commit);
   }
