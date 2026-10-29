@@ -635,11 +635,17 @@ test.each(["assigned", "done"] as const)("retained live lane occupies worker cap
     stages: [{ id: "work", kind: "run", role: { roleId: "builder" }, prompt: "Apply the requested correction", next: null }] }, f.h.ports);
   if (!made.pipeline) throw new Error(made.error);
   const ordinaryLane = made.pipeline;
-  const begun = beginLegacySpawnFixture(agentRegistry(), { engine: "codex", cwd: ordinaryLane.worktreeDir, taskIds: [ordinary.id],
+  const registry = agentRegistry();
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: ordinaryLane.worktreeDir, taskIds: [ordinary.id],
     conversationId: `conversation_ordinary_${status}`, role: "builder", origin: { kind: "container", container: "pipeline", containerId: ordinaryLane.id, creatorConversationId: null },
     memberships: [{ kind: "pipeline", containerId: ordinaryLane.id, role: "builder", slot: "work:1", stageId: "work", stageOrder: 0, round: 1, parentConversationId: null }],
     launchProfile: emptyLaunchProfile({ cwd: ordinaryLane.worktreeDir, model: "gpt-5.6-sol" }) });
   if (begun.kind !== "created") throw new Error("fresh ordinary worker required");
+  const sessionId = ["30000000", "0000", "4000", "8000", status === "assigned" ? "000000000001" : "000000000002"].join("-");
+  const artifactPath = `/codex/${sessionId}.jsonl`;
+  const entry = { key: sessionKeyFromTranscript("codex", artifactPath)!, artifactPath, cwd: ordinaryLane.worktreeDir,
+    accountId: null, status: "live" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null };
+  registry.completeSpawn(begun.receipt.launchId, entry);
   mutateTasks(tasks => {
     const result = patchTask(tasks, ordinary.id, { status }, f.at);
     if (!result.ok) throw new Error(result.error);
@@ -657,9 +663,21 @@ test.each(["assigned", "done"] as const)("retained live lane occupies worker cap
   await f.tick();
   expect(f.h.spawnInputs.filter(input => input.membership.containerId === f.id)).toHaveLength(0);
   expect(f.current().stateDetail).toContain("capacity is exhausted");
-  expect(loadPipelines().find(lane => lane.id === ordinaryLane.id)?.state).toBe("running");
+  const running = loadPipelines().find(lane => lane.id === ordinaryLane.id)!;
+  expect(running.state).toBe("running");
+  Object.assign(running.runs[0]!.attempts.at(-1)!, { conversationId: begun.receipt.conversationId,
+    launchId: begun.receipt.launchId, agentPath: artifactPath, paneId: null });
+  savePipelines(loadPipelines().map(lane => lane.id === running.id ? running : lane));
+  f.h.setConversationActive(true);
+  f.h.ports.stopStageAgent = async target => {
+    expect(target.conversationId).toBe(begun.receipt.conversationId);
+    registry.upsert({ ...entry, status: "dead" });
+    return { outcome: "stopped" };
+  };
   expect((await closeAndDrain(ordinaryLane.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
   expect(loadPipelines().find(lane => lane.id === ordinaryLane.id)?.closeReport?.status).toBe("settled");
+  expect(Object.values(registry.conversationRetentionSnapshot(begun.receipt.conversationId).entries)
+    .some(row => row.status === "dead")).toBe(true);
   expect(() => assertProactivePipelineExecution(f.current(), "dispatch")).not.toThrow();
   expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
   await f.tick();
