@@ -1055,7 +1055,9 @@ async function reconcileOutstandingWake(context: {
   /* A holder that cannot answer must not take the check down with it, and it
      is not evidence either way: the wake stays outstanding, so the next check
      asks again rather than crediting or discarding it on a failed read. */
-  const recoveryBound = 3 * context.retryIntervalMs;
+  // A short arrival interval must not inherit three whole check intervals of
+  // delay. The recorded caller deadline still fences a caller allowed longer.
+  const recoveryBound = Math.min(3 * context.retryIntervalMs, context.wakeIntervalMs);
   let fencedAbsent = false;
   if (state.accounting && (wake.dispatch?.state === "active" || (wake.dispatch?.state === "returned" && !wake.dispatch.deadlineAt))
     && context.now - preparedAt >= recoveryBound) {
@@ -1144,9 +1146,9 @@ async function reconcileOutstandingWake(context: {
       settlement = { verdict: "revoked", outcome: "unknown", row: "keep",
         detail: `the wake raised for the replaced seat could not be revoked: no holder could account for it${reason ? ` (${reason})` : ""}; it is asked again at the next check` };
     }
-  } else if (observed === "uncertain" && wake.dispatch?.state === "returned"
-    && Number.isFinite(Date.parse(wake.dispatch.deadlineAt ?? ""))
-    && context.now >= Date.parse(wake.dispatch.deadlineAt!)
+  } else if (observed === "uncertain" && wake.dispatch?.state !== "active"
+    && (wake.dispatch?.state === "returned" || overdue)
+    && context.now >= (wake.dispatch?.deadlineAt ? Date.parse(wake.dispatch.deadlineAt) : preparedAt + recoveryBound)
     && !!wake.operationId && observation.evidence?.operationId === wake.operationId
     && ((typeof observation.evidence?.journal === "object" && observation.evidence.journal !== null
       && ["uncertain", "interrupted", "failed"].includes(observation.evidence.journal.status))
@@ -1157,7 +1159,7 @@ async function reconcileOutstandingWake(context: {
     const terminalReason = typeof observation.evidence.journal === "object" && observation.evidence.journal
       ? observation.evidence.journal.reason : observation.evidence.record?.reason;
     settlement = { verdict: "dropped", outcome: "terminal-unverified", row: "clear",
-      detail: `the returned dispatch passed its arrival deadline and its operation ended without proof of arrival: ${redactBounded(terminalReason ?? wake.dispatch.reason ?? "arrival unverified", REASON_LIMIT)}; nothing is credited and the current wake carries the uncredited obligations` };
+      detail: `the dispatch passed its arrival deadline and its operation ended without proof of arrival: ${redactBounded(terminalReason ?? wake.dispatch?.reason ?? "arrival unverified", REASON_LIMIT)}; nothing is credited and the current wake carries the uncredited obligations` };
   } else if (observed === "uncertain") {
     settlement = { verdict: "uncertain", outcome: "uncertain", row: "keep",
       detail: "the layer holding the wake ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };

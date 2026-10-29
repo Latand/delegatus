@@ -1,4 +1,4 @@
-import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, emptySeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
+import { expect, test, spyOn, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, emptySeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
 import type { HostState, SeatTickOutstandingWake, SeatTickRunRecord, AgentLivenessRecord, ConversationMessage, DeliveryOutcome, ChildFixture } from "./seatTickController.fixture";
 
 test("an authoritative seat quota obligation withholds ordinary agenda delivery", async () => {
@@ -998,6 +998,9 @@ test("a wake the settlement ended unrecorded fences inside its bound, the board 
   /* Inside the bound, age settles nothing and a restart settles nothing: the
      row, the key and the payload are exactly what they were, and the card is
      raised once. */
+  // A terminal record with a reachable, empty journal now releases on the
+  // arrival bound. Keep the age-retirement control without terminal proof.
+  journal.unreachable = true;
   const before = JSON.stringify(frozen(fixture));
   for (const minutes of [16, 61, 119]) {
     const later = childRig(fixture, { realWakeState: true, journal, now: fixture.now + minutes * MINUTE });
@@ -1009,11 +1012,8 @@ test("a wake the settlement ended unrecorded fences inside its bound, the board 
   }
   expect(fixture.acknowledged()).toEqual([]);
 
-  /* Past it, nothing about the evidence has improved and nothing ever will:
-     the record absorbed the key, the journal holds no record of the operation,
-     and absence is not proof. This is the #1672 shape, and what ends it is the
-     bound (#1746) — the attempt retired unresolved, the obligations it named
-     re-derived, and the seat woken by the same check. */
+  /* Past the age bound, the unreachable journal still supplies no terminal
+     proof. Retire the attempt unresolved and re-derive its obligations. */
   const spent = childRig(fixture, { realWakeState: true, journal, now: fixture.now + 2 * 24 * 60 * MINUTE });
   const woken = await runSeatTickCheck(fixture.project, spent.deps);
   expect(woken).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { outcome: "delivered" } });
@@ -1350,7 +1350,7 @@ test("a wake waits out the seat's running turn instead of interrupting it, and r
    whole issue is measured by: the first check after the bound delivers. */
 test("the #1672 shape — a key anchored eight days back that no evidence can settle — is retired on its bound and the first check past it delivers a wake (#1746)", async () => {
   const anchor = new Date(Date.now() + 3 * MINUTE - 8 * 24 * 60 * MINUTE).toISOString();
-  const { fixture, child, wake, rig, operationId } = await strandedManagerWake("fence-bound-1672-shape", {
+  const { fixture, journal, child, wake, rig, operationId } = await strandedManagerWake("fence-bound-1672-shape", {
     seatEpoch: 169, lastWakeAt: anchor, wakeIntervalMinutes: 20,
   });
   /* The key carries the stale anchor, which is how one unresolved original key
@@ -1358,6 +1358,7 @@ test("the #1672 shape — a key anchored eight days back that no evidence can se
   expect(wake.clientMessageId).toContain(`:${anchor}:`);
   expect(wake).toMatchObject({ seatEpoch: 169, operationId, dispatch: { state: "refused" } });
 
+  journal.unreachable = true;
   /* Inside the bound — one hour, the floor under two twenty-minute intervals —
      every check still computes `wake` and still sends nothing, which is the
      no-blind-resend rule this issue keeps. What is new is that the line says
@@ -1401,6 +1402,7 @@ test("the #1672 shape — a key anchored eight days back that no evidence can se
    it is the fence — under its own key, for its own bound. */
 test("the wake that replaces an attempt retired on its age is the project's only one in flight (#1746)", async () => {
   const { fixture, journal, wake, rig } = await strandedManagerWake("fence-bound-one-in-flight", { wakeIntervalMinutes: 20 });
+  journal.unreachable = true;
   let replacementOperation = "";
   const past = rig(61, { deliverWith: reservedThenTimedOut(fixture, (id) => { replacementOperation = id; }) });
   await runSeatTickCheck(fixture.project, past.deps);
@@ -1519,9 +1521,10 @@ test("a wake retired on its age is taken back out of the queue that still holds 
 });
 
 test("the wake replacing an attempt retired on its age stays inside the bound the runtime journal admits, and reaches the seat (#1771)", async () => {
-  const { fixture, child, wake, rig } = await strandedManagerWake("mute-seat-key-bound", {
+  const { fixture, journal: unavailableJournal, child, wake, rig } = await strandedManagerWake("mute-seat-key-bound", {
     seatEpoch: 173, wakeIntervalMinutes: 20, monitorPrompt: MUTE_PROMPT,
   });
+  unavailableJournal.unreachable = true;
   /* The original attempt is the readable composition, prompt digest and all,
      and it fits — which is why the seat got that first wake and no other. */
   expect(wake.clientMessageId).toContain(":prompt-");
@@ -1740,4 +1743,109 @@ test("a child whose record is weeks old is skipped though a sweep refreshed its 
   expect(text).not.toContain(child.id);
   expect(text).toContain("(1 spawned child(ren) not listed: their last activity predates this seat's designation");
   expect(fixture.acknowledged()).toEqual([]);
+});
+
+
+test.each(["refused", "legacy", "returned", "refused-pruned", "legacy-pruned"] as const)("terminal destination with %s dispatch releases one current wake within two checks", async form => {
+  const clock = spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    const fixture = childFixture(`terminal-destination-${form}`);
+    setAgentRegistryForTests(fixture.registry);
+    const child = fixture.spawn({ title: "owed terminal worker", turn: "terminal" });
+    fixture.seed();
+    const settings = { ...defaultSeatTickSettings(fixture.project), wakeIntervalMinutes: 10 };
+    const journal = fakeJournal();
+    let operationId = "";
+    await runSeatTickCheck(fixture.project, childRig(fixture, { settings, realWakeState: true, journal,
+      deliverWith: reservedThenTimedOut(fixture, id => { operationId = id; }),
+    }).deps);
+    const original = fixture.row().outstandingWake!;
+    expect(original.dispatch?.state).toBe("refused");
+    const destination = await resolveOriginalSend(original, { registry: fixture.registry, client: null });
+    if (destination.kind !== "found" || !destination.deliveryId) throw new Error("reserved wake has no destination record");
+    const reason = "destination ended without arrival proof";
+    fixture.registry.recordDeliveryOutcome(destination.deliveryId, "failed", reason, "unverified");
+    if (!form.endsWith("pruned")) journal.operations.set(operationId, { status: "uncertain", reason });
+    if (form.startsWith("legacy")) {
+      writeSeatTickState(fixture.project, { ...fixture.row(), outstandingWake: { ...original, dispatch: undefined, operationId: null } }, fixture.stateFile);
+    } else if (form === "returned") {
+      new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project)
+        .returnedDispatch(original.clientMessageId, original.dispatch!.token, false, operationId, reason);
+    }
+    // A terminal destination cannot release a caller before its own deadline.
+    const early = childRig(fixture, { settings, realWakeState: true, journal, now: fixture.now + 30_000 });
+    await runSeatTickCheck(fixture.project, early.deps);
+    expect(early.sent).toEqual([]);
+    expect(fixture.acknowledged()).toEqual([]);
+    const sent: ConversationMessage[] = [];
+    const records: SeatTickRunRecord[] = [];
+    for (const minutes of [20, 25]) {
+      const next = childRig(fixture, { settings, realWakeState: true, journal, now: fixture.now + minutes * MINUTE,
+        deliverWith: async message => {
+          expect(fixture.acknowledged()).toEqual([]);
+          expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
+          expect(message.clientMessageId).not.toBe(original.clientMessageId);
+          expect(message.conversationId).toBe(original.conversationId);
+          expect(message.text).toContain(child.id);
+          return { ok: true, target: "structured", outcome: "delivered", structured: true };
+        },
+      });
+      await runSeatTickCheck(fixture.project, next.deps);
+      sent.push(...next.sent); records.push(...next.journal);
+    }
+    expect(sent).toHaveLength(1);
+    expect(records.find(row => row.delivery?.clientMessageId === original.clientMessageId && row.delivery.outcome === "terminal-unverified")?.detail).toContain(reason);
+    expect(fixture.row()).toMatchObject({ seatEpoch: original.seatEpoch, outstandingWake: null });
+    expect(fixture.acknowledged()).toEqual([child.id]);
+  } finally { clock.mockRestore(); }
+});
+
+
+test.each(["active", "returned"] as const)("expired %s recordless dispatch recovers within two checks of the five-minute arrival bound", async dispatchState => {
+  const clock = spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    for (const future of [false, true]) {
+      const fixture = childFixture(`short-arrival-${dispatchState}-${future}`);
+      setAgentRegistryForTests(fixture.registry);
+      const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
+      fixture.seed();
+      const settings = { ...defaultSeatTickSettings(fixture.project), wakeIntervalMinutes: 5 };
+      await runSeatTickCheck(fixture.project, childRig(fixture, { settings, realWakeState: true,
+        deliverWith: refuseBeforeReservation(503),
+      }).deps);
+      const accounting = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project);
+      const original = fixture.row().outstandingWake!;
+      const token = accounting.beginDispatch(original, new Date(fixture.now + (future ? 20 * MINUTE : 75_000)).toISOString());
+      expect(token).not.toBeNull();
+      if (dispatchState === "returned") accounting.returnedDispatch(original.clientMessageId, token!, false);
+      const dispatched = fixture.row().outstandingWake!;
+      expect(await resolveOriginalSend(dispatched, { registry: fixture.registry, client: null })).toEqual({ kind: "absent" });
+      const sent: ConversationMessage[] = [];
+      const check = async (minutes: number) => {
+        const next = childRig(fixture, { settings, realWakeState: true, now: fixture.now + minutes * MINUTE,
+          deliverWith: async message => {
+            expect(fixture.acknowledged()).toEqual([]);
+            expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
+            expect(message.clientMessageId).not.toBe(original.clientMessageId);
+            expect(message.text).toContain(child.id);
+            return { ok: true, target: "structured", outcome: "delivered", structured: true };
+          },
+        });
+        await runSeatTickCheck(fixture.project, next.deps);
+        sent.push(...next.sent);
+      };
+      for (const minutes of [6, 11]) await check(minutes);
+      if (future) {
+        expect(sent).toEqual([]);
+        expect(fixture.row().outstandingWake).toEqual(dispatched);
+        expect(fixture.acknowledged()).toEqual([]);
+        for (const minutes of [21, 26]) await check(minutes);
+      }
+      expect(sent).toHaveLength(1);
+      expect(fixture.row()).toMatchObject({ seatEpoch: original.seatEpoch, outstandingWake: null });
+      expect(fixture.acknowledged()).toEqual([child.id]);
+      expect(accounting.dispatchAdmitted(original.clientMessageId, token!)).toBe(false);
+      expect(accounting.beginDispatch(dispatched)).toBeNull();
+    }
+  } finally { clock.mockRestore(); }
 });
