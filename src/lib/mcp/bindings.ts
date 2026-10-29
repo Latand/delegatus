@@ -1,3 +1,5 @@
+import { agentBrowserAccess, type AgentBrowserSeat } from "@/lib/team/agentBrowserAccess";
+import { TeamError } from "@/lib/team/members";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
@@ -8338,6 +8340,25 @@ export function viewerMcpBindings(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): McpToolBindings {
   const reads = viewerReadTools(domainDependencies, controlDependencies);
+  const browserAccess = async (args: McpToolArgs, write: boolean) => {
+    const requireSeat = (): AgentBrowserSeat => {
+      // Use the authenticated caller itself: a deputy's folded attribution
+      // must never turn another conversation into the designated seat.
+      const caller = domainDependencies.attentionAuthority();
+      const seats = domainDependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+      const seat = caller.kind !== "unidentified" && caller.conversationId
+        ? seats.find(candidate => candidate.conversationId === caller.conversationId) : null;
+      if (!seat?.project) throw new McpToolRefusal("only the project's currently designated orchestrator seat may grant agent browser access", {
+        code: "agent_browser_seat_required", retryable: false,
+      });
+      return { conversationId: seat.conversationId, project: seat.project };
+    };
+    try { return await agentBrowserAccess(args, requireSeat, write); }
+    catch (error) {
+      if (error instanceof TeamError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status, retryable: false });
+      throw error;
+    }
+  };
   const pageOwner = {};
   const budgeted = (tool: string, args: McpToolArgs, budget: number, load: (cursor: string | null) => Promise<McpToolPayload>) =>
     budgetPage(pageOwner, tool, args, budget, async cursor => {
@@ -8346,6 +8367,13 @@ export function viewerMcpBindings(
       return { rows: (conversations ?? []) as Record<string, unknown>[], meta, upstream: typeof nextCursor === "string" ? nextCursor : null };
     }, fullAnswer(args));
   return {
+    grant_agent_browser_access: Object.assign(async (args: McpToolArgs) => browserAccess(args, true), {
+      authorizeReceipt: async (args: McpToolArgs) => { await browserAccess(args, false); },
+      receiptScope: async (args: McpToolArgs) => {
+        const access = await browserAccess(args, false);
+        return `agent-browser:${access.project}:${access.workspaceId}:${access.memberId}`;
+      },
+    }),
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
