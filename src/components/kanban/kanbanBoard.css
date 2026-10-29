@@ -1795,6 +1795,7 @@
 .kb .pane-conv .reader.conv.in-sheet { max-height: none; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; gap: 8px; }
 .kb .pane-conv .reader.conv.in-sheet:focus { box-shadow: none; }
 .kb .pane-conv.away { align-items: center; justify-content: center; text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); padding: 12px; }
+.kb .pane-conv.away.line { flex: none; align-items: flex-start; text-align: start; border: 0; padding: 0; }
 .kb .pane-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); }
 .kb :is(.pane, .stage-detail) .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
 .kb .pane .ch-meta.pane-id { margin-top: -2px; }

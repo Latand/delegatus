@@ -24,13 +24,16 @@ const SETUP_TAIL_CHARS = 480;
  * the end of its output; a pass stays one closed line. When the setup started
  * and how long it took is the dot's popover, so the line says it once.
  */
-export function StageSetupResult({ setup, worktreeDir, fit = false }: {
+export function StageSetupResult({ setup, worktreeDir, fit = false, fill = false }: {
   setup: PipelineStageAttempt["setup"];
   worktreeDir: string | null;
   /** In a host of fixed height (a stage pane): the result takes at most half
       of it, and an open failure scrolls its output, held at the end, where
       the failing command says why. */
   fit?: boolean;
+  /** With `fit`, when nothing follows it (the attempt has no conversation):
+      the result takes the host's whole room. */
+  fill?: boolean;
 }) {
   const { t } = useLocale();
   if (!setup) return null;
@@ -40,9 +43,15 @@ export function StageSetupResult({ setup, worktreeDir, fit = false }: {
   const stderr = setup.stderr.trim() ? setup.stderr : "";
   const stdout = setup.stdout.trim() ? setup.stdout : "";
   const both = Boolean(stderr && stdout);
+  const stderrPreview = stderr ? <OutputPreview output={stderr} truncated={false} tone="err" heading={both ? t("tools.stderr") : undefined}
+    copyLabel={t("tools.copyStderr")} previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" holdControl /> : null;
+  /* In a bounded host the stdout heading stays above the scroller, so the tail is named however far it scrolls. */
+  const leadHeading = fit && both;
+  const stdoutPreview = stdout ? <OutputPreview output={stdout} truncated={false} heading={both && !leadHeading ? t("tools.stdout") : undefined}
+    previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" holdControl /> : null;
   return (
     /* `reader-host` keeps the board's button reset off the output's own controls, as in a conversation. */
-    <div data-stage-setup={setup.state} className={`reader-host flex min-w-0 items-start gap-2 text-label leading-4 ${fit ? "min-h-0 max-h-1/2" : "shrink-0"}`}>
+    <div data-stage-setup={setup.state} className={`reader-host flex min-w-0 items-start gap-2 text-label leading-4 ${fit ? fill ? "min-h-0" : "min-h-0 max-h-1/2" : "shrink-0"}`}>
       <SetupDot setup={setup} />
       {/* A bounded host bounds the details' content too, so only the output
           below the summary scrolls. */}
@@ -51,15 +60,15 @@ export function StageSetupResult({ setup, worktreeDir, fit = false }: {
           <span className={`min-w-0 break-words font-semibold ${failed ? "text-danger" : "text-secondary"}`}>{words}</span>
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted transition-transform group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
         </summary>
-        <SetupBody fit={fit}>
+        {/* What ran, where, and why it failed lead; the stream the failing
+            command wrote last is the tail below them. */}
+        <SetupBody fit={fit} tail={leadHeading ? <div className="[&>:first-child]:mt-0">{stdoutPreview}</div> : stdout ? stdoutPreview : stderrPreview}>
           <code className="block break-words [overflow-wrap:anywhere] font-mono text-[12px] text-primary" data-stage-setup-command>
             $ {setup.command.map(shellWord).join(" ")}
           </code>
           {dir ? <p className="mt-0.5 break-words [overflow-wrap:anywhere] text-muted">{t("projectSetup.inDir", { dir })}</p> : null}
-          {stderr ? <OutputPreview output={stderr} truncated={false} tone="err" heading={both ? t("tools.stderr") : undefined}
-            copyLabel={t("tools.copyStderr")} previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" holdControl /> : null}
-          {stdout ? <OutputPreview output={stdout} truncated={false} heading={both ? t("tools.stdout") : undefined}
-            previewLines={8} previewChars={SETUP_TAIL_CHARS} from="end" holdControl /> : null}
+          {stdout ? stderrPreview : null}
+          {leadHeading ? <div className="mt-1.5 mb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted">{t("tools.stdout")}</div> : null}
           {!stderr && !stdout && setup.state !== "running" ? <p className="mt-1 text-muted">{t("projectSetup.noOutput")}</p> : null}
         </SetupBody>
       </details>
@@ -67,20 +76,29 @@ export function StageSetupResult({ setup, worktreeDir, fit = false }: {
   );
 }
 
-/* The details' content below the summary. In a bounded host it scrolls when
-   the output is taller than the room, held at its end by a reversed column as
-   the room changes; the scroller then gives up the part of the line its top
-   edge would cut, so every line in view is whole. */
-function SetupBody({ fit, children }: { fit: boolean; children: ReactNode }) {
+/* The details' content below the summary: the command, its directory and
+   the stderr above a stdout tail, then the tail. In a bounded host the tail
+   scrolls when it is taller than the room, held at its end by a reversed
+   column as the room changes; the scroller then gives up the part of the line
+   its top edge would cut, so every line in view is whole. The lead keeps its
+   height unless it alone is taller than the room, and then scrolls itself. */
+function SetupBody({ fit, tail, children }: { fit: boolean; tail: ReactNode; children: ReactNode }) {
+  const lead = useRef<HTMLDivElement>(null);
+  const leadContent = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const tailed = Boolean(tail);
   useLayoutEffect(() => {
-    const scroller = body.current, inner = content.current;
-    if (!fit || !scroller || !inner) return;
-    const details = scroller.closest("details"), host = scroller.closest("[data-stage-setup]")?.parentElement;
+    const head = lead.current, scroller = body.current, inner = content.current;
+    if (!fit || !head) return;
+    const details = head.closest("details"), host = head.closest("[data-stage-setup]")?.parentElement;
     const align = () => {
-      scroller.style.maxHeight = "";
-      for (let pass = 0; pass < 3 && scroller.scrollHeight > scroller.clientHeight + 1; pass++) {
+      head.style.maxHeight = "";
+      if (scroller) scroller.style.maxHeight = "";
+      /* Closed, the content has no room to measure; the toggle that opens it aligns it again. */
+      const room = details?.open ? details.clientHeight - (details.querySelector("summary")?.offsetHeight ?? 0) : Infinity;
+      if (head.offsetHeight > room + 1) head.style.maxHeight = `${Math.max(0, room)}px`;
+      for (let pass = 0; scroller && pass < 3 && scroller.scrollHeight > scroller.clientHeight + 1; pass++) {
         const cut = lineCutAt(scroller);
         if (cut <= 0) break;
         scroller.style.maxHeight = `${Math.max(0, scroller.clientHeight - cut)}px`;
@@ -88,16 +106,23 @@ function SetupBody({ fit, children }: { fit: boolean; children: ReactNode }) {
     };
     align();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(align);
-    observer?.observe(inner);
-    if (host) observer?.observe(host);
+    for (const element of [leadContent.current, inner, host]) if (element) observer?.observe(element);
     details?.addEventListener("toggle", align);
     return () => { observer?.disconnect(); details?.removeEventListener("toggle", align); };
-  }, [fit]);
+  }, [fit, tailed]);
+  if (!fit) return <div className="min-w-0 pb-1" data-stage-setup-body="">{children}{tail}</div>;
+  /* Each scroller reaches 4 px past the text on its left so a focus ring on the output's controls is not cut. */
   return (
-    /* The scroller reaches 4 px past the text on its left so a focus ring on the output's controls is not cut. */
-    <div ref={body} className={fit ? "-ml-1 flex min-h-0 min-w-0 flex-col-reverse overflow-y-auto pl-1" : "min-w-0"} data-stage-setup-body="">
-      <div ref={content} className="min-w-0 pb-1">{children}</div>
-    </div>
+    <>
+      <div ref={lead} className="-ml-1 min-w-0 shrink-0 overflow-y-auto pl-1" data-stage-setup-lead="">
+        <div ref={leadContent} className="min-w-0">{children}</div>
+      </div>
+      {tail ? (
+        <div ref={body} className="-ml-1 flex min-h-0 min-w-0 flex-col-reverse overflow-y-auto pl-1" data-stage-setup-body="">
+          <div ref={content} className="min-w-0 pb-1">{tail}</div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

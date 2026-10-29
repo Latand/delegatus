@@ -2053,9 +2053,13 @@ else if (root && requested === "project-setup") {
   const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
   const state = params.get("state") ?? "switch";
   const setups = (state === "switch" ? ["failed", "passed"] : [state]).map((kind, index) => setupRecord(kind, index));
+  /* A failed setup parks the stage before its agent starts; the passed retry
+     of `switch` started one, recorded off the board. */
+  const conversation = (index: number) => state === "switch" && index === 1;
   const attempts = setups.map((setup, index) => ({
     n: index + 1, state: setup.state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
-    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    launchId: null, conversationId: conversation(index) ? "conversation_setup_retry" : null, sessionId: null,
+    agentPath: conversation(index) ? "/repo-lane/.agent/build-2.jsonl" : null, paneId: null, flowId: null,
     startedAt: setup.startedAt, completedAt: null, input: null, activatedBy: null, output: null,
     verdict: null, error: null, setup,
   })) as PipelineStageAttempt[];

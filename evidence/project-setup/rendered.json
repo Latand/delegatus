@@ -1,13 +1,13 @@
 {
-  "capturedAt": "2026-10-28T19:36:55.001Z",
+  "capturedAt": "2026-10-29T00:26:31.383Z",
   "sourceDigests": {
     "src/components/kanban/kanbanBoard.browser.test.tsx": "a76df2664f4b817c40da3b4139a73cd95d0d47617e7dd859e752d09480036c20",
     "src/components/mobile/issue1671Evidence.browser.test.tsx": "58fb5ef632a8b7583ba0f01579e64067def392081776e5cb6748d9267ed97d01",
-    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "7da33f154949612647a8020111dade3f502867efa92df01bb12d46aedcd24550",
-    "src/components/kanban/issue1695BrowserHarness.ts": "ccfa2ecc07bff2dee30b832eec4440089fd3d35f65aa53c674d4628ddd8fb632",
-    "src/components/pipelines/StageSetupResult.tsx": "1269886e663f53fdcc9f14cf255d5da56d7409a489c6667778b664d336db687b",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "fc07e7f2c3bb5c5c79066c4edc417a75c4ca97c8dc09a3d7a364e0042cef01d3",
+    "src/components/kanban/issue1695BrowserHarness.ts": "79f0c5f0e92f56fcc621a0551eb996acb16fc906d8648ce744ca031bd266d119",
+    "src/components/pipelines/StageSetupResult.tsx": "74389edbcae76c73f6c082cfdbd8cc348b05f529fc17f1e537ce0f68bc45867e",
     "src/components/feed/cards/OutputPreview.tsx": "06104f620eebbbf829083d698e02219ffd2e2be387ff703ab710ef1a1b889a10",
-    "src/components/kanban/StagesSheet.tsx": "eb25b6023da2231787682a47f2ead9e3f50bdec3342f65d9e1df0562c8f021b3",
+    "src/components/kanban/StagesSheet.tsx": "c881344a5d6feacd7503f9b1cf8835e4477190ae5af3d7cdf559e944ccc09c8e",
     "src/components/mobile/MobilePipelineScreen.tsx": "3cb7d13f4c4db1ee8ab5e32af7f0a51c7b181647ec21f4326acce89453156061",
     "src/lib/i18n/en.ts": "c55d53444ad56f080655c6b06004cd6f94e1df12d55907b28a08e5295a881e97",
     "src/lib/i18n/uk.ts": "510eaec3a6c8e794590908096741c2eec141e1b69d893ef7da8460028f15da9f"
@@ -37,18 +37,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 335,
-            "bottom": 821
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -78,19 +81,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 301,
-            "bottom": 821
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -116,23 +119,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 549,
-            "bottom": 821
+            "top": 655,
+            "bottom": 671,
+            "line": true
           }
         }
       },
@@ -172,18 +178,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 317,
-            "bottom": 821
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -214,19 +223,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 281,
-            "bottom": 821
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -261,23 +270,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 11,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 312,
-          "content": 432
+          "height": 286,
+          "content": 286
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 557,
-            "bottom": 821
+            "top": 565,
+            "bottom": 581,
+            "line": true
           }
         }
       },
@@ -308,18 +320,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 367,
-            "bottom": 821
+            "top": 407,
+            "bottom": 821,
+            "line": false
           }
         }
       },
@@ -345,33 +360,36 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 581,
-            "bottom": 821
+            "top": 727,
+            "bottom": 743,
+            "line": true
           }
         }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 202.375,
-          "top": 241.9375,
-          "right": 341.796875,
-          "bottom": 271.9375
+          "left": 191.578125,
+          "top": 306.9375,
+          "right": 331,
+          "bottom": 336.9375
         },
         "inside": true,
         "covers": []
@@ -402,18 +420,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 335,
-            "bottom": 677
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -443,19 +464,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 301,
-            "bottom": 677
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -481,23 +502,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 479,
-            "bottom": 677
+            "top": 519,
+            "bottom": 535,
+            "line": true
           }
         }
       },
@@ -537,18 +561,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 317,
-            "bottom": 677
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -579,19 +606,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 281,
-            "bottom": 677
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -631,18 +658,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 208,
-          "content": 208
+          "height": 174,
+          "content": 174
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 453,
-            "bottom": 677
+            "bottom": 469,
+            "line": true
           }
         }
       },
@@ -673,18 +703,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 367,
-            "bottom": 677
+            "top": 407,
+            "bottom": 677,
+            "line": false
           }
         }
       },
@@ -710,23 +743,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 511,
-            "bottom": 677
+            "top": 591,
+            "bottom": 607,
+            "line": true
           }
         }
       },
@@ -734,9 +770,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 202.375,
-          "top": 241.9375,
+          "top": 281.9375,
           "right": 341.796875,
-          "bottom": 271.9375
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -767,18 +803,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 444,
-            "bottom": 662
+            "bottom": 460,
+            "line": true
           }
         }
       },
@@ -808,19 +847,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 410,
-            "bottom": 662
+            "top": 406,
+            "bottom": 422,
+            "line": true
           }
         }
       },
@@ -846,23 +885,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 24,
+        "scrolled": 16,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 152,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -902,18 +944,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 426,
-            "bottom": 662
+            "bottom": 442,
+            "line": true
           }
         }
       },
@@ -944,19 +989,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 390,
-            "bottom": 662
+            "top": 386,
+            "bottom": 402,
+            "line": true
           }
         }
       },
@@ -991,23 +1036,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 20,
+        "scrolled": 12,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 432
+          "height": 248,
+          "content": 398
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -1038,18 +1086,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 476,
-            "bottom": 662
+            "top": 516,
+            "bottom": 662,
+            "line": false
           }
         }
       },
@@ -1080,28 +1131,31 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 88,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 555,
-            "bottom": 662
+            "top": 644,
+            "bottom": 660,
+            "line": true
           }
         }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 217.375,
-          "top": 347.9375,
-          "right": 356.796875,
-          "bottom": 377.9375
+          "left": 212.578125,
+          "top": 415.9375,
+          "right": 352,
+          "bottom": 445.9375
         },
         "inside": true,
         "covers": []
@@ -1132,18 +1186,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 407,
-            "bottom": 762
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -1173,19 +1230,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 373,
-            "bottom": 762
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -1211,23 +1268,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 711,
+            "bottom": 727,
+            "line": true
           }
         }
       },
@@ -1235,9 +1295,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 217.375,
-          "top": 278.9375,
+          "top": 281.9375,
           "right": 356.796875,
-          "bottom": 308.9375
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -1267,18 +1327,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 389,
-            "bottom": 762
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -1309,19 +1372,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 353,
-            "bottom": 762
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -1356,23 +1419,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 320
+          "height": 254,
+          "content": 254
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 605,
+            "bottom": 621,
+            "line": true
           }
         }
       },
@@ -1403,18 +1469,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 439,
-            "bottom": 762
+            "top": 479,
+            "bottom": 762,
+            "line": false
           }
         }
       },
@@ -1440,23 +1509,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 6,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 233,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 595,
-            "bottom": 762
+            "top": 736,
+            "bottom": 752,
+            "line": true
           }
         }
       },
@@ -1464,9 +1536,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 217.375,
-          "top": 310.9375,
+          "top": 353.9375,
           "right": 356.796875,
-          "bottom": 340.9375
+          "bottom": 383.9375
         },
         "inside": true,
         "covers": []
@@ -1497,18 +1569,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 407,
-            "bottom": 862
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -1538,19 +1613,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 373,
-            "bottom": 862
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -1576,23 +1651,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 605,
-            "bottom": 862
+            "top": 695,
+            "bottom": 711,
+            "line": true
           }
         }
       },
@@ -1632,18 +1710,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 389,
-            "bottom": 862
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -1674,19 +1755,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 353,
-            "bottom": 862
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -1726,18 +1807,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 272,
-          "content": 272
+          "height": 238,
+          "content": 238
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 589,
-            "bottom": 862
+            "bottom": 605,
+            "line": true
           }
         }
       },
@@ -1768,18 +1852,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 439,
-            "bottom": 862
+            "top": 479,
+            "bottom": 862,
+            "line": false
           }
         }
       },
@@ -1805,23 +1892,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 637,
-            "bottom": 862
+            "top": 767,
+            "bottom": 783,
+            "line": true
           }
         }
       },
@@ -1829,9 +1919,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 217.375,
-          "top": 313.9375,
+          "top": 353.9375,
           "right": 356.796875,
-          "bottom": 343.9375
+          "bottom": 383.9375
         },
         "inside": true,
         "covers": []
@@ -1862,18 +1952,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 335,
-            "bottom": 821
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -1903,19 +1996,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 301,
-            "bottom": 821
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -1941,23 +2034,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 549,
-            "bottom": 821
+            "top": 655,
+            "bottom": 671,
+            "line": true
           }
         }
       },
@@ -1997,18 +2093,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 317,
-            "bottom": 821
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -2039,19 +2138,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 281,
-            "bottom": 821
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -2086,23 +2185,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 11,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 312,
-          "content": 432
+          "height": 286,
+          "content": 286
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 557,
-            "bottom": 821
+            "top": 565,
+            "bottom": 581,
+            "line": true
           }
         }
       },
@@ -2133,18 +2235,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 367,
-            "bottom": 821
+            "top": 407,
+            "bottom": 821,
+            "line": false
           }
         }
       },
@@ -2170,33 +2275,36 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 581,
-            "bottom": 821
+            "top": 727,
+            "bottom": 743,
+            "line": true
           }
         }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 202.375,
-          "top": 241.9375,
-          "right": 341.796875,
-          "bottom": 271.9375
+          "left": 191.578125,
+          "top": 306.9375,
+          "right": 331,
+          "bottom": 336.9375
         },
         "inside": true,
         "covers": []
@@ -2227,18 +2335,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 335,
-            "bottom": 677
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -2268,19 +2379,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 301,
-            "bottom": 677
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -2306,23 +2417,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 479,
-            "bottom": 677
+            "top": 519,
+            "bottom": 535,
+            "line": true
           }
         }
       },
@@ -2362,18 +2476,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 317,
-            "bottom": 677
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -2404,19 +2521,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 281,
-            "bottom": 677
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -2456,18 +2573,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 208,
-          "content": 208
+          "height": 174,
+          "content": 174
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 453,
-            "bottom": 677
+            "bottom": 469,
+            "line": true
           }
         }
       },
@@ -2498,18 +2618,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 367,
-            "bottom": 677
+            "top": 407,
+            "bottom": 677,
+            "line": false
           }
         }
       },
@@ -2535,23 +2658,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 511,
-            "bottom": 677
+            "top": 591,
+            "bottom": 607,
+            "line": true
           }
         }
       },
@@ -2559,9 +2685,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 202.375,
-          "top": 241.9375,
+          "top": 281.9375,
           "right": 341.796875,
-          "bottom": 271.9375
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -2592,18 +2718,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 444,
-            "bottom": 662
+            "bottom": 460,
+            "line": true
           }
         }
       },
@@ -2633,19 +2762,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 410,
-            "bottom": 662
+            "top": 406,
+            "bottom": 422,
+            "line": true
           }
         }
       },
@@ -2671,23 +2800,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 24,
+        "scrolled": 16,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 152,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -2727,18 +2859,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 426,
-            "bottom": 662
+            "bottom": 442,
+            "line": true
           }
         }
       },
@@ -2769,19 +2904,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 390,
-            "bottom": 662
+            "top": 386,
+            "bottom": 402,
+            "line": true
           }
         }
       },
@@ -2816,23 +2951,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 20,
+        "scrolled": 12,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 432
+          "height": 248,
+          "content": 398
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -2863,18 +3001,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 476,
-            "bottom": 662
+            "top": 516,
+            "bottom": 662,
+            "line": false
           }
         }
       },
@@ -2905,28 +3046,31 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 88,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 555,
-            "bottom": 662
+            "top": 644,
+            "bottom": 660,
+            "line": true
           }
         }
       },
       "popover": {
         "text": "Started 13:00 · took 38s",
         "box": {
-          "left": 217.375,
-          "top": 347.9375,
-          "right": 356.796875,
-          "bottom": 377.9375
+          "left": 212.578125,
+          "top": 415.9375,
+          "right": 352,
+          "bottom": 445.9375
         },
         "inside": true,
         "covers": []
@@ -2957,18 +3101,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 407,
-            "bottom": 762
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -2998,19 +3145,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 373,
-            "bottom": 762
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -3036,23 +3183,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 711,
+            "bottom": 727,
+            "line": true
           }
         }
       },
@@ -3060,9 +3210,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 217.375,
-          "top": 278.9375,
+          "top": 281.9375,
           "right": 356.796875,
-          "bottom": 308.9375
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -3092,18 +3242,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 389,
-            "bottom": 762
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -3134,19 +3287,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 353,
-            "bottom": 762
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -3181,23 +3334,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 320
+          "height": 254,
+          "content": 254
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 605,
+            "bottom": 621,
+            "line": true
           }
         }
       },
@@ -3228,18 +3384,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 439,
-            "bottom": 762
+            "top": 479,
+            "bottom": 762,
+            "line": false
           }
         }
       },
@@ -3265,23 +3424,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 6,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 233,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 595,
-            "bottom": 762
+            "top": 736,
+            "bottom": 752,
+            "line": true
           }
         }
       },
@@ -3289,9 +3451,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 217.375,
-          "top": 310.9375,
+          "top": 353.9375,
           "right": 356.796875,
-          "bottom": 340.9375
+          "bottom": 383.9375
         },
         "inside": true,
         "covers": []
@@ -3322,18 +3484,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 407,
-            "bottom": 862
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -3363,19 +3528,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 373,
-            "bottom": 862
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -3401,23 +3566,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 605,
-            "bottom": 862
+            "top": 695,
+            "bottom": 711,
+            "line": true
           }
         }
       },
@@ -3457,18 +3625,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 389,
-            "bottom": 862
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -3499,19 +3670,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 353,
-            "bottom": 862
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -3551,18 +3722,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 272,
-          "content": 272
+          "height": 238,
+          "content": 238
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 589,
-            "bottom": 862
+            "bottom": 605,
+            "line": true
           }
         }
       },
@@ -3593,18 +3767,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 439,
-            "bottom": 862
+            "top": 479,
+            "bottom": 862,
+            "line": false
           }
         }
       },
@@ -3630,23 +3807,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 637,
-            "bottom": 862
+            "top": 767,
+            "bottom": 783,
+            "line": true
           }
         }
       },
@@ -3654,9 +3834,9 @@
         "text": "Started 13:00 · took 38s",
         "box": {
           "left": 217.375,
-          "top": 313.9375,
+          "top": 353.9375,
           "right": 356.796875,
-          "bottom": 343.9375
+          "bottom": 383.9375
         },
         "inside": true,
         "covers": []
@@ -3687,18 +3867,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 335,
-            "bottom": 821
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -3728,19 +3911,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 301,
-            "bottom": 821
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -3766,23 +3949,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 549,
-            "bottom": 821
+            "top": 655,
+            "bottom": 671,
+            "line": true
           }
         }
       },
@@ -3822,18 +4008,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 317,
-            "bottom": 821
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -3864,19 +4053,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 281,
-            "bottom": 821
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -3911,23 +4100,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 11,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 312,
-          "content": 432
+          "height": 286,
+          "content": 286
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 557,
-            "bottom": 821
+            "top": 565,
+            "bottom": 581,
+            "line": true
           }
         }
       },
@@ -3958,18 +4150,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 367,
-            "bottom": 821
+            "top": 407,
+            "bottom": 821,
+            "line": false
           }
         }
       },
@@ -3995,23 +4190,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 581,
-            "bottom": 821
+            "top": 727,
+            "bottom": 743,
+            "line": true
           }
         }
       },
@@ -4019,9 +4217,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 157.390625,
-          "top": 184.9375,
+          "top": 330.9375,
           "right": 331,
-          "bottom": 214.9375
+          "bottom": 360.9375
         },
         "inside": true,
         "covers": []
@@ -4052,18 +4250,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 335,
-            "bottom": 677
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -4093,19 +4294,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 301,
-            "bottom": 677
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -4131,23 +4332,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 479,
-            "bottom": 677
+            "top": 519,
+            "bottom": 535,
+            "line": true
           }
         }
       },
@@ -4187,18 +4391,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 317,
-            "bottom": 677
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -4229,19 +4436,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 281,
-            "bottom": 677
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -4281,18 +4488,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 208,
-          "content": 208
+          "height": 174,
+          "content": 174
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 453,
-            "bottom": 677
+            "bottom": 469,
+            "line": true
           }
         }
       },
@@ -4323,18 +4533,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 367,
-            "bottom": 677
+            "top": 407,
+            "bottom": 677,
+            "line": false
           }
         }
       },
@@ -4360,23 +4573,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 511,
-            "bottom": 677
+            "top": 591,
+            "bottom": 607,
+            "line": true
           }
         }
       },
@@ -4384,9 +4600,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 270.921875,
-          "top": 241.9375,
+          "top": 281.9375,
           "right": 444.53125,
-          "bottom": 271.9375
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -4417,18 +4633,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 444,
-            "bottom": 662
+            "bottom": 460,
+            "line": true
           }
         }
       },
@@ -4458,19 +4677,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 410,
-            "bottom": 662
+            "top": 406,
+            "bottom": 422,
+            "line": true
           }
         }
       },
@@ -4496,23 +4715,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 24,
+        "scrolled": 16,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 152,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -4552,18 +4774,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 426,
-            "bottom": 662
+            "bottom": 442,
+            "line": true
           }
         }
       },
@@ -4594,19 +4819,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 390,
-            "bottom": 662
+            "top": 386,
+            "bottom": 402,
+            "line": true
           }
         }
       },
@@ -4641,23 +4866,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 20,
+        "scrolled": 12,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 432
+          "height": 248,
+          "content": 398
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -4688,18 +4916,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 476,
-            "bottom": 662
+            "top": 516,
+            "bottom": 662,
+            "line": false
           }
         }
       },
@@ -4730,18 +4961,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 88,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 555,
-            "bottom": 662
+            "top": 644,
+            "bottom": 660,
+            "line": true
           }
         }
       },
@@ -4749,9 +4983,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 285.921875,
-          "top": 350.9375,
+          "top": 390.9375,
           "right": 459.53125,
-          "bottom": 380.9375
+          "bottom": 420.9375
         },
         "inside": true,
         "covers": []
@@ -4782,18 +5016,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 407,
-            "bottom": 762
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -4823,19 +5060,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 373,
-            "bottom": 762
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -4861,23 +5098,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 711,
+            "bottom": 727,
+            "line": true
           }
         }
       },
@@ -4917,18 +5157,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 389,
-            "bottom": 762
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -4959,19 +5202,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 353,
-            "bottom": 762
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -5006,23 +5249,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 320
+          "height": 254,
+          "content": 254
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 605,
+            "bottom": 621,
+            "line": true
           }
         }
       },
@@ -5053,18 +5299,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 439,
-            "bottom": 762
+            "top": 479,
+            "bottom": 762,
+            "line": false
           }
         }
       },
@@ -5090,23 +5339,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 6,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 233,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 595,
-            "bottom": 762
+            "top": 736,
+            "bottom": 752,
+            "line": true
           }
         }
       },
@@ -5114,9 +5366,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 285.921875,
-          "top": 310.9375,
+          "top": 353.9375,
           "right": 459.53125,
-          "bottom": 340.9375
+          "bottom": 383.9375
         },
         "inside": true,
         "covers": []
@@ -5147,18 +5399,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 407,
-            "bottom": 862
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -5188,19 +5443,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 373,
-            "bottom": 862
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -5226,23 +5481,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 605,
-            "bottom": 862
+            "top": 695,
+            "bottom": 711,
+            "line": true
           }
         }
       },
@@ -5282,18 +5540,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 389,
-            "bottom": 862
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -5324,19 +5585,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 353,
-            "bottom": 862
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -5376,18 +5637,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 272,
-          "content": 272
+          "height": 238,
+          "content": 238
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 589,
-            "bottom": 862
+            "bottom": 605,
+            "line": true
           }
         }
       },
@@ -5418,18 +5682,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 439,
-            "bottom": 862
+            "top": 479,
+            "bottom": 862,
+            "line": false
           }
         }
       },
@@ -5455,33 +5722,36 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 637,
-            "bottom": 862
+            "top": 767,
+            "bottom": 783,
+            "line": true
           }
         }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 285.921875,
-          "top": 313.9375,
-          "right": 459.53125,
-          "bottom": 343.9375
+          "left": 270.390625,
+          "top": 378.9375,
+          "right": 444,
+          "bottom": 408.9375
         },
         "inside": true,
         "covers": []
@@ -5512,18 +5782,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 335,
-            "bottom": 821
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -5553,19 +5826,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 301,
-            "bottom": 821
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -5591,23 +5864,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 549,
-            "bottom": 821
+            "top": 655,
+            "bottom": 671,
+            "line": true
           }
         }
       },
@@ -5647,18 +5923,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
             "top": 317,
-            "bottom": 821
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -5689,19 +5968,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 281,
-            "bottom": 821
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -5736,23 +6015,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 11,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 312,
-          "content": 432
+          "height": 286,
+          "content": 286
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 557,
-            "bottom": 821
+            "top": 565,
+            "bottom": 581,
+            "line": true
           }
         }
       },
@@ -5783,18 +6065,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 367,
-            "bottom": 821
+            "top": 407,
+            "bottom": 821,
+            "line": false
           }
         }
       },
@@ -5820,23 +6105,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 9,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 304,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 834,
           "conversation": {
-            "top": 581,
-            "bottom": 821
+            "top": 727,
+            "bottom": 743,
+            "line": true
           }
         }
       },
@@ -5844,9 +6132,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 157.390625,
-          "top": 184.9375,
+          "top": 330.9375,
           "right": 331,
-          "bottom": 214.9375
+          "bottom": 360.9375
         },
         "inside": true,
         "covers": []
@@ -5877,18 +6165,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 335,
-            "bottom": 677
+            "bottom": 351,
+            "line": true
           }
         }
       },
@@ -5918,19 +6209,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 301,
-            "bottom": 677
+            "top": 297,
+            "bottom": 313,
+            "line": true
           }
         }
       },
@@ -5956,23 +6247,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 479,
-            "bottom": 677
+            "top": 519,
+            "bottom": 535,
+            "line": true
           }
         }
       },
@@ -6012,18 +6306,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 317,
-            "bottom": 677
+            "bottom": 333,
+            "line": true
           }
         }
       },
@@ -6054,19 +6351,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 281,
-            "bottom": 677
+            "top": 277,
+            "bottom": 293,
+            "line": true
           }
         }
       },
@@ -6106,18 +6403,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 208,
-          "content": 208
+          "height": 174,
+          "content": 174
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
             "top": 453,
-            "bottom": 677
+            "bottom": 469,
+            "line": true
           }
         }
       },
@@ -6148,18 +6448,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 367,
-            "bottom": 677
+            "top": 407,
+            "bottom": 677,
+            "line": false
           }
         }
       },
@@ -6185,23 +6488,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 4,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 234,
-          "content": 290
+          "height": 168,
+          "content": 168
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 690,
           "conversation": {
-            "top": 511,
-            "bottom": 677
+            "top": 591,
+            "bottom": 607,
+            "line": true
           }
         }
       },
@@ -6209,9 +6515,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 270.921875,
-          "top": 241.9375,
+          "top": 281.9375,
           "right": 444.53125,
-          "bottom": 271.9375
+          "bottom": 311.9375
         },
         "inside": true,
         "covers": []
@@ -6242,18 +6548,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 444,
-            "bottom": 662
+            "bottom": 460,
+            "line": true
           }
         }
       },
@@ -6283,19 +6592,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 410,
-            "bottom": 662
+            "top": 406,
+            "bottom": 422,
+            "line": true
           }
         }
       },
@@ -6321,23 +6630,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 24,
+        "scrolled": 16,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 152,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -6377,18 +6689,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
             "top": 426,
-            "bottom": 662
+            "bottom": 442,
+            "line": true
           }
         }
       },
@@ -6419,19 +6734,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 390,
-            "bottom": 662
+            "top": 386,
+            "bottom": 402,
+            "line": true
           }
         }
       },
@@ -6466,23 +6781,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 20,
+        "scrolled": 12,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 432
+          "height": 248,
+          "content": 398
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 523,
-            "bottom": 662
+            "top": 636,
+            "bottom": 652,
+            "line": true
           }
         }
       },
@@ -6513,18 +6831,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 476,
-            "bottom": 662
+            "top": 516,
+            "bottom": 662,
+            "line": false
           }
         }
       },
@@ -6555,18 +6876,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 169,
-          "content": 410
+          "height": 88,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 675,
           "conversation": {
-            "top": 555,
-            "bottom": 662
+            "top": 644,
+            "bottom": 660,
+            "line": true
           }
         }
       },
@@ -6574,9 +6898,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 285.921875,
-          "top": 350.9375,
+          "top": 390.9375,
           "right": 459.53125,
-          "bottom": 380.9375
+          "bottom": 420.9375
         },
         "inside": true,
         "covers": []
@@ -6607,18 +6931,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 407,
-            "bottom": 762
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -6648,19 +6975,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 373,
-            "bottom": 762
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -6686,23 +7013,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 280,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 711,
+            "bottom": 727,
+            "line": true
           }
         }
       },
@@ -6742,18 +7072,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
             "top": 389,
-            "bottom": 762
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -6784,19 +7117,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 353,
-            "bottom": 762
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -6831,23 +7164,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 320
+          "height": 254,
+          "content": 254
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 563,
-            "bottom": 762
+            "top": 605,
+            "bottom": 621,
+            "line": true
           }
         }
       },
@@ -6878,18 +7214,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 439,
-            "bottom": 762
+            "top": 479,
+            "bottom": 762,
+            "line": false
           }
         }
       },
@@ -6915,23 +7254,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 14,
+        "scrolled": 6,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 247,
-          "content": 410
+          "height": 233,
+          "content": 280
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": true,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 775,
           "conversation": {
-            "top": 595,
-            "bottom": 762
+            "top": 736,
+            "bottom": 752,
+            "line": true
           }
         }
       },
@@ -6939,9 +7281,9 @@
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
           "left": 285.921875,
-          "top": 310.9375,
+          "top": 353.9375,
           "right": 459.53125,
-          "bottom": 340.9375
+          "bottom": 383.9375
         },
         "inside": true,
         "covers": []
@@ -6972,18 +7314,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 407,
-            "bottom": 862
+            "bottom": 423,
+            "line": true
           }
         }
       },
@@ -7013,19 +7358,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 58,
-          "content": 58
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 373,
-            "bottom": 862
+            "top": 369,
+            "bottom": 385,
+            "line": true
           }
         }
       },
@@ -7051,23 +7396,26 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 605,
-            "bottom": 862
+            "top": 695,
+            "bottom": 711,
+            "line": true
           }
         }
       },
@@ -7107,18 +7455,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 72,
-          "content": 72
+          "height": 38,
+          "content": 38
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 389,
-            "bottom": 862
+            "bottom": 405,
+            "line": true
           }
         }
       },
@@ -7149,19 +7500,19 @@
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
-        "scroller": {
-          "height": 38,
-          "content": 38
-        },
+        "scroller": null,
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 353,
-            "bottom": 862
+            "top": 349,
+            "bottom": 365,
+            "line": true
           }
         }
       },
@@ -7201,18 +7552,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 272,
-          "content": 272
+          "height": 238,
+          "content": 238
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
             "top": 589,
-            "bottom": 862
+            "bottom": 605,
+            "line": true
           }
         }
       },
@@ -7243,18 +7597,21 @@
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 92,
-          "content": 92
+          "height": 58,
+          "content": 58
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 439,
-            "bottom": 862
+            "top": 479,
+            "bottom": 862,
+            "line": false
           }
         }
       },
@@ -7280,33 +7637,36 @@
       "geometry": {
         "clipped": [],
         "covered": [],
-        "scrolled": 7,
+        "scrolled": 0,
         "wide": 0,
         "controls": [],
         "documentOverflow": false,
         "scroller": {
-          "height": 288,
-          "content": 378
+          "height": 264,
+          "content": 264
         },
         "lastLine": true,
-        "commandReached": true,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": {
           "overflow": 0,
           "bottom": 875,
           "conversation": {
-            "top": 637,
-            "bottom": 862
+            "top": 767,
+            "bottom": 783,
+            "line": true
           }
         }
       },
       "popover": {
         "text": "Почато о 13:00 · тривало 38 с",
         "box": {
-          "left": 285.921875,
-          "top": 313.9375,
-          "right": 459.53125,
-          "bottom": 343.9375
+          "left": 270.390625,
+          "top": 378.9375,
+          "right": 444,
+          "bottom": 408.9375
         },
         "inside": true,
         "covers": []

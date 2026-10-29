@@ -1526,9 +1526,9 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
         if (!tail.trimEnd().endsWith(last)) throw new Error(`${where}: tail ends "${tail.slice(-40)}"`);
         /* Every word is whole in the window. Output the setup's own scroller
            holds out of view is not cut: no line straddles its edges, and it
-           reaches both the command and the last line. The pane around it
+           reaches both its first and its last line. The pane around it
            overflows nothing, so the conversation below stays in view. */
-        const geometry = await result.evaluate(element => {
+        const geometry = await result.evaluate((element, kind) => {
           const clipped: string[] = [], covered: string[] = [], scrolled: string[] = [];
           const body = element.querySelector<HTMLElement>("[data-stage-setup-body]");
           const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -1556,47 +1556,56 @@ export async function captureProjectSetupHosts(browser: Browser, base: string, o
           }
           const wide = [...element.querySelectorAll("pre, code")].filter(child => child.scrollWidth > child.clientWidth + 1).length;
           const pane = element.closest<HTMLElement>("section[data-stage]");
-          const conv = pane?.querySelector(".pane-conv")?.getBoundingClientRect();
+          const convElement = pane?.querySelector(".pane-conv"), conv = convElement?.getBoundingClientRect();
           const paneBox = pane?.getBoundingClientRect();
-          const whole = (target: Element | null | undefined, last = false) => {
+          const whole = (target: Element | null | undefined, part: "all" | "first" | "last" = "all") => {
             if (!target) return false;
             const range = document.createRange(); range.selectNodeContents(target);
-            const rects = [...range.getClientRects()].filter(rect => rect.width > 0), frame = body?.getBoundingClientRect();
-            return rects.length > 0 && (last ? rects.slice(-1) : rects).every(rect => rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
+            const rects = [...range.getClientRects()].filter(rect => rect.width > 0), frame = body?.contains(target) ? body.getBoundingClientRect() : null;
+            return rects.length > 0 && (part === "last" ? rects.slice(-1) : part === "first" ? rects.slice(0, 1) : rects).every(rect => rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
               && (!frame || (rect.top >= frame.top - 0.5 && rect.bottom <= frame.bottom + 0.5)));
           };
-          /* The output opens on its last line; scrolled to its start, the command line is whole. */
-          const lastLine = whole([...element.querySelectorAll("pre")].at(-1), true);
-          let commandReached: boolean | null = null;
+          /* The output opens on its last line; scrolled to its start, its first line is whole. */
+          const lastLine = whole([...element.querySelectorAll("pre")].at(-1), "last");
+          /* As it opens, a failure shows its command and, when it wrote to
+             stderr, the first line of why above the tail. */
+          const commandInView = whole(element.querySelector("[data-stage-setup-command]"));
+          const reasonInView = kind === "failed" || kind === "stopped" ? whole(element.querySelector("pre"), "first") : null;
+          let startReached: boolean | null = null;
           if (body && body.scrollHeight > body.clientHeight + 1) {
             const at = body.scrollTop;
             body.scrollTop = -body.scrollHeight;
             if (body.scrollTop === at) body.scrollTop = 0;
-            commandReached = whole(element.querySelector("[data-stage-setup-command]"));
+            const texts = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, { acceptNode: node => node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP });
+            startReached = whole(texts.nextNode()?.parentElement, "first");
             body.scrollTop = at;
           }
           /* Every control the output draws (its copy button, its reveal) lies whole
-             inside the setup body: a scroller holds one wholly in view or wholly
-             out of it, and none hangs past the body's edge. */
-          const frame = body?.getBoundingClientRect();
-          const controls = frame ? [...body!.querySelectorAll("button")].flatMap(control => {
-            const box = control.getBoundingClientRect();
+             inside the part of the setup that holds it: a scroller holds one wholly
+             in view or wholly out of it, and none hangs past its edge. */
+          const controls = [...element.querySelectorAll("details button")].flatMap(control => {
+            const holder = control.closest("[data-stage-setup-body], [data-stage-setup-lead]");
+            if (!holder) return [];
+            const frame = holder.getBoundingClientRect(), box = control.getBoundingClientRect();
             if (box.bottom <= frame.top + 0.5 || box.top >= frame.bottom - 0.5) return [];
             return box.left < frame.left - 0.5 || box.right > frame.right + 0.5 || box.top < frame.top - 0.5 || box.bottom > frame.bottom + 0.5
               || box.top < -0.5 || box.bottom > innerHeight + 0.5
               ? [{ label: control.getAttribute("aria-label") ?? control.textContent, box: [box.left, box.top, box.right, box.bottom].map(Math.round), body: [frame.left, frame.top, frame.right, frame.bottom].map(Math.round) }] : [];
-          }) : [];
+          });
           const dot = element.querySelector("[data-stage-setup-dot] > span")!.firstElementChild!.getBoundingClientRect();
           return { clipped, covered, scrolled: scrolled.length, wide, controls, documentOverflow: document.documentElement.scrollWidth > innerWidth,
-            scroller: body ? { height: body.clientHeight, content: body.scrollHeight } : null, lastLine, commandReached,
+            scroller: body ? { height: body.clientHeight, content: body.scrollHeight } : null, lastLine, startReached,
             dotEdge: Math.round((dot.left - element.getBoundingClientRect().left) * 10) / 10,
+            commandInView, reasonInView,
             pane: pane && paneBox && conv ? { overflow: pane.scrollHeight - pane.clientHeight, bottom: Math.round(paneBox.bottom),
-              conversation: { top: Math.round(conv.top), bottom: Math.round(conv.bottom) } } : null };
-        });
+              conversation: { top: Math.round(conv.top), bottom: Math.round(conv.bottom), line: convElement!.classList.contains("line") } } : null };
+        }, view.kind);
+        /* A conversation keeps room to read; an attempt with none says so in one line under the setup. */
         const paneFails = geometry.pane && (geometry.pane.overflow > 1 || geometry.pane.conversation.bottom > Math.min(geometry.pane.bottom, height)
-          || geometry.pane.conversation.bottom - geometry.pane.conversation.top < 48);
+          || geometry.pane.conversation.bottom - geometry.pane.conversation.top < (geometry.pane.conversation.line ? 1 : 48));
         if (geometry.clipped.length || geometry.covered.length || geometry.controls.length || geometry.wide || geometry.documentOverflow || paneFails
-          || geometry.commandReached === false || Math.abs(geometry.dotEdge) > 1
+          || geometry.startReached === false || Math.abs(geometry.dotEdge) > 1
+          || (opens && (!geometry.commandInView || geometry.reasonInView === false))
           || (["failed", "stopped", "long", "passed"].includes(view.kind) && !geometry.lastLine)) throw new Error(`${where}: ${JSON.stringify(geometry)}`);
         if (!opens) frames.push(await shot("-open"));
         /* On the phone the dot is its own 44 px target, every tap inside it (short

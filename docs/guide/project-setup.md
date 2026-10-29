@@ -67,7 +67,8 @@ are retained on the stage attempt. Each output stream is displayed up to 16,000
 characters, with an ellipsis when shortened. The setup is one line with a dot
 and its outcome: in the board's **Stages** sheet for the attempt the pane shows,
 and on the phone pipeline screen for the lane's latest setup. A failure opens on
-the end of its output; select a closed line to see its command and output, and
+its command, its stderr and the end of its output; with no conversation on the
+attempt, the setup takes the pane. Select a closed line to see its command and output, and
 hover or tap the dot for when it started and how long it took. A failed setup
 stays on its attempt beside its successful retry; in the **Stages** sheet the
 attempt buttons switch between them.

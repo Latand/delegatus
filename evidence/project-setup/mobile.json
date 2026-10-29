@@ -1,13 +1,13 @@
 {
-  "capturedAt": "2026-10-28T19:42:59.271Z",
+  "capturedAt": "2026-10-29T01:05:27.349Z",
   "sourceDigests": {
     "src/components/kanban/kanbanBoard.browser.test.tsx": "a76df2664f4b817c40da3b4139a73cd95d0d47617e7dd859e752d09480036c20",
     "src/components/mobile/issue1671Evidence.browser.test.tsx": "58fb5ef632a8b7583ba0f01579e64067def392081776e5cb6748d9267ed97d01",
-    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "7da33f154949612647a8020111dade3f502867efa92df01bb12d46aedcd24550",
-    "src/components/kanban/issue1695BrowserHarness.ts": "ccfa2ecc07bff2dee30b832eec4440089fd3d35f65aa53c674d4628ddd8fb632",
-    "src/components/pipelines/StageSetupResult.tsx": "1269886e663f53fdcc9f14cf255d5da56d7409a489c6667778b664d336db687b",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "fc07e7f2c3bb5c5c79066c4edc417a75c4ca97c8dc09a3d7a364e0042cef01d3",
+    "src/components/kanban/issue1695BrowserHarness.ts": "79f0c5f0e92f56fcc621a0551eb996acb16fc906d8648ce744ca031bd266d119",
+    "src/components/pipelines/StageSetupResult.tsx": "74389edbcae76c73f6c082cfdbd8cc348b05f529fc17f1e537ce0f68bc45867e",
     "src/components/feed/cards/OutputPreview.tsx": "06104f620eebbbf829083d698e02219ffd2e2be387ff703ab710ef1a1b889a10",
-    "src/components/kanban/StagesSheet.tsx": "eb25b6023da2231787682a47f2ead9e3f50bdec3342f65d9e1df0562c8f021b3",
+    "src/components/kanban/StagesSheet.tsx": "c881344a5d6feacd7503f9b1cf8835e4477190ae5af3d7cdf559e944ccc09c8e",
     "src/components/mobile/MobilePipelineScreen.tsx": "3cb7d13f4c4db1ee8ab5e32af7f0a51c7b181647ec21f4326acce89453156061",
     "src/lib/i18n/en.ts": "c55d53444ad56f080655c6b06004cd6f94e1df12d55907b28a08e5295a881e97",
     "src/lib/i18n/uk.ts": "510eaec3a6c8e794590908096741c2eec141e1b69d893ef7da8460028f15da9f"
@@ -47,8 +47,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -88,8 +90,10 @@
           "content": 58
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -129,8 +133,10 @@
           "content": 410
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": {
@@ -179,8 +185,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": null,
@@ -221,8 +229,10 @@
           "content": 38
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": {
@@ -271,8 +281,10 @@
           "content": 320
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -312,8 +324,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -353,8 +367,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -394,8 +410,10 @@
           "content": 58
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -435,8 +453,10 @@
           "content": 410
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": {
@@ -485,8 +505,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": null,
@@ -527,8 +549,10 @@
           "content": 38
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": {
@@ -577,8 +601,10 @@
           "content": 320
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -618,8 +644,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -659,8 +687,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -700,8 +730,10 @@
           "content": 58
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -741,8 +773,10 @@
           "content": 410
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": {
@@ -791,8 +825,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": null,
@@ -833,8 +869,10 @@
           "content": 38
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": {
@@ -883,8 +921,10 @@
           "content": 320
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -924,8 +964,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -965,8 +1007,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -1006,8 +1050,10 @@
           "content": 58
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -1047,8 +1093,10 @@
           "content": 410
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": {
@@ -1097,8 +1145,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": true,
         "pane": null
       },
       "popover": null,
@@ -1139,8 +1189,10 @@
           "content": 38
         },
         "lastLine": false,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": {
@@ -1189,8 +1241,10 @@
           "content": 320
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,
@@ -1230,8 +1284,10 @@
           "content": 94
         },
         "lastLine": true,
-        "commandReached": null,
+        "startReached": null,
         "dotEdge": 0,
+        "commandInView": true,
+        "reasonInView": null,
         "pane": null
       },
       "popover": null,

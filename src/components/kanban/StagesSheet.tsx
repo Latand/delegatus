@@ -434,8 +434,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
     );
   } else {
-    body = <div className="pane-conv away"><p className="pane-note">{shown.state === "spawning" || shown.state === "pending" ? t("kanban.stages.starting") : t("kanban.graph.noConversationTitle")}</p></div>;
+    /* With no conversation to show, a setup the attempt ran has the pane's
+       room, and the note under it is one line. */
+    body = <div className={`pane-conv away${shown.setup ? " line" : ""}`}><p className="pane-note">{shown.state === "spawning" || shown.state === "pending" ? t("kanban.stages.starting") : t("kanban.graph.noConversationTitle")}</p></div>;
   }
+  const setupFills = !neverRan && !pane.readerKey && !recorded;
 
   return (
     <section className={className} data-stage={stage.id} data-collapsed="0" tabIndex={-1} role="region" aria-label={aria}>
@@ -506,9 +509,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
-      {/* The setup result belongs to the attempt the pane shows. It takes at
-          most half the pane, so the conversation below keeps its room. */}
-      {shown ? <StageSetupResult setup={shown.setup} worktreeDir={pipeline.worktreeDir} fit /> : null}
+      {/* The setup result belongs to the attempt the pane shows. Above a
+          conversation it takes at most half the pane, so the conversation
+          keeps its room; with none, it takes what the pane has. */}
+      {shown ? <StageSetupResult setup={shown.setup} worktreeDir={pipeline.worktreeDir} fit fill={setupFills} /> : null}
       <AgentMemoryCapNote cap={shown?.memoryCap} />
       {body}
     </section>
