@@ -4,7 +4,8 @@
  * them back to say each one in the operator's language.
  */
 export const MERGE_REASONS = {
-  refreshClosed: "the refresh was closed before the PR merged",
+  refreshClosed: "the refresh was closed; finish the resolution review before retrying the merge",
+  refreshReviewRequired: "the refresh has not passed its resolution review",
   refreshSameBase: "the refresh did not clear the conflict, and main has not moved since",
   conflict: "conflict with the base branch",
   noChecks: "no checks reported on this head",
@@ -22,6 +23,11 @@ export const MERGE_REASONS = {
 } as const;
 
 export type MergeReasonKey = keyof typeof MERGE_REASONS;
+
+/** Older stored reasons remain readable after their wording changes. */
+export const LEGACY_MERGE_REASONS: Partial<Record<MergeReasonKey, readonly string[]>> = {
+  refreshClosed: ["the refresh was closed before the PR merged"],
+};
 
 /** A reason with a part of its own: a named red check, or GitHub's words. */
 export const MERGE_REASON_PATTERNS = {

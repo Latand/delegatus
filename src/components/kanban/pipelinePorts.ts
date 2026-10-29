@@ -32,6 +32,8 @@ export interface PipelineRead {
   stageDigests: Readonly<Record<string, string>>;
   /** The record's revision, which one more review round names as `expectedRevision` (#1938). */
   revision?: string | null;
+  /** The digest of the whole ordered plan, which guards `add-stage`. */
+  graphDigest?: string | null;
 }
 
 export interface PipelinePorts {
@@ -50,10 +52,10 @@ export const browserPipelinePorts: PipelinePorts = {
     try {
       const response = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, { cache: "no-store" });
       if (!response.ok) return null;
-      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; stageDigests?: Record<string, unknown>; revision?: unknown } | null;
+      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; stageDigests?: Record<string, unknown>; revision?: unknown; graphDigest?: unknown } | null;
       if (!json?.pipeline) return null;
       const stageDigests = Object.fromEntries(Object.entries(json.stageDigests ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-      return { pipeline: json.pipeline, stageDigests, revision: typeof json.revision === "string" ? json.revision : null };
+      return { pipeline: json.pipeline, stageDigests, revision: typeof json.revision === "string" ? json.revision : null, graphDigest: typeof json.graphDigest === "string" ? json.graphDigest : null };
     } catch {
       return null;
     }
