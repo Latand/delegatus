@@ -9,7 +9,7 @@ import { releaseStages } from "@/lib/release/stages";
 import { assignPipelineDelivery, buildPipeline, savePipelines } from "./store";
 import { pipelineRoleLookup } from "./roles";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
-import type { PipelineRoleId } from "./types";
+import type { PipelineRoleId, PipelineStageAttempt } from "./types";
 import { accountManager } from "@/lib/accounts/manager";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 
@@ -49,6 +49,12 @@ async function fixture() {
     stages, srcPath: null, srcConversationId: null, now: NOW });
   pipeline.lastPassedCommit = head;
   pipeline.publishedCommit = head;
+  const review = pipeline.stages.find(item => item.id === "review")!;
+  const reviewedAttempt: PipelineStageAttempt = { n: 1, state: "passed", effectiveRole: review.effectiveRole,
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: NOW, completedAt: NOW, input: null, activatedBy: null, output: null, verdict: null, error: null,
+    outputBaseHead: head };
+  pipeline.runs.find(run => run.stageId === review.id)!.attempts.push(reviewedAttempt);
   assignPipelineDelivery(pipeline, { repository: "fixture", remote, branch: "refs/heads/main" }, false, () => null);
   const stage = pipeline.stages.at(-1)!;
   const receipts: string[] = [];
@@ -73,7 +79,7 @@ async function fixture() {
   const tag = (target = head, name = "v1.2.3") => git("tag", "-a", name, target, "-m", `Release ${name}`);
   const push = (...args: string[]) => run(lane, ["push", ...args]);
   const close = async () => { for (const receipt of receipts) await fs.rm(receipt, { recursive: true, force: true }); await fs.rm(root, { recursive: true, force: true }); };
-  return { root, lane, remote, source, pipeline, stage, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
+  return { root, lane, remote, source, pipeline, stage, reviewedAttempt, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
 }
 
 test.each([false, true])("publishes exactly the annotated release tag; prior-attempt tag=%s", async retry => {
@@ -193,6 +199,7 @@ test("release receipts replay unchanged and refuse a different policy for the sa
 const refusals = [
   "wrong commit", "lightweight", "other version", "nested tag", "moved tag", "deleted tag", "branch", "mixed refs",
   "changed head", "changed publication", "unpublished head", "comparison", "disabled publication", "foreign remote", "foreign owner", "inactive delivery", "missing delivery",
+  "no review", "failed review", "stale review", "historical review",
 ] as const;
 const reasons: Record<typeof refusals[number], string> = {
   "wrong commit": "directly target the reviewed head", lightweight: "must be annotated", "other version": "only the approved release tag ref",
@@ -201,6 +208,7 @@ const reasons: Record<typeof refusals[number], string> = {
   "changed publication": "delivery branch no longer names", "unpublished head": "published reviewed head",
   comparison: "active delivery owner", "disabled publication": "active delivery owner", "foreign remote": "destination differs",
   "foreign owner": "active delivery owner", "inactive delivery": "active delivery owner", "missing delivery": "active delivery owner",
+  "no review": "successful review", "failed review": "successful review", "stale review": "successful review", "historical review": "successful review",
 };
 test.each(refusals)("release tag refuses %s without a remote change", async scenario => {
   const f = await fixture();
@@ -224,12 +232,17 @@ test.each(refusals)("release tag refuses %s without a remote change", async scen
     if (scenario === "foreign owner") f.pipeline.delivery!.ownerId = "another-lane";
     if (scenario === "inactive delivery") f.pipeline.delivery!.active = false;
     if (scenario === "missing delivery") delete f.pipeline.delivery;
+    if (scenario === "no review") f.pipeline.runs.find(run => run.stageId === "review")!.attempts = [];
+    if (scenario === "failed review") f.reviewedAttempt.state = "failed";
+    if (scenario === "stale review") f.reviewedAttempt.outputBaseHead = f.ancestor;
+    if (scenario === "historical review") f.reviewedAttempt.historical = true;
     await f.bind();
     if (scenario === "changed head") await f.git("commit", "--allow-empty", "-m", "unreviewed");
     if (scenario === "changed publication") expect((await f.run(f.remote, ["update-ref", "refs/heads/main", f.ancestor], f.source)).code).toBe(0);
     if (scenario === "foreign remote") {
       const other = path.join(f.root, "other.git");
       expect((await f.run(f.root, ["init", "--bare", other], f.source)).code).toBe(0);
+      expect((await f.run(f.lane, ["push", other, "HEAD:refs/heads/main"], f.source)).code).toBe(0);
       args[0] = other;
     }
     const before = (await f.run(f.remote, ["show-ref"], f.source)).stdout;
@@ -250,6 +263,7 @@ test.each(["missing", "malformed", "prerelease", "numeric"])("refuses an unappro
     await f.git("add", "package.json"); await f.git("commit", "-m", "invalid release version");
     f.pipeline.lastPassedCommit = await f.git("rev-parse", "HEAD");
     f.pipeline.publishedCommit = f.pipeline.lastPassedCommit;
+    f.reviewedAttempt.outputBaseHead = f.pipeline.lastPassedCommit;
     expect((await f.push("origin", "HEAD:refs/heads/main")).code).toBe(0);
     await f.tag(f.pipeline.lastPassedCommit); await f.bind();
     const denied = await f.push("origin", "refs/tags/v1.2.3");
@@ -259,16 +273,25 @@ test.each(["missing", "malformed", "prerelease", "numeric"])("refuses an unappro
   } finally { await f.close(); }
 });
 
-test.each(["builder", "reviewer", "verifier", "architect", "cleaner", "prod-auditor", "merger", "visual-critic", "orchestrator", "deploy", "missing mode"])("tag exception is unavailable to %s", async other => {
+test.each(["builder", "reviewer", "verifier", "architect", "cleaner", "prod-auditor", "merger", "visual-critic", "orchestrator", "deploy", "missing mode",
+  "legacy kind", "read-only", "declared role mismatch", "effective role mismatch"])("tag exception is unavailable to %s", async other => {
   const f = await fixture();
   try {
-    if (other === "deploy" || other === "missing mode") f.stage.role!.params = other === "deploy" ? { mode: "deploy" } : {};
+    if (other === "legacy kind") f.stage.kind = "review-loop";
+    else if (other === "read-only") f.stage.effectiveRole.access = "read-only";
+    else if (other === "declared role mismatch") f.stage.role!.roleId = "builder";
+    else if (other === "effective role mismatch") f.stage.effectiveRole.roleId = "builder";
+    else if (other === "deploy" || other === "missing mode") f.stage.role!.params = other === "deploy" ? { mode: "deploy" } : {};
     else { f.stage.role!.roleId = other as PipelineRoleId; f.stage.effectiveRole.roleId = other as PipelineRoleId; }
     await f.bind();
     await f.tag();
     const denied = await f.push("origin", "refs/tags/v1.2.3");
     expect(denied.code).not.toBe(0);
     expect(denied.stderr).toContain("tag publication requires a release-mode deployer stage");
+    await f.git("tag", "-d", "v1.2.3"); await f.git("tag", "v1.2.3");
+    const lightweight = await f.push("origin", "refs/tags/v1.2.3");
+    expect(lightweight.code).not.toBe(0);
+    expect(lightweight.stderr).toContain("tag publication requires a release-mode deployer stage");
     expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
   } finally { await f.close(); }
 });
