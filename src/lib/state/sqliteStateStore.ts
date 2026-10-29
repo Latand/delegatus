@@ -1513,6 +1513,18 @@ export class SqliteStateCollection<T> {
     return row ? this.controllerRow(key, row.row_revision) : null;
   }
 
+  /** Header-only fair page for the independent terminal-turn observer. */
+  pipelineRecoveryWindow(after: { row_order: number; row_key: string }, limit: number): Array<{ row_order: number; row_key: string }> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 8) throw new Error("invalid recovery lane budget");
+    const db = sharedStateReadonlyDatabase(this.filename);
+    const page = (order: number, key: string, count: number) => db.query<{ row_order: number; row_key: string }, [number, number, string, number]>(`
+      SELECT row_order,row_key FROM pipeline_controller_work WHERE kind='running'
+      AND row_order>=? AND (row_order>? OR row_key>?) ORDER BY row_order,row_key LIMIT ?`).all(order, order, key, count);
+    const rows = page(after.row_order, after.row_key, limit);
+    if (!rows.length) return page(-1, "", limit);
+    return rows;
+  }
+
   pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {
     return selectPipelineTickWork(sharedStateReadonlyDatabase(this.filename), now, excluded, limit);
   }
