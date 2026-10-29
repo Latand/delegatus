@@ -488,7 +488,8 @@ export function createTask(
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
-  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId);
+  const notes: string[] = [];
+  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId, [], notes);
   if (!steps.ok) return steps;
   /* The bound is on bands, so only a task that will occupy one is counted
      against it: a task created off the board joins the history, which has no
@@ -498,7 +499,7 @@ export function createTask(
     return boardFullError("project");
   }
 
-  const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId);
+  const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
   const id = deps.id?.() ?? crypto.randomUUID();
   const previous = key === undefined ? undefined : existing
     .filter(row => row.project === project && row.findingKey === key && row.status === "done")
@@ -537,7 +538,7 @@ export function createTask(
     task = noted.task;
   }
   const nextRecent = receipt(id);
-  const notes = [icon, color, priority].flatMap((field) => field.kind === "clamped" ? [field.note] : []);
+  notes.push(...[icon, color, priority].flatMap((field) => field.kind === "clamped" ? [field.note] : []));
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(key !== undefined ? { matched: false } : {}), ...(notes.length ? { notes } : {}) };
 }
 
@@ -608,6 +609,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
       return { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", field: "expectedRevision", error: "expectedRevision is stale; read the task and reconsider the request" };
     }
   }
+  const notes: string[] = [];
   const patch: Partial<BoardTask> = {};
   if (Object.hasOwn(input, "progress")) {
     const progress = readTaskProgress(input.progress, now, options.statusActor ?? taskProgressActor(options));
@@ -678,7 +680,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
   }
   if (Object.hasOwn(input, "hold")) {
-    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId);
+    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId, notes);
     if (patch.hold) patch.status = "blocked";
     else if (!Object.hasOwn(input, "status") && task.status === "blocked") {
       patch.status = task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
@@ -687,7 +689,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     patch.hold = readTaskHold({ kind: "unstated" }, now, options.actor ?? "operator", undefined, options.conversationId);
   }
   if (Object.hasOwn(input, "steps")) {
-    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps);
+    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps, notes);
     if (!steps.ok) return steps;
     patch.steps = steps.steps;
   }
@@ -734,7 +736,6 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (priority.kind === "clamped") return { ok: false, error: `priority must be one of ${TASK_PRIORITIES.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "priority" };
     patch.priority = priority.kind === "set" ? priority.priority : undefined;
   }
-  const notes: string[] = [];
   if (Object.hasOwn(input, "icon")) {
     const icon = readTaskIconInput(input.icon);
     patch.icon = icon.kind === "set" ? icon.icon : undefined;
