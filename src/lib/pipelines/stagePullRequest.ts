@@ -102,14 +102,15 @@ async function inspectRepositoryText(part: "title" | "body", file: string, gate:
       signal: typeof failure?.signal === "string" && /^SIG[A-Z0-9]+$/.test(failure.signal) ? failure.signal as NodeJS.Signals : null,
       stderr: [error instanceof Error ? error.message : "subprocess threw", typeof failure?.stderr === "string" ? failure.stderr : ""].join("\n") };
   }
-  if (checked.code === 0 && !checked.signal && Object.values(inputs).every(value => value === "available")) return { ok: true };
+  const missingInput = Object.values(inputs).some(value => value !== "available");
+  if (checked.code === 0 && !checked.signal && !missingInput) return { ok: true };
   const elapsedMs = Math.max(0, Math.round(timing.now() - started));
-  // A killed/timed-out child has no trustworthy completed content verdict.
-  const result = checked.code === null || checked.signal || spawn !== "none"
+  // An incomplete run has no trustworthy completed content verdict.
+  const result = missingInput || checked.code === null || checked.signal || spawn !== "none"
     ? { ok: false as const, inspection: true as const, error: `pull request publication privacy gate inspection-error for ${part}` }
     : repositoryRefusal(part, checked.stdout);
   if (result.ok) return result;
-  const cause = Object.values(inputs).some(value => value !== "available") ? "missing-input"
+  const cause = missingInput ? "missing-input"
     : spawn === "ETIMEDOUT" || /^command timed out after [0-9]+ms/.test(checked.stderr) ? "timeout"
     : checked.signal ? "signal" : checked.code === null || spawn !== "none" ? "spawn" : "exit";
   return { ...result, error: `${result.error}; gate diagnostic ${JSON.stringify({ cause, exit: checked.code,

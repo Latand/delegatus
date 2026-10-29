@@ -1341,6 +1341,23 @@ test.each(["timeout", "empty", "signal", "spawn", "missing"] as const)("PR inspe
   } finally { f.close(); }
 });
 
+test("PR inspection missing input keeps incomplete content output out of summary repair", async () => {
+  const f = await inspectionFixture("missing");
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
+      ? { code: 1, stdout: "known_value: 1\n", stderr: "input unavailable" }
+      : exec(...input);
+    const waiting = await f.finish();
+    const attempt = waiting.runs[0]!.attempts[0]!;
+    expect(waiting.state).toBe("running");
+    expect(attempt.pullRequestInspection?.failures).toBe(1);
+    expect(attempt.publicationTextRepair).toBeUndefined();
+    expect(attempt.error).toContain('"cause":"missing-input"');
+    expect(f.sends).toEqual([]);
+  } finally { f.close(); }
+});
+
 test("PR inspection adopts an open PR created during the failed inspection and retains its diagnostic", async () => {
   const f = await inspectionFixture("empty");
   try {
