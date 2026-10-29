@@ -49,7 +49,11 @@ async function stat(file: string) {
  * retain their existing private-write dependency policy. */
 export async function usesLockedDependencies(cwd: string): Promise<boolean> {
   try { return JSON.parse(await fs.readFile(path.join(cwd, "package.json"), "utf8")).name === "delegatus-cli"; }
-  catch (error) { if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  catch (error) {
+    if (error instanceof SyntaxError) throw new Error("stage environment: dependency preparation failed: invalid dependency manifest");
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 /** Capture every byte used by Bun, including patches, before installing.

@@ -201,6 +201,18 @@ test("an unrepaired lockfile is an environment refusal and preserves the install
   } finally { f.close(); }
 }, 30_000);
 
+test("a malformed manifest is an environment refusal and preserves the installed tools", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+    fs.writeFileSync(path.join(f.worktreeDir, "package.json"), '{"name":"delegatus-cli",');
+    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment: dependency preparation failed: invalid dependency manifest");
+    expect(fs.realpathSync(local)).toBe(before);
+  } finally { f.close(); }
+}, 30_000);
+
 test("two fresh processes share one completed installation", async () => {
   const f = await lockedFixture();
   try {
