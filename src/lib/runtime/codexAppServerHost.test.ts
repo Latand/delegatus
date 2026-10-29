@@ -180,11 +180,13 @@ test.each(["0.162.7", "0.165.0", "0.166.0"])("compatible CLI %s reaches thread/s
     return JSON.stringify(bundle);
   };
   const generated: string[] = [];
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => version, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
-    generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
-  });
+  const writes = spyOn(server.stdout, "write");
+  let host: CodexAppServerHost | undefined;
   try {
+    host = await CodexAppServerHost.start({
+      cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => version, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+      generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
+    });
     const health = await host.health();
     // The registry keeps the pin, so a successor reconnects under the same reviewed contract.
     expect(health.protocolVersion).toBe(pin);
@@ -200,7 +202,12 @@ test.each(["0.162.7", "0.165.0", "0.166.0"])("compatible CLI %s reaches thread/s
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-  } finally { await host.release(); }
+    if (version === "0.166.0") {
+      expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
+    }
+  } finally {
+    try { await host?.release(); } finally { writes.mockRestore(); }
+  }
 });
 
 test("a self-updated CLI with a breaking schema is refused before spawning", async () => {
