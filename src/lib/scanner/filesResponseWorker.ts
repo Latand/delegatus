@@ -1,3 +1,4 @@
+import { StateLockDeferredError } from "@/lib/state/lockWait";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { assertSeatTickWork, seatTickWorkRemainingMs } from "@/lib/monitor/seatTickWork";
 import { DeadlineExceededError } from "@/lib/deadline";
@@ -51,7 +52,7 @@ export type SeatSourceWorkerRequest =
   | { type: "seat-liveness"; query: Parameters<import("@/lib/monitor/seatTickSources").SeatTickSources["liveness"]>[0]; scan: import("./scanCache").PersistedFileScanGeneration & { snapshotFile: string } }
   | { type: "seat-agenda"; bodyFile: string; project: string; now: number }
   | { type: "seat-reports"; project: string }
-  | { type: "seat-rule-reports"; project: string; at: string };
+  | { type: "seat-rule-reports"; project: string; at: string; deadlineAt?: number };
 type WorkerRequest = FilesResponseWorkerRequest | SeatSourceWorkerRequest;
 
 export interface FilesResponseWorkerRuntime {
@@ -292,7 +293,9 @@ function answer(worker: ResidentWorker, frame: string): void {
   worker.stderr = "";
   if (parsed.ok !== true) {
     const message = typeof parsed.error === "string" ? parsed.error : "files response worker failed";
-    pending.reject(new Error(`${message}${detail ? `: ${detail}` : ""}`));
+    const description = `${message}${detail ? `: ${detail}` : ""}`;
+    pending.reject(parsed.errorCode === "STATE_ADMISSION_BUSY" ? new StateLockDeferredError(description)
+      : parsed.errorCode === "DEADLINE_EXCEEDED" ? new DeadlineExceededError(description, 0) : new Error(description));
     return;
   }
   const result = representation(parsed.result);
@@ -491,7 +494,7 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
     assertSeatTickWork();
     const remaining = deadline - Date.now();
     if (expired || remaining <= 0) throw new DeadlineExceededError("seat source worker deadline exceeded in queue", 0);
-    return dispatch(request, { ...runtime, timeoutMs: remaining });
+    return dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, { ...runtime, timeoutMs: remaining });
   });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   const timeout = new Promise<never>((_, reject) => {
