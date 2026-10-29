@@ -68,6 +68,7 @@ export interface FlowPipelineControllerPorts {
   /** Fire-and-forget completion notices to spawn launchers
       (docs/design/spawn-completion-notice.md §3); one pass at a time. */
   sweepSpawnNotices?: () => void;
+  sweepProviderRecovery?: () => void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -125,6 +126,10 @@ function productionPorts(): FlowPipelineControllerPorts {
     // cache starts stale revalidation in the background for the next pass.
     scan: controllerFileScan,
     tickPipelines: tickPipelinesController,
+    sweepProviderRecovery: () => {
+      void import("./providerRecovery").then(({ scheduleProviderRecovery }) => scheduleProviderRecovery())
+        .catch(error => console.error("[pipelines] provider recovery sweep could not start", error));
+    },
     handoffHeld: autoHandoffHeld,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
     sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines: loadPipelinesForList, loadTasks: loadTasksForList }),
@@ -171,6 +176,7 @@ export class FlowPipelineController {
       sweepForgeLinks: ports.sweepForgeLinks ?? (() => undefined),
       sweepAutoMerge: ports.sweepAutoMerge ?? (() => undefined),
       sweepSpawnNotices: ports.sweepSpawnNotices ?? (() => undefined),
+      sweepProviderRecovery: ports.sweepProviderRecovery ?? (() => undefined),
       log: ports.log ?? ((message, error) => {
         if (error === undefined) console.error(message);
         else console.error(message, error);
@@ -183,6 +189,7 @@ export class FlowPipelineController {
 
   tick(trigger = "signal"): Promise<void> {
     if (this.ports.handoffHeld()) return Promise.resolve();
+    this.sweepProviderRecovery();
     if (this.running) {
       this.trailingCycleRequested = true;
       this.trailingTrigger = trigger;
@@ -205,7 +212,13 @@ export class FlowPipelineController {
   }
 
   poll(): Promise<void> {
+    if (this.running && !this.ports.handoffHeld()) this.sweepProviderRecovery();
     return this.running ?? this.tick("watchdog");
+  }
+
+  private sweepProviderRecovery(): void {
+    try { this.ports.sweepProviderRecovery(); }
+    catch (error) { this.ports.log("[pipelines] provider recovery sweep failed to start", error); }
   }
 
   recover(): Promise<void> {
@@ -460,9 +473,12 @@ export function startFlowPipelineControllerRuntime(
   state.__llvFlowPipelineUnregister = ports.registerTick(() => controller.tick("signal"));
   if (!state.__llvFlowPipelineWatchdog) {
     state.__llvFlowPipelineWatchdog = ports.scheduleInterval(() => {
+      // poll also admits independent terminal recovery while the ordinary
+      // pass is retained. Keep just one error observer on that shared pass.
+      const pending = controller.poll();
       if (state.__llvFlowPipelinePolling) return;
       state.__llvFlowPipelinePolling = true;
-      void controller.poll().catch((error) => {
+      void pending.catch((error) => {
         ports.log("[flow pipeline controller] watchdog reconciliation failed", error);
       }).finally(() => { state.__llvFlowPipelinePolling = false; });
     }, FLOW_PIPELINE_WATCHDOG_MS);

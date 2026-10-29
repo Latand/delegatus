@@ -343,7 +343,7 @@ export function spawnLauncherFor(
   return { value: null };
 }
 
-type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; inheritedServiceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
 
 export async function executeSpawnRequest(
   req: NextRequest,
@@ -476,7 +476,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if ("error" in validation) return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  const tierResolution = codexLaunchTier({ engine, model: selectedModel.model, fast: body.fast, serviceTier: body.serviceTier,
+  const tierResolution = codexLaunchTier({ engine, model: selectedModel.model, fast: body.fast, serviceTier: body.serviceTier, inheritedServiceTier: body.inheritedServiceTier,
     roleDefault: role.value?.config.serviceTier, roleDefaultApplies: !!role.value && !role.value.explicitRuntime });
   if ("error" in tierResolution) return NextResponse.json({ error: tierResolution.error }, { status: 400 });
   let launchTier = tierResolution.tier;

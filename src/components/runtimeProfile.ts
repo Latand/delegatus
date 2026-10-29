@@ -5,8 +5,21 @@ import type { TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
-    the pill face, the live-tmux draft and the resume/stage pickers. */
-export type RuntimeDraft = { model: string; effort: string; fast: boolean };
+    the pill face, the live-tmux draft and the resume/stage pickers. `serviceTier`
+    names a Codex catalog tier the fast flag cannot say (ultrafast); absent or
+    null, `fast` alone is the speed. */
+export type RuntimeDraft = { model: string; effort: string; fast: boolean; serviceTier?: string | null };
+
+/** The tier as a draft field: present only when one is named, so a draft that has
+    none keeps the shape every earlier reader and stored record has. */
+function tierField(tier: string | null | undefined): { serviceTier?: string } {
+  return tier ? { serviceTier: tier } : {};
+}
+
+/** The tiers that are `fast` itself: a named tier beyond them only `serviceTier` can carry. */
+function namedServiceTier(tier: string | null | undefined): string | null {
+  return tier && !["default", "standard", "priority"].includes(tier) ? tier : null;
+}
 
 /** A *sparse* per-conversation runtime selection: only the fields the user has
     explicitly chosen. Persisted under the `:profile` key so a synthesized
@@ -128,7 +141,7 @@ export function defaults(file: FileEntry): RuntimeDraft {
   const engine = file.engine as "claude" | "codex" | "copilot";
   const model = listedModelId(file);
   const efforts = effortScale(engine, model) ?? [];
-  return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false };
+  return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false, ...tierField(file.serviceTier) };
 }
 
 /** The live-tmux persisted draft (full), or the conversation's defaults. */
@@ -143,10 +156,19 @@ export function readDraft(file: FileEntry): RuntimeDraft {
       model,
       effort: efforts.includes(value?.effort ?? "") ? value!.effort! : fallback.effort,
       fast: engine === "codex" && typeof value?.fast === "boolean" ? value.fast : fallback.fast,
+      ...tierField(storedServiceTier(engine, value, fallback)),
     };
   } catch {
     return fallback;
   }
+}
+
+/** A stored draft's tier: its own, else the conversation's while the stored speed
+    still agrees with it, since a draft written before tiers existed names none. */
+function storedServiceTier(engine: string, value: Partial<RuntimeDraft> | null, fallback: RuntimeDraft): string | null {
+  if (engine !== "codex") return null;
+  if (typeof value?.serviceTier === "string") return value.serviceTier;
+  return typeof value?.fast !== "boolean" || value.fast === fallback.fast ? fallback.serviceTier ?? null : null;
 }
 
 /** The persisted resume profile for a conversation, or its defaults — for
@@ -177,6 +199,7 @@ function readConcreteProfile(file: FileEntry, key: string): RuntimeDraft | null 
       model,
       effort: efforts.includes(value.effort ?? "") ? value.effort! : fallback.effort,
       fast: engine === "codex" && typeof value.fast === "boolean" ? value.fast : fallback.fast,
+      ...tierField(storedServiceTier(engine, value, fallback)),
     };
   } catch {
     return null;
@@ -235,6 +258,9 @@ export function writeResumeProfile(file: FileEntry, patch: RuntimeProfile): Runt
     next.effort = clampEffortToScale(engine, next.model, next.effort) ?? next.effort;
   }
   if (engine !== "codex") next.fast = false;
+  /* A speed choice replaces the tier along with `fast`; the tier names only what `fast` cannot. */
+  if (patch.fast !== undefined) next.serviceTier = (patch as Partial<RuntimeDraft>).serviceTier ?? null;
+  if (engine !== "codex" || !next.serviceTier) delete next.serviceTier;
   try {
     localStorage.setItem(resumeKey(file), JSON.stringify(next));
   } catch { /* quota/opaque-origin: the in-memory selection still rides the send */ }
@@ -264,7 +290,8 @@ export function effectiveProfile(file: FileEntry): RuntimeDraft {
   const effort = profile.effort && efforts.includes(profile.effort)
     ? profile.effort
     : clampEffortToScale(engine, model, profile.effort ?? base.effort) ?? base.effort;
-  return { model, effort, fast: engine === "codex" ? profile.fast ?? base.fast : false };
+  const fast = engine === "codex" ? profile.fast ?? base.fast : false;
+  return { model, effort, fast, ...tierField(fast === base.fast ? base.serviceTier : null) };
 }
 
 /** The subset of a concrete draft to ride a structured send as `runtime`: only
@@ -277,7 +304,10 @@ export function sendRuntimeFrom(file: FileEntry): RuntimeProfile | undefined {
   const runtime: RuntimeProfile = {};
   if (profile.model) runtime.model = profile.model;
   if (profile.effort) runtime.effort = profile.effort;
-  if (engine === "codex" && typeof profile.fast === "boolean" && profile.fast !== (file.fast ?? null)) runtime.fast = profile.fast;
+  /* A per-turn `fast` is priority: on a thread running a named tier beyond it
+     (ultrafast) it would slow every turn down to Fast. */
+  if (engine === "codex" && typeof profile.fast === "boolean" && profile.fast !== (file.fast ?? null)
+    && !(profile.fast && namedServiceTier(file.serviceTier))) runtime.fast = profile.fast;
   return Object.keys(runtime).length ? runtime : undefined;
 }
 

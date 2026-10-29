@@ -2,11 +2,28 @@ import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard";
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
 import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
+import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
     identity. Invalid settings refuse the launch without logging their values. */
 export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<string, string | undefined> {
+  let repository: RepositoryCommitIdentity | undefined;
+  if (source[REPOSITORY_IDENTITY] !== undefined) {
+    try { repository = JSON.parse(source[REPOSITORY_IDENTITY]!); }
+    catch { throw new Error("Invalid repository Git identity (values withheld)"); }
+    const name = repository?.env?.GIT_AUTHOR_NAME, email = repository?.env?.GIT_AUTHOR_EMAIL;
+    if (repository?.coauthor !== DELEGATUS_COAUTHOR || typeof name !== "string" || typeof email !== "string"
+      || !name || !email || name.length > 1024 || email.length > 1024 || /[\x00-\x1f\x7f<>]/.test(name + email)
+      || repository.env.GIT_COMMITTER_NAME !== name || repository.env.GIT_COMMITTER_EMAIL !== email) {
+      throw new Error("Invalid repository Git identity (values withheld)");
+    }
+    const forge = agentForgeWriteEnv(source);
+    return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
+      [REPOSITORY_IDENTITY]: source[REPOSITORY_IDENTITY],
+      ...agentLessonPublicationEnv(), ...forge,
+      ...agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor) };
+  }
   const defaults = controllerCommitIdentityEnv();
   const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
   const name = configuredName.trim();

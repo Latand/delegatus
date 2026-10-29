@@ -19678,6 +19678,183 @@ describe("fast TTS header", () => {
   }, 120_000);
 });
 
+/* Ultra on the seat's speed control (2026-10-26), at 1280, 768 and 390 in both
+   languages and themes: S1 offered, S2 just picked (pending on its row in the phone's
+   sheet), S3 applied (named on the phone's face and sheet summary), S4 unavailable on a
+   priority-only account with its reason as visible text and reached by the arrow keys,
+   S5 refused and rolled back with the localized reason beside the rows it was picked in, S6 the
+   create (Ultrafast in its Runs on line) and rotate drafts with Ultra chosen and a rotation left on the inherited tier. Every changed string is
+   measured as whole text inside the window and its popover or sheet. */
+async function captureUltraSpeedStates(browser: Browser, base: string, out: string) {
+  const frames: Record<string, unknown>[] = [];
+  const HEIGHT = 844;
+  for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) for (const width of [1280, 768, 390]) {
+    const phone = width === 390;
+    const ultraText = translate(locale, "composer.speedUltraTier");
+    const shot = async (page: Page, state: string, facts: Record<string, unknown>, measured: string[]) => {
+      const whole = await page.evaluate((selectors) => selectors.map((selector) => {
+        const element = document.querySelector(selector);
+        if (!element || !element.textContent?.trim()) return { selector, whole: false, reason: "missing" };
+        const range = document.createRange(); range.selectNodeContents(element);
+        const box = element.closest("[data-runtime-sheet], [data-runtime-popover]")?.getBoundingClientRect() ?? null;
+        const cut = [...range.getClientRects()].filter((rect) => rect.width > 0).find((rect) => rect.left < 0 || rect.top < 0 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5
+          || (box && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)));
+        /* An ellipsis keeps every rect inside the box and still drops the end of the text. */
+        const clipped = [element, ...element.querySelectorAll("*")].some((node) => getComputedStyle(node).textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 0.5);
+        return { selector, whole: !cut && !clipped, text: element.textContent };
+      }), measured);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+      const popover = await page.locator("[data-runtime-popover]").count() ? await page.locator("[data-runtime-popover]").boundingBox() : null;
+      const file = `ultra-${state}-${locale}-${theme}-${width}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      for (const item of whole) expect(item, `${state} ${locale} ${theme} ${width}`).toMatchObject({ whole: true });
+      expect(overflow).toBeFalse();
+      if (popover) { expect(popover.y).toBeGreaterThanOrEqual(0); expect(popover.y + popover.height).toBeLessThanOrEqual(HEIGHT); expect(popover.x + popover.width).toBeLessThanOrEqual(width); }
+      frames.push({ state, locale, theme, width, frame: file, ...facts, measured: whole.map(({ selector, text }) => ({ selector, text })) });
+    };
+    const seat = async (query: string) => openFixture(browser, `${base}?scenario=service-tier&speed=1${query}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+    const ultraRow = phone ? '[data-runtime-sheet-value="ultrafast"]' : '[data-runtime-row="speed"][data-runtime-value="ultrafast"]';
+    const openSpeed = async (page: Page) => {
+      await page.locator("[data-runtime-pill]").click();
+      if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
+      await page.locator(ultraRow).waitFor();
+      /* Settled: the catalog answered, so Ultra is enabled or carries its reason. */
+      await page.waitForFunction((selector) => document.querySelector(selector)!.getAttribute("aria-disabled") !== "true" || !!document.querySelector("[data-runtime-row-note]") || document.querySelector(selector)!.getAttribute("aria-checked") === "true", ultraRow);
+      if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
+    };
+    const facts = async (page: Page) => ({
+      face: await page.locator("[data-runtime-pill]").getAttribute("aria-label"),
+      ultra: await page.locator(ultraRow).count() ? await page.locator(ultraRow).evaluate((row) => ({ text: row.textContent, disabled: row.getAttribute("aria-disabled") === "true", checked: row.getAttribute("aria-checked") })) : null,
+      note: await page.locator("[data-runtime-row-note]").count() ? await page.locator("[data-runtime-row-note]").textContent() : null,
+    });
+    const label = `${ultraRow} [data-runtime-row-label], ${ultraRow} > span`;
+
+    { // S1: standard applied on Account B, whose catalog lists ultrafast.
+      const { context, page, pageErrors } = await seat("");
+      try {
+        await openSpeed(page);
+        const read = await facts(page);
+        expect(read.ultra).toEqual({ text: ultraText, disabled: false, checked: "false" });
+        expect(read.note).toBeNull();
+        await shot(page, "s1-offered", read, [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S2: Ultra just picked, the speed action still answering: checked at once, the face names it.
+      const { context, page, pageErrors } = await seat("&speedanswer=hold");
+      try {
+        await openSpeed(page);
+        await page.locator(ultraRow).click();
+        await page.locator("[data-runtime-switch-pending]").waitFor();
+        expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).toContain("Ultrafast");
+        /* The rows stay open until the action answers, with Ultra checked. */
+        expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("true");
+        /* The sheet covers the face's «switch pending», so the tapped row says it. */
+        if (phone) expect(await page.locator(`${ultraRow} [data-runtime-sheet-pending]`).textContent()).toBe(translate(locale, "runtimeConfig.pending"));
+        await shot(page, "s2-picked", await facts(page), phone ? [label, `${ultraRow} [data-runtime-sheet-pending]`] : [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S3: Ultra applied, as the conversation reports it.
+      const { context, page, pageErrors } = await seat("&tier=ultrafast");
+      try {
+        expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+        /* The phone's face, before its sheet covers it. */
+        if (phone) await shot(page, "s3-face", { faceText: await page.locator("[data-runtime-pill]").textContent() }, ["[data-runtime-pill]"]);
+        await openSpeed(page);
+        const read = await facts(page);
+        expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
+        expect(await page.locator("[data-runtime-sheet-pending]").count()).toBe(0);
+        /* The phone's sheet says the applied tier in the line it opens with, as the face does. */
+        const summary = phone ? await page.locator("[data-mobile2-next-message]").textContent() : null;
+        if (phone) expect(summary).toContain("· Ultrafast");
+        await shot(page, "s3-applied", { ...read, summary, faceText: await page.locator("[data-runtime-pill]").textContent() }, phone ? [label, "[data-mobile2-next-message]", "[data-runtime-pill]"] : [label]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S4: Account D lists only priority: disabled, with its reason as visible text.
+      const { context, page, pageErrors } = await seat("&account=d");
+      try {
+        await openSpeed(page);
+        await page.locator("[data-runtime-row-note]").scrollIntoViewIfNeeded();
+        /* The keyboard reaches it too: Standard is focused, two steps down is Ultra, and its reason is its description. */
+        if (!phone) {
+          await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+          expect(await page.evaluate((selector) => document.activeElement === document.querySelector(selector), ultraRow)).toBeTrue();
+          expect(await page.evaluate(() => document.getElementById(document.activeElement!.getAttribute("aria-describedby")!)?.textContent ?? null))
+            .toBe(await page.locator("[data-runtime-row-note]").textContent());
+        }
+        const read = await facts(page);
+        expect(read.ultra).toMatchObject({ disabled: true, checked: "false" });
+        /* The offers are named by the words the rows use. */
+        expect(read.note).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account D", model: "GPT\u20116.1\u2011Sol", offers: translate(locale, "composer.speedFastShort") }));
+        await shot(page, "s4-unavailable", read, [label, "[data-runtime-row-note]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    { // S5: refused: back on Standard, the reason where the choice was made.
+      const { context, page, pageErrors } = await seat("&speedanswer=refuse");
+      try {
+        await openSpeed(page);
+        /* On the phone the operator scrolls the sheet to its end to reach Ultra, as far as it goes. */
+        if (phone) await page.locator("[data-runtime-sheet]").evaluate((sheet) => { sheet.scrollTop = sheet.scrollHeight; });
+        await page.locator(ultraRow).click();
+        /* Said where the choice was made, on the desktop too: no second click on the pill,
+           and no scroll after the tap: the sheet brings the whole reason into view itself. */
+        await page.locator("[data-runtime-speed-error]").waitFor();
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.locator(ultraRow).getAttribute("aria-checked")).toBe("false");
+        const error = await page.locator("[data-runtime-speed-error]").textContent();
+        /* The server's refusal, said as the Ultra row's own reason says it, in the page's language. */
+        expect(error).toBe(translate(locale, "composer.speedUltraAbsent", { account: "Account B", model: "GPT\u20116.1\u2011Sol", offers: translate(locale, "composer.speedFastShort") }));
+        const lines = await page.locator("[data-runtime-speed-error]").evaluate((element) => {
+          const range = document.createRange(); range.selectNodeContents(element);
+          return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
+        });
+        expect(await page.locator("[data-runtime-pill]").getAttribute("aria-label")).not.toContain("Ultrafast");
+        await shot(page, "s5-refused", { ...await facts(page), error, lines }, ["[data-runtime-speed-error]"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    for (const mode of ["create", "rotate", "rotate-inherited"] as const) { // S6: launch drafts with Ultra chosen, and a rotation left untouched.
+      const inherited = mode === "rotate-inherited";
+      const draft = inherited ? "rotate" : mode;
+      const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=service-tier&draft=${draft}${inherited ? "&inherit=1" : ""}`, { width, height: HEIGHT }, theme, locale, "reduce", phone);
+      try {
+        await page.locator(`[data-speed-draft="${draft}"]`).waitFor();
+        if (mode === "create") await page.locator("[data-orchestrator-runs-on-change]").click();
+        const select = page.locator('select[aria-label]').filter({ has: page.locator('option[value="ultrafast"]') });
+        await select.waitFor();
+        await page.waitForFunction(() => !(document.querySelector('option[value="ultrafast"]') as HTMLOptionElement).disabled);
+        expect(await select.inputValue()).toBe(inherited ? "" : "ultrafast");
+        const shown = await select.evaluate((element) => (element as HTMLSelectElement).selectedOptions[0]?.textContent);
+        expect(shown).toBe(translate(locale, inherited ? "draft.speedInherited" : "draft.speedUltra"));
+        /* The speed choice never reads like a reasoning choice in the select beside it. */
+        const efforts = await page.locator('select[aria-label]').filter({ has: page.locator('option[value="high"]') }).evaluate((element) => [...(element as HTMLSelectElement).options].map((option) => option.textContent));
+        expect(efforts).not.toContain(translate(locale, "draft.speedUltra"));
+        await select.scrollIntoViewIfNeeded();
+        /* The Runs on line the operator confirms names the chosen speed too. */
+        const runsOn = mode === "create" ? await page.locator("[data-orchestrator-runs-on-value]").textContent() : null;
+        if (mode === "create") expect(runsOn).toContain("· Ultrafast");
+        await shot(page, `s6-${mode}-select`, { select: shown, efforts, runsOn }, mode === "create" ? ["[data-orchestrator-runs-on-value]"] : []);
+        if (mode === "create") {
+          await page.locator("[data-runtime-pill]").click();
+          if (!phone) await page.locator('[data-runtime-row="submenu"][data-runtime-value="speed"]').click();
+          await page.locator(ultraRow).waitFor();
+          await page.waitForFunction((selector) => !(document.querySelector(selector) as HTMLButtonElement).disabled, ultraRow);
+          if (phone) await page.locator(ultraRow).scrollIntoViewIfNeeded();
+          const read = await facts(page);
+          expect(read.ultra).toMatchObject({ disabled: false, checked: "true" });
+          if (!phone) expect(await page.locator("[data-runtime-pill]").textContent()).toContain("· Ultrafast");
+          await shot(page, "s6-create-pill", read, phone ? [label] : [label, "[data-runtime-pill]"]);
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+  }
+  return frames;
+}
+
 describe("Codex service tier rendered evidence", () => {
   browserTest("ultrafast appears on desktop and in the phone speed sheet in both locales", async () => {
     const out = path.resolve(".artifacts/codex-service-tier");
@@ -19693,7 +19870,8 @@ describe("Codex service tier rendered evidence", () => {
           await pill.waitFor();
           if (width > 390) expect(await pill.textContent()).toContain("Ultrafast");
           await pill.click();
-          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.getByText(translate(locale, "composer.speedTierNamed", { tier: "Ultrafast" }), { exact: true });
+          /* The phone's sheet names the tier in its own checked Ultra row. */
+          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.locator('[data-runtime-sheet-value="ultrafast"][aria-checked="true"]');
           await detail.waitFor();
           if (width === 390) await detail.scrollIntoViewIfNeeded();
           expect(await detail.textContent()).toContain("Ultrafast");
@@ -19714,10 +19892,11 @@ describe("Codex service tier rendered evidence", () => {
           evidence.push({ ...runtimeEvidence, mappingTier: await mapping.textContent() });
         } finally { await context.close(); }
       }
+      const ultra = await captureUltraSpeedStates(browser, server.base, out);
       fs.mkdirSync("evidence/codex-service-tier", { recursive: true });
-      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence }, null, 2) + "\n");
+      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence, ultra }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 1_500_000);
 });
 
 describe("linked board sync health", () => {
@@ -20090,254 +20269,299 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
-  browserTest("instruction authors are readable on desktop and 390px in both locales and themes", async () => {
-    const out = path.resolve(".artifacts/seat-tick-authors");
+  browserTest("seat tick instructions: the field, the counter and the notes in every state at 1440, 768 and 390, en and uk, light and dark", async () => {
+    /* Two records, each built by the production module the way it arises: an
+       older 495-character line with no author (the field then claims it), and
+       an operator line beside a seat note and an agent note. Frames and
+       readings go to LLV_SEAT_TICK_SHOTS_DIR/instruction-lines, never committed. */
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "instruction-lines");
     fs.mkdirSync(out, { recursive: true });
     const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-01T12:00:00.000Z";
+    type Stored = ReturnType<typeof defaultSeatTickSettings>;
+    const writtenAt = "2026-10-01T12:00:00.000Z";
+    const savedAt = "2026-10-02T12:00:00.000Z";
     const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const instructionLines = [
-      { text: "Keep  operator wording.", author: operator, at },
-      { text: "Check the release before resuming the paused lane.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 }, at },
-      { text: "A legacy note with no author recorded.", author: null, at: null },
-    ];
-    const initial = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
-    let stored = structuredClone(initial);
-    const response = () => ({ ...tickAnswer(stored.reason!), settings: stored });
+    const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 };
+    const agent = { kind: "agent" as const, conversationId: "conversation_agent", project: "other", seatEpoch: null };
+    const words = {
+      en: { filler: "Synthetic older line with no recorded author, kept to measure the field limit. ", field: "Read the incoming chat and answer, correcting anything inaccurate. Sort incoming tasks by priority and start them properly. ", seat: "Release lane paused until the review of the runtime host lands; resume it after that review passes. ", agent: "Keep the docs lane on the same branch. ", more: " Also check the inbox twice a day, in the morning and the evening." },
+      uk: { filler: "Синтетичний старий рядок без записаного автора для перевірки ліміту поля. ", field: "Дивись, що пишуть у чат, і відповідай, поправляй неточне. Розбирай вхідні задачі за пріоритетом і правильно їх запускай. ", seat: "Лінію випуску призупинено до рев'ю хоста виконання; відновити її після того, як рев'ю пройде. ", agent: "Тримай лінію документації на тій самій гілці. ", more: " Також перевіряй вхідні двічі на день: уранці та ввечері, без пропусків." },
+    };
+    const sized = (text: string, length: number) => { const cut = text.repeat(Math.ceil(length / text.length) + 1).slice(0, length - 1).trimEnd(); return `${cut}${".".repeat(length - cut.length)}`; };
+    const write = (current: Stored, change: Parameters<typeof applySeatTickSettingsChange>[1], actor: typeof operator | typeof seat | typeof agent, at = writtenAt) => {
+      const result = applySeatTickSettingsChange(current, change, { at, actor });
+      if (!result.ok) throw new Error(result.error);
+      return result.settings as Stored;
+    };
+    const records = (lang: "en" | "uk") => {
+      const text = words[lang];
+      const legacy: Stored = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: sized(text.filler, 495), updatedAt: writtenAt };
+      let notes: Stored = write({ ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30 }, { reason: sized(text.field, 260) }, operator);
+      notes = write(notes, { reason: sized(text.seat, 150) }, seat);
+      notes = write(notes, { reason: sized(text.agent, 60) }, agent);
+      return { legacy, notes };
+    };
+    let stored: Stored = records("en").legacy;
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return { ...base, settings: stored, effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60, reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null } };
+    };
+    const sent: Record<string, unknown>[] = [];
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": async (request: Request) => {
         if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-02T12:00:00.000Z", actor: operator });
+          const body = await request.json() as Record<string, unknown>;
+          sent.push(body);
+          const result = applySeatTickSettingsChange(stored, body, { at: savedAt, actor: operator });
           if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
+          stored = result.settings as Stored;
         }
-        return Response.json(response());
+        return Response.json(answer());
       },
       "/api/roles": rolesAnswer,
     });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
     const readings: Record<string, unknown>[] = [];
+
+    /** Every text range and control of the instructions, measured where it is
+        drawn: whole inside the window and its scroller, uncovered by a pinned
+        bar, and overlapping no neighbour. */
+    async function measure(page: Page, label: string) {
+      const reading = await page.evaluate(() => {
+        const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]")!;
+        const box = (rect: DOMRect) => ({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+        const textRects = (node: Element | null) => {
+          if (!node) return [];
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          return [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).map(box);
+        };
+        const scroller = (node: Element) => {
+          for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (/(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight) return parent;
+          }
+          return null;
+        };
+        const pinned = [...document.querySelectorAll("[data-seat-tick-save]")].map(save => save.closest(".sticky")).filter(Boolean).map(bar => box(bar!.getBoundingClientRect()));
+        const items: { name: string; rects: ReturnType<typeof box>[]; control?: boolean }[] = [];
+        const add = (name: string, node: Element | null, control = false) => {
+          if (!node) return;
+          node.scrollIntoView({ block: "center" });
+          items.push({ name, rects: control ? [box(node.getBoundingClientRect())] : textRects(node), control });
+          const view = scroller(node)?.getBoundingClientRect();
+          const bars = [...document.querySelectorAll("[data-seat-tick-save]")].map(save => save.closest(".sticky")).filter(Boolean).map(bar => box(bar!.getBoundingClientRect()));
+          for (const rect of items.at(-1)!.rects) {
+            if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) throw new Error(`${name} leaves the window`);
+            if (view && (rect.top < view.top - 0.5 || rect.bottom > view.bottom + 0.5 || rect.left < view.left - 0.5 || rect.right > view.right + 0.5)) throw new Error(`${name} is cut by its scroller`);
+            if (bars.some(bar => rect.bottom > bar.top + 0.5 && rect.top < bar.bottom - 0.5 && rect.right > bar.left && rect.left < bar.right)) throw new Error(`${name} is under the pinned Save`);
+          }
+        };
+        add("field", field, true);
+        add("counter", document.querySelector("[data-seat-tick-character-count]"));
+        add("split", document.querySelector("[data-seat-tick-over-limit-split]"));
+        add("hint", document.querySelector("[data-seat-tick-instructions-hint]"));
+        const rows = [...document.querySelectorAll("[data-seat-tick-instruction-line]")];
+        rows.forEach((row, index) => {
+          const [meta, text] = row.querySelectorAll("p");
+          add(`note${index}-meta`, meta ?? null);
+          add(`note${index}-text`, text ?? null);
+          add(`note${index}-removed`, row.querySelector("[data-seat-tick-note-removed-label]"));
+          add(`note${index}-button`, row.querySelector("[data-seat-tick-remove-note]"), true);
+        });
+        /* Overlap is judged in one scroll position: the instructions block
+           scrolled to its start, as the frames show it. */
+        field.closest("label")!.scrollIntoView({ block: "start" });
+        const placed = items.map(item => {
+          const node = item.name === "field" ? field
+            : item.name === "counter" ? document.querySelector("[data-seat-tick-character-count]")
+            : item.name === "split" ? document.querySelector("[data-seat-tick-over-limit-split]")
+            : item.name === "hint" ? document.querySelector("[data-seat-tick-instructions-hint]")
+            : (() => { const [, index, part] = item.name.match(/^note(\d+)-(\w+)$/)!; const row = rows[Number(index)]!; const [meta, text] = row.querySelectorAll("p");
+              return part === "meta" ? meta! : part === "text" ? text! : part === "removed" ? row.querySelector("[data-seat-tick-note-removed-label]") : row.querySelector("[data-seat-tick-remove-note]"); })();
+          return { name: item.name, rects: item.control ? [box(node!.getBoundingClientRect())] : textRects(node) };
+        });
+        const overlaps: string[] = [];
+        for (let a = 0; a < placed.length; a += 1) for (let b = a + 1; b < placed.length; b += 1) {
+          for (const left of placed[a]!.rects) for (const right of placed[b]!.rects) {
+            if (left.left < right.right - 0.5 && right.left < left.right - 0.5 && left.top < right.bottom - 0.5 && right.top < left.bottom - 0.5) overlaps.push(`${placed[a]!.name} × ${placed[b]!.name}`);
+          }
+        }
+        const buttons = rows.map(row => box(row.querySelector("[data-seat-tick-remove-note]")!.getBoundingClientRect()));
+        return {
+          field: { scrollHeight: field.scrollHeight, clientHeight: field.clientHeight },
+          rowsOverflow: rows.filter(row => row.scrollWidth > row.clientWidth + 1).length,
+          pageOverflow: document.documentElement.scrollWidth - innerWidth,
+          overlaps: [...new Set(overlaps)],
+          buttons: buttons.map(button => ({ width: button.right - button.left, height: button.bottom - button.top })),
+          pinned: pinned.length,
+          counter: document.querySelector("[data-seat-tick-character-count]")?.textContent ?? null,
+          split: document.querySelector("[data-seat-tick-over-limit-split]")?.textContent ?? null,
+          hint: document.querySelector("[data-seat-tick-instructions-hint]")?.textContent ?? null,
+          notes: rows.map(row => row.textContent),
+          /* Drawn lines of each note's author and date line. */
+          metaLines: rows.map(row => { const meta = row.querySelector("[data-seat-tick-note-meta]")!; return Math.round(meta.getBoundingClientRect().height / parseFloat(getComputedStyle(meta).lineHeight)); }),
+          /* The over-limit lines: their size, and whether the counter sits on
+             its own line under the field's label. */
+          overLimit: (() => {
+            const counter = document.querySelector("[data-seat-tick-character-count]");
+            const split = document.querySelector("[data-seat-tick-over-limit-split]");
+            if (!counter || !split) return null;
+            const label = field.closest("label")!.querySelector("span")!.getBoundingClientRect();
+            return { counterPx: parseFloat(getComputedStyle(counter).fontSize), splitPx: parseFloat(getComputedStyle(split).fontSize), underLabel: counter.getBoundingClientRect().top >= label.bottom - 0.5 };
+          })(),
+        };
+      });
+      expect(reading.field.scrollHeight, `${label} the whole field is visible`).toBeLessThanOrEqual(reading.field.clientHeight + 1);
+      expect(reading.rowsOverflow, `${label} note rows`).toBe(0);
+      expect(reading.pageOverflow, `${label} page width`).toBeLessThanOrEqual(0);
+      expect(reading.overlaps, `${label} overlaps`).toEqual([]);
+      if (label.startsWith("390-")) expect(reading.buttons.every(button => button.width >= 44 && button.height >= 44), `${label} phone targets`).toBe(true);
+      if (label.startsWith("1440-")) expect(reading.metaLines.every(lines => lines === 1), `${label} note meta on one line`).toBe(true);
+      for (const note of reading.notes) expect(note ?? "", `${label} no seat epoch or seconds`).not.toMatch(/epoch|епоха|\d:\d\d:\d\d/i);
+      if (label.startsWith("390-") && reading.overLimit) {
+        expect(reading.overLimit.counterPx, `${label} over-limit counter size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.splitPx, `${label} over-limit split size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.underLabel, `${label} the counter reads first under the label`).toBe(true);
+      }
+      await page.locator("[data-seat-tick-reason]").evaluate(node => node.closest("label")!.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: path.join(out, `${label}.png`) });
+      if (await page.locator("[data-seat-tick-instruction-lines]").count()) {
+        await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.parentElement!.scrollIntoView({ block: "start" }));
+        await page.screenshot({ path: path.join(out, `${label}-notes.png`) });
+      }
+      readings.push({ label, ...reading });
+      return reading;
+    }
+
+    async function openPanel(page: Page) {
+      await page.waitForSelector('[data-phone-kanban-tab="inbox"], [data-open-seat-tick]', { state: "attached", timeout: 30_000 });
+      const phone = await page.locator('[data-phone-kanban-tab="inbox"]').count() > 0;
+      if (phone) {
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+        await page.locator("[data-phone-task-tick-open]").click();
+        await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+      } else {
+        const fold = page.locator("[data-seat-collapse]");
+        if (await fold.count()) await fold.first().click();
+        /* At 768 the board shows one column at a time: the notice is in the Inbox tab. */
+        const inbox = page.locator('[role="tab"][aria-controls="kb-col-inbox"]');
+        if (await inbox.isVisible()) await inbox.click();
+        await page.locator("[data-open-seat-tick]").click();
+        await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+      }
+      await page.waitForFunction(() => { const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]"); return field !== null && !field.disabled; });
+      return phone ? "sheet" : "popover";
+    }
+
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(initial);
-        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+      for (const width of [1440, 768, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const touch = width === 390;
+        const viewport = { width, height: width === 390 ? 844 : 900 };
+        const name = `${width}-${lang}-${theme}`;
         const texts = cardTexts(lang);
         const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          const entries = page.locator("[data-seat-tick-instruction-line]");
-          await entries.first().waitFor();
-          expect(await entries.count()).toBe(3);
-          expect(await entries.nth(0).textContent()).toContain(lang === "en" ? "Operator" : "Оператор");
-          expect(await entries.nth(1).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Сидіння, епоха 7");
-          expect(await entries.nth(2).textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
-          expect(await entries.nth(0).locator("time").getAttribute("datetime")).toBe(at);
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe(instructionLines[0]!.text);
-          await page.locator("[data-seat-tick-reason]").fill("Updated operator instruction.");
-          await page.locator("[data-seat-tick-save]").click();
-          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
-          expect(stored.instructionLines.slice(1)).toEqual(instructionLines.slice(1));
-          await page.locator("[data-seat-tick-instruction-lines]").scrollIntoViewIfNeeded();
-          const geometry = await entries.evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, scrollWidth: node.scrollWidth, text: node.textContent })));
-          expect(geometry.every(row => row.scrollWidth <= row.width + 1)).toBe(true);
-          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `${label}.png`) });
-          await page.locator("[data-seat-tick-instruction-lines]").screenshot({ path: path.join(out, `${label}-lines.png`) });
-          expect(pageErrors).toEqual([]);
-          readings.push({ label, geometry, operatorDate: stored.instructionLines[0]!.at, preservedSeatAndLegacy: true, pageErrors });
-        } finally { await context.close(); }
+        const initial = records(lang);
+        const counter = (count: number) => lang === "en" ? `${count} / 500 characters, all lines` : `${count} / 500 символів у всіх рядках`;
+        /* The hint names the older lines and the notes only where they are. */
+        const hint = (unknown: boolean, notes: boolean) => (lang === "en"
+          ? ["The agent receives these instructions on every wake.", unknown && "The field includes older lines with no recorded author.", notes && "The notes below can be removed. The 500-character limit counts the field and the notes together.", "A\u00A0schedule change needs instructions. Schedule resets and expiry keep them."]
+          : ["Агент отримує ці вказівки на кожне пробудження.", unknown && "У\u00A0полі є й\u00A0старіші рядки без записаного автора.", notes && "Нотатки нижче можна прибрати. Ліміт 500 символів рахує поле й\u00A0нотатки разом.", "Для зміни розкладу потрібні вказівки. Скидання розкладу та завершення строку дії зберігають їх."]
+        ).filter(Boolean).join(" ");
+
+        /* No instructions stored: the hint names no notes and no older lines. */
+        stored = { ...structuredClone(initial.legacy), reason: null };
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            await openPanel(page);
+            expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+            expect((await measure(page, `${name}-empty`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* The operator's report: an older line with no author, 495 characters, and «читай» typed under it. */
+        stored = structuredClone(initial.legacy);
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            const surface = await openPanel(page);
+            const field = page.locator("[data-seat-tick-reason]");
+            expect(await field.inputValue(), `${name} the field shows the line with no author`).toBe(initial.legacy.reason!);
+            expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(0);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(495));
+            expect((await measure(page, `${name}-legacy-near`)).hint).toBe(hint(true, false));
+            await field.fill(`${initial.legacy.reason}\nчитай`);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(`${counter(501)} · ${lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1"}`);
+            expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en" ? "All of it is the text in the field\u00A0— shorten it." : "Усе це\u00A0— текст у\u00A0полі; скоротіть його.");
+            await measure(page, `${name}-legacy-over`);
+            const shortened = `${initial.legacy.reason!.slice(0, 300).trimEnd()}\nчитай`;
+            await field.fill(shortened);
+            expect(await page.locator("[data-seat-tick-character-count]").count(), `${name} under the limit the counter steps aside`).toBe(0);
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(stored.reason).toBe(shortened);
+            expect(stored.instructionLines).toEqual(shortened.split("\n").map(text => ({ text, author: operator, at: savedAt })));
+            expect(sent.at(-1)).toEqual({ project: "atlas", reason: shortened, clearUnknownInstructions: true });
+            expect((await measure(page, `${name}-legacy-saved`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+            readings.push({ label: `${name}-legacy`, surface });
+          } finally { await context.close(); }
+        }
+
+        /* An operator line, a seat note and an agent note, near the limit. */
+        stored = structuredClone(initial.notes);
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            const surface = await openPanel(page);
+            const field = page.locator("[data-seat-tick-reason]");
+            const [own, seatNote, agentNote] = initial.notes.instructionLines!;
+            expect(await field.inputValue()).toBe(own!.text);
+            const rows = page.locator("[data-seat-tick-instruction-line]");
+            expect(await rows.count()).toBe(2);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(472));
+            expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "150\u00A0chars" : "150\u00A0симв.");
+            expect(await rows.nth(0).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Orchestrator" : "Оркестратор");
+            expect(await rows.nth(1).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Agent session" : "Сесія агента");
+            expect(await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.previousElementSibling?.textContent)).toBe(lang === "en" ? "Notes from the orchestrator and agents" : "Нотатки оркестратора й\u00A0агентів");
+            expect((await measure(page, `${name}-notes-near`)).hint).toBe(hint(false, true));
+            await field.fill(`${own!.text}${words[lang].more}`);
+            const over = 472 + words[lang].more.length;
+            /* The notes figure is the rows' 150 + 60; the field takes the rest of the counter. */
+            expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en"
+              ? `Field: ${over - 210}\u00A0· notes below: 210. Shorten the field or remove a\u00A0note.`
+              : `Поле\u00A0— ${over - 210}\u00A0· нотатки нижче\u00A0— 210. Скоротіть поле або приберіть нотатку.`);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over));
+            await measure(page, `${name}-notes-over`);
+            await rows.nth(1).locator('[data-seat-tick-remove-note="remove"]').click();
+            expect(await rows.nth(1).locator("[data-seat-tick-note-removed-label]").textContent()).toBe(lang === "en" ? "Removed when you save" : "Буде прибрано після збереження");
+            expect(await rows.nth(1).locator('[data-seat-tick-remove-note="undo"]').textContent()).toBe(lang === "en" ? "Undo" : "Повернути");
+            expect(over - 61, `${name} the removal keeps the counter on screen`).toBeGreaterThanOrEqual(450);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over - 61));
+            await measure(page, `${name}-notes-removed`);
+            const before = sent.length;
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(sent.slice(before)).toEqual([
+              { project: "atlas", reason: `${own!.text}${words[lang].more}`, removeSeatNotes: [{ index: 2, text: agentNote!.text, at: agentNote!.at }] },
+            ]);
+            expect(stored.instructionLines).toEqual([{ text: `${own!.text}${words[lang].more}`, author: operator, at: savedAt }, seatNote!]);
+            expect(stored.instructionLines).not.toContainEqual(agentNote!);
+            await measure(page, `${name}-notes-saved`);
+            expect(pageErrors).toEqual([]);
+            readings.push({ label: `${name}-notes`, surface });
+          } finally { await context.close(); }
+        }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
     fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
-  }, 180_000);
-
-  browserTest("the operator can replace a full unknown legacy field without changing the schedule on desktop and phone", async () => {
-    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "legacy-removal");
-    fs.mkdirSync(out, { recursive: true });
-    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-19T12:00:00.000Z";
-    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const legacyText = `${"u".repeat(484)}\nKeep seat note.`;
-    const seatLine = {
-      text: "Keep seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 },
-      at: "2026-10-18T12:00:00.000Z",
-    };
-    const scheduleCases = [
-      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
-      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
-    ] as const;
-    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
-      ...defaultSeatTickSettings("atlas"),
-      enabled: schedule.enabled,
-      wakeIntervalMinutes: schedule.wakeIntervalMinutes,
-      reason: legacyText,
-      instructionLines: [{ text: legacyText.split("\n")[0]!, author: null, at: null }, seatLine],
-      updatedAt: at,
-    });
-    expect(legacyText.length).toBe(500);
-    const initial = makeInitial(scheduleCases[0]);
-    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(initial);
-    const answer = () => {
-      const base = tickAnswer(stored.reason ?? "");
-      return {
-        ...base,
-        settings: stored,
-        effective: {
-          ...base.effective,
-          enabled: stored.enabled,
-          wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
-          reason: stored.reason,
-          until: stored.until,
-          isDefault: stored.enabled && stored.wakeIntervalMinutes === null,
-        },
-      };
-    };
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": async (request: Request) => {
-        if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
-          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
-        }
-        return Response.json(answer());
-      },
-      "/api/roles": rolesAnswer,
-    });
-    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
-    fs.mkdirSync(browserHome, { recursive: true });
-    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
-    try {
-      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(makeInitial(schedule));
-        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
-        const texts = cardTexts(lang);
-        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          const legacyLine = page.locator("[data-seat-tick-instruction-line]");
-          await legacyLine.first().waitFor();
-          expect(await legacyLine.first().textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
-          const removeUnknown = page.locator("[data-seat-tick-clear-unknown]");
-          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Replace unattributed legacy instructions" : "Замінити старі вказівки без автора");
-          expect(await removeUnknown.isDisabled()).toBe(true);
-          await removeUnknown.scrollIntoViewIfNeeded();
-          await page.screenshot({ path: path.join(out, `${label}-legacy-removal-control.png`) });
-          await page.locator("[data-seat-tick-reason]").fill("New operator instruction.");
-          expect(await removeUnknown.isDisabled()).toBe(false);
-          await removeUnknown.click();
-          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
-          expect(stored.reason).toBe("Keep seat note.\nNew operator instruction.");
-          expect(stored.instructionLines).toEqual([
-            seatLine,
-            { text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" },
-          ]);
-          expect(stored.enabled).toBe(schedule.enabled);
-          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
-          await page.screenshot({ path: path.join(out, `${label}-legacy-cleared-and-replaced.png`) });
-          expect(pageErrors).toEqual([]);
-        } finally { await context.close(); }
-      }
-    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
-  }, 180_000);
-
-  browserTest("the operator can replace a full seat note without changing the schedule on desktop and phone", async () => {
-    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "full-seat-note-replacement");
-    fs.mkdirSync(out, { recursive: true });
-    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-19T12:00:00.000Z";
-    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const seatLine = {
-      text: "s".repeat(500), author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 }, at,
-    };
-    const scheduleCases = [
-      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
-      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
-    ] as const;
-    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
-      ...defaultSeatTickSettings("atlas"), enabled: schedule.enabled, wakeIntervalMinutes: schedule.wakeIntervalMinutes,
-      reason: seatLine.text, instructionLines: [seatLine], updatedAt: at,
-    });
-    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(makeInitial(scheduleCases[0]));
-    const answer = () => {
-      const base = tickAnswer(stored.reason ?? "");
-      return {
-        ...base, settings: stored,
-        effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
-          reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null },
-      };
-    };
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": async (request: Request) => {
-        if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
-          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
-        }
-        return Response.json(answer());
-      },
-      "/api/roles": rolesAnswer,
-    });
-    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
-    fs.mkdirSync(browserHome, { recursive: true });
-    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
-    try {
-      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(makeInitial(schedule));
-        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
-        const texts = cardTexts(lang);
-        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          await page.locator("[data-seat-tick-instruction-line]").first().waitFor();
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
-          const replaceOther = page.locator("[data-seat-tick-replace-other]");
-          expect(await replaceOther.innerText()).toBe(lang === "en" ? "Replace seat notes with operator instructions" : "Замінити нотатки агента на вказівки оператора");
-          expect(await replaceOther.isDisabled()).toBe(true);
-          await page.locator("[data-seat-tick-reason]").fill("Operator replacement.");
-          await replaceOther.click();
-          await page.locator("[data-seat-tick-replace-other]").waitFor({ state: "detached" });
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("Operator replacement.");
-          expect(stored.reason).toBe("Operator replacement.");
-          expect(stored.instructionLines).toEqual([{ text: "Operator replacement.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
-          expect(stored.enabled).toBe(schedule.enabled);
-          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
-          expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(1);
-          await page.screenshot({ path: path.join(out, `${label}-replacement.png`) });
-          expect(pageErrors).toEqual([]);
-        } finally { await context.close(); }
-      }
-    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
-  }, 180_000);
+  }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
@@ -40078,6 +40302,455 @@ describe("new task default deadline", () => {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureTaskDueFrames(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+
+describe("provider capacity recovery", () => {
+  browserTest("capacity waits and exhausted budgets stay visible at every lane density", async () => {
+    const out = path.resolve(".artifacts/provider-capacity-recovery");
+    fs.mkdirSync(out, { recursive: true });
+    const entry = path.join(out, "fixture.tsx");
+    // This case renders the production block; it adds no standalone driver.
+    fs.writeFileSync(entry, `
+      import { createRoot } from "react-dom/client";
+      import { PipelineBlock, PipelineStateLine } from "@/components/pipelines/PipelineBlock";
+      import { summarizePipeline } from "@/components/kanban/kanbanModel";
+      import { laneState } from "@/components/kanban/cardState";
+      import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
+      import { setLocale } from "@/lib/i18n";
+      const lang = new URL(location.href).searchParams.get("lang");
+      setLocale(lang === "uk" ? "uk" : "en");
+      document.documentElement.classList.toggle("dark", matchMedia("(prefers-color-scheme: dark)").matches);
+      const now = Date.parse("2026-10-26T13:38:00Z");
+      Date.now = () => now;
+      const role = {roleId:"builder",engine:"codex",model:"gpt-6",effort:"high",access:"read-write"};
+      function lane(state, density) {
+        const stage = {id:"builder",kind:"run",role:{roleId:"builder"},effectiveRole:role,prompt:"",next:null,onFail:null};
+        return {id:state+"-"+density,task:lang === "uk" ? "Відновити пошук" : "Restore search",state,taskIds:[],project:"fixture",
+          stages:[stage],cursor:{stageId:"builder",state:"running",input:null,activatedBy:null},createdAt:"2026-10-26T13:28:00Z",closedAt:null,
+          runs:[{stageId:"builder",attempts:[{n:1,state,effectiveRole:role,startedAt:"2026-10-26T13:28:00Z",report:null,
+            completedAt:state === "running" ? null : "2026-10-26T13:38:00Z",verdict:null,flowId:null,agentPath:null,conversationId:null,
+            providerWait:{condition:{kind:"transient",label:"model at capacity",scope:null,resetLabel:null},
+              text:"Selected model is at capacity. Please try again later.",accountId:null,turnTs:now,tries:state === "running" ? 0 : 3,
+              startedAt:"2026-10-26T13:38:00Z",resumeAt:"2026-10-26T13:39:00.000Z",resetsAt:null}}]}]};
+      }
+      createRoot(document.getElementById("root")).render(
+        <WorkLinksProvider value={{pipelines:{},tasks:{}}}>
+          <main style={{padding:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,360px),1fr))",gap:16,color:"var(--color-primary)",background:"var(--surface-base)"}}>
+            {["running","needs_decision"].flatMap(state => ["card","task","screen"].map(density => {
+              const pipeline=lane(state,density);
+              return <article key={pipeline.id} data-case={pipeline.id} data-owner={laneState(pipeline).owner}
+                style={{padding:12,minWidth:0,border:"1px solid var(--border-default)",borderRadius:12,background:"var(--surface-card)"}}>
+                <h2 style={{fontSize:14,marginBottom:8}}>{lang === "uk" ? ({card:"Картка",task:"Завдання",screen:"Конвеєр"}[density]) : density} · {state === "running" ? (lang === "uk" ? "Очікування" : "Waiting") : (lang === "uk" ? "Ліміт вичерпано" : "Budget exhausted")}</h2>
+                {density === "screen" ? <PipelineStateLine summary={summarizePipeline(pipeline)} nowMs={now} /> : null}
+                <PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={now} />
+              </article>;
+            }))}
+          </main>
+        </WorkLinksProvider>);
+    `);
+    const server = await serveEvidenceFixture(out, entry);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const frames: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=${lang}`, { width, height: 1100 }, theme, lang, "reduce", width === 390);
+        try {
+          await page.waitForSelector('[data-case="needs_decision-screen"]');
+          for (const state of ["running", "needs_decision"]) for (const density of ["card", "task", "screen"]) {
+            const panel = page.locator(`[data-case="${state}-${density}"]`);
+            const text = (await panel.innerText()).replaceAll("\u00a0", " ").replaceAll("\u2011", "-");
+            expect(text).toContain(lang === "en" ? "Model at capacity" : "Модель перевантажена");
+            expect(text).toContain(state === "running" ? "2026-10-26 13:39 UTC" : lang === "en" ? "retry budget exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
+            expect(text.split(lang === "en" ? "Model at capacity" : "Модель перевантажена")).toHaveLength(2);
+            if (state === "running") {
+              expect(await panel.getAttribute("data-owner")).toBe("waiting");
+              expect(await panel.locator('.st-running, [data-stage-state="running"]').count()).toBe(0);
+              expect(text).not.toMatch(/running|працює/);
+            }
+          }
+          const geometry = await page.evaluate(() => {
+            const clipped: string[] = [];
+            for (const element of document.querySelectorAll<HTMLElement>('[data-pipeline-reason], [data-stage-now], [data-provider-wait]')) {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const box = element.getBoundingClientRect();
+              for (const rect of range.getClientRects()) if (rect.left < box.left - 1 || rect.right > box.right + 1
+                || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) clipped.push(element.textContent ?? "");
+              const stamp = /\d{4}[-\u2011]\d{2}[-\u2011]\d{2}[ \u00a0]\d{2}:\d{2}[ \u00a0]UTC/.exec(element.textContent ?? "");
+              if (stamp && element.firstChild?.nodeType === Node.TEXT_NODE) {
+                range.setStart(element.firstChild, stamp.index);
+                range.setEnd(element.firstChild, stamp.index + stamp[0].length);
+                if (range.getClientRects().length !== 1) clipped.push("retry timestamp wraps");
+              }
+            }
+            return { clipped, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          expect(geometry).toEqual({ clipped: [], overflow: false });
+          expect(pageErrors).toEqual([]);
+          const screenshot = `${lang}-${theme}-${width}.png`;
+          await page.locator("main").screenshot({ path: path.join(out, screenshot) });
+          frames.push({ lang, theme, width, screenshot, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/provider-capacity-recovery", { recursive: true });
+      const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/pipelines/PipelineBlock.tsx", "src/components/pipelines/pipelineBlock.css", "src/components/pipelines/pipelineBlockModel.ts", "src/components/kanban/cardState.ts", "src/lib/pipelines/stageChip.ts", "src/components/kanban/PipelineSection.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/provider-capacity-recovery/rendered.json", JSON.stringify({
+        driver:"src/components/kanban/kanbanBoard.browser.test.tsx",
+        command:"LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'capacity waits and exhausted budgets'",
+        capturedAt:new Date().toISOString(),
+        base:Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
+        sources:Object.fromEntries(sources.map(file => [file, new Bun.CryptoHasher("sha256").update(fs.readFileSync(file)).digest("hex")])), frames,
+      }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
+/* docs/design/card-progress-estimate.md, prototype variant 3: a short bar between
+   the status dot and the state words, filled to the agent's estimate. Over the
+   stages board with `progress=1`: two cards with running work (a sweep on the
+   unfilled part), idle cards, a stale and a done card, and cards with no estimate
+   (no bar). 390, 820 and 1440 px, both languages and themes; the reduced-motion
+   frame at 1440. Run it with
+   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task progress estimate'
+   under isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR (scripts/gate-slot.sh). */
+describe("task progress estimate", () => {
+  type Expected = { id: string; status: "assigned" | "blocked" | "done"; value: number | null; running: boolean; stale: boolean; role: "builder" | "architect" | null; age: string | null; coloured: boolean };
+  const CARDS_UNDER_TEST: Expected[] = [
+    { id: "t-search", status: "assigned", value: 35, running: true, stale: false, role: "builder", age: "18m", coloured: true },
+    { id: "t-upload", status: "assigned", value: 65, running: true, stale: false, role: "builder", age: "12m", coloured: false },
+    { id: "t-export", status: "assigned", value: 0, running: true, stale: false, role: "builder", age: "6m", coloured: false },
+    { id: "t-links", status: "assigned", value: 100, running: false, stale: false, role: "builder", age: "9m", coloured: true },
+    { id: "t-disk", status: "assigned", value: null, running: false, stale: false, role: null, age: null, coloured: false },
+    { id: "t-limits", status: "blocked", value: 50, running: false, stale: true, role: "architect", age: "2d", coloured: false },
+    { id: "t-compact", status: "done", value: 100, running: false, stale: true, role: null, age: "2d", coloured: false },
+  ];
+
+  const FROZEN = new Date("2026-10-26T12:00:00.000Z");
+
+  browserTest("the bar sits beside the dot, fills to the estimate and glows only while work runs", async () => {
+    const out = path.resolve(".artifacts/task-progress-bar");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    let phoneEdgeChecks = 0;
+    const frames = [
+      { name: "phone-390", width: 390, height: 844, phone: true },
+      { name: "desktop-820", width: 820, height: 900, phone: false },
+      { name: "desktop-1440", width: 1440, height: 900, phone: false },
+    ];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const frame of frames) for (const motion of ["no-preference", "reduce"] as const) {
+        /* The reduced-motion frame is taken at one width and one theme per language. */
+        if (motion === "reduce" && (frame.name !== "desktop-1440" || theme !== "light")) continue;
+        const label = `${frame.name}-${lang}-${theme}${motion === "reduce" ? "-reduced" : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: frame.width, height: frame.height }, theme, lang, motion, frame.phone);
+        try {
+          /* The fixture dates every estimate from the page's clock, and the board's clock ticks on: a frozen clock
+             keeps «18m ago» true however long the machine takes to reach a card. */
+          await page.clock.setFixedTime(FROZEN);
+          await page.goto(`${server.base}?scenario=stages&progress=1#p=atlas`);
+          await page.waitForSelector(frame.phone ? "[data-phone-card]" : "[data-kanban-card]", { state: "attached" });
+          const shots: Buffer[] = [];
+          for (const spec of CARDS_UNDER_TEST) {
+            const cardSelector = frame.phone ? `[data-phone-card="task:${spec.id}"]` : `[data-kanban-card="task:${spec.id}"]`;
+            if (frame.phone) {
+              await page.locator(`[data-phone-kanban-tab="${spec.status}"]`).click();
+            } else {
+              /* A narrow board is tabbed (820 px beside the sidebar): its columns are tabs. */
+              const tab = page.locator(`[role="tab"][data-tab="${spec.status}"]`);
+              if (await tab.count()) await tab.click();
+            }
+            const card = page.locator(cardSelector);
+            await card.waitFor({ state: "attached" });
+            await card.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(async (error) => {
+              await page.screenshot({ path: path.join(out, `${label}-${spec.id}-not-visible.png`) });
+              throw new Error(`${label} ${spec.id}: ${error.message.split("\n")[0]}`);
+            });
+            await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            const read = await card.evaluate((element, wantPhone) => {
+              const q = (selector: string) => element.querySelector<HTMLElement>(selector);
+              const bar = q(".task-progress");
+              const textRects = (node: Element | null) => {
+                const rects: DOMRect[] = [];
+                if (!node) return rects;
+                const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+                for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                  if (!text.textContent?.trim()) continue;
+                  const range = document.createRange(); range.selectNodeContents(text);
+                  for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) rects.push(rect);
+                }
+                return rects;
+              };
+              const words = q(".card-state-words");
+              const dot = q(".card-state-dot");
+              const wordRects = textRects(words);
+              const probe = document.createElement("canvas").getContext("2d")!;
+              const luminance = (color: string) => {
+                probe.clearRect(0, 0, 1, 1); probe.fillStyle = "#000"; probe.fillStyle = color; probe.fillRect(0, 0, 1, 1);
+                const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+                const lin = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+                return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!);
+              };
+              const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
+              const surface = (node: Element) => {
+                for (let n: Element | null = node; n; n = n.parentElement) {
+                  const c = getComputedStyle(n).backgroundColor;
+                  if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") return c;
+                }
+                return "rgb(255, 255, 255)";
+              };
+              const base = {
+                phone: wantPhone,
+                hasBar: Boolean(bar),
+                stateWords: words?.textContent?.trim() ?? null,
+              };
+              if (!bar || !dot || !words) return base;
+              const box = bar.getBoundingClientRect();
+              const dotBox = dot.getBoundingClientRect();
+              const cardBox = element.getBoundingClientRect();
+              const fill = bar.querySelector<HTMLElement>(".task-progress-fill")!;
+              const glow = bar.querySelector<HTMLElement>(".task-progress-glow");
+              const inner = bar.clientWidth;
+              const style = getComputedStyle(bar);
+              const stale = bar.getAttribute("data-task-progress") === "stale";
+              const swatch = document.createElement("span");
+              swatch.style.color = "var(--task-progress-stripe)";
+              bar.appendChild(swatch);
+              const stripe = getComputedStyle(swatch).color;
+              swatch.remove();
+              const fillColour = stale ? stripe : getComputedStyle(fill).backgroundColor;
+              const card = surface(element);
+              const sweep = glow ? getComputedStyle(glow, "::after") : null;
+              const wordsAfterBar = wordRects.every((rect) => rect.left >= box.right - 0.5);
+              const lines = new Set(wordRects.map((rect) => Math.round(rect.top))).size;
+              return {
+                ...base,
+                value: Number(bar.getAttribute("aria-valuenow")),
+                valueText: bar.getAttribute("aria-valuetext"),
+                label: bar.getAttribute("aria-label"),
+                stale,
+                box: { width: box.width, height: box.height, left: box.left, right: box.right },
+                dotRight: dotBox.right,
+                gapToDot: box.left - dotBox.right,
+                wordsAfterBar,
+                firstWordLeft: Math.min(...wordRects.map((rect) => rect.left)),
+                lines,
+                wordsClipped: words.scrollHeight > words.clientHeight + 1,
+                /* The same line with the bar taken out: a clamp that also cuts it there is not the bar's doing. */
+                wordsClippedWithoutBar: (() => { bar.style.display = "none"; const clipped = words.scrollHeight > words.clientHeight + 1; bar.style.display = ""; return clipped; })(),
+                insideCard: box.left >= cardBox.left && box.right <= cardBox.right && box.top >= cardBox.top && box.bottom <= cardBox.bottom,
+                inViewport: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+                verticalCentreOffset: (box.top + box.height / 2) - (dotBox.top + dotBox.height / 2),
+                fillRatio: fill.getBoundingClientRect().width / inner,
+                running: bar.hasAttribute("data-running"),
+                glow: glow ? { animationName: sweep!.animationName, background: sweep!.backgroundImage.slice(0, 80), left: glow.getBoundingClientRect().left - box.left } : null,
+                trackContrast: contrast(style.borderTopColor, card),
+                insideColour: style.backgroundColor,
+                fillColour,
+                fillContrastInside: contrast(fillColour, style.backgroundColor),
+                fillContrastCard: contrast(fillColour, card),
+                cardColour: card,
+              };
+            }, frame.phone);
+            readings.push({ label, lang, theme, motion, card: spec.id, ...read });
+            const fail = (text: string) => failures.push(`${label} ${spec.id}: ${text}`);
+            const r = read as unknown as { hasBar: boolean; box: { width: number; height: number }; value: number; fillRatio: number; wordsAfterBar: boolean; gapToDot: number; verticalCentreOffset: number; insideCard: boolean; inViewport: boolean; wordsClipped: boolean; wordsClippedWithoutBar: boolean; running: boolean; stale: boolean; trackContrast: number; fillContrastInside: number; glow: { animationName: string; left: number } | null; valueText: string | null };
+            if (spec.value === null) {
+              if (r.hasBar) fail("a card with no estimate draws a bar");
+              shots.push(await card.screenshot());
+              continue;
+            }
+            if (!r.hasBar) { fail("no bar"); continue; }
+            if (Math.abs(r.box.width - 36) > 0.5 || Math.abs(r.box.height - 8) > 0.5) fail(`bar is ${r.box.width}x${r.box.height}, not 36x8`);
+            if (r.value !== spec.value) fail(`value ${r.value}`);
+            if (Math.abs(r.fillRatio - spec.value / 100) > 0.02) fail(`fill ${r.fillRatio} for ${spec.value}%`);
+            if (!r.wordsAfterBar) fail("state words overlap the bar");
+            if (r.gapToDot < 0 || r.gapToDot > 8) fail(`bar is ${r.gapToDot}px from the dot`);
+            if (Math.abs(r.verticalCentreOffset) > 0.5) fail(`bar centre is ${r.verticalCentreOffset}px off the dot's`);
+            if (!r.insideCard) fail("bar leaves its card");
+            if (!r.inViewport) fail("bar is outside the window");
+            if (r.wordsClipped && !r.wordsClippedWithoutBar) fail("the bar makes the state sentence run into the two-line clamp");
+            if (r.running !== spec.running) fail(`running ${r.running}`);
+            if (r.stale !== spec.stale) fail(`stale ${r.stale}`);
+            if (r.trackContrast < 3) fail(`track outline against the card is ${r.trackContrast.toFixed(2)}:1`);
+            if (r.fillContrastInside < 3) fail(`fill against the track's inside is ${r.fillContrastInside.toFixed(2)}:1`);
+            if (spec.running && spec.value < 100) {
+              if (!r.glow) fail("running work has no sweep");
+              else if (motion === "no-preference" && r.glow.animationName !== "task-progress-glow") fail(`sweep animation is ${r.glow.animationName}`);
+              else if (motion === "reduce" && r.glow.animationName !== "none") fail("the sweep moves under reduced motion");
+              else if (Math.abs(r.glow.left - (36 - 2) * spec.value / 100 - 1) > 1.5) fail(`sweep starts ${r.glow.left}px in, not at the fill's end`);
+            } else if (r.glow) fail("idle work has a sweep");
+            const age = lang === "en" ? spec.age : spec.age!.replace("m", " хв").replace("d", " д");
+            const who = spec.role ? translate(lang, `roleCopy.${spec.role}.name` as never) : translate(lang, "cardState.progress.byOperator");
+            const wantLine = translate(lang, spec.stale ? "cardState.progress.lineStale" : "cardState.progress.line", { value: spec.value, age: lang === "en" ? `${age} ago` : `${age} тому`, who });
+            const norm = (text: string | null) => (text ?? "").replace(/ /g, " ");
+            if (norm(r.valueText) !== wantLine) fail(`accessible value "${norm(r.valueText)}" is not "${wantLine}"`);
+            shots.push(await card.screenshot());
+            if (frame.phone && motion === "no-preference") {
+              /* The phone's face is one button whose label replaces what is inside it: the estimate is read into it, and
+                 the opened task says it in words, since the passive dot opens no popover. */
+              const face = norm(await card.getAttribute("aria-label"));
+              readings.push({ label, card: spec.id, phoneFaceLabel: face });
+              if (!face.includes(wantLine)) fail(`phone card label "${face}" leaves out "${wantLine}"`);
+              await card.click();
+              const shown = page.locator("[data-phone-task-progress]");
+              await shown.waitFor({ timeout: 10_000 }).catch(() => fail("the opened task shows no estimate"));
+              if (await shown.count()) {
+                await shown.scrollIntoViewIfNeeded();
+                const words = norm(await shown.textContent());
+                readings.push({ label, card: spec.id, phoneTaskLine: words });
+                if (words !== wantLine) fail(`opened task says "${words}", not "${wantLine}"`);
+                const whole = await shown.evaluate((element) => {
+                  const range = document.createRange(); range.selectNodeContents(element);
+                  return [...range.getClientRects()].every((rect) => rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight);
+                });
+                if (!whole) fail("the opened task's estimate line is cut by the window");
+                /* The estimate stacks under the status line and the task's meta: their first glyphs share one left edge. */
+                const edges = await page.evaluate(() => {
+                  const firstGlyph = (element: Element | null) => {
+                    if (!element) return null;
+                    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                      const at = (text.textContent ?? "").search(/\S/);
+                      if (at < 0) continue;
+                      const range = document.createRange(); range.setStart(text, at); range.setEnd(text, at + 1);
+                      return range.getBoundingClientRect().left;
+                    }
+                    return null;
+                  };
+                  return {
+                    estimate: firstGlyph(document.querySelector("[data-phone-task-progress]")),
+                    motion: firstGlyph(document.querySelector(".motion-line[data-motion-full]")),
+                    meta: firstGlyph(document.querySelector(".card-meta-line.phone:not([data-phone-task-progress])")),
+                  };
+                });
+                readings.push({ label, card: spec.id, phoneTaskEdges: edges });
+                if (edges.motion !== null) phoneEdgeChecks += 1;
+                for (const [name, edge] of [["status", edges.motion], ["meta", edges.meta]] as const) {
+                  if (edge !== null && edges.estimate !== null && Math.abs(edge - edges.estimate) > 0.5) fail(`opened task's estimate starts at x=${edges.estimate}, its ${name} line at x=${edge}`);
+                }
+                await page.screenshot({ path: path.join(out, `${label}-${spec.id}-task.png`) });
+              }
+              await page.goBack();
+              await card.waitFor({ state: "attached" });
+            }
+            if (!frame.phone && (spec.id === "t-search" || spec.id === "t-upload") && motion === "no-preference") {
+              /* A mouse on the dot opens its popover beside the state line, after its words (the prototype's README,
+                 «Where the desktop popover opens»); its second line says value, age and author. It covers no text of
+                 its own card or another, and stays inside its card and the window. */
+              for (const closed of [true, false]) {
+                const collapsed = (await card.getAttribute("data-collapsed")) === "1";
+                if (closed !== collapsed) {
+                  await card.locator("[data-card-state-toggle]").click();
+                  await page.waitForFunction(([selector, want]) => document.querySelector(selector as string)?.getAttribute("data-collapsed") === want, [cardSelector, closed ? "1" : "0"]);
+                  await card.scrollIntoViewIfNeeded();
+                  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                }
+                /* The bar is inside the dot's hover target: a mouse on it opens the same popover (the other card: on the dot). */
+                await card.locator(spec.id === "t-upload" ? ".task-progress" : ".card-state-dot").hover({ force: true });
+                const pop = page.locator("[data-card-progress-line]");
+                await pop.waitFor();
+                await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                const popRead = await pop.evaluate((line, selector) => {
+                  const bubbleNode = line.closest("[role='tooltip']")!;
+                  const box = bubbleNode.getBoundingClientRect();
+                  const host = document.querySelector(selector)!;
+                  const own: string[] = [];
+                  const foreign: string[] = [];
+                  const restated: string[] = [];
+                  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                    if (!text.textContent?.trim() || bubbleNode.contains(text)) continue;
+                    const range = document.createRange(); range.selectNodeContents(text);
+                    for (const rect of range.getClientRects()) {
+                      const x = Math.min(rect.right, box.right) - Math.max(rect.left, box.left);
+                      const y = Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top);
+                      if (x > 1 && y > 1) {
+                        /* Text clipped away by a scroller or a collapsed row paints nothing under the bubble. */
+                        const stack = document.elementsFromPoint(Math.max(rect.left, box.left) + x / 2, Math.max(rect.top, box.top) + y / 2);
+                        const parent = text.parentElement!;
+                        if (!stack.some((element) => parent.contains(element))) continue;
+                        /* The one-line form may lie over the state words its first phrase restates; nothing else of its card. */
+                        if (host.contains(text) && bubbleNode.getAttribute("data-beside") === "line" && parent.closest(".card-state-words")) { restated.push(text.textContent.trim().slice(0, 40)); break; }
+                        (host.contains(text) ? own : foreign).push(text.textContent.trim().slice(0, 40)); break;
+                      }
+                    }
+                  }
+                  /* Outlined controls of its own card (stage chips, buttons): their boxes stay clear, not only their words.
+                     The dot and the bar are the state line's own marks and stay clear too. */
+                  const controls: string[] = [];
+                  for (const mark of host.querySelectorAll(".card-state .card-state-dot, .card-state .task-progress")) {
+                    const rect = mark.getBoundingClientRect();
+                    if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0) controls.push(mark.className);
+                  }
+                  for (const element of host.querySelectorAll<HTMLElement>("*")) {
+                    const style = getComputedStyle(element);
+                    const outlined = (["Top", "Right", "Bottom", "Left"] as const).some((side) => parseFloat(style[`border${side}Width`]) > 0 && !/rgba\([^)]*,\s*0\)|transparent/.test(style[`border${side}Color`]));
+                    if (!outlined || element.closest(".card-state")) continue;
+                    const rect = element.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0) controls.push(`${element.className}`.slice(0, 40) || element.tagName);
+                  }
+                  const cardBox = host.getBoundingClientRect();
+                  /* The words that open each drawn line of the estimate: a narrow bubble wraps after a «·», never before one. */
+                  const lineStarts: string[] = [];
+                  const words = line.firstChild!;
+                  let lineTop = -Infinity;
+                  for (let at = 0; at < (words.textContent ?? "").length; at += 1) {
+                    const range = document.createRange(); range.setStart(words, at); range.setEnd(words, at + 1);
+                    const rect = range.getClientRects()[0];
+                    if (!rect || rect.width === 0 || rect.top <= lineTop + 2) continue;
+                    lineTop = rect.top;
+                    lineStarts.push((words.textContent ?? "").slice(at, at + 12).trim());
+                  }
+                  return {
+                    lineStarts,
+                    text: line.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+                    box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width }, insideCard: box.right <= cardBox.right && box.bottom <= cardBox.bottom && box.left >= cardBox.left && box.top >= cardBox.top - 1,
+                    own, foreign, controls, restated,
+                    card: { left: cardBox.left, top: cardBox.top, right: cardBox.right, bottom: cardBox.bottom },
+                    stateLineTop: host.querySelector(".card-state")!.getBoundingClientRect().top,
+                    /* The band beside the state line: the title's last drawn line above it, the first chip below it. */
+                    titleBottom: Math.max(...[...host.querySelectorAll("h3")].flatMap((title) => { const range = document.createRange(); range.selectNodeContents(title); return [...range.getClientRects()].map((rect) => rect.bottom); })),
+                    chipTop: Math.min(...[...host.querySelectorAll(".pb-pill")].map((chip) => chip.getBoundingClientRect().top)),
+                    beside: bubbleNode.getAttribute("data-beside"),
+                  };
+                }, cardSelector);
+                readings.push({ label, card: spec.id, cardState: closed ? "closed" : "open", popover: popRead });
+                if (norm(popRead.text) !== wantLine) fail(`popover line "${norm(popRead.text)}"`);
+                if (!popRead.inside) fail(`${closed ? "closed" : "open"} card: popover leaves the window`);
+                if (popRead.foreign.length) fail(`${closed ? "closed" : "open"} card: popover covers another card's text ${JSON.stringify(popRead.foreign)}`);
+                if (popRead.own.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's text ${JSON.stringify(popRead.own)}`);
+                if (popRead.controls.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's controls ${JSON.stringify(popRead.controls)}`);
+                if (!popRead.insideCard) fail(`${closed ? "closed" : "open"} card: popover leaves its card`);
+                if (popRead.lineStarts.some((start) => start.startsWith("·"))) fail(`${closed ? "closed" : "open"} card: a popover line opens with a separator ${JSON.stringify(popRead.lineStarts)}`);
+                await page.screenshot({ path: path.join(out, `${label}-${spec.id}-popover-${closed ? "closed" : "open"}.png`) });
+                await page.mouse.move(2, 2);
+              }
+            }
+          }
+          let top = 0;
+          const layers: { input: Buffer; top: number; left: number }[] = [];
+          let width = 0;
+          for (const shot of shots) {
+            const meta = await sharp(shot).metadata();
+            layers.push({ input: shot, top, left: 0 });
+            top += meta.height! + 8;
+            width = Math.max(width, meta.width!);
+          }
+          await sharp({ create: { width, height: top, channels: 4, background: theme === "dark" ? "#101114" : "#f4f1ea" } }).composite(layers).png().toFile(path.join(out, `${label}-cards.png`));
+          await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    if (phoneEdgeChecks === 0) failures.push("no opened phone task had a status line to align the estimate with");
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
   }, 900_000);
 });
 

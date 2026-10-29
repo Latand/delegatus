@@ -349,6 +349,7 @@ function isAttempt(value: unknown, index: number): boolean {
       && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
     )) &&
     isProviderWait(attempt.providerWait) &&
+    isRestoreContinuation(attempt.restoreContinuation) &&
     isProviderRecoveries(attempt.providerRecoveries) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
@@ -397,6 +398,19 @@ function isAttempt(value: unknown, index: number): boolean {
     isPriorWriterStop(attempt.priorWriterStop) &&
     isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+function isRestoreContinuation(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const timestamp = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value));
+  return ["cutAt", "requestedAt", "deadline"].every(key => timestamp(record[key]))
+    && ["conversationId", "transcriptPath"].every(key => typeof record[key] === "string" && record[key].length > 0)
+    && (record.acceptedAt === undefined || timestamp(record.acceptedAt))
+    && (record.promptBoundary === null || Number.isSafeInteger(record.promptBoundary) && Number(record.promptBoundary) >= 0)
+    && Number.isSafeInteger(record.count) && Number(record.count) >= 1 && Number(record.count) <= 3
+    && typeof record.clientMessageId === "string" && record.clientMessageId.length > 0 && record.clientMessageId.length <= 300;
 }
 
 function isStartupOwnerWait(value: unknown): boolean {
@@ -1208,6 +1222,10 @@ export async function controllerFlowAttached(id: string): Promise<boolean> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-owners", () =>
     stateLockAttempt("pipelines.controller-owners", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineOwnerExists([["flow",id]],false)))));
 }
+export async function pipelineRecoveryWindow(after: { row_order: number; row_key: string }, limit: number) {
+  return waitForStateLock("pipelines.provider-recovery-schedule", () => stateLockAttempt("pipelines.provider-recovery-schedule", () => pipelineStore().pipelineRecoveryWindow(after, limit)));
+}
+
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
 }
