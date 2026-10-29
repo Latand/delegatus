@@ -1,12 +1,19 @@
 import "./engineEnvironment.fixture";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { create, harness, tickPipelines, loadPipelines, savePipelines, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, accountManager } from "./engine.fixture";
-import { roleMemoryCollection } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { sharedLinkState } from "@/lib/links/runtimeState";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { StructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryQueue";
+import type { QueueEntry } from "@/lib/runtime/engineHost";
+import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
+import type { RuntimeSendCommand } from "@/lib/runtime/contracts";
 
 const oldRule = "Preserve fixtureword receipts until the owning operation completes";
 const newRule = "Verify silver orchard evidence before the operation completes";
@@ -18,6 +25,193 @@ function write(rule: string) {
   }));
 }
 afterEach(shutdownTaskPageWorker);
+
+test("an immutable stale first-message effect is fenced and launch recovery delivers its successor once", async () => {
+  setSystemTime(new Date("2026-10-29T00:00:00Z"));
+  savePipelines([]);
+  write(oldRule);
+  let nextId = 100;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`);
+  const root = path.join(process.env.LLV_STATE_DIR!, "persisted-privacy-launch");
+  fs.mkdirSync(root, { recursive: true });
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const journalFile = path.join(root, "runtime.sqlite");
+  let journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const realSpawn = spawnModule.spawnStructuredConversation;
+  const sent: QueueEntry[] = [];
+  const launches: string[] = [];
+  const hosts = new Map<string, SpawnedStructuredHost>();
+  let changed = false;
+  let originalEffect: string | undefined;
+  let originalCommand: RuntimeSendCommand | undefined;
+  const drain = async () => {
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: async () => "privacy-fixture-owner",
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+    }, id => hosts.get(id) ?? null);
+    await queue.drain();
+  };
+  const client = {
+    readSession: async identity => journal.readSession(identity),
+    snapshot: async () => journal.snapshot(),
+    append: async event => journal.append(event),
+    operation: async event => journal.append(event),
+    operationStatus: async id => journal.operationResult(id),
+    transitionOperation: async (id, status, details, options) => journal.transitionOperation(id, status, details, options),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    command: async command => {
+      const result = journal.executeOperation(command);
+      if (command.kind !== "send") return result;
+      if (!changed) {
+        changed = true;
+        const effect = journal.effectBatch(100, ["runtime.send"])[0]!;
+        originalEffect = JSON.stringify(effect);
+        originalCommand = structuredClone(command);
+        write(newRule);
+        // A new consumer process gets only the unchanged, admitted payload.
+        journal.close();
+        const consumer = Bun.spawn([process.execPath, "-e", `
+          import crypto from "node:crypto";
+          import { RuntimeJournal } from "./src/runtime-host/journal";
+          import { StructuredDeliveryQueue } from "./src/lib/runtime/structuredDeliveryQueue";
+          const journal = new RuntimeJournal(process.env.LLV_PRIVACY_TEST_JOURNAL, { structuredHosts: true });
+          const effects = journal.effectBatch(100, ["runtime.send"]);
+          const digest = crypto.createHash("sha256").update(JSON.stringify(effects[0])).digest("hex");
+          if (digest !== process.env.LLV_PRIVACY_TEST_EFFECT) throw new Error("persisted effect changed");
+          let sends = 0;
+          const queue = new StructuredDeliveryQueue({
+            effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+            status: async id => journal.operationResult(id)?.receipt ?? null,
+            hostClaim: async () => "privacy-fixture-owner",
+            transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+          }, () => ({
+            supportsSteer: false,
+            health: async () => ({ status: "idle", sessionKey: "privacy-consumer", endpoint: "fixture", pid: process.pid,
+              processStartIdentity: "privacy-fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null,
+              pendingAttention: [], activeFlags: [], account: null }),
+            send: async (_entry, _proof, authorize) => { authorize?.(); sends++; return { outcome: "turn-started", turnId: "forbidden-turn" }; },
+          }));
+          await queue.drain();
+          await queue.drain();
+          console.log(JSON.stringify({ sends, receipt: journal.operationResult(effects[0].payload.operationId).receipt }));
+          journal.close();
+        `], { cwd: process.cwd(), env: { ...process.env, LLV_PRIVACY_TEST_JOURNAL: journalFile,
+          LLV_PRIVACY_TEST_EFFECT: crypto.createHash("sha256").update(originalEffect).digest("hex") },
+          stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+        const [code, output, errors] = await Promise.all([consumer.exited, new Response(consumer.stdout).text(), new Response(consumer.stderr).text()]);
+        journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+        expect(code, errors).toBe(0);
+        const observed = JSON.parse(output);
+        expect(observed.sends).toBe(0);
+        expect(observed.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+      }
+      await drain();
+      if (result.operationId === `spawn_message_${launches[0]}`) {
+        expect(journal.operationResult(result.operationId)?.receipt.status).toBe("failed");
+      }
+      // The admission ACK retains the receipt produced by that transaction;
+      // dispatch settlement is observed through the subsequent status read.
+      return result;
+    },
+  } as RuntimeHostClient;
+  const runtime = spyOn(clientModule, "runtimeHostClient").mockReturnValue(client);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture-account", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" },
+  }});
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    launches.push(input.receipt.launchId);
+    const sessionId = ["00000000", "0000", "4000", "8000", String(launches.length).padStart(12, "0")].join("-");
+    const artifact = path.join(root, `${sessionId}.jsonl`);
+    let dead = false;
+    const host: SpawnedStructuredHost = {
+      identity: { threadId: sessionId, path: artifact },
+      supportsSteer: false,
+      health: async () => ({ status: dead ? "dead" : "idle", sessionKey: sessionId, endpoint: "fixture", pid: process.pid,
+        processStartIdentity: "privacy-fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null,
+        pendingAttention: [], activeFlags: [], account: null }),
+      onStateChange: () => () => {},
+      attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+      interrupt: async () => {}, answer: async () => {}, release: async () => { dead = true; },
+      send: async (entry, _proof, authorize) => {
+        authorize?.();
+        sent.push(entry);
+        fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n"
+          + JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: entry.text } }) + "\n");
+        return { outcome: "turn-started", turnId: "privacy-current-turn" };
+      },
+    };
+    hosts.set(input.receipt.conversationId, host);
+    return await realSpawn(input, {
+      startHost: async () => {
+        fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+        return host;
+      },
+      bindHost: async (target, key, _host, owner, epoch) => {
+        target.setStructuredHostClaimed(key, { kind: "codex-app-server", endpoint: "fixture",
+          process: { pid: process.pid, startIdentity: "privacy-fixture" }, eventCursor: 0, protocolVersion: "fixture",
+          writerClaimEpoch: epoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] }, "idle", owner, epoch);
+        journal.append({ scope: { type: "session", id: input.receipt.conversationId }, kind: "session-status", payload: {
+          conversationId: input.receipt.conversationId, sessionKey: key, artifactPath: artifact, cwd: input.spec.cwd,
+          hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+        } });
+        return () => {};
+      },
+      publishHost: async () => async () => {},
+      processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
+    });
+  });
+  try {
+    const h = harness();
+    const defaults = defaultPipelinePorts();
+    h.ports.spawnAgent = defaults.spawnAgent;
+    h.ports.spawnReceipt = defaults.spawnReceipt;
+    h.ports.claimSpawnRetry = defaults.claimSpawnRetry;
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build safely", next: null }] as never, { repoDir: root });
+    await tickPipelines([], h.ports);
+    fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
+    await tickPipelines([], h.ports);
+    expect(changed).toBe(true);
+    expect(sent).toHaveLength(0);
+    expect(launches).toHaveLength(1);
+    const originalId = `spawn_message_${launches[0]}`;
+    expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+    expect(defaults.spawnReceipt(launches[0]!)).toMatchObject({ state: "failed", roleMemoryRetrySafe: true });
+    // A fresh reader cannot revive the fenced effect or reset a retry counter.
+    journal.close();
+    journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+    expect(journal.executeOperation(originalCommand!).receipt).toMatchObject({ operationId: originalId, status: "failed" });
+    await drain();
+    expect(sent).toHaveLength(0);
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+    expect(launches).toHaveLength(2);
+    expect(sent.map(entry => entry.id)).toEqual([`spawn_message_${launches[1]}`]);
+    const successor = registry.readOnlySnapshot().receipts[launches[1]!]!;
+    expect(successor.state).toBe("completed");
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.retiredLaunches?.map(launch => launch.launchId)).toEqual([launches[0]!]);
+    expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+    await drain();
+    expect(sent).toHaveLength(1);
+    expect(roleMemoryRevisionToken()).not.toBe(JSON.parse(originalEffect!).payload.roleMemoryRevision);
+  } finally {
+    spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
+    ids.mockRestore();
+    setSystemTime();
+    setAgentRegistryForTests(null);
+    journal.close();
+  }
+}, 30_000);
 
 test.each([
   { boundary: "composition", fileBacked: false }, { boundary: "worker", fileBacked: false },

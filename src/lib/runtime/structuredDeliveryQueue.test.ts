@@ -1,5 +1,9 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { RuntimeJournal } from "@/runtime-host/journal";
 
 afterEach(() => setSystemTime());
 
@@ -16,7 +20,7 @@ import {
 } from "./structuredDeliveryQueue";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 import { deputySeatNoteRequest } from "@/lib/orchestrator/deputySweep";
-import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, storedLessonRevision } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
 
 const privacyFixtureId = "r:delivery-privacy-fence-test";
 afterEach(() => {
@@ -101,15 +105,14 @@ test("a role-memory change during delivery admission prevents first-message disp
     createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:00Z",
   }));
   const revision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
-  let currentRevision = revision;
-  let currentPrompt = "filtered first message from the old revision";
+  const prompt = "filtered first message from the old revision";
   const transitions: Array<{ status: string; reason?: string | null }> = [];
   let sent = 0;
   let changed = false;
   const queue = new StructuredDeliveryQueue({
     effects: async () => [{ id: "effect:role-privacy", kind: "runtime.send", eventSeq: 1,
       payload: { kind: "send", operationId: "spawn_message_privacy_fixture", conversationId: "conversation-one",
-        text: currentPrompt, policy: "queue", roleMemoryRevision: currentRevision } }],
+        text: prompt, policy: "queue", roleMemoryRevision: revision } }],
     status: async () => {
       if (!changed) {
         changed = true;
@@ -126,22 +129,20 @@ test("a role-memory change during delivery admission prevents first-message disp
     transition: async (_id, status, options) => { transitions.push({ status, reason: options?.reason }); },
   }, () => host(async entry => {
     sent += 1;
-    expect(entry.text).toBe(currentPrompt);
+    expect(entry.text).toBe(prompt);
     return { outcome: "turn-started", turnId: "turn-privacy" };
   }));
 
   await queue.drain();
   expect(changed).toBe(true);
   expect(sent).toBe(0);
-  expect(transitions).toContainEqual({ status: "queued", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+  expect(transitions).toContainEqual({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
   expect(transitions.some(transition => transition.status === "uncertain")).toBe(false);
-  currentRevision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
-  currentPrompt = "filtered first message from the current revision";
   await queue.drain();
-  expect(sent).toBe(1);
+  expect(sent).toBe(0);
 });
 
-test("a role-memory change after inbox binding keeps the batch retryable", async () => {
+test("a role-memory change after inbox binding fences the stale member", async () => {
   const collection = roleMemoryCollection(true)!;
   collection.boundedPatch(1, tx => tx.put({
     kind: "rule", id: "delivery-privacy-batch-test", scope: "machine", rule: "old batch privacy fixture",
@@ -193,12 +194,91 @@ test("a role-memory change after inbox binding keeps the batch retryable", async
     await queue.drain();
     expect(changed, JSON.stringify({ transitions })).toBe(true);
     expect(sent).toBe(0);
-    expect(transitions).toContainEqual({ id: "spawn_message_one", status: "queued", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+    expect(transitions).toContainEqual({ id: "spawn_message_one", status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
     expect(transitions).not.toContainEqual(expect.objectContaining({ status: "uncertain" }));
   } finally {
     collection.boundedPatch(1, tx => tx.delete("r:delivery-privacy-batch-test"));
   }
 });
+
+test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordinary-send", "delivery-auto-retry", "read-retry", "delivery-wins", "uncertainty-wins"] as const)(
+  "stale privacy fencing preserves durable %s evidence", async mode => {
+    setSystemTime(new Date("2026-10-29T00:00:00Z"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-privacy-evidence-"));
+    const filename = path.join(root, "runtime.sqlite");
+    let journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const privacyFile = roleMemoryCollection(true)!.filename;
+    const unavailablePrivacy = path.join(root, "privacy.sqlite");
+    const operationId = mode === "ordinary-send" ? "ordinary-delivery" : "spawn_message_privacy_evidence";
+    const changePrivacy = () => {
+      roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: "delivery-privacy-fence-test",
+        scope: "machine", rule: "changed privacy evidence", why: "", state: "active", hints: [],
+        source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder",
+          fixRound: false, conversationId: "conversation_privacy_evidence" },
+        createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:01Z" }));
+    };
+    try {
+      journal.append({ scope: { type: "session", id: "conversation_privacy_evidence" }, kind: "session-status", payload: {
+        conversationId: "conversation_privacy_evidence", sessionKey: { engine: "codex",
+          sessionId: ["00000000", "0000", "4000", "8000", "000000000001"].join("-") },
+        hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+        capabilities: { steer: true, structuredAttention: true },
+      } });
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+        conversationId: "conversation_privacy_evidence", text: "durable input", policy: "queue",
+        ...(mode !== "ordinary-send" ? { roleMemoryRevision: roleMemoryRevisionToken() } : {}),
+      });
+      const effects = journal.effectBatch(100, ["runtime.send"]);
+      expect(effects).toHaveLength(1);
+      if (mode === "delivered" || mode === "uncertain" || mode === "delivering") {
+        journal.transitionOperation(operationId, "delivering", { reason: "delivering-owner:earlier@owner:old" });
+        if (mode !== "delivering") journal.transitionOperation(operationId, mode, { reason: "prior native outcome" });
+      }
+      if (mode === "delivery-auto-retry") {
+        journal.transitionOperation(operationId, "delivering");
+        journal.transitionOperation(operationId, "queued", { reason: "delivery-auto-retry" });
+      }
+      journal.close();
+      journal = new RuntimeJournal(filename, { structuredHosts: true });
+      if (mode === "privacy-unreadable") {
+        // Exercise an actual store-read refusal with the fixture's own file.
+        fs.renameSync(privacyFile, unavailablePrivacy);
+      } else if (mode !== "read-retry") {
+        changePrivacy();
+      }
+      let sends = 0;
+      const queue = new StructuredDeliveryQueue({
+        // A stale page retained across restart must still consult the receipt.
+        effects: async () => effects,
+        status: async id => journal.operationResult(id)?.receipt ?? null,
+        hostClaim: async () => "owner:current",
+        transition: async (id, status, details, options) => {
+          if (status === "failed" && (mode === "delivery-wins" || mode === "uncertainty-wins")) {
+            journal.transitionOperation(id, mode === "delivery-wins" ? "delivered" : "uncertain", { reason: "native winner" });
+          }
+          journal.transitionOperation(id, status, details, options);
+        },
+      }, () => host(async () => {
+        sends++;
+        if (mode === "read-retry") {
+          changePrivacy();
+          throw new Error("request timed out: thread/read");
+        }
+        return { outcome: "turn-started", turnId: "ordinary-turn" };
+      }));
+      await queue.drain();
+      await queue.drain();
+      const receipt = journal.operationResult(operationId)!.receipt;
+      expect(sends).toBe(mode === "ordinary-send" || mode === "read-retry" ? 1 : 0);
+      expect(receipt.status).toBe(["delivered", "ordinary-send", "delivery-wins"].includes(mode) ? "delivered" : "uncertain");
+      if (mode !== "ordinary-send") expect(receipt.reason).not.toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+    } finally {
+      if (fs.existsSync(unavailablePrivacy)) fs.renameSync(unavailablePrivacy, privacyFile);
+      journal.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("only the first journal admission under a known claim supplies first-dispatch evidence", async () => {
   for (const [revision, claim] of [[1, "owner:1"], [2, "owner:1"], [undefined, "owner:1"], [1, null], [1, "?"]] as const) {
