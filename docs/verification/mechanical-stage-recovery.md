@@ -48,6 +48,15 @@ Lane `f9f8b370`, inventory attempt 1, retained a commit-repair request at
 producer's response at 08:55:05 UTC reported no file defect and made no edits.
 The explicit retry later accepted the output in the same attempt.
 
+The additional lane `d6ab7243` has the same shape: a read-only verifier with
+one declared Markdown output. Its retained repair request is timestamped
+10:09:35 UTC; the producer answered at 10:15:36 UTC that no document change
+could answer the cancellation. The stage eventually passed at 11:55:14 UTC,
+still on attempt 1. The seat also observed cancellations around 10:55 UTC and
+before 11:54 UTC, including a failed explicit retry. Those later observations
+are not separate entries in the retained attempt, so their exact command
+start, exit and cancellation authority cannot be reconstructed from it.
+
 `src/lib/workflows/provision.ts:48` and `:69` produce the bare cancellation result
 when the command's AbortSignal is already aborted or aborts in flight. The
 executor kills and reaps the owned command group before answering. Settlement
@@ -56,6 +65,18 @@ supplies its cancellation signal from its authority revalidator
 authority aborts it. The retained repair record contains no triggering fence
 or raw exit status, so it cannot establish which observation cancelled that
 historical invocation. The later deploy alone supplies no such evidence.
+
+The load-related deadline hypothesis remains unconfirmed. The executor's own
+budget emits `command timed out after …ms` (`src/lib/workflows/provision.ts:71`),
+whereas an aborted signal emits `command cancelled` (`:69`). The production
+settlement wrapper supplies the authority signal and preserves the commit's
+timeout (`src/lib/pipelines/engine.ts:12359` at `83973ce6`). Its controller job
+has no additional cancellation timer. The provider observer's fifteen-second
+deadline explicitly defers Git settlement (`src/lib/pipelines/engine.ts:12674`
+in the repaired source). A slow poll can delay these callbacks; the code does
+not establish that the observed loop gaps caused these particular cancellations.
+The fix handles both typed deadline expiry and bare signal cancellation with
+the same persistent bound, without turning a diagnostic hook refusal into a retry.
 
 `src/lib/pipelines/git.ts:803` distinguished deadline expiry from a hook refusal, but let bare
 cancellation fall through to `commitRefusal` at `:949`. `src/lib/pipelines/engine.ts:5598`
