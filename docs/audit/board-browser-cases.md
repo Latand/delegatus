@@ -118,3 +118,51 @@ LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprin
 ```
 
 Only this report is a retained output. The rendered frames, raw logs, probes and generated JSON belong to stage scratch; the assertion excerpts and measurements above preserve the audit evidence without publishing machine paths or fixture account names.
+
+## Repair verification
+
+Repair date: 2026-10-29. **All 18 active Chrome cases now pass**, including the six repaired cases and all twelve controls from the original audit. The audit above is retained as the historical diagnosis.
+
+Merged source revision: `6c46a95470da4c9c456a873f39438203d7acf0ab`; its second parent is current `origin/main`, `e317e8d5775978607a98e5faa256f030825783ee`. Main was already an ancestor, so the explicit merge records that parent without changing production inputs. Only the existing test drivers, their fixtures, and this report change. The production build, geometry capture, and full-project typecheck used a clean export of that merged revision. The three corrected browser reruns used identical committed driver bytes.
+
+Chrome for Testing 156.0.8078.4 and Bun 1.4.0 ran locally. Every case ran separately and sequentially, through the supplied gate wrapper, with private HOME, XDG configuration/cache, TMPDIR, state and agent homes; the Viewer control URL was closed. Environment preparation used `checkEnvironment` followed by `isolatedEnvironment`. Chrome used a short descriptor-backed temporary path and visible scrollbars. Prototype comparison remained disabled.
+
+| Case | Repair | Fresh result |
+| --- | --- | --- |
+| #1681 | Retire the obsolete synthetic header and its sweeps; retain the separate real-header case. Measure the phone's opening button and schedule switch. Expect the compact desktop schedule word. | Exit 0; 111 assertions. Dock checks and en/uk stale/blocked phone checks pass, including the keyboard-safe Save. The real-header control also passes. |
+| K4b | Count project and all-project seat polls separately. | Exit 0; two reads per scope over 12.5 seconds. Panel and lock present; protected Hide remains disabled with zero hide writes. |
+| K3 | Start a new running attempt at the fixture's seed clock, ahead of the existing turns. Require both cards to exist before comparing their order. | Exit 0; upload moves from after search to before it. The same reader remains mounted; scrollTop is 826 before, immediately after and after settling. Later Stop-host and failed-read checks also complete. |
+| K5b | Hold the Pause response while asserting the predicted paused state and absence of an early confirmation. Release it and await its receipt. Assert refused Resume rolls back; wait for confirmed Resume before the next action. | Exit 0; pending state is paused, refusal rolls back, lost-answer reconciliation performs one read. Four expected writes; guarded Skip checks retained. |
+| #1938 | Read the phone card's state line for the unreviewed-fix reason. | Exit 0; desktop states, both heads, spent-review badge and phone reason all pass. |
+| #1989 | Open Done before reading its member rows. Check row containment; compare the grid shelves within 1 px and retain the scrolling 280.5 px cap. | Exit 0; 12 viewport/locale/theme combinations, 36 frames, empty failures. Six nonempty, contained member rows per combination. |
+
+Driver locations: `src/components/orchestrator/issue1681Evidence.browser.test.tsx:274`; `src/components/kanban/kanbanBoard.browser.test.tsx:4013` (K3), `:4715` (K4b), `:5526` (K5b), `:6898` (#1938); `scripts/capture-board-geometry.ts:4393` and `:4418` (#1989). Fixture support stays in `src/components/kanban/issue1695Evidence.fixture.tsx` and `src/components/orchestrator/issue1681Evidence.fixture.tsx`.
+
+The twelve controls each report one pass and zero failures: #1802, #1731, the real seat header, #1765, K5a, balanced columns, K1+K2, graph-loop replacement, model-glyph replacement, both #2072 cases, and K6a. The retired #1743 case remains retired.
+
+The first candidate campaign completed all 17 selected Bun cases: 14 passed and three failed. Those failures exposed remaining driver assumptions: #1681 still expected “every 30 min” on the compact switch; K3's first replacement timestamp predated the live turns; K5b advanced after optimistic Resume before its confirmation. After correcting those assumptions, each of those three complete cases passed in a fresh invocation. Together with the successful production geometry capture, all 18 distinct cases have a passing final observation. No product defect was identified.
+
+Commands follow the original isolation and B/T procedure above, with a fresh run/log per invocation:
+
+```sh
+T
+B '#1695 K4b'
+B '#1695 K3'
+B '#1695 K5b'
+B '#1938'
+# The twelve control filters are listed in the original audit table.
+
+# In a separate clean export of the merged source, using isolated roots:
+NODE_ENV=production bash "$GATE" bun --bun node_modules/.bin/next build --webpack
+BOARD_CAPTURE_CASE=columns-wide BOARD_CAPTURE_COMMIT="$MERGED_REVISION" \
+  bash "$GATE" bun --preload "$CAPTURE_ENV" scripts/capture-board-geometry.ts
+bash "$GATE" bunx tsc --noEmit
+```
+
+The production Viewer build and **full-project `bunx tsc --noEmit` both exit 0**. Both TypeScript configuration files match the committed inputs. The build emits the previously recorded CSS optimizer warning for `::highlight(tts-karaoke)`.
+
+Fresh `columns-wide.json` records the merged revision and no failures. At 1920 px, Inbox, Assigned and Done are each 349.5 px beside pinned Blocked at 520 px. At 1440 and 1280, they are each 280 px beside Blocked at 480 px. Opened Done member rows measure 476 px at 1920 and 436 px at the smaller widths; every row stays within its card and column. Existing pin persistence, title and Overview assertions also pass. Rendered frames and the generated measurements were inspected; only this report retains the new evidence.
+
+The code commits passed the existing pre-commit whitespace, publication privacy and scoped ESLint checks. Hooks remain enabled. Nothing was pushed and no pull request was opened by this stage.
+
+Final publication check: `bun run privacy:check`, with isolated roots and committed fingerprints, exits 0: `PRIVACY GATE: PASS`. This includes commit identities/messages and all changed publication paths.
