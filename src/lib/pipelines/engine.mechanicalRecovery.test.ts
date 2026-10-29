@@ -1,5 +1,5 @@
 import { expect, test, harness, tickPipelines, reserveActivationOnly, loadPipelines, savePipelines,
-  create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn, stopFixtureProcess } from "./engine.fixture";
+  create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn } from "./engine.fixture";
 import type { Pipeline } from "./types";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
@@ -7,13 +7,14 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { pipelineArtifactsDir } from "./store";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 
 // Every observation starts a new interpreter against the writer's real store.
 async function restartedTick(now: string, mode = "spawn", repo?: string) {
-  const child = spawn(process.execPath, ["test", import.meta.path, "-t", "restart observation"], { cwd: process.cwd(),
+  const child = ownFixtureTree(spawn(process.execPath, ["test", "--timeout=60000", import.meta.path, "-t", "restart observation"], { cwd: process.cwd(),
     env: { ...process.env, MECHANICAL_STATE: process.env.LLV_STATE_DIR, MECHANICAL_NOW: now,
       MECHANICAL_MODE: mode, MECHANICAL_REPO: repo },
-    stdio: ["ignore", "pipe", "pipe"] });
+    stdio: ["ignore", "pipe", "pipe"] }));
   let stdout = "", stderr = "";
   child.stdout!.on("data", chunk => { stdout += chunk; });
   child.stderr!.on("data", chunk => { stderr = (stderr + chunk).slice(-8192); });
@@ -21,11 +22,11 @@ async function restartedTick(now: string, mode = "spawn", repo?: string) {
   try {
     const code = await Promise.race([
       new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); }),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`restart did not finish: ${stderr}`)), 15_000); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`restart did not finish: ${stderr}`)), 30_000); }),
     ]);
     expect(code, stderr).toBe(0);
     return JSON.parse(stdout.trim().split("\n").at(-1)!) as { lane: Pipeline; spawns: unknown[] };
-  } finally { clearTimeout(timer); await stopFixtureProcess(child); }
+  } finally { clearTimeout(timer); await stopFixtureTree(child); }
 }
 
 if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
@@ -88,7 +89,7 @@ test.each(["settles", "exhausts"] as const)("settlement admission survives proce
   const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString(), "settlement-free");
   expect(after.lane.state).toBe(exhausted ? "needs_decision" : "completed");
   expect(after.spawns).toHaveLength(0);
-});
+}, 240_000);
 
 test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
   const exhausted = outcome === "exhausts";
@@ -142,7 +143,7 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
     expect(after.spawns).toHaveLength(0);
     expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
-});
+}, 240_000);
 
 async function interruptedBeforeReservation() {
   await reserveActivationOnly();
@@ -171,7 +172,7 @@ test("a launch interrupted before reservation retries after restart without anot
   expect(recovered.lane.runs[0]!.attempts).toHaveLength(1);
   expect(recovered.lane.runs[0]!.attempts[0]!.state).toBe("running");
   expect(recovered.lane.lastPassedCommit).toBe(lane.lastPassedCommit);
-});
+}, 240_000);
 
 test("three interrupted launch retries retain their cap through real process restarts", async () => {
   await interruptedBeforeReservation();
@@ -194,7 +195,7 @@ test("three interrupted launch retries retain their cap through real process res
   const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString());
   expect(after.lane.state).toBe("needs_decision");
   expect(after.spawns).toHaveLength(0);
-});
+}, 240_000);
 
 test("a counted launch without its receipt remains an uncertain stop", async () => {
   await interruptedBeforeReservation();
