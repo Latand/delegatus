@@ -1751,7 +1751,6 @@ test.each(["CLEAN", "unreadable"])("an overdue hold reconciles %s before releasi
   else h.prs.get(11)!.mergeStateStatus = status;
   await h.sweep();
   expect(h.merge("overdue")?.state).toBe(status === "CLEAN" ? "merged" : status === "unreadable" ? "waiting-checks" : "blocked");
-  if (status === "BEHIND") expect(h.merge("overdue")?.reason).toBe(MERGE_REASONS.checksTimeout);
   if (status === "unreadable") expect(h.merge("overdue")).toMatchObject({
     reason: "GitHub read failed: fixture read unavailable", readFailures: 1, nextReadAt: iso(T0 + MERGE_POLL_MS),
   });
