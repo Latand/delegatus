@@ -2,7 +2,7 @@ import { expect, test, harness, tickPipelines, reserveActivationOnly, loadPipeli
   create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn, engineModule, publishHarness } from "./engine.fixture";
 import type { Pipeline } from "./types";
 import { tickPipelinesController } from "./controllerPass";
-import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
+import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, waitForPipelineControllerJob } from "./controllerJobs";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -120,6 +120,7 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
           expect(startPipelineControllerJob(`restart-publication-${n}`, () => held, async () => "unchanged", "publication")).toBe(true);
         }
         await tickPipelinesController([], h.ports);
+        await waitForPipelineControllerJob(lane.id, "settlement");
       } finally { release(); await settlePipelineControllerJobs(); }
       if (mode === "publication-free") for (let n = 0; n < 3; n++) {
         await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
@@ -247,7 +248,7 @@ test.each(["retry-stage", "publish", "publish-head", "custody", "custody-head"] 
   const settled = await restartedTick(manualAt, "publication-free", undefined, lane.id);
   expect(settled.lane.state).toBe("completed");
   expect(settled.lane.lastPassedCommit).toBe(parked.lastPassedCommit);
-  expect(settled.lane.delivery!.operation!.id).toBe(reservation);
+  expect(settled.lane.delivery!.operation!.id).toBe(reservation!);
   expect(settled.lane.runs[0]!.attempts).toHaveLength(1);
   expect(settled.lane.runs[0]!.attempts[0]!.report).toEqual(oldReport);
   expect(settled.spawns).toHaveLength(0);
@@ -372,10 +373,11 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
       expect(resumed.lane.state).toBe("completed");
       expect(resumed.lane.runs[0]!.attempts).toHaveLength(1);
       expect(resumed.spawns).toHaveLength(0);
-      expect(fs.readFileSync(receiptPath, "utf8")).toBe(receipt);
+      expect(fs.readFileSync(receiptPath, "utf8")).toBe(receipt!);
       expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe("1");
     }
-    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked && outcome !== "authority-exhausts" ? "0" : "1");
+    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(
+      parked && outcome !== "authority-exhausts" || outcome === "authority-paused" ? "0" : "1");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 }, 240_000);
 

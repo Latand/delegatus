@@ -29,7 +29,9 @@ function latch() {
 }
 
 test("a waiting production publisher releases its settlement permit for another passed stage", async () => {
-  const publishers = [];
+  const publishers: Array<Awaited<ReturnType<typeof committing>> & {
+    publication: ReturnType<typeof publishHarness>; exec: ReturnType<typeof harness>["ports"]["exec"];
+  }> = [];
   for (let n = 0; n < 4; n++) {
     const lane = await committing("remote-branch");
     const publication = publishHarness(lane.h);
@@ -46,6 +48,14 @@ test("a waiting production publisher releases its settlement permit for another 
   h.ports.exec = async (command, args, cwd, env, options) => {
     const publisher = publishers.find(row => row.lane.worktreeDir === cwd);
     if (publisher) {
+      // Each fixture port must answer for its own checkout; the shared store
+      // also contains its siblings and cannot supply a positional branch.
+      if (args[0] === "branch" && args[1] === "--show-current")
+        return { code: 0, stdout: publisher.lane.branch + "\n", stderr: "" };
+      if (args[0] === "symbolic-ref")
+        return { code: 0, stdout: `refs/heads/${publisher.lane.branch}\n`, stderr: "" };
+      if (args[0] === "ls-remote") return { code: 0, stdout: publisher.publication.remote()
+        ? `${publisher.publication.remote()}\trefs/heads/${publisher.lane.branch}\n` : "", stderr: "" };
       if (args[0] === "push") {
         pushes.set(publisher.lane.id, (pushes.get(publisher.lane.id) ?? 0) + 1);
         maximum = Math.max(maximum, ++active);
