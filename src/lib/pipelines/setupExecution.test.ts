@@ -359,7 +359,7 @@ test.skipIf(process.platform !== "linux")("the real executor rechecks approval a
     return (command, args, options) => { launched++; return base!(command, args, options); };
   };
   const current = { n: 1, effectiveRole: { roleId: "builder" } } as PipelineStageAttempt;
-  const lane = { project, worktreeDir: directory, runs: [{ stageId: "build", attempts: [current] }] } as unknown as Pipeline;
+  const lane = { project, repoDir: directory, worktreeDir: directory, runs: [{ stageId: "build", attempts: [current] }] } as unknown as Pipeline;
   try {
     await expect(preparePipelineSetup(lane, { sandbox: "restricted" } as PipelineStage, current, () => "2026-10-23T10:00:00.000Z", () => {},
       (cwd, reviewed, sandbox, signal, authorize) => runSetupRecipe(cwd, reviewed, sandbox, signal, authorize, {

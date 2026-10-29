@@ -29,6 +29,11 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   await git(lane, "config", "user.name", "Fixture");
   await git(lane, "config", "user.email", ["noreply", "example.invalid"].join("@"));
   await git(lane, "config", "commit.gpgSign", "false");
+  // These historical machine-identity cases model a privacy-bound project.
+  await fs.mkdir(path.join(lane, "scripts"));
+  await fs.writeFile(path.join(lane, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+  await fs.writeFile(path.join(lane, "scripts/privacy-known-value-fingerprints.json"), "{}");
+  await git(lane, "add", "package.json", "scripts");
   await git(lane, "commit", "--allow-empty", "-m", "base");
   let base = await git(lane, "rev-parse", "HEAD");
   await git(lane, "remote", "add", "origin", remote);

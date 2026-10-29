@@ -263,6 +263,30 @@ test("takeover records a settled failure before the old controller observes it",
   expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline?.publicationRecovery);
 }));
 
+test("takeover after restart keeps an unrecorded App refusal's original expiry", async () => isolatedDelivery(async root => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("app-refusal-owner"), deliveryTarget);
+  const sha = "a".repeat(40);
+  owner.delivery!.operation = { id: "unobserved-app-refusal", sha, epoch: 1, state: "settled", result: { ok: false,
+    error: "App git access unavailable", failure: { step: "publishing the pipeline branch", code: 1,
+      signal: null, durationMs: 1, outputTail: "fatal: HTTP 403", retryableApp403: true, observedAt: "2026-10-27T08:00:00.000Z" } } };
+  savePipelines([owner]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("app-refusal-successor"), deliveryTarget);
+  const { realExec } = await import("@/lib/workflows/provision");
+  const result = await realExec(process.execPath, ["-e", `
+    const { setSystemTime } = await import("bun:test");
+    setSystemTime(new Date("2026-10-27T09:20:00.000Z"));
+    const { takeoverPipelineDelivery } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});
+    const taken = await takeoverPipelineDelivery(${JSON.stringify(comparison.id)}, ${JSON.stringify(owner.id)}, 1, "continue publication", null);
+    console.log(JSON.stringify(taken));
+  `], process.cwd(), { ...process.env, LLV_STATE_DIR: root }, { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+  const taken = JSON.parse(result.stdout);
+  expect(taken.error).toBeUndefined();
+  expect(taken.pipeline.publicationRecovery[sha]).toMatchObject({ app403Since: "2026-10-27T08:00:00.000Z",
+    history: [{ cause: "app-git-403", retryAt: null }] });
+  expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline.publicationRecovery);
+}));
+
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
   const owner = await createPipelineWithDelivery(deliveryFixture("owner"), deliveryTarget);
   const comparison = await createPipelineWithDelivery(deliveryFixture("comparison"), deliveryTarget);
@@ -1193,7 +1217,7 @@ test("startup owner handoff deadlines round-trip and malformed deadlines are ref
 test("suspension custody round-trips independently and rejects malformed stop evidence", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
   const suspension = { reason: "account" as const, detail: "account left binding", requestedAt: "2026-10-15T00:00:00Z",
-    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z" };
+    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z", retryRequestedAt: "2026-10-15T00:00:03Z" };
   lane.runs[0]!.attempts[0]!.suspension = suspension;
   savePipelines([lane]);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension).toEqual(suspension);
@@ -1201,7 +1225,8 @@ test("suspension custody round-trips independently and rejects malformed stop ev
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail).toBe(suspension.detail);
   for (const bad of [{}, { ...suspension, reason: "unknown" }, { ...suspension, stoppedAt: "invalid" },
     { ...suspension, requestedAt: null }, { ...suspension, operatorStoppedAt: 123 },
-    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" }]) {
+    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" },
+    { ...suspension, retryRequestedAt: "invalid" }, { ...suspension, retryRequestedAt: null }]) {
     lane.runs[0]!.attempts[0]!.suspension = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
   }

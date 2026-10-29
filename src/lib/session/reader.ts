@@ -71,6 +71,19 @@ function tsOf(obj: Record<string, unknown>): string | null {
   return str(obj.timestamp) || str(obj.ts) || null;
 }
 
+const MAX_NORMALIZATION_DEPTH = 64;
+
+/** Check before recursive content extraction or JSON.stringify. Stop at the
+ * depth limit so this check itself never follows an unbounded call chain. */
+function exceedsNormalizationDepth(value: unknown, depth = 0): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (depth >= MAX_NORMALIZATION_DEPTH) return true;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    if (exceedsNormalizationDepth(child, depth + 1)) return true;
+  }
+  return false;
+}
+
 function codexEnvelopeTs(payload: Record<string, unknown>): string | null {
   const value = payload.started_at_ms ?? payload.completed_at_ms;
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -210,7 +223,7 @@ function normalizeClaudeLine(obj: Record<string, unknown>): NormalizedSessionLin
 function readClaude(pathname: string): SessionReadResult {
   const out: SessionReadResult = { path: pathname, engine: "claude", messages: [], reasoning: [], tools: [], traces: [] };
   for (const obj of readJsonl(pathname)) {
-    for (const normalized of normalizeClaudeLine(obj)) push(out, normalized.record);
+    for (const normalized of normalizeSessionLine("claude", obj)) push(out, normalized.record);
   }
   return out;
 }
@@ -449,6 +462,13 @@ export function normalizeSessionLine(
   engine: Extract<Engine, "claude" | "codex" | "copilot">,
   obj: Record<string, unknown>,
 ): NormalizedSessionLine[] {
+  if (exceedsNormalizationDepth(obj)) {
+    return [{ record: {
+      kind: "trace", role: "system", name: "normalization_limit",
+      ts: (engine === "codex" ? codexEnvelopeTs(rec(obj.payload)) : null) ?? tsOf(obj),
+      text: `Record skipped: JSON nesting exceeds ${MAX_NORMALIZATION_DEPTH} levels`,
+    } }];
+  }
   if (engine === "copilot") return normalizeCopilotLine(obj);
   return engine === "claude" ? normalizeClaudeLine(obj) : normalizeCodexLine(obj);
 }
@@ -456,7 +476,7 @@ export function normalizeSessionLine(
 function readCopilot(pathname: string): SessionReadResult {
   const out: SessionReadResult = { path: pathname, engine: "copilot", messages: [], reasoning: [], tools: [], traces: [] };
   for (const obj of readJsonl(pathname)) {
-    for (const normalized of normalizeCopilotLine(obj)) push(out, normalized.record);
+    for (const normalized of normalizeSessionLine("copilot", obj)) push(out, normalized.record);
   }
   return out;
 }
@@ -464,7 +484,7 @@ function readCopilot(pathname: string): SessionReadResult {
 function readCodex(pathname: string): SessionReadResult {
   const out: SessionReadResult = { path: pathname, engine: "codex", messages: [], reasoning: [], tools: [], traces: [] };
   for (const obj of readJsonl(pathname)) {
-    for (const normalized of normalizeCodexLine(obj)) push(out, normalized.record);
+    for (const normalized of normalizeSessionLine("codex", obj)) push(out, normalized.record);
   }
   return out;
 }

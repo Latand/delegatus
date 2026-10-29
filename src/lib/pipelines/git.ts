@@ -1,4 +1,6 @@
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 export { preparePipelineSetup } from "./setupRecipe";
@@ -10,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
@@ -23,7 +26,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -132,6 +135,8 @@ const INVALID_BASE_BRANCH = "the pipeline base branch is invalid";
 
 /** The branch a pipeline resolves its base from when the caller named none. */
 export const DEFAULT_PIPELINE_BASE_BRANCH = "main";
+// Cached hardlinks may also belong to another checkout; keep package writes local.
+const WORKTREE_INSTALL_BACKEND = "--backend=copyfile";
 
 function validBaseBranch(value: string): boolean {
   return (
@@ -209,7 +214,8 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
-  await prepareStageToolchain(pipeline, exec);
+  try { await prepareStageToolchain(pipeline, exec); }
+  catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -222,9 +228,9 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
 }
 
 /** Provisioning uses the same bounded executor with a cancellation signal. */
-export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
-export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal) =>
-  await realExec(command, args, cwd, undefined, { signal });
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number }) => Promise<ExecResult>;
+export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal, options) =>
+  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -438,7 +444,14 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
-  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  try {
+    await prepareStageToolchain(pipeline,
+      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs }), signal);
+  }
+  catch {
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" };
+  }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
@@ -732,65 +745,31 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
-/** Capture only the exact, live parent link settlement creates. Recheck its
-    identity before releasing it so a replacement install is preserved. */
-function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
+/** Provisioning and settlement prepare hooks from matching dependency inputs.
+    Incompatible or unavailable installations require a private frozen install.
+    Existing local installations and unrelated links remain their owner's. */
+async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?: AbortSignal): Promise<void> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
-  const local = path.join(pipeline.worktreeDir, "node_modules");
-  const target = path.resolve(pipeline.repoDir, "node_modules");
-  try {
-    const owned = fs.lstatSync(local);
-    if (!owned.isSymbolicLink() || fs.readlinkSync(local) !== target || !fs.existsSync(local)) return;
-    return () => {
-      try {
-        const current = fs.lstatSync(local);
-        if (current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino
-          && fs.readlinkSync(local) === target) fs.unlinkSync(local);
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    };
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-}
-
-/** Provisioning shares the parent checkout's installed tools before the agent
-    can make its first hooked commit. Settlement retries this for older lanes
-    and read-only turns, then removes the borrowed link after its commit so a
-    later install cannot write into the parent checkout.
-    Preserve any local install or unrelated link, including dangling links. */
-/** Project setup runs without the borrowed parent tools. Its sandbox mounts
-    only the checkout, so the link would dangle there and an install would fail
-    on it. The returned restore puts the same link back only when setup left no
-    node_modules of its own. */
-export function withdrawStageToolchainForSetup(pipeline: Pipeline): () => void {
-  if (typeof pipeline.repoDir !== "string") return () => {};
-  const release = stageToolchainRelease(pipeline);
-  if (!release) return () => {};
-  release();
-  const local = path.join(pipeline.worktreeDir, "node_modules");
-  const target = path.resolve(pipeline.repoDir, "node_modules");
-  return () => {
-    try { fs.lstatSync(local); return; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    if (!fs.existsSync(target)) return;
-    try { fs.symlinkSync(target, local, "dir"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-  };
-}
-
-async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
-  if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  isolateWorktreeDependencies(pipeline);
   const local = path.join(pipeline.worktreeDir, "node_modules");
   try { fs.lstatSync(local); return; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const parent = path.join(pipeline.repoDir, "node_modules");
-  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return;
-  // A repository that tracks dependencies must never gain a staged symlink.
+  // A non-package repository needs no preparation. If the source has tools,
+  // an absent lane manifest must still refuse sharing and try a private install.
+  if (!fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
+    && !fs.existsSync(path.join(pipeline.repoDir, "node_modules"))) return;
+  // Repositories tracking dependencies must not acquire an ignored install.
   const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
   if (ignored.code === 1) return;
-  if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
-  const target = path.resolve(parent);
-  try { fs.symlinkSync(target, local, "dir"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
-  return stageToolchainRelease(pipeline);
+  if (ignored.code !== 0) throw new Error("checking ignored repository hook dependencies failed");
+  signal?.throwIfAborted();
+  const prepared = await prepareWorktreeDependencies(pipeline, { signal });
+  if (prepared !== "private-install") return;
+  signal?.throwIfAborted();
+  const installed = await exec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir,
+    pipelinePublicationHookEnv(), { signal, timeoutMs: 180_000 });
+  signal?.throwIfAborted();
+  if (installed.code !== 0) throw new Error("private repository hook dependency installation failed");
 }
 
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
@@ -816,9 +795,10 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     }
   }
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
+  const identity = await repositoryCommitIdentity(cwd, exec);
   await beforeCommit?.();
-  const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
+  const commit = await exec("git", ["commit", ...[...messages, marker, ...(identity.coauthor ? [identity.coauthor] : [])].flatMap(message => ["-m", message])], cwd,
+    pipelineLiteralGitEnv({ ...identity.env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
@@ -856,10 +836,9 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
-  // A Viewer exit can bypass the commit's finally. Reap that link before
-  // inspecting paths or recovering an already-landed commit; borrow anew only
-  // after staging, so every successful settlement leaves publication safe.
-  try { stageToolchainRelease(pipeline)?.(); }
+  // A Viewer exit can leave a source-owned link behind. Reap it before
+  // inspecting paths or recovering an already-landed commit.
+  try { isolateWorktreeDependencies(pipeline); }
   catch (error) {
     return { ok: false, error: `committing the passed stage: releasing interrupted repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
   }
@@ -959,17 +938,13 @@ export async function commitPipelineStage(
   if (head.stdout.trim() !== sha || recheckedTree.stdout.trim() !== custodyTree) {
     return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
   }
-  let releaseTools: (() => void) | undefined;
-  try { releaseTools = await prepareStageToolchain(pipeline, exec); }
+  try { await prepareStageToolchain(pipeline, exec); }
   catch (error) {
     return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
   }
-  let commit: PipelineGitResult;
-  try {
-    commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
+  const commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
       ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
       () => control?.beforeCommit(sha));
-  } finally { releaseTools?.(); }
   if (!commit.ok) {
     if (commit.deferred) return commit;
     return { ...commit,
@@ -1356,6 +1331,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
+  const repositoryIdentity = await repositoryCommitIdentity(pipeline.worktreeDir, exec);
   // Check every commit this parent would reintroduce, including an unsafe
   // ancestor behind an admitted accepted tip. Unknown identities are refused
   // conservatively; values and partial metadata reads never enter the reason.
@@ -1366,7 +1342,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     const [commit, parents, ...fields] = line.split("\0");
     if (!/^[0-9a-f]{40}$/.test(commit) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents) || fields.length !== 4) return unreadableIdentity;
     for (const offset of [0, 2]) {
-      if (!admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
+      if (!repositoryIdentity.coauthor && !admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
         error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${offset === 0 ? "author" : "committer"} identity; restored commits require publication-safe attribution (values withheld)` };
     }
     // Formatting with %B truncates at NUL and transcodes declared encodings.
@@ -1379,7 +1355,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     if (messageStart < 0) return unreadableMessage;
     const encoding = /^encoding (.+)$/m.exec(bytes.subarray(0, messageStart).toString("ascii"))?.[1];
     if (encoding && !/^utf-?8$/i.test(encoding)) return unreadableMessage;
-    if (!admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
+    if (!repositoryIdentity.coauthor && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
       error: `history reconciliation refused to restore ${commit.slice(0, 12)} commit message; restored commits require publication-safe messages (values withheld)` };
   }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
@@ -1502,8 +1478,9 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   if (missing) {
     return { ok: false, error: `stage head ${shortId(head)} does not preserve accepted head ${shortId(accepted)}; dropped accepted commits: ${[...dropped, ...droppedMerges].map(shortId).join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
+  const identity = repositoryIdentity;
   const commit = (await exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
-    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
+    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`, ...(identity.coauthor ? ["-m", identity.coauthor] : [])], pipeline.worktreeDir, identity.env));
   if (commit.code !== 0) return failure("recording the stage reconciliation merge", commit);
   const sha = commit.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "reconciliation did not produce an exact commit SHA" };
@@ -1605,6 +1582,8 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
+  const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+  if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -1613,7 +1592,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
   if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
   if (runner) return `git push was refused (${status}${tests}${lost})`;
-  const last = lines.filter(Boolean).at(-1);
+  const last = lines.filter(line => line && !/^Everything up-to-date$/i.test(line)).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
@@ -1749,6 +1728,8 @@ export interface PipelinePublishRequest {
   /** What the caller last recorded as published; a match short-circuits the
       whole probe. */
   publishedSha?: string | null;
+  /** Same observation clock as the controller; defaults to the wall clock. */
+  now?: () => string;
 }
 
 /** Acquire a kernel lock on the parent's open file description BEFORE any
@@ -1806,7 +1787,7 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
     branch: pipeline.branch, worktree: pipeline.worktreeDir,
     attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
     delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
-      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null })).digest("hex");
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id, app403Deadline: delivery.operation?.app403Deadline } : null })).digest("hex");
 }
 
 /**
@@ -1833,6 +1814,9 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const now = request.now ?? (() => new Date().toISOString());
+  const expiredFailure = (deadline: string): PipelinePublicationFailure => ({ step: "publishing the pipeline branch", code: 1, signal: null,
+    durationMs: 0, outputTail: APP_PUSH_WINDOW_ENDED_REASON, retryableApp403: true, observedAt: new Date(Date.parse(deadline) - APP_PUSH_RETRY_WINDOW_MS).toISOString() });
   const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
   if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
@@ -1900,8 +1884,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         deliveryJournal(current, "recovery", error); tx.put(current);
         return { error };
       }
+      // Reservations written before the deadline field still carry the
+      // automatic retry's attempt counter and per-head refusal observation.
+      const retry = current.runs.find(run => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.publicationRetry;
+      const since = current.publicationRecovery?.[request.acceptedSha]?.app403Since;
+      const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
+        && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
+        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1997,6 +1987,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // through gate-slot.sh. The lane shows the reason while it waits, and a
       // close or takeover aborts the wait before any child exists.
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Re-read time after dependency admission and all preceding Git awaits.
+      // A queued automatic retry cannot acquire a fresh window on restart.
+      const deadline = reservation.pipeline.delivery!.operation!.app403Deadline;
+      if (!writeStarted && deadline && Date.parse(now()) >= Date.parse(deadline)) {
+        failureEvidence = expiredFailure(deadline);
+        return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
+      }
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
@@ -2017,6 +2016,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;
@@ -2244,7 +2244,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // left node_modules incomplete, or a merged lockfile may have moved on.
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
-    const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
+    await isolateWorktreeDependencies(pipeline);
+    const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
     if (installed.code !== 0) return failure("preparing publication dependencies", installed);
     // Lifecycle scripts must not change the accepted head or tracked work.
     const prepared = await currentPipelineBranchHead(pipeline, exec);

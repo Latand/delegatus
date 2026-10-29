@@ -25,6 +25,24 @@ function writeTranscript(name: string, records: Record<string, unknown>[]): stri
 
 const PASS_TEXT = "done\n\n```json\n{\"status\":\"pass\"}\n```";
 
+test.each(["native", "human", "typed", "sdk"] as const)("Claude %s notification envelopes retain their progress authority", async source => {
+  const before = "2026-10-20T10:00:00.000Z";
+  const after = "2026-10-20T10:01:00.000Z";
+  const file = writeTranscript(`restore-notification-${source}.jsonl`, [
+    { type: "assistant", timestamp: before, message: { role: "assistant", model: "claude-test",
+      content: [{ type: "tool_use", id: "tool-check", name: "Bash", input: {} }] } },
+    syntheticNoOpRecord(after),
+    { type: "user", timestamp: after, queueTranscriptOnly: true,
+      ...(source === "human" ? { origin: { kind: "human" }, promptSource: "system" }
+        : source === "native" ? { origin: "task-notification", promptSource: "system" } : { promptSource: source }),
+      message: { role: "user", content: "<task-notification>Background command ended</task-notification>" } },
+  ]);
+  const evidence = await durableStageTurnEvidence("claude", file);
+  expect(evidence?.lastAgentEventAt).toBe(Date.parse(source === "native" ? before : after));
+  expect(evidence?.lastAgentOutputAt).toBe(Date.parse(before));
+  expect(evidence?.prompts?.at(-1)?.origin).toBe(source === "native" ? "harness" : "external");
+});
+
 test.each(["origin=agent", "origin=agent sender=reviewer", "origin=agent sender=pipeline"])
 ("Codex unverified legacy prompt authorship remains external (%s)", async attributes => {
   const cut = Date.parse("2026-10-05T10:00:00Z");
@@ -1059,7 +1077,8 @@ for (const engine of ["claude", "codex"] as const) {
     const file = writeTranscript(`chain-open-over-bound-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
       notice(later), ...Array.from({ length: 8500 }, () => filler), notice(later + 1000)]);
     expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))
-      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: false, promptHistoryComplete: false });
+      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: false, promptHistoryComplete: false,
+        ...(engine === "claude" ? { lastAgentOutputAt: cut + 2000 } : {}) });
     expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, later))
       .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: true, promptHistoryComplete: false });
   });
@@ -1167,3 +1186,43 @@ test("large native-start recovery refuses a transcript changed after its final t
   });
   expect(evidence).toMatchObject({ turn: "terminal", message: { text: PASS_TEXT }, turnStartedAt: null });
 });
+
+for (const largeHistory of [false, true]) {
+  test.each(["unknown", "operator", "agent", "human override", "task notification"] as const)
+  (`Claude queued prompt authorship keeps physical cancellation order (large=${largeHistory}, %s)`, async source => {
+    const cut = Date.parse("2026-10-20T10:00:00Z");
+    const text = "Wait for review";
+    const file = writeTranscript(`queued-authorship-${largeHistory}-${source.replaceAll(" ", "-")}.jsonl`, [
+      ...(largeHistory ? [{ type: "system", subtype: "historical-context", content: "x".repeat(MAX_REPORT_EVIDENCE_BYTES + 1024) }] : []),
+      { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+        message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } },
+      { type: "attachment", timestamp: new Date(cut - 1).toISOString(), entrypoint: "sdk-cli", attachment: {
+        type: "queued_command", commandMode: source === "task notification" ? "task-notification" : "prompt",
+        source_uuid: "queued-prompt-source", prompt: text,
+        ...(source === "human override" ? { origin: { kind: "human" } } : {}),
+      } },
+    ]);
+    if (["operator", "agent", "human override"].includes(source)) {
+      const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+      const ledger = new FileClaudeDeliveryLedger();
+      const session = path.basename(file, ".jsonl");
+      ledger.recordQueued(session, { id: "queued-send", text,
+        origin: source === "operator" ? { kind: "operator" } : { kind: "agent", role: "pipeline" } }, "turn-started");
+      ledger.confirmDelivered(session, "queued-send", "queued-prompt-source");
+    }
+    const evidence = await durableStageTurnEvidence("claude", file, undefined, new Date(cut - 1000).toISOString(), undefined, cut);
+    const external = source !== "agent" && source !== "task notification";
+    expect(evidence).toMatchObject({ promptHistoryComplete: true,
+      promptCount: source === "task notification" ? 0 : 1,
+      lastExternalPromptIndex: external ? 0 : -1,
+      requestedPromptBoundary: 0, externalPromptAfterCut: external,
+    });
+    if (largeHistory) {
+      expect(evidence?.newestExternalPromptAt).toBe(external ? cut - 1 : null);
+      expect(evidence?.hasUndatedExternalPrompt).toBe(false);
+    }
+    expect(evidence?.prompts).toEqual(source === "task notification" ? [] : [
+      { ts: cut - 1, origin: external ? "external" : "pipeline" },
+    ]);
+  });
+}

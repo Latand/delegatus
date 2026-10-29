@@ -45,15 +45,18 @@ run tells you where to look without republishing what it found.
 ## Commits from launched agents
 
 Delegatus sets the author and committer environment for every launched agent,
-including pipeline stages and plain spawns. The default is the controller's
-Delegatus machine identity. Git configuration stays untouched, and agents can
-keep their machine attribution trailers.
+including pipeline stages and plain spawns. User repositories use their
+configured Git user identity with Delegatus as a no-reply co-author. Missing or
+incomplete user configuration retains the Delegatus machine identity. This
+repository's checked-in publication configuration retains its machine identity
+and existing attribution policy. Git configuration stays untouched. See
+[Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
 
 An agent must add a new commit on top of work authored by someone else. The
 launch environment installs Git hooks that refuse
 amends and other history changes which remove commits authored by a different
 identity, including `--reset-author` and `--no-verify` amends. New commits,
-merges and amendments of the configured machine's commits remain available.
+merges and amendments of the selected identity's commits remain available.
 The same protection applies to detached HEAD history; moving a detached HEAD
 back past another author's work is refused. Existing repository hooks still
 run, including the publication gate. If `core.hooksPath` points at the guard,
@@ -66,7 +69,8 @@ does not isolate hostile shell commands. Author reuse through `commit -C`,
 another author's identity. Hooks live under the launching home's cache so
 container-launched agents can reach them on the host.
 
-To configure an installation's agent publication identity, set
+For projects using machine authorship, configure the installation's publication
+identity with
 `DELEGATUS_PUBLICATION_NAME` and `DELEGATUS_PUBLICATION_EMAIL` in the launching
 Viewer and runtime host environment. The legacy `LLV_` spellings also work;
 the `DELEGATUS_` spelling takes precedence. Use a machine display name and a
@@ -182,11 +186,25 @@ alias the operator defined with `gh alias set` is not expanded.
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
 `service=delegatus-github-app` and `repository=<owner/name>`; the helper reads
-it with `secret-tool`. Nothing about the App is stored in this repository, in
-state files or in logs, and a token exists only in the memory and environment
-of the process that asked for it. `bun bin/forge-app-token.mjs token` prints one
+it with `secret-tool`. Credentials stay out of state and logs, and a token
+exists only in the memory and environment of the process that asked for it.
+`forge-app-tokens.ndjson` in Delegatus state records each mint, credential use
+for a git push, and revocation result with its time, purpose (`git push`, `gh`
+or `token command`), repository, expiry and SHA-256 token fingerprint. A failed
+or unreachable revocation records its status or an unknown outcome; Git push
+credentials otherwise expire on their own. A mint or push credential use that
+cannot be recorded is refused. Launched helpers receive the resolved audit
+path before their configuration is sandboxed. `bun bin/forge-app-token.mjs token` prints one
 on captured stdout and refuses a terminal. The declaration names repositories
 and holds nothing secret.
+
+A publication refused by GitHub with a git App denial or HTTP 403 after its
+credential helper verified a fresh mint waits for GitHub to accept the App
+push. It retries with a fresh token after one minute, then five minutes, then
+at most fifteen minutes between attempts, through a one-hour window. The first
+403 time is retained with the accepted head through restarts and delivery
+takeover. Window exhaustion parks the lane with the GitHub access reason;
+installation verification and permission refusals keep their existing recovery.
 
 A push that edits `.github/workflows` needs a `workflows` permission the App
 does not hold and is refused by GitHub itself. Nothing here changes git or

@@ -194,6 +194,7 @@
 .pblock .pb-merge-note[data-merge-note="merged"] { color: var(--color-success); }
 .pblock .pb-answer .stage-report[data-merge-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The one line on why a lane stopped on a review (#2187 §3.4) is a sentence, and wraps whole. */
+.pblock .pb-answer .stage-report[data-provider-wait] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .pblock .pb-answer .stage-report[data-review-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The buttons share a line when they fit and wrap when they do not; their
    words are never cut. */

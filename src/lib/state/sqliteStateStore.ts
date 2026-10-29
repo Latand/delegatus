@@ -168,6 +168,9 @@ export interface SqliteStateCollectionOptions<T> {
   collection: string;
   schemaVersion: number;
   busyMessage: string;
+  /** Open an existing compatible collection without schema upgrades. Writes
+      still require release authority and the activated schema. */
+  readOnlyOpen?: boolean;
   key(record: T): string;
   decode(value: unknown): T | null;
   clone(record: T): T;
@@ -1426,7 +1429,7 @@ export class SqliteStateCollection<T> {
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
-    this.readDb = openDatabase(filename);
+    this.readDb = options.readOnlyOpen ? connectReadonlyDatabase(filename) : openDatabase(filename);
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);
@@ -1511,6 +1514,18 @@ export class SqliteStateCollection<T> {
     const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
     return row ? this.controllerRow(key, row.row_revision) : null;
+  }
+
+  /** Header-only fair page for the independent terminal-turn observer. */
+  pipelineRecoveryWindow(after: { row_order: number; row_key: string }, limit: number): Array<{ row_order: number; row_key: string }> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 8) throw new Error("invalid recovery lane budget");
+    const db = sharedStateReadonlyDatabase(this.filename);
+    const page = (order: number, key: string, count: number) => db.query<{ row_order: number; row_key: string }, [number, number, string, number]>(`
+      SELECT row_order,row_key FROM pipeline_controller_work WHERE kind='running'
+      AND row_order>=? AND (row_order>? OR row_key>?) ORDER BY row_order,row_key LIMIT ?`).all(order, order, key, count);
+    const rows = page(after.row_order, after.row_key, limit);
+    if (!rows.length) return page(-1, "", limit);
+    return rows;
   }
 
   pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {

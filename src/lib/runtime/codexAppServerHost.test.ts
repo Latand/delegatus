@@ -4853,13 +4853,19 @@ describe("CodexAppServerHost", () => {
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     let processIdentity: string | null = "4242:owned";
     let alive = true;
+    let unavailableIdentityRead = Promise.withResolvers<void>();
+    const cleanupFinished = Promise.withResolvers<void>();
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
       shutdownGraceMs: 2,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
-      processIdentity: () => processIdentity,
+      processIdentity: () => {
+        if (processIdentity === null) unavailableIdentityRead.resolve();
+        return processIdentity;
+      },
       pidAlive: () => alive,
+      releaseCleanup: cleanupFinished.resolve,
       signalProcess: (pid, signal) => {
         signals.push({ pid, signal });
         if (signal === "SIGKILL") {
@@ -4868,21 +4874,31 @@ describe("CodexAppServerHost", () => {
         }
       },
     });
-    processIdentity = null;
+    try {
+      processIdentity = null;
+      server.stdout.write("malformed\n");
+      await unavailableIdentityRead.promise;
+      // Each attempt reads identity synchronously. Rearm after it returns so
+      // these observations require two later retries while the fence is shut.
+      for (let retry = 0; retry < 2; retry++) {
+        unavailableIdentityRead = Promise.withResolvers<void>();
+        await unavailableIdentityRead.promise;
+      }
+      expect(signals).toEqual([]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: 4242 });
 
-    server.stdout.write("malformed\n");
-    await Bun.sleep(6);
-    expect(signals).toEqual([]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: 4242 });
+      processIdentity = "4242:owned";
+      await cleanupFinished.promise;
 
-    processIdentity = "4242:owned";
-    await Bun.sleep(12);
-
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+    } finally {
+      processIdentity = "4242:owned";
+      await host.release();
+    }
   });
 
   test("an asynchronous stdin EPIPE fails and reaps the host", async () => {
@@ -5293,6 +5309,11 @@ describe("CodexAppServerHost", () => {
       null,
       ["initialize"],
     );
+    // Inject the exit after the host has attached its listeners and begun
+    // initialization. Repository identity lookup may yield before spawning.
+    const initializing = new Promise<void>((resolve) => {
+      server.stdin.once("data", () => resolve());
+    });
     const started = CodexAppServerHost.start({
       cwd: "/repo",
       requestTimeoutMs: 100,
@@ -5300,7 +5321,7 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
     });
-    await Bun.sleep(0);
+    await initializing;
     server.stderr.write(`${"x".repeat(20 * 1024)}\nYour authentication token has been invalidated oauth_token=must-stay-private\n`);
     server.emit("close", 1, null);
 

@@ -181,7 +181,7 @@ function SetupDotWords({ setup, endMs }: { setup: Setup; endMs: number }) {
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [open]);
-  const place = useCallback((size: { width: number; height: number }) => setupPopPlace(anchor.current!, size), []);
+  const place = useCallback((bubble: HTMLElement) => setupPopPlace(anchor.current!, bubble.getBoundingClientRect()), []);
   /* On a coarse pointer the dot's own column is the 44 px target. The dot keeps
      the host's content edge; the target extends around it into the host's
      12 px side padding and ends where the summary's target begins, so it

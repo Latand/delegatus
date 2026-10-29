@@ -9,6 +9,9 @@ export type AgentModelOption = {
   /** This row is a launch alias of the row with this id: it stays a valid
       model id but is not offered beside it (see listedModels). */
   duplicateOf?: string;
+  /** A choice fresh menus no longer offer. The row stays so a saved selection
+      keeps its label and stays listed while it is the current choice. */
+  retired?: true;
 };
 
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
@@ -63,21 +66,23 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
     // Claude Code 2.1.296 resolves `haiku` to claude-haiku-5-5 on
-    // first-party auth. Pinned rows keep both generations selectable.
+    // first-party auth. Haiku 4.5 is retired: saved selections still read and launch.
     { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general", duplicateOf: "claude-haiku-5-5" },
     { id: "claude-haiku-5-5", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
-    { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
+    { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general", retired: true },
   ],
   codex: [
     // Catalogue order is independent of the shipped launch fallback below.
-    // Astra and Terra remain selectable for explicit launches.
+    // Fresh menus offer the first four; the retired rows keep saved
+    // selections and transcript provenance readable.
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
-    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
+    { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
     { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
-    { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
-    { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
-    { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
+    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review", retired: true },
+    { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review", retired: true },
+    { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement", retired: true },
+    { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general", retired: true },
   ],
   // `auto` heads the list because it is the one value every Copilot plan
   // accepts, Free included. The ids after it are unverified against a
@@ -92,13 +97,25 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
   ],
 };
 
-/** The rows a picker offers for `engine`. A launch alias that names the same
-    release as a pinned row stays valid but is not listed beside it, unless it
-    is the current choice, which then stands in for the pinned row. */
-export function listedModels(engine: "claude" | "codex" | "copilot", current?: string | null): readonly AgentModelOption[] {
+/** The rows a picker offers for `engine`. A retired row is listed only while it
+    is a current choice, so a saved selection is never rewritten. A launch alias
+    that names the same release as a pinned row stays valid but is not listed
+    beside it, unless it is a current choice, which then stands in for the
+    pinned row. With several current choices (what runs, what is drafted), the
+    earlier one decides between an alias and its pinned row. */
+export function listedModels(
+  engine: "claude" | "codex" | "copilot",
+  current?: string | null | readonly (string | null | undefined)[],
+): readonly AgentModelOption[] {
   const rows = ENGINE_MODELS[engine];
-  const alias = rows.find((option) => option.duplicateOf && option.id === current);
-  return rows.filter((option) => option.duplicateOf ? option === alias : option.id !== alias?.duplicateOf);
+  const order = (Array.isArray(current) ? current : [current]).flatMap((value) => typeof value === "string" && value.trim() ? [value.trim()] : []);
+  const kept = new Set(order);
+  for (const row of rows) {
+    if (!row.duplicateOf || !kept.has(row.id) || !kept.has(row.duplicateOf)) continue;
+    kept.delete(order.indexOf(row.id) < order.indexOf(row.duplicateOf) ? row.duplicateOf : row.id);
+  }
+  const alias = rows.find((option) => option.duplicateOf && kept.has(option.id));
+  return rows.filter((option) => kept.has(option.id) || (!option.duplicateOf && !option.retired && option.id !== alias?.duplicateOf));
 }
 
 export type LaunchModelValidation = { model: string } | { error: string };
