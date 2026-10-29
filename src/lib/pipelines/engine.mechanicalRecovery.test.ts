@@ -1,5 +1,5 @@
 import { expect, test, harness, tickPipelines, reserveActivationOnly, loadPipelines, savePipelines,
-  create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn } from "./engine.fixture";
+  create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn, engineModule } from "./engine.fixture";
 import type { Pipeline } from "./types";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
@@ -268,6 +268,40 @@ test("a counted launch without its receipt remains an uncertain stop", async () 
   expect(result.lane.state).toBe("needs_decision");
   expect(result.spawns).toHaveLength(0);
 });
+
+test.each(["report", "verdict", "output", "empty-output", "completed", "refusal"] as const)("preserved stage evidence prevents an interrupted launch retry: %s", async evidence => {
+  const h = harness();
+  const now = "2026-10-29T08:48:00.000Z";
+  h.ports.now = () => now;
+  await create(h.ports, BUILD_ONLY as never);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const launched = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect((await engineModule.reportStageCompletion({ verdict: "pass", summary: "Preserved work" },
+    { kind: "agent", role: "builder", conversationId: launched.conversationId }, h.ports)).error).toBeUndefined();
+  const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  const report = attempt.report!;
+  if (evidence !== "report") delete attempt.report;
+  attempt.verdict = evidence === "verdict" ? report.verdict : null;
+  attempt.output = evidence === "output" ? report.summary! : evidence === "empty-output" ? "" : null;
+  attempt.completedAt = evidence === "completed" ? now : null;
+  attempt.error = evidence === "refusal" ? "privacy refused result.txt" : null;
+  attempt.state = "spawning"; attempt.startedAt = now;
+  attempt.launchId = null; attempt.conversationId = null; attempt.sessionId = null;
+  attempt.agentPath = null; attempt.paneId = null;
+  delete attempt.activation; delete attempt.spawnCalls;
+  lane.cursor!.state = "spawning";
+  savePipelines([lane]);
+  const stopped = await restartedTick(now);
+  expect(stopped.lane.state).toBe("needs_decision");
+  expect(stopped.lane.runs[0]!.attempts[0]!.spawnInterruptionRetry).toBeUndefined();
+  expect(stopped.spawns).toHaveLength(0);
+  expect(stopped.lane.runs[0]!.attempts).toHaveLength(1);
+  expect(stopped.lane.lastPassedCommit).toBe(lane.lastPassedCommit);
+  if (evidence === "report") expect(stopped.lane.runs[0]!.attempts[0]!.report?.summary).toBe(report.summary);
+  if (evidence === "verdict") expect(stopped.lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  if (evidence === "output" || evidence === "empty-output") expect(stopped.lane.runs[0]!.attempts[0]!.output).toBe(attempt.output);
+  if (evidence === "refusal") expect(stopped.lane.stateDetail).toContain("privacy refused result.txt");
+}, 120_000);
 
 test.each(["valid", "engine", "cwd", "member", "duplicate"] as const)("an interrupted uncounted launch checks its admitted receipt before any retry: %s", async kind => {
   const h = await reserveActivationOnly();

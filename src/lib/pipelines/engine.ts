@@ -9160,6 +9160,10 @@ async function tickRunStage(
       // call or any host evidence is uncertain work and retains today's park.
       if (!attempt.spawnCalls && !attempt.controllerWait && !attempt.retiredLaunches?.length
         && !attempt.conversationId && !attempt.sessionId && !attempt.agentPath && !attempt.paneId) {
+        if (attempt.report || attempt.verdict || attempt.output !== null || attempt.completedAt !== null || attempt.error !== null) {
+          await park(pipeline, attempt.error || "stage spawn was interrupted before durable launch evidence; preserved stage evidence requires reconciliation", attempt);
+          return;
+        }
         const registry = agentRegistry();
         const baseId = clientAttemptId(pipeline, stage, attempt);
         // Older writers did not count calls. Reconcile every key they could

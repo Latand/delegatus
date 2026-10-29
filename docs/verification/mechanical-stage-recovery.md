@@ -39,7 +39,10 @@ row. No registry dispatch had been reached at this checkpoint. The fix writes
 the activation in the first spawning checkpoint. Recovery of an older row
 first checks the original registry keys and their membership. A counted call
 without a receipt, conflicting receipts or retained host evidence continues
-to require reconciliation.
+to require reconciliation. A retained report, verdict, output (including an
+empty output), completion marker or refusal also prevents relaunch. The safety
+cases start with the production report writer's output and remove launch
+handles before restarting the process.
 
 ### Cancelled commit
 
@@ -96,6 +99,30 @@ An additional production-controller case rejects one read from a real
 authority-reader instance while a real Git hook is held, then restores the
 reader. It checks that the controller's own signal cancels the command and
 that the preserved pass retries without a producer repair turn.
+
+### Restart continuation delivery (deferred)
+
+The additional class is confirmed in the retained frontend attempt 3 of lane
+`08315f24`, proto-fix attempt 1 of `f9f8b370`, and sonnet-extra-fix attempt 3
+of `6ec5a459`: each stopped on continuation 1 with unconfirmed delivery.
+The deployment times and repeated frontend stop are seat observations; the
+retained error does not identify the failed delivery operation.
+
+At `3f13c7b4`, `src/lib/pipelines/engine.ts:6550` gives each continuation
+three minutes. At `:6655`, a missing acceptance, outstanding delivery or
+unconfirmed completion parks before the three-continuation count advances.
+Only confirmed delivery permits a later continuation. Production completion
+proof is the registry's admitted-and-delivered receipt (`:2532`); enqueueing
+uses the reserved client message id (`:2408`). Existing controls in
+`src/lib/pipelines/engine.restoreContinuation.test.ts:415` and `:434` prohibit
+a second send while that proof is pending or unreadable.
+
+This class is outside the implemented recovery policy. Safely recovering a
+failed delivery requires reconciling the queue and runtime receipt, including
+transport uncertainty and cancellation, before reusing or replacing its
+delivery. Increasing this deadline or issuing another continuation alone
+would leave the duplicate-delivery question unanswered. No continuation,
+runtime-host or delivery-queue behavior changes here.
 
 ## Recovery policy
 
