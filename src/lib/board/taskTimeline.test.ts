@@ -128,6 +128,8 @@ test("unknown, reversed and future times never invent elapsed agent work", () =>
   const malformedEnd = attempt(pipeline, 6, -30, null, "running");
   malformedEnd.completedAt = "unrecorded";
   expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ completedAtMs: null, endAtMs: null, live: false });
+  attempt(pipeline, 7, null, -20);
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts.at(-1)).toMatchObject({ startedAtMs: null, completedAtMs: ms(-20), endAtMs: null });
   expect(() => read([pipeline], [task()], NaN)).toThrow("timeline clock must be finite");
 });
 

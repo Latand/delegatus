@@ -80,7 +80,7 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number): TimelinePipeline {
         model: role ? role.model : stage?.model ?? null,
         startedAtMs,
         completedAtMs,
-        endAtMs: completedAtMs !== null && (startedAtMs === null || completedAtMs >= startedAtMs)
+        endAtMs: completedAtMs !== null && startedAtMs !== null && completedAtMs >= startedAtMs
           ? completedAtMs : live ? nowMs : null,
         live,
       });
