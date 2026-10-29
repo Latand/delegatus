@@ -37063,10 +37063,14 @@ describe("pipeline from a PR or issue link", () => {
       { name: "refused", link: "https://github.com/example/atlas/pull/9", state: "refused" },
       { name: "rewritten", link: "https://github.com/example/atlas/pull/43", state: "refused" },
       { name: "attach", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "longfork", link: "https://github.com/example/atlas/pull/44", state: "resolved" },
+      { name: "longrefused", link: "https://github.com/example/atlas/pull/45", state: "refused" },
     ] as const;
+    /* The fixture's 100-character repository name, the longest GitHub allows. */
+    const longRepository = "contributor/" + ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
-      for (const [width, height] of [[390, 844], [1000, 700], [1440, 900]] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
+      for (const [width, height] of [[390, 844], [695, 800], [1000, 700], [1220, 860], [1440, 900]] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
         const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "attach" ? entry.name : "picker"),
           { width, height }, scheme, lang, "reduce", width === 390);
         try {
@@ -37086,6 +37090,17 @@ describe("pipeline from a PR or issue link", () => {
             expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: "contributor/atlas" }));
             expect(await push.evaluate((node) => node.getClientRects().length === 1 && node.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(node).lineHeight))).toBe(true);
             expect(await page.locator("[data-pipeline-link-warning]").count()).toBe(1);
+          }
+          /* A name with no place to break wraps inside the row, starting beside the word fork. */
+          if (entry.name === "longfork") {
+            const push = page.locator("[data-pipeline-link-push]");
+            expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: longRepository }));
+            expect(await push.evaluate((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const rects = [...range.getClientRects()];
+              return rects.length > 1 && rects[0]!.width > node.getBoundingClientRect().width / 2;
+            })).toBe(true);
           }
           if (entry.name === "issue") expect(await page.locator("[data-pipeline-link-no-task]").count()).toBe(1);
           /* The draft exists and attaching the issue failed: the reason stays with Retry and Open, and nothing can make a second draft. */
@@ -37113,9 +37128,17 @@ describe("pipeline from a PR or issue link", () => {
               };
             });
             expect(placed).toEqual({ alertBelowInput: true, retryFilled: true, headingWhole: true, alertVisible: true });
+            /* On a touch phone Retry and Open are full touch targets, side by side. */
+            if (width === 390) {
+              const retry = (await page.locator("[data-pipeline-link-attach-retry]").boundingBox())!;
+              const skip = (await page.locator("[data-pipeline-link-attach-skip]").boundingBox())!;
+              expect(Math.min(retry.height, skip.height)).toBeGreaterThanOrEqual(44);
+              expect(Math.abs(retry.y - skip.y)).toBeLessThan(1);
+            }
           }
           if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
           if (entry.name === "rewritten") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: "contributor/atlas" }));
+          if (entry.name === "longrefused") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: longRepository }));
           /* A resolved link enables the templates; a refused one keeps them off. */
           const blank = page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") });
           expect(await blank.isEnabled()).toBe(entry.state === "resolved" && entry.name !== "attach");
@@ -37128,13 +37151,41 @@ describe("pipeline from a PR or issue link", () => {
             const clipped = [...root.querySelectorAll("span, dd, dt, label, legend, div")]
               .filter((node) => node.children.length === 0 && (node.textContent ?? "").trim() && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).textOverflow !== "ellipsis")
               .map((node) => (node.textContent ?? "").slice(0, 60));
-            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, clipped };
+            /* Every drawn line of text, measured from its range, ends inside the scroller. */
+            const edge = root.getBoundingClientRect();
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const outside: string[] = [];
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              if (!(text.textContent ?? "").trim()) continue;
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              if ([...range.getClientRects()].some((rect) => rect.width && (rect.left < edge.left - 1 || rect.right > edge.left + root.clientWidth + 1))) outside.push((text.textContent ?? "").slice(0, 60));
+            }
+            /* The start hint ends on a line of more than two words. */
+            const hint = root.querySelector("[data-pipeline-link-state] > span:last-child:not([role])");
+            let lastLineWords: number | null = null;
+            if (hint?.firstChild) {
+              const lines = new Map<number, number>();
+              const content = hint.firstChild.textContent ?? "";
+              for (const match of content.matchAll(/\S+/g)) {
+                const range = document.createRange();
+                range.setStart(hint.firstChild, match.index!);
+                range.setEnd(hint.firstChild, match.index! + 1);
+                const top = Math.round(range.getBoundingClientRect().top);
+                lines.set(top, (lines.get(top) ?? 0) + 1);
+              }
+              lastLineWords = lines.size > 1 ? lines.get(Math.max(...lines.keys()))! : null;
+            }
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, clipped, outside, lastLineWords };
           });
           expect(geometry.left).toBeGreaterThanOrEqual(0);
           expect(geometry.right).toBeLessThanOrEqual(width + 1);
           expect(geometry.top).toBeGreaterThanOrEqual(0);
           expect(geometry.bottom).toBeLessThanOrEqual(height + 1);
           expect(geometry.clipped).toEqual([]);
+          expect(geometry.outside).toEqual([]);
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+          if (geometry.lastLineWords !== null) expect(geometry.lastLineWords).toBeGreaterThan(2);
           expect(pageErrors).toEqual([]);
           /* On a desktop window the first two templates are whole on the first screen. */
           if (entry.name === "pr" && width >= 1000) {
@@ -37161,7 +37212,7 @@ describe("pipeline from a PR or issue link", () => {
       }
     } finally { await browser?.close(); server.stop(); fs.closeSync(browserTempFd); fs.rmSync(browserTemp, { recursive: true, force: true }); }
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
-  }, 300_000);
+  }, 900_000);
 });
 
 describe("saved decision delivery", () => {

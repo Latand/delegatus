@@ -386,7 +386,7 @@ function LinkSourcePreview({ link, disabled, onTask, attachFailure }: {
   }
   if (link.phase === "refused") {
     return (
-      <div data-pipeline-link-state="refused" role="alert" className="mb-2 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-ui font-semibold text-danger">
+      <div data-pipeline-link-state="refused" role="alert" className="mb-2 min-w-0 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-ui font-semibold text-danger [overflow-wrap:anywhere]">
         {link.message}
       </div>
     );
@@ -394,7 +394,7 @@ function LinkSourcePreview({ link, disabled, onTask, attachFailure }: {
   const { source } = link;
   const head = source.head;
   const pushes = head ? pushTarget(head, t) : null;
-  const row = "grid grid-cols-[minmax(72px,auto)_1fr] gap-x-2";
+  const row = "grid grid-cols-[minmax(72px,auto)_minmax(0,1fr)] gap-x-2";
   return (
     <div data-pipeline-link-state="resolved" data-pipeline-link-source={source.kind} className="mb-2 flex flex-col gap-1.5 rounded-control border border-border bg-sunken px-3 py-2 text-ui">
       <div className="flex flex-wrap items-baseline gap-x-2">
@@ -412,7 +412,7 @@ function LinkSourcePreview({ link, disabled, onTask, attachFailure }: {
         {pushes ? (
           <div className={row}>
             <dt className="text-muted">{t("pipelineLink.pushesTo")}</dt>
-            <dd data-pipeline-link-fork={head?.fork ? "" : undefined} data-pipeline-link-push className="break-words font-semibold text-secondary">{pushes}</dd>
+            <dd data-pipeline-link-fork={head?.fork ? "" : undefined} data-pipeline-link-push className="break-all font-semibold text-secondary">{pushes}</dd>
           </div>
         ) : null}
       </dl>
@@ -445,7 +445,7 @@ function LinkSourcePreview({ link, disabled, onTask, attachFailure }: {
               type="button"
               data-pipeline-link-attach-retry
               disabled={attachFailure.retrying}
-              className="min-h-8 shrink-0 rounded-control bg-danger px-3 text-label font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
+              className="min-h-8 shrink-0 rounded-control bg-danger px-3 text-label font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60 pointer-coarse:min-h-11"
               onClick={attachFailure.onRetry}
             >
               {t("pipelineTemplates.retry")}
@@ -454,7 +454,7 @@ function LinkSourcePreview({ link, disabled, onTask, attachFailure }: {
               type="button"
               data-pipeline-link-attach-skip
               disabled={attachFailure.retrying}
-              className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
+              className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60 pointer-coarse:min-h-11"
               onClick={attachFailure.onOpen}
             >
               {t("pipelineLink.openDraft")}

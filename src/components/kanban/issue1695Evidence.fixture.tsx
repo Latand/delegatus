@@ -2928,6 +2928,7 @@ const linkTasks = [
   { id: "link-task-1", text: "Start pipelines from a pasted pull request link", updatedAt: "2026-10-22T09:00:00Z" },
   { id: "link-task-2", text: "Review the board's pull request flow on the phone", updatedAt: "2026-10-20T09:00:00Z" },
 ];
+const LONG_REPOSITORY = ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
 function linkSourceAnswer(link: string): Response {
   const pr = (number: number, head: Record<string, unknown>, tasks: typeof linkTasks) => ({
     ok: true, repoDir: "/project", source: {
@@ -2940,6 +2941,10 @@ function linkSourceAnswer(link: string): Response {
   });
   if (link.includes("/pull/41")) return json(pr(41, { branch: "feature/link-source-preview", repository: "example/atlas", remote: "origin", fork: false, maintainerCanModify: null }, linkTasks));
   if (link.includes("/pull/42")) return json(pr(42, { branch: "main", repository: "contributor/atlas", remote: "https://github.com/contributor/atlas.git", fork: true, maintainerCanModify: false }, []));
+  /* A valid repository name as long as GitHub allows, with no place to break. */
+  if (link.includes("/pull/44")) return json(pr(44, { branch: "main", repository: `contributor/${LONG_REPOSITORY}`, remote: `https://github.com/contributor/${LONG_REPOSITORY}.git`, fork: true, maintainerCanModify: true }, []));
+  if (link.includes("/pull/45")) return json({ ok: false, code: "remote_rewritten", params: { repository: `contributor/${LONG_REPOSITORY}` },
+    error: `this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/${LONG_REPOSITORY}.git to another repository than contributor/${LONG_REPOSITORY}` }, 409);
   if (link.includes("/issues/7")) return json({ ok: true, repoDir: "/project", source: {
     kind: "issue", repository: "example/atlas", number: 7, url: "https://github.com/example/atlas/issues/7", title: "Start work from an issue link", state: "open",
     base: { branch: "main" }, head: null, tasks: [], request: { task: "Issue #7", spec: "", baseBranch: "main" }, attachLink: "example/atlas#7",
