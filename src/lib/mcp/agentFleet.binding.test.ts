@@ -64,6 +64,7 @@ for (const tool of ["agent_fleet", "agent_activity"] as const) {
       const current = await call("retained-current");
       expect(current.response.isError).not.toBe(true);
       expect(current.answer.ok).toBe(true);
+      if (!current.answer.ok) throw new Error("expected current coverage");
       if (tool === "agent_activity") {
         expect(current.answer).toMatchObject({ unselectedCount: 0, selection: { matched: 1, selected: 1,
           cacheStatus: "hit", projected: 0, unreadable: 0, recoveryPending: 0, recoveryTruncated: false },

@@ -9,6 +9,7 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
 import type { CachedFileScan, FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
+import { describe } from "@/lib/scanner/describe";
 import { productionLivenessSources } from "./liveness";
 
 /** Production readers over retained cold history, with one real transcript and
@@ -38,7 +39,8 @@ export function retainedLivenessFixture(count = 120) {
       hotTerminalRows: 0, outstandingReceipts: 0, pendingDeliveries: 0,
       uncertainDeliveries: 0, grantEvery: 1,
     }, { sessionsRoot: path.join(directory, "sessions") });
-    peer = new SqliteAgentRegistryStore(dataset.filename, { normalize: normalizeRegistry });
+    peer = new SqliteAgentRegistryStore(dataset.filename, { normalize: normalizeRegistry,
+      initialSnapshot: () => { throw new Error("retained dataset must already be initialized"); } });
     const worker = dataset.workers[0]!;
     const conversationId = dataset.conversations[0]!.conversationId as `conversation_${string}`;
     peer.mutate(file => {
@@ -63,9 +65,8 @@ export function retainedLivenessFixture(count = 120) {
     savePipelines([...previousPipelines, pipeline]);
     fs.utimesSync(worker.transcript, new Date(), new Date());
     const stat = fs.statSync(worker.transcript);
-    const files = [{ path: worker.transcript, conversationId, project: "fixture", title: "Retained liveness",
-      engine: "codex", kind: "session", mtime: stat.mtimeMs / 1000, size: stat.size,
-      activity: "live", root: "codex-sessions", fmt: "jsonl" }] as FileEntry[];
+    const files: FileEntry[] = [{ ...describe("codex-sessions", path.join(directory, "sessions"), worker.transcript, stat),
+      conversationId, project: "fixture", title: "Retained liveness", activity: "live" }];
     let cacheStatus: CachedFileScan["cacheStatus"] = "hit";
     const completedFileScan = async (): Promise<CachedFileScan> => ({
       snapshot: structuredClone({ files, projectCatalog: [], complete: true } as FileScanSnapshot),
