@@ -98,3 +98,11 @@ note stays inside the surface; every control is at least 44 px under a finger
 and 24 px under a pointer; a Ukrainian frame carries no Latin word outside
 provider and product names; neighbouring states of one variant, and the three
 variants in one state, read differently; and the page reports no errors.
+
+The fix capture on 2026-10-29 completed with 1 passing browser case, 0 failures
+and 109 assertions: 228 primary frames plus 30 scrolled detail frames. Every
+image was inspected, with desktop panels viewed at 1:1 scale. The final four
+phone popover frames were inspected again after correcting their scroll
+position; the other images were byte-identical to the inspected capture.
+`frames/verification.json` records the capture time and source digests;
+`frames/readings.json` contains the measurements and an empty failure list.

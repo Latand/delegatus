@@ -6669,6 +6669,15 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
             /* The pressed feature's row starts the sheet's body, so no row above it is sliced by the top scroll edge. */
             await page.locator(`[data-proto-feature="${shot.dot}"]`).evaluate((row) => row.scrollIntoView({ block: "start" }));
             await page.locator("[data-proto-popover]").scrollIntoViewIfNeeded();
+            if (phone) await page.evaluate(() => {
+              // The scroll limit can stop short of the requested row. Move back to the
+              // first intersecting row's start so its label stays whole at the top edge.
+              const body = document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")!;
+              const top = body.getBoundingClientRect().top;
+              const first = [...body.querySelectorAll<HTMLElement>("[data-proto-feature]")]
+                .find((row) => row.getBoundingClientRect().bottom > top);
+              if (first && first.getBoundingClientRect().top < top) body.scrollTop += first.getBoundingClientRect().top - top;
+            });
           }
           await page.waitForTimeout(250);
           const reading = await page.evaluate(({ coarse }) => {
