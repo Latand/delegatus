@@ -1135,7 +1135,7 @@ test("a controller restart adopts the dead producer repair checkpoint without an
   } finally { f.close(); }
 });
 
-test.each(["active", "unknown", "idle", "queued", "background", "revived", "unrecorded", "rewritten", "untracked", "no-review", "discard-refused"] as const)(
+test.each(["active", "unknown", "idle", "queued", "background", "revived", "revived-clean", "unrecorded", "rewritten", "untracked", "no-review", "discard-refused"] as const)(
   "a dead publication repair retains its %s fence", async fence => {
     const f = await fixture();
     try {
@@ -1148,8 +1148,10 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "unre
       f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null,
         lastRecordAt: Date.parse(f.h.ports.now()) });
       const repaired = fence === "rewritten" ? accepted : await f.commit("producer repair");
-      fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
-      await f.agentGit(f.lane(), "add", "file.txt");
+      if (fence !== "revived-clean") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
+        await f.agentGit(f.lane(), "add", "file.txt");
+      }
       fs.unlinkSync(path.join(f.hooks, "pre-push"));
       f.h.setConversationActive(fence === "active" ? true : fence === "unknown" ? null : false);
       f.h.ports.conversationTurnInterrupted = async () => fence === "idle" ? "idle" : "dead";
@@ -1171,10 +1173,11 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "unre
           return execute(command, args, ...rest);
         };
       }
-      if (fence === "revived") {
+      if (fence === "revived" || fence === "revived-clean") {
         const execute = f.h.ports.exec;
         f.h.ports.exec = async (command, args, ...rest) => {
-          if (command === "git" && args[0] === "write-tree") f.h.setConversationActive(true);
+          if (command === "git" && (fence === "revived" && args[0] === "write-tree"
+            || fence === "revived-clean" && args[0] === "diff" && args[1] === "--quiet" && args.includes(accepted))) f.h.setConversationActive(true);
           return execute(command, args, ...rest);
         };
       }
@@ -1185,7 +1188,8 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "unre
       expect(current().cursor?.stageId).toBe("build");
       expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
       expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
-      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(fence === "discard-refused" ? "unstaged repair\n" : "staged repair\n");
+      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(fence === "discard-refused" ? "unstaged repair\n"
+        : fence === "revived-clean" ? "producer repair\n" : "staged repair\n");
       if (fence === "discard-refused") {
         expect(restoreCalls).toBe(1);
         const reason = current().runs[0]!.attempts[0]!.publicationRepairAbandonment?.reason;

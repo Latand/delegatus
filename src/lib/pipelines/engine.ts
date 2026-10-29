@@ -5507,6 +5507,9 @@ async function settlePublicationRepair(
     if (ancestor.code !== 0) return fail("The publication repair does not preserve its published/base boundary.");
     const diff = await ports.exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv", repair.sha, result.sha], pipeline.worktreeDir, pipelineLiteralGitEnv());
     if (diff.code !== 0 && diff.code !== 1) return fail("The publication repair's content change could not be verified.");
+    if (deadProducer && !producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports, true))) {
+      return fail("The publication repair producer changed before its repaired head was accepted; preserve its work.");
+    }
     repair.committedSha = result.sha;
     repair.reviewRequired = diff.code === 1 && (worker.attempt !== attempt || attempt.effectiveRole.roleId === "reviewer");
     // This checkpoint consumes the commit before the accepted head is moved.
