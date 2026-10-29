@@ -23,7 +23,7 @@ for (const engine of ["claude", "codex"] as const) {
     f.advance(60_000);
     const lane = loadPipelines()[0]!;
     const spare = lane.runs[0]!.attempts.at(-1)!;
-    // Exhaust the bounded transient continuations on the target.
+    // Capacity keeps retrying after the old bounded continuation budget.
     if (cause === "capacity") {
       spare.providerRecoveryBudget!.tries = 3;
       savePipelines([lane]);
@@ -42,14 +42,25 @@ for (const engine of ["claude", "codex"] as const) {
     } });
     await tickPipelines([], f.h.ports);
     const parked = loadPipelines()[0]!;
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
-      resumeAt: new Date(f.resetsAt! * 1_000 + 60_000).toISOString(), stageRetry: { fallback: false },
-    });
-    expect(parked.stateDetail).toMatch(/Automatic retry|Автоповтор/);
-    while (f.now() < f.resetsAt! * 1_000 + 60_000) {
-      f.advance(30_000);
-      await tickPipelines([], f.h.ports);
+    if (engine === "codex" && cause === "capacity") {
+      expect(parked.state).toBe("running");
+      expect(parked.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
+      expect(f.h.spawnInputs).toHaveLength(2);
+      // Leave capacity backoff in the future when the source quota resets.
+      const current = parked.runs[0]!.attempts.at(-1)!;
+      current.providerWait!.resumeAt = new Date(f.resetsAt! * 1_000 + 10 * 60_000).toISOString();
+      savePipelines([parked]);
+      f.advance(f.resetsAt! * 1_000 + 60_000 - f.now());
+    } else {
+      expect(parked.state).toBe("needs_decision");
+      expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
+        resumeAt: new Date(f.resetsAt! * 1_000 + 60_000).toISOString(), stageRetry: { fallback: false },
+      });
+      expect(parked.stateDetail).toMatch(/Automatic retry|Автоповтор/);
+      while (f.now() < f.resetsAt! * 1_000 + 60_000) {
+        f.advance(30_000);
+        await tickPipelines([], f.h.ports);
+      }
     }
     await tickPipelines([], f.h.ports);
     expect(f.h.spawnInputs).toHaveLength(3);

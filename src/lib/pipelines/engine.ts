@@ -3383,7 +3383,9 @@ async function recoverProviderCut(
   }
   // The first spare can run immediately. Further capacity cuts keep their
   // persisted backoff, preventing an overloaded pool from cycling launches.
-  if (capacity && wait.tries > 0 && time < unixMs(wait.resumeAt)) {
+  // A recorded quota reset opens a fresh window without that capacity delay.
+  if (capacity && wait.tries > 0 && time < unixMs(wait.resumeAt)
+    && !(target && providerAccountHasNewWindow(pipeline, attempt, engine, target, ports))) {
     scheduleProviderWake(ports, wait.resumeAt);
     return true;
   }
