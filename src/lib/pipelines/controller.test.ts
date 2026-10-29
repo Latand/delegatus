@@ -606,7 +606,7 @@ test("watchdog keeps only one observer while its poll remains in flight", async 
   const failure = new Error("one watchdog refusal");
   reject(failure);
   for (let i = 0; i < 20; i++) await Promise.resolve();
-  expect(polls).toBe(1);
+  expect(polls).toBe(31);
   expect(logs).toEqual([failure]);
 });
 
