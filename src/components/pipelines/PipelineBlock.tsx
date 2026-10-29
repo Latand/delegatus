@@ -596,6 +596,12 @@ export interface PipelineBlockProps {
       words as at home, and none of the ways to act on it. A lane that waits on
       a person says where to answer instead of offering the answer. */
   managedOn?: ManagedOn;
+  /** Task density, a draft lane made from a conversation: its Start, at the
+      head of the lane's tail, and the line that says what holds it back. */
+  start?: React.ReactNode;
+  startNote?: React.ReactNode;
+  /** Stages density: a control right under the last stage row, before the loops and Attach. */
+  afterStages?: React.ReactNode;
 }
 
 export interface StageConversation {
@@ -762,6 +768,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {opener}
           {acting}
           <span className="pb-grow" />
+          {managed ? null : props.start}
           {controls}
         </div>
       )}
@@ -777,9 +784,10 @@ export function PipelineBlock(props: PipelineBlockProps) {
           <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
           {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
           {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
-          {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
+          {chainHead ? <span className="pb-tail">{acting}{managed ? null : props.start}{controls}{opener}</span> : null}
         </div>
       )}
+      {managed ? null : props.startNote}
       {laneReason ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{laneReason}</p> : null}
       {managed ? (
         managed.note ? <p className="pb-note" data-managed-on={managed.host}>{managed.note}</p> : null
@@ -874,7 +882,7 @@ function ScreenBlock(props: PipelineBlockProps & {
   answers: PipelineAnswers | null;
   root: Record<string, string | undefined>;
 }) {
-  const { summary, nowMs, names, nameOf, suffixes, answers } = props;
+  const { summary, nowMs, names, nameOf, suffixes, answers, afterStages } = props;
   const { t } = useLocale();
   const { pipeline } = summary;
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
@@ -1137,6 +1145,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         ) : null}
         {chips.map((chip, index) => (folded.has(chip.stage.id) ? null : row(chip, index)))}
       </ol>
+      {afterStages}
       {summary.loops.length ? (
         <ul className="pb-loops">
           {summary.loops.map((loop) => (
