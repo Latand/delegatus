@@ -16,8 +16,10 @@ Only an installation with a completed receipt for those inputs may be linked.
 On a miss, Bun installs the captured inputs once with `--frozen-lockfile
 --ignore-scripts --backend=copyfile`, including development dependencies.
 The installation is published by rename before any worktree links to it.
-Package tools share that installation; run dependency preparation again after
-editing dependency inputs, rather than installing through the shared link.
+Package files and directories are read-only, including executable tools.
+Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,
+then run `bun scripts/prepare-stage-dependencies.ts`. Each input graph keeps
+its own package bytes while another worktree updates its dependencies.
 
 A kernel lock serializes cache writers. On POSIX the installer inherits that
 lock independently of its controller's lock, so ownership survives until the

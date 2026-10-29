@@ -45,6 +45,24 @@ async function stat(file: string) {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
+/** Only owned install trees reach this walker. Never follow package symlinks. */
+async function dependencyPermissions(directory: string, writable: boolean, check?: () => void): Promise<void> {
+  check?.();
+  const entry = await stat(directory);
+  if (!entry || entry.isSymbolicLink()) return;
+  const mode = entry.mode & 0o777;
+  if (entry.isDirectory()) {
+    if (writable) await fs.chmod(directory, mode | 0o700);
+    for (const name of await fs.readdir(directory)) await dependencyPermissions(path.join(directory, name), writable, check);
+  }
+  if (!entry.isDirectory() || !writable) await fs.chmod(directory, writable ? mode | 0o200 : mode & ~0o222);
+}
+
+async function dependencyTarget(link: string): Promise<string | null> {
+  try { return await fs.realpath(link); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+
 /** Scope the shared installation policy to this repository. Other projects
  * retain their existing private-write dependency policy. */
 export async function usesLockedDependencies(cwd: string): Promise<boolean> {
@@ -76,7 +94,7 @@ export async function lockedDependencyInputs(cwd: string) {
     if (!resolved.startsWith(await fs.realpath(cwd) + path.sep)) throw new Error("dependency patch leaves the checkout");
     files.set(patch, await fs.readFile(resolved));
   }
-  const hash = createHash("sha256").update(`${CACHE_VERSION}\0${process.platform}\0${process.arch}\0${Bun.version}\0`);
+  const hash = createHash("sha256").update(`${CACHE_VERSION}\0frozen-readonly\0${process.platform}\0${process.arch}\0${Bun.version}\0`);
   for (const [name, bytes] of [...files].sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
     hash.update(`${name.length}:${name}:${bytes.length}:`).update(bytes);
   }
@@ -123,6 +141,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
         // Windows' fence uses a separate kernel handle, not the inherited fd.
         // A surviving installer cannot be ruled out after its owner dies.
         if (process.platform === "win32") throw new Error("interrupted dependency build requires inspection before retry");
+        await dependencyPermissions(path.join(cache, `building-${interrupted.key}`, "node_modules"), true);
         await fs.rm(path.join(cache, `building-${interrupted.key}`), { recursive: true, force: true });
         await fs.unlink(activeBuild);
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -138,7 +157,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
         const referenced = new Set<string>([modules]);
         for (const row of listing.split("\0")) {
           if (row.startsWith("worktree ")) {
-            const resolved = await fs.realpath(path.join(row.slice(9), "node_modules")).catch(() => null);
+            const resolved = await dependencyTarget(path.join(row.slice(9), "node_modules"));
             if (resolved) referenced.add(resolved);
           }
         }
@@ -152,7 +171,11 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
           unused.push({ directory, used: (await fs.stat(record)).mtimeMs });
         }
         unused.sort((a, b) => b.used - a.used || a.directory.localeCompare(b.directory));
-        for (const old of unused.slice(keep)) { remaining(); await fs.rm(old.directory, { recursive: true }); }
+        for (const old of unused.slice(keep)) {
+          remaining();
+          await dependencyPermissions(path.join(old.directory, "node_modules"), true);
+          await fs.rm(old.directory, { recursive: true });
+        }
       };
       let installed = false;
       try { installed = JSON.parse(await fs.readFile(receipt, "utf8")).key === plan.key && (await stat(modules))?.isDirectory() === true; }
@@ -176,13 +199,19 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
           }
           if ((await lockedDependencyInputs(build)).key !== plan.key) throw new Error("frozen installation changed dependency inputs");
           remaining();
+          await dependencyPermissions(path.join(build, "node_modules"), false, remaining);
+          remaining();
           await fs.writeFile(path.join(build, "installed.json"), JSON.stringify({ key: plan.key }));
           await fs.rename(build, target);
         } finally {
+          await dependencyPermissions(path.join(build, "node_modules"), true);
           await fs.rm(build, { recursive: true, force: true });
           await fs.unlink(activeBuild);
         }
       }
+      // An interrupted eviction may have restored write permissions before
+      // its deletion failed. Finish sealing before admitting another reader.
+      if (((await fs.lstat(modules)).mode & 0o222) !== 0) await dependencyPermissions(modules, false, remaining);
       remaining();
       if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed during preparation; retry setup");
       const local = path.join(cwd, "node_modules");

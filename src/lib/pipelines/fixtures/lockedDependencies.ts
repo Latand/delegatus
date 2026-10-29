@@ -4,6 +4,17 @@ import path from "node:path";
 import { buildPipeline } from "../store";
 import { realExec } from "../../workflows/provision";
 
+function removeFixture(root: string): void {
+  const writable = (filename: string) => {
+    const entry = fs.lstatSync(filename);
+    if (entry.isSymbolicLink()) return;
+    fs.chmodSync(filename, (entry.mode & 0o777) | (entry.isDirectory() ? 0o700 : 0o200));
+    if (entry.isDirectory()) for (const name of fs.readdirSync(filename)) writable(path.join(filename, name));
+  };
+  writable(root);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 // Read dependency plans through the production builder; the installer, lockfile
 // and package payload are real. A loopback registry keeps these cases offline.
 export async function lockedFixture() {
@@ -59,6 +70,6 @@ export async function lockedFixture() {
       }
     };
     return { root, repoDir, worktreeDir, run, server, pipeline, makeLagging,
-      close: () => { server.stop(true); fs.rmSync(root, { recursive: true, force: true }); } };
-  } catch (error) { server.stop(true); fs.rmSync(root, { recursive: true, force: true }); throw error; }
+      close: () => { server.stop(true); removeFixture(root); } };
+  } catch (error) { server.stop(true); removeFixture(root); throw error; }
 }

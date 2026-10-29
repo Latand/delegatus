@@ -228,6 +228,9 @@ test("a worktree install preserves an already shared input graph", async () => {
     };
     expect(version(shared)).toBe("2.0.0");
     expect(await exportedVersion(shared)).toBe("2.0.0");
+    const unchanged = await realExec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], f.worktreeDir,
+      { NODE_ENV: "development" }, { timeoutMs: 20_000 });
+    expect(unchanged.code, unchanged.stderr).toBe(0);
     const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
     manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${f.server.port}/next.tgz`;
     fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify(manifest));
@@ -341,6 +344,28 @@ test("cache eviction retains registered worktrees and four unused input graphs",
     expect(fs.realpathSync(path.join(other, "node_modules"))).toBe(pinned);
     expect(fs.existsSync(path.join(pinned, "fixture-tool/package.json"))).toBe(true);
   } finally { f.close(); }
+}, 30_000);
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable worktree reference refuses eviction and preserves its graph", async () => {
+  const f = await lockedFixture();
+  const other = path.join(f.root, "other");
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const shared = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    await f.run(["git", "worktree", "add", "-b", "other", other]);
+    await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], other);
+    expect(fs.realpathSync(path.join(other, "node_modules"))).toBe(shared);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
+    for (let revision = 0; revision < 6; revision++) {
+      fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify({ ...manifest, description: `fixture revision ${revision}` }));
+      await prepareWorktreeDependencies(f.pipeline);
+    }
+    fs.chmodSync(other, 0o000);
+    expect(() => fs.realpathSync(path.join(other, "node_modules"))).toThrow();
+    fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify({ ...manifest, description: "next fixture revision" }));
+    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment: dependency preparation failed");
+    expect(JSON.parse(fs.readFileSync(path.join(shared, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+  } finally { if (fs.existsSync(other)) fs.chmodSync(other, 0o700); f.close(); }
 }, 30_000);
 
 test("cancelled setup leaves the old dependency link available", async () => {
