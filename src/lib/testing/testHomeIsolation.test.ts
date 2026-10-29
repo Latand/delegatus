@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { legacyClaudeHome } from "../accounts/claude";
-import { legacyCodexHome } from "../accounts/codex";
+import { accountForSpawn } from "../accounts/codex";
 import { legacyCopilotHome } from "../accounts/copilot";
 import { readCodexAuth } from "../codexAuth";
 import { claudeTranscriptPath } from "../agent/transcript";
@@ -20,7 +20,7 @@ function expectInside(root: string, candidate: string): void {
 }
 
 test("preload confines default account resolvers and CLI homes to its sandbox", () => {
-  for (const home of [legacyClaudeHome(), legacyCodexHome(), legacyCopilotHome(), openclawStateDir()]) {
+  for (const home of [legacyClaudeHome(), accountForSpawn("default").home, legacyCopilotHome(), openclawStateDir()]) {
     expectInside(os.tmpdir(), home);
   }
   for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "CLAUDE_CODE_TMPDIR", "USERPROFILE", "DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"]) {
@@ -94,13 +94,13 @@ test.each([
       import path from "node:path";
       import fs from "node:fs";
       import { legacyClaudeHome } from ${JSON.stringify(path.join(repository, "src/lib/accounts/claude.ts"))};
-      import { legacyCodexHome } from ${JSON.stringify(path.join(repository, "src/lib/accounts/codex.ts"))};
+      import { accountForSpawn } from ${JSON.stringify(path.join(repository, "src/lib/accounts/codex.ts"))};
       import { legacyCopilotHome } from ${JSON.stringify(path.join(repository, "src/lib/accounts/copilot.ts"))};
       import { readCodexAuth } from ${JSON.stringify(path.join(repository, "src/lib/codexAuth.ts"))};
       import { foldDelegatusEnvironment } from ${JSON.stringify(path.join(repository, "bin/envAlias.mjs"))};
       test("account homes stay in the preload sandbox", () => {
         foldDelegatusEnvironment();
-        for (const candidate of [legacyClaudeHome(), legacyCodexHome(), legacyCopilotHome()]) {
+        for (const candidate of [legacyClaudeHome(), accountForSpawn("default").home, legacyCopilotHome()]) {
           const relative = path.relative(os.tmpdir(), candidate);
           expect(path.isAbsolute(relative)).toBe(false);
           expect(relative === ".." || relative.startsWith(".." + path.sep)).toBe(false);
