@@ -80,7 +80,10 @@ async function available(file: string): Promise<string> {
 async function diagnosticTail(stderr: string): Promise<string> {
   if (!stderr.trim()) return "no stderr";
   const safe = await inspectPullRequestText("title/body", stderr);
-  return safe.ok ? stderr.trim().slice(-1_000) : `[redacted: ${safe.privacy?.kind ?? "inspection-error"}]`;
+  if (!safe.ok) return `[redacted: ${safe.privacy?.kind ?? "inspection-error"}]`;
+  const tail = stderr.trim().slice(-1_000);
+  const retained = await inspectPullRequestText("title/body", tail);
+  return retained.ok ? tail : `[redacted: ${retained.privacy?.kind ?? "inspection-error"}]`;
 }
 
 async function inspectRepositoryText(part: "title" | "body", file: string, gate: string, titleFile: string,

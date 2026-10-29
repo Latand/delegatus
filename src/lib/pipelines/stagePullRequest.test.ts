@@ -1372,6 +1372,26 @@ test("PR inspection adopts an open PR created during the failed inspection and r
   } finally { f.close(); }
 });
 
+test.each([false, true])("PR inspection checks its bounded diagnostic after truncation, unsafe boundary=%s", async unsafe => {
+  const f = await inspectionFixture("empty");
+  try {
+    const tail = (unsafe ? ["user", " synthetic fixture words"].join(":") : "gate input unavailable").padEnd(1_000, "x");
+    const stderr = "prefix" + tail;
+    expect(await inspectPullRequestText("title/body", stderr)).toEqual({ ok: true });
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
+      && input[1].at(-1)?.endsWith("body.md") ? { code: 1, stdout: "", stderr } : exec(...input);
+    const waiting = await f.finish();
+    const attempt = waiting.runs[0]!.attempts[0]!;
+    const diagnostic = JSON.parse(attempt.error!.split("gate diagnostic ")[1]!);
+    expect(diagnostic.stderrTail).toBe(unsafe ? "[redacted: transcript-content]" : tail);
+    expect(await inspectPullRequestText("title/body", diagnostic.stderrTail)).toEqual({ ok: true });
+    expect(attempt.pullRequestInspection?.failures).toBe(1);
+    expect(attempt.publicationTextRepair).toBeUndefined();
+    expect(f.sends).toEqual([]);
+  } finally { f.close(); }
+});
+
 test("PR inspection content repair retires its prior counter before a concurrent summary report", async () => {
   const f = await inspectionFixture("empty");
   try {
