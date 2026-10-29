@@ -12585,7 +12585,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         clearInterval(watch); await validation;
         let sameAuthority = false;
         try { sameAuthority = await ownership.read() === ownershipFence && matches(reader.read()); }
-        catch { /* Missing proof never authorizes a lifecycle checkpoint. */ }
+        catch {
+          // Missing proof never authorizes a lifecycle checkpoint.
+          console.error("[pipelines] commit retry limit awaits readable ownership proof", shortId(preview.id));
+        }
         if (sameAuthority) await withPipelineMutation(async (pipelines, persist) => {
           const current = pipelines.find(pipeline => pipeline.id === preview.id);
           if (!current || !matches(current)) return;
