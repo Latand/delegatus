@@ -33,7 +33,13 @@ exists produces `selector-timeout` and whole fallback; a deadline during the
 provider path produces `jev-timeout` and the completed BM25 fallback. A stalled
 key endpoint or decision body can consume that same budget. No historical
 phase timings exist to attribute the 182 recorded timeouts more precisely.
-The deadline is retained; this change claims no latency improvement.
+The deadline is retained. External operations now start lazily after a
+monotonic-clock check, and are checked again after each await. This prevents
+a late timer callback from admitting a request after its budget already elapsed.
+A controlled-clock regression advances the deadline during a real adapter
+admission read without firing the timer and requires zero paid decision
+requests.
+This change claims no latency improvement.
 
 ## Provider boundary and evidence
 

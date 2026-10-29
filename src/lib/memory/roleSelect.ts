@@ -92,16 +92,25 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
       evidence.phase = next; phaseStart = now;
     };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? MEMORY_SELECTION_DEADLINE_MS);
+    const budgetMs = Math.max(0, options.timeoutMs ?? MEMORY_SELECTION_DEADLINE_MS);
+    const deadline = start + budgetMs;
+    const timer = setTimeout(() => controller.abort(), budgetMs);
     const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
     let abort!: () => void;
     const expired = new Promise<never>((_, reject) => { abort = () => reject(Error("timeout")); signal.addEventListener("abort", abort, { once: true }); });
     void expired.catch(() => {});
-    const bounded = async <T>(work: Promise<T>): Promise<T> => { signal.throwIfAborted(); const result = await Promise.race([work, expired]); signal.throwIfAborted(); return result; };
+    const checkDeadline = () => {
+      if (performance.now() >= deadline) controller.abort();
+      signal.throwIfAborted();
+    };
+    // Start external work only after checking the monotonic deadline. A timer
+    // callback can run late when the event loop is busy.
+    const bounded = async <T>(work: () => Promise<T>, observe?: (value: T) => void): Promise<T> => { checkDeadline(); const result = await Promise.race([work(), expired]); observe?.(result); checkDeadline(); return result; };
     const evaluate = async (): Promise<ShadowSelection> => {
       try {
         if (process.env.LLV_ROLE_MEMORY_SHADOW === "off") return failure("whole");
         if (!brief.trim()) return failure("no-brief");
+        checkDeadline();
         const rules = scopes.flatMap(scope => [...scope.rules]);
         const protectedIds = alwaysOn(rules);
         const candidates = rules.filter(rule => !protectedIds.has(rule.id));
@@ -118,25 +127,28 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
         let reservation: Awaited<ReturnType<typeof reserveSelectionSpend>> = null;
         try {
           phase("key");
-          const key = await bounded(provider.readKey(signal));
+          const key = await bounded(() => provider.readKey(signal));
           if (!key) return result("jev-no-key");
+          phase("prepare");
           const plan = provider.prepare({ role: scopes.find(scope => scope.scope.startsWith("role:"))?.scope.split(":").at(-1) ?? "agent", brief, rules: candidates });
           if (!Number.isFinite(plan.ceilingUsd) || plan.ceilingUsd <= 0) throw new RoleSelectionProviderError("shape");
+          evidence.ceilingUsd = plan.ceilingUsd;
           phase("admission");
-          evidence.admission = await bounded(plan.admit(key, signal));
-          if (evidence.admission.status !== "admitted") return result("jev-provider-limit");
+          const admission = await bounded(() => plan.admit(key, signal), value => { evidence.admission = value; });
+          if (admission.status !== "admitted") return result("jev-provider-limit");
           phase("reserve");
-          reservation = await bounded(reserveSelectionSpend(plan.ceilingUsd, signal, options.now?.()));
+          reservation = await bounded(() => reserveSelectionSpend(plan.ceilingUsd, signal, options.now?.()), held => {
+            if (held) evidence.reservedUsd = evidence.costUsd = held.ceiling;
+          });
           if (!reservation) return result("jev-cap");
-          evidence.reservedUsd = evidence.costUsd = reservation.ceiling;
           phase("authority");
           const authorize = async () => {
-            if (await bounded(provider.readKey(signal)) !== key || !roleMemoryEnabled()) throw new RoleSelectionProviderError("authority-changed");
+            if (await bounded(() => provider.readKey(signal)) !== key || !roleMemoryEnabled()) throw new RoleSelectionProviderError("authority-changed");
             signal.throwIfAborted();
           };
           try { await authorize(); }
           catch (error) {
-            await bounded(settleSelectionSpend(reservation, 0, signal));
+            await bounded(() => settleSelectionSpend(reservation!, 0, signal));
             evidence.costUsd = 0;
             throw error;
           }
@@ -145,11 +157,12 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
           evidence.billedUsd = null;
           let probabilities: number[];
           try {
-            probabilities = await bounded(plan.decide(key, signal, authorize, (cost, ceiling) => {
+            probabilities = await bounded(() => plan.decide(key, signal, authorize, (cost, ceiling) => {
               signal.throwIfAborted();
               accounted += ceiling;
               billed += cost ?? ceiling;
               unknown ||= cost === null;
+              if (!unknown && Math.abs(accounted - reservation!.ceiling) < 1e-12) evidence.billedUsd = billed;
             }));
           } finally {
             // Replies that were never observed keep their reserved ceiling.
@@ -157,7 +170,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
             if (!signal.aborted) {
               phase("settle");
               const charge = Math.max(0, reservation.ceiling - accounted) + billed;
-              await bounded(settleSelectionSpend(reservation, charge, signal));
+              await bounded(() => settleSelectionSpend(reservation!, charge, signal));
               evidence.costUsd = charge;
               if (!unknown && Math.abs(accounted - reservation.ceiling) < 1e-12) evidence.billedUsd = billed;
             }
@@ -175,8 +188,9 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
     };
     try {
       const result = await evaluate();
-      evidence.latencyMs = Math.max(0, performance.now() - start);
-      evidence.timings.push([evidence.phase, Math.max(0, performance.now() - phaseStart)]);
+      const finished = performance.now();
+      evidence.latencyMs = Math.max(0, finished - start);
+      evidence.timings.push([evidence.phase, Math.max(0, finished - phaseStart)]);
       return { ...result, evidence };
     } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); controller.abort(); }
   });

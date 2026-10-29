@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test, setSystemTime } from "bun:test";
+import { afterAll, beforeEach, expect, test, setSystemTime, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,7 +34,7 @@ test("BM25 ranks matches and fills by curator order when terms do not match", as
   expect(await selectRoleMemory(scopes, "Unrelated astronomy", { apiKey: null })).toMatchObject({ selector: "bm25", reason: "jev-no-key,bm25-no-match", shadowIds: rules.map(rule => rule.id), scores: rules.map(rule => [rule.id, 0]) });
 });
 
-test("Jev stores only selected scores, rounded to three decimals", async () => {
+test("Jev rounds the selected-score projection to three decimals", async () => {
   const { fetcher, requests } = provider();
   const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
   expect(result).toMatchObject({ selector: "jev", reason: "jev", shadowIds: [rules[0].id], scores: [[rules[0].id, 0.877]] });
@@ -246,4 +246,21 @@ test.each(["http", "shape", "unpriced"])("a %s decision records observed versus 
   expect(evidence.reservedUsd).toBeGreaterThan(0);
   expect(evidence.costUsd).toBe(kind === "http" ? 0 : kind === "shape" ? 0.00001 : evidence.reservedUsd);
   expect(evidence.billedUsd).toBe(kind === "http" ? 0 : kind === "shape" ? 0.00001 : null);
+});
+
+
+test("a late timer cannot admit paid work after the monotonic deadline", async () => {
+  const { fetcher, requests } = provider();
+  let clock = 0, admissions = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key")) { admissions++; clock = 10_000; }
+    return fetcher(url, init);
+  }) as typeof fetch;
+  try {
+    const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request });
+    expect(result).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25", evidence: { phase: "admission", costUsd: 0 } });
+    expect(admissions).toBe(1);
+    expect(requests).toHaveLength(0);
+  } finally { now.mockRestore(); }
 });

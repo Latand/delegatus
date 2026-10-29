@@ -17,6 +17,7 @@ export interface SelectionEvidence {
   phase: string;
   latencyMs: number;
   timings: [string, number][];
+  ceilingUsd: number;
   reservedUsd: number;
   /** Conservative charge retained by the local cap, including lost replies. */
   costUsd: number;
@@ -26,7 +27,7 @@ export interface SelectionEvidence {
   allScores: [string, number][];
 }
 export function emptySelectionEvidence(phase: string, latencyMs = 0): SelectionEvidence {
-  return { provider: "openrouter", model: JEV_MODEL, admission: null, phase, latencyMs, timings: [], reservedUsd: 0, costUsd: 0, billedUsd: 0, scoreSource: "bm25", allScores: [] };
+  return { provider: "openrouter", model: JEV_MODEL, admission: null, phase, latencyMs, timings: [], ceilingUsd: 0, reservedUsd: 0, costUsd: 0, billedUsd: 0, scoreSource: "bm25", allScores: [] };
 }
 /** Optional on old rows; new writers always store the complete observation. */
 export function isSelectionEvidence(value: unknown): value is SelectionEvidence {
@@ -34,7 +35,7 @@ export function isSelectionEvidence(value: unknown): value is SelectionEvidence 
   const row = value as SelectionEvidence;
   const admission = row.admission;
   return typeof row.provider === "string" && typeof row.model === "string" && typeof row.phase === "string"
-    && nonnegative(row.latencyMs) && nonnegative(row.reservedUsd) && nonnegative(row.costUsd)
+    && nonnegative(row.latencyMs) && nonnegative(row.ceilingUsd) && nonnegative(row.reservedUsd) && nonnegative(row.costUsd)
     && (row.billedUsd === null || nonnegative(row.billedUsd))
     && ["bm25", "jev"].includes(row.scoreSource)
     && Array.isArray(row.timings) && row.timings.every(pair => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && nonnegative(pair[1]))
