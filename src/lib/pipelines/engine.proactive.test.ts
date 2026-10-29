@@ -800,12 +800,15 @@ test("review probe: companion scope cannot enter an unadopted proactive lane", a
 });
 
 const pausedWorkerStates = ["deferred", "unconfirmed", "failed", "unresolved", "throws", "starting", "exiting", "survivor", "claimed", "pending", "dead", "unhosted"] as const;
-test.each([...pausedWorkerStates])("paused lane worker capacity follows retained custody: %s", async kind => {
-  const f = await fixture(`paused-worker-${kind}`);
+test.each([
+  ...pausedWorkerStates.map(kind => ["pause", kind] as const),
+  ["close", "unconfirmed"], ["close", "dead"], ["close", "unhosted"],
+] as const)("%s lane worker capacity follows retained custody: %s", async (action, kind) => {
+  const f = await fixture(`${action}-worker-${kind}`);
   setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
   const ordinary = mutateTasks(tasks => {
     const made = createTask(tasks, { project: f.project, text: "Requested correction", placement: "unplaced" }, [],
-      { id: () => `paused-ordinary-${kind}`, now: () => f.at });
+      { id: () => `${action}-ordinary-${kind}`, now: () => f.at });
     if (!made.ok) throw new Error(made.error);
     return { tasks: made.tasks, result: made.task };
   });
@@ -815,12 +818,13 @@ test.each([...pausedWorkerStates])("paused lane worker capacity follows retained
   const ordinaryId = made.pipeline.id;
   const registry = agentRegistry();
   const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: made.pipeline.worktreeDir, taskIds: [ordinary.id],
-    conversationId: `conversation_paused_worker_${kind}`, role: "builder",
+    conversationId: `conversation_${action}_worker_${kind}`, role: "builder",
     origin: { kind: "container", container: "pipeline", containerId: ordinaryId, creatorConversationId: null },
     memberships: [{ kind: "pipeline", containerId: ordinaryId, role: "builder", slot: "work:1", stageId: "work", stageOrder: 0, round: 1, parentConversationId: null }],
     launchProfile: emptyLaunchProfile({ cwd: made.pipeline.worktreeDir, model: "gpt-5.6-sol" }) });
   if (begun.kind !== "created") throw new Error("fresh ordinary worker required");
-  const sessionId = ["20000000", "0000", "4000", "8000", (pausedWorkerStates.indexOf(kind) + 1).toString(16).padStart(12, "0")].join("-");
+  const workerIndex = pausedWorkerStates.indexOf(kind) + 1 + (action === "close" ? pausedWorkerStates.length : 0);
+  const sessionId = ["20000000", "0000", "4000", "8000", workerIndex.toString(16).padStart(12, "0")].join("-");
   const artifactPath = `/codex/${sessionId}.jsonl`;
   const entry = { key: sessionKeyFromTranscript("codex", artifactPath)!, artifactPath, cwd: made.pipeline.worktreeDir,
     accountId: null, status: "dead" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null };
@@ -856,30 +860,42 @@ test.each([...pausedWorkerStates])("paused lane worker capacity follows retained
     if (kind === "unresolved") return { outcome: "unresolved", error: "host still alive", survivors: [captureProcessIdentity(process.pid)] };
     return { outcome: settled ? "stopped" : "deferred" };
   };
-  expect((await patchPipeline(ordinaryId, { action: "pause", reason: "Hold requested work" }, f.h.ports)).error).toBeUndefined();
-  const paused = loadPipelines().find(lane => lane.id === ordinaryId)!;
-  expect(paused.state).toBe("paused");
-  expect(!!paused.runs[0]!.attempts.at(-1)!.suspension?.stoppedAt).toBe(settled);
+  const stop = () => action === "close"
+    ? closeAndDrain(ordinaryId, { action: "close" }, f.h.ports)
+    : patchPipeline(ordinaryId, { action: "pause", reason: "Hold requested work" }, f.h.ports);
+  expect((await stop()).error).toBeUndefined();
+  const stopped = loadPipelines().find(lane => lane.id === ordinaryId)!;
+  if (action === "close") {
+    expect(stopped.closedAt).toBeTruthy();
+    expect(stopped.closeReport!.unconfirmed).toHaveLength(settled ? 0 : 1);
+    if (!settled) expect(Object.values(registry.conversationRetentionSnapshot(begun.receipt.conversationId).entries)
+      .some(row => row.status === "live")).toBe(true);
+  } else {
+    expect(stopped.state).toBe("paused");
+    expect(!!stopped.runs[0]!.attempts.at(-1)!.suspension?.stoppedAt).toBe(settled);
+  }
   const check = () => assertProactivePipelineExecution(f.current(), "dispatch");
   expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
   await f.tick();
   expect(spawns()).toHaveLength(settled ? 1 : 0);
   if (settled) expect(check).not.toThrow();
   else expect(check).toThrow("worker capacity is exhausted");
-  // A fresh process must observe the same retained capacity while the lane is paused.
+  // A fresh process must observe the same retained capacity after pause or close.
+  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "lane-dispatch"],
+    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code) throw new Error(err);
+    const result = JSON.parse(out.split("RESULT ")[1]!);
+    if (settled) expect(result).toEqual({ error: null });
+    else expect(result.error).toContain("worker capacity is exhausted");
+  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
   if (!settled) {
-    const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "lane-dispatch"],
-      { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-    try {
-      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      if (code) throw new Error(err);
-      expect(JSON.parse(out.split("RESULT ")[1]!).error).toContain("worker capacity is exhausted");
-    } finally { if (child.exitCode === null) child.kill(); await child.exited; }
     if (["deferred", "unconfirmed", "failed", "throws", "starting", "claimed", "pending"].includes(kind)) {
       if (kind === "starting") registry.completeSpawn(begun.receipt.launchId, entry);
       else registry.upsert(entry);
       f.h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
-      expect((await patchPipeline(ordinaryId, { action: "pause", reason: "Confirm stopped host" }, f.h.ports)).error).toBeUndefined();
+      expect((await stop()).error).toBeUndefined();
       expect(() => assertProactivePipelineExecution(f.current(), "dispatch")).not.toThrow();
       expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
       await f.tick();

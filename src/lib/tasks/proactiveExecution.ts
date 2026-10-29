@@ -71,10 +71,11 @@ export function proactiveExecutionError(tasks: readonly BoardTask[], file = TASK
             if (member.containerId === live.pipeline?.id) continue;
             const lane = findPipelineRecord(member.containerId);
             if (!lane) return "proactive worker capacity is unreadable";
-            // Pause is persisted before termination is confirmed. Retained
-            // host and exit custody still owns a slot until positively settled.
-            if (!lane.closedAt && !lane.hiddenAt && (["running", "provisioning"].includes(lane.state)
-              || lane.state === "paused" && unsettled())) workers.add(`pipeline:${lane.id}`);
+            // Pause and close persist before termination is confirmed. Retained
+            // host and exit custody owns a slot until positively settled,
+            // independently of the lane's state or visibility.
+            if ((!lane.closedAt && !lane.hiddenAt && ["running", "provisioning"].includes(lane.state))
+              || unsettled()) workers.add(`pipeline:${lane.id}`);
           }
         }
         if (workers.size >= limit.value) return "proactive worker capacity is exhausted";
