@@ -107,9 +107,10 @@ test.each([
         expect(path.isAbsolute(nativeRelative)).toBe(false);
         expect(nativeRelative === ".." || nativeRelative.startsWith(".." + path.sep)).toBe(false);
         expect(readCodexAuth()).toBeNull();
-        fs.writeFileSync(process.env.LLV_TEST_HOME_RECEIPT, os.homedir());
+        fs.appendFileSync(process.env.LLV_TEST_HOME_RECEIPT, os.homedir() + "\\n");
         if (${fails}) throw new Error("fixture refusal after home checks");
       });
+      test("excluded fixture", () => { throw new Error("the test-name filter was lost"); });
     `);
     const env = { ...process.env };
     const home = path.join(root, "launch-home");
@@ -125,14 +126,17 @@ test.each([
       if (inherited) env[key] = path.join(root, "foreign-home", key.toLowerCase());
       else delete env[key];
     }
-    const result = spawnSync(process.execPath, ["test", "--timeout=60000", "./fixture.test.ts"], {
+    const result = spawnSync(process.execPath, ["test", "--timeout=60000", "--rerun-each=2", "--test-name-pattern", "account homes stay", "./fixture.test.ts"], {
       cwd: root, env, encoding: "utf8", timeout: 60_000,
     });
     expect(result.status, result.stdout + result.stderr).toBe(fails ? 1 : 0);
     expect(fs.existsSync(receipt), result.stdout + result.stderr).toBe(true);
-    const startupHome = fs.readFileSync(receipt, "utf8");
-    expectInside(env.TMPDIR, startupHome);
-    expect(fs.existsSync(path.dirname(startupHome))).toBe(false);
+    const startupHomes = fs.readFileSync(receipt, "utf8").trim().split("\n");
+    expect(startupHomes).toHaveLength(2);
+    for (const startupHome of startupHomes) {
+      expectInside(env.TMPDIR, startupHome);
+      expect(fs.existsSync(path.dirname(startupHome))).toBe(false);
+    }
     if (fails) expect(result.stderr).toContain("fixture refusal after home checks");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
