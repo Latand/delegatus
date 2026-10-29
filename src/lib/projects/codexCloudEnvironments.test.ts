@@ -226,6 +226,88 @@ async function restart(f: ReturnType<typeof fixture>, action = "no-crash", proje
 }
 
 for (const effect of ["/v1/environment-configs", "/v1/environment-configs/asenvcfg_account-a/drafts"]) {
+  test(`a held 403 refusal of ${effect} survives a peer checkpoint and recovers across restart`, async () => {
+    const f = fixture({ create: true }), original = f.backend.dependencies.fetch;
+    const dispatched = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.backend.dependencies.fetch = async (url, init) => {
+      if (init.method !== "POST" || new URL(url).pathname !== effect) return original(url, init);
+      dispatched.resolve();
+      await release.promise;
+      return Response.json({}, { status: 403 });
+    };
+    const held = f.prepare();
+    try {
+      await dispatched.promise;
+      const before = readCloudEnvironmentBindings(f.input.project).bindings[0]!;
+      expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("setup_uncertain") });
+      expect(readCloudEnvironmentBindings(f.input.project).bindings[0]!.revision).toBeGreaterThan(before.revision);
+    } finally { release.resolve(); }
+    const refused = await held;
+    f.backend.dependencies.fetch = original;
+    const states = [];
+    for (const elapsed of [2001, 4001, 900_001]) {
+      f.advance(elapsed);
+      states.push((await restart(f)).state);
+    }
+    expect(states).toEqual(["unavailable", "ready", "ready"]);
+    expect(refused).toMatchObject({ state: "unavailable", reason: expect.stringContaining("access_refused") });
+    expect(f.backend.configs.size).toBe(1);
+    expect(f.backend.calls.filter(call => call.method === "POST" && call.path === "/v1/environment-configs")).toHaveLength(1);
+    expect(f.backend.calls.filter(call => call.method === "POST" && call.path.endsWith("/drafts"))).toHaveLength(1);
+  });
+
+  test(`a held 403 refusal of ${effect} releases custody after cancellation and a peer checkpoint`, async () => {
+    const f = fixture({ create: true }), original = f.backend.dependencies.fetch;
+    const controller = new AbortController(); f.input.signal = controller.signal;
+    const dispatched = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.backend.dependencies.fetch = async (url, init) => {
+      if (init.method !== "POST" || new URL(url).pathname !== effect) return original(url, init);
+      dispatched.resolve();
+      await release.promise;
+      return Response.json({}, { status: 403 });
+    };
+    const held = f.prepare().then(value => ({ value }), error => ({ error }));
+    try {
+      await dispatched.promise;
+      expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("setup_uncertain") });
+      controller.abort();
+    } finally { release.resolve(); }
+    expect(await held).toMatchObject({ error: { message: expect.stringContaining("access_refused") } });
+    f.backend.dependencies.fetch = original; f.advance(2001);
+    expect(await restart(f)).toMatchObject({ state: "ready" });
+    expect(f.backend.configs.size).toBe(1);
+    expect(f.backend.calls.filter(call => call.method === "POST" && call.path === "/v1/environment-configs")).toHaveLength(1);
+    expect(f.backend.calls.filter(call => call.method === "POST" && call.path.endsWith("/drafts"))).toHaveLength(1);
+  });
+
+  test(`a late 403 refusal of ${effect} preserves a newer peer receipt across restart`, async () => {
+    const f = fixture({ create: true }), original = f.backend.dependencies.fetch;
+    const dispatched = Promise.withResolvers<() => Promise<Response>>(), release = Promise.withResolvers<void>();
+    f.backend.dependencies.fetch = async (url, init) => {
+      if (init.method !== "POST" || new URL(url).pathname !== effect) return original(url, init);
+      // Another remote writer can make a recoverable configuration/draft
+      // visible while this caller is still waiting for its rejected request.
+      dispatched.resolve(() => original(url, init));
+      await release.promise;
+      return Response.json({}, { status: 403 });
+    };
+    const held = f.prepare();
+    let peer;
+    try {
+      const remoteWriter = await dispatched.promise;
+      await remoteWriter();
+      f.backend.dependencies.fetch = original;
+      expect(await f.prepare()).toMatchObject({ state: "ready" });
+      peer = readCloudEnvironmentBindings(f.input.project).bindings;
+    } finally { release.resolve(); }
+    expect(await held).toMatchObject({ state: "pending" });
+    expect(readCloudEnvironmentBindings(f.input.project).bindings).toEqual(peer);
+    expect(await restart(f)).toMatchObject({ state: "ready" });
+    expect(f.backend.configs.size).toBe(1);
+    expect(f.backend.calls.filter(call => call.method === "POST" && call.path === "/v1/environment-configs")).toHaveLength(1);
+    expect(f.backend.calls.filter(call => call.method === "POST" && call.path.endsWith("/drafts"))).toHaveLength(1);
+  });
+
   for (const recovery of ["retry", "cooldown"] as const) {
     test(`a confirmed 403 refusal of ${effect} recovers after ${recovery} across restart`, async () => {
       const f = fixture({ create: true }), original = f.backend.dependencies.fetch;

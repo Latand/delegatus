@@ -59,7 +59,10 @@ therefore reports `github_connector_not_configured` explicitly.
 A received HTTP 401 or 403 rejection releases only the refused creation or
 draft dispatch marker, so preparation can retry after access returns. The
 rejection survives process restarts through the existing retry and cooldown
-checkpoints. Failures of later reads never release an earlier mutation's marker.
+checkpoints. If a peer advances the row revision, the refusal clears its marker
+against the latest matching setup receipt under the keyed write lease. A newer
+receipt is preserved. Failures of later reads never release an earlier
+mutation's marker.
 
 After a lost creation reply, recovery searches verified catalog metadata for
 the saved creation intent. It refuses another creation if the outcome remains

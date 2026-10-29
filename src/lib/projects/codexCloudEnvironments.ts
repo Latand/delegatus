@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { statePath } from "@/lib/configDir";
@@ -81,6 +82,23 @@ async function update(value: CloudEnvironmentBinding, expected: number, assertCu
       // upserts preserve other accounts and the separately stored override.
       await persist([next]); return next;
     }, () => assertCurrent(), false, 1000, undefined, [checked.key]);
+  } finally { store.close(); }
+}
+/** Refusals belong to the dispatched receipt, even after a peer records
+ * uncertainty. Change only that receipt's marker under the keyed write lease. */
+async function releaseRefusedDispatch(dispatched: CloudEnvironmentBinding, marker: "createDispatched" | "draftDispatched"): Promise<CloudEnvironmentBinding> {
+  const store = readStore();
+  if (!store) throw new CloudEnvironmentError("preparation_superseded");
+  try {
+    return await store.mutate(async (rows, persist) => {
+      const current = rows.find(row => row.key === dispatched.key);
+      if (!current || current.principal !== dispatched.principal || !isDeepStrictEqual(current.setup, dispatched.setup)
+        || key(current.project, current.accountId, current.repository, current.ref, current.kind) !== current.key) {
+        throw new CloudEnvironmentError("preparation_superseded");
+      }
+      const next = bindingSchema.parse({ ...current, revision: current.revision + 1, setup: { ...current.setup, [marker]: false } });
+      await persist([next]); return next;
+    }, undefined, false, 1000, undefined, [dispatched.key]);
   } finally { store.close(); }
 }
 export function cloudEnvironmentSelection(project: string, accountId: string): { environmentId: string; source: CloudEnvironmentProjection["source"]; revision: number } {
@@ -290,7 +308,7 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       const configId = await backend.create(`delegatus-${saved.setup.intent}`, target.id, ref, template).catch(async error => {
         // Only this mutation's confirmed refusal releases its dispatch marker.
         // Record it even if authority changed while the provider was replying.
-        if (error instanceof CloudEnvironmentMutationRefused) await checkpoint({ setup: { ...saved.setup, createDispatched: false } }, true);
+        if (error instanceof CloudEnvironmentMutationRefused) saved = await releaseRefusedDispatch(saved, "createDispatched");
         throw error;
       });
       await checkpoint({ environmentId: configId, setup: { ...saved.setup, configId } }, true); guard();
@@ -311,7 +329,7 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       if (saved.setup.draftDispatched) throw new CloudEnvironmentError("setup_uncertain");
       await checkpoint({ setup: { ...saved.setup, draftDispatched: true } });
       const draft = await backend.draft(configId).catch(async error => {
-        if (error instanceof CloudEnvironmentMutationRefused) await checkpoint({ setup: { ...saved.setup, draftDispatched: false } }, true);
+        if (error instanceof CloudEnvironmentMutationRefused) saved = await releaseRefusedDispatch(saved, "draftDispatched");
         throw error;
       });
       await checkpoint({ state: "approving", setup: { ...saved.setup, ...draft } }, true); guard();
