@@ -20,7 +20,7 @@
    it was typed in. No token is written to a file or to a terminal. */
 
 import { execFile, spawn } from "node:child_process";
-import { createSign } from "node:crypto";
+import { createHash, createSign } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,19 @@ export const FORGE_DIR_ENV = "LLV_AGENT_FORGE_DIR";
     as App repositories, `owner/name` separated by commas. Empty or unset means
     none, and then nothing here changes any command. */
 export const FORGE_REPOSITORIES_ENV = "LLV_AGENT_FORGE_REPOSITORIES";
+/** Pinned by the launcher before an agent's configuration is sandboxed. */
+export const FORGE_AUDIT_ENV = "LLV_AGENT_FORGE_AUDIT_FILE";
+export const FORGE_PUSH_MINT_MARKER = "Delegatus App push: fresh installation token verified";
+
+function tokenRecord(issued, purpose) {
+  return { repository: issued.repository, expiresAt: issued.expiresAt, purpose,
+    fingerprint: createHash("sha256").update(issued.token).digest("hex") };
+}
+
+async function recordToken(ports, issued, purpose, event, extra = {}) {
+  await ports.audit({ version: 1, at: new Date(ports.now()).toISOString(), event,
+    ...tokenRecord(issued, purpose), ...extra });
+}
 
 const API = "https://api.github.com/";
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
@@ -142,7 +155,7 @@ function exactlyRequiredPermissions(granted, required) {
  * @param {Readonly<Record<string, string>>} [permissions]
  * @param {boolean} [includeWorkflows]
  */
-export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false) {
+export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false, purpose = "token command") {
   const slug = parseRepository(repository);
   if (!slug) throw new ForgeAppRefusal(null, "the target is not a github.com repository this installation can name");
   const refuse = (reason) => new ForgeAppRefusal(slug, reason);
@@ -188,22 +201,29 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
     token: bearer, body: { repositories: [name], permissions },
   });
   if (!issued || typeof issued.token !== "string" || !issued.token) throw refuse("GitHub issued no installation token");
+  const result = { token: issued.token, expiresAt: typeof issued.expires_at === "string" && Number.isFinite(Date.parse(issued.expires_at)) ? issued.expires_at : null, repository: slug };
   try {
+    try { await recordToken(ports, result, purpose, "mint"); }
+    catch { throw refuse("the App token lifecycle could not be recorded"); }
     if (!exactlyRequiredPermissions(issued.permissions, permissions)) throw refuse("the issued token carries unexpected permissions");
     const reach = await call("GET", "installation/repositories?per_page=100", { token: issued.token });
     if (reach?.total_count !== 1 || reach.repositories?.length !== 1 || !sameRepository(reach.repositories[0]?.full_name, slug)) {
       throw refuse("the issued token is not limited to this repository");
     }
   } catch (error) {
-    await revokeInstallationToken(issued.token, ports);
+    await revokeInstallationToken(result, ports, purpose);
     throw error;
   }
-  return { token: issued.token, expiresAt: typeof issued.expires_at === "string" ? issued.expires_at : null, repository: slug };
+  return result;
 }
 
 /** Best effort: a token nobody holds any more should not stay valid for an hour. */
-export async function revokeInstallationToken(token, ports) {
-  try { await ports.request("DELETE", "installation/token", { token }); } catch { /* It expires on its own. */ }
+export async function revokeInstallationToken(issued, ports, purpose = "token command") {
+  let status = null;
+  try { status = (await ports.request("DELETE", "installation/token", { token: issued.token })).status; }
+  catch { /* Record an unknown outcome; it expires on its own. */ }
+  try { await recordToken(ports, issued, purpose, "revoke", { status, revoked: status === 204 }); }
+  catch { ports.stderr("Delegatus: the App token revocation could not be recorded.\n"); }
 }
 
 /* ── `gh` ─────────────────────────────────────────────────────────────────── */
@@ -408,7 +428,7 @@ export async function runGh(args, ports) {
   if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, ports.env);
   let issued;
   try {
-    issued = await mintInstallationToken(named, ports);
+    issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, false, "gh");
   } catch (error) {
     ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(named, "the GitHub App credential could not be used")}\n`);
     return 1;
@@ -428,7 +448,7 @@ export async function runGh(args, ports) {
     }
     return status;
   } finally {
-    await revokeInstallationToken(issued.token, ports);
+    await revokeInstallationToken(issued, ports, "gh");
   }
 }
 
@@ -517,7 +537,13 @@ export async function gitCredential(action, input, ports) {
       if (own) ports.stdout(own);
       return 0;
     }
-    const issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, true);
+    const issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, true, "git push");
+    try { await recordToken(ports, issued, "git push", "use"); }
+    catch {
+      await revokeInstallationToken(issued, ports, "git push");
+      throw new ForgeAppRefusal(named, "the App token use could not be recorded");
+    }
+    ports.stderr(`${FORGE_PUSH_MINT_MARKER}\n`);
     /* Git's own field names, joined so no credential-shaped literal sits in the source. */
     ports.stdout(`${["username", FORGE_APP_USERNAME].join("=")}\n${["password", issued.token].join("=")}\n`);
     return 0;
@@ -582,6 +608,16 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
   return {
     env,
     now: Date.now,
+    audit: async (record) => {
+      // The copied helper has no application imports. Launched commands get
+      // the resolved state path; standalone commands must name their state.
+      const file = env[FORGE_AUDIT_ENV] || (env.LLV_STATE_DIR && path.join(env.LLV_STATE_DIR, "forge-app-tokens.ndjson"));
+      if (!file || !path.isAbsolute(file)) throw new Error("App token audit requires a resolved state path");
+      await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      const handle = await fs.promises.open(file, "a", 0o600);
+      try { await handle.writeFile(`${JSON.stringify(record)}\n`); await handle.sync(); }
+      finally { await handle.close(); }
+    },
     originRepository,
     checkoutRepositories,
     /* The item is keyed by the repository as the origin spells it, which a
@@ -649,6 +685,15 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
 
 async function main(argv) {
   const [mode, ...rest] = argv;
+  // A standalone invocation from bin/ is a state-owning tool. Copied helpers
+  // receive the launcher's resolved audit path and never import the app.
+  if (mode === "token" && !process.env[FORGE_AUDIT_ENV] && !process.env.LLV_STATE_DIR) {
+    try {
+      await import("../src/lib/state/owner/tool.ts");
+      const { statePath } = await import("../src/lib/configDir.ts");
+      process.env[FORGE_AUDIT_ENV] = statePath("forge-app-tokens.ndjson");
+    } catch { /* A missing state path refuses a mint without exposing a token. */ }
+  }
   const ports = productionPorts();
   if (mode === "gh") return runGh(rest, ports);
   if (mode === "git") return runGit(rest, ports);

@@ -1,9 +1,17 @@
 # Built-in Orchestrator agent — issue #182, Phase 1
 
+> **Historical design (Phase 1).** This page records the original plan. Two
+> parts of it no longer hold: review flows are retired
+> ([retire-flows.md](retire-flows.md)), so review runs as pipeline run stages
+> ([docs/review-loop.md](../review-loop.md)), and the seat now starts accepted
+> work by default, keeping drafts for an explicit request. The current mandate
+> is `src/lib/orchestrator/prompt.ts`; the current guide is
+> [docs/orchestrator.md](../orchestrator.md).
+
 Design + skeleton for the viewer's resident Orchestrator: one long-lived agent
 conversation the user talks to, which drives everything else through the
 viewer's own API surface. Grounded in the code as of `main` (post-#212/#215):
-`src/app/api/spawn`, `src/app/api/pipelines`, `src/app/api/flows`,
+`src/app/api/spawn`, `src/app/api/pipelines`,
 `src/lib/roles/defaults.ts` (the #35 role registry), `Viewer.tsx` hash
 deep-links, `OverviewBoard.tsx`.
 
@@ -56,7 +64,7 @@ rotation history. The sidebar flow:
 | API | Use |
 | --- | --- |
 | `POST /api/spawn` | Spawn implementers/reviewers with `src` = its own transcript (lineage draws the diagram edges) and `role`/`reviews` per the role table. |
-| `POST /api/flows`, `PATCH /api/flows/[id]` | Start and drive implement→review flows (rounds, verdict relays). |
+| `PATCH /api/pipelines/[id]` | Drive pipeline stages: `resolve-decision` for a parked stage, `retry-stage`, `close`. Review flows (`/api/flows`) are retired and read-only. |
 | `POST /api/pipelines` (**`autoStart: false` always**) | Compose multi-stage pipelines as **drafts** — see the contract below. |
 | `GET /api/files`, `GET /api/agent/snapshot` | Observe board state: conversations, activity, lineage, receipts. |
 | `POST /api/conversation-host` | Relay messages to workers — resumes or respawns the target's host as needed (verdict summaries, nudges). Also served at the legacy path `/api/tmux`, which runs no tmux. |
@@ -86,12 +94,12 @@ carries it.
 
 The prompt encodes the `llv-conveyor` loop the resident agent runs:
 
-**issues → worktree lanes → implementer agents → review flows → merge bars
-(merge on APPROVE only) → batched deploy → cleanup**, with:
+**issues → pipeline lanes → builder stage → reviewer stage with a finite fail
+edge to an apply-fixes stage → merge bars → batched deploy → cleanup**, with:
 
 - one lane per issue, one file owner at a time across active worktrees;
-- fresh reviewer per round, `REVIEW_READY:` / `VERDICT:` contracts;
-- merge bar: green gates (tsc + tests) and an APPROVE verdict before merge;
+- a fresh reviewer per round, each reporting through `stage_report`;
+- merge bar: green checks and a passing review of the exact head being merged;
 - status reporting: concise chat replies to the user + task-card updates; it
   reports what it *did* (links, ids, verdicts), not plans.
 
@@ -99,9 +107,9 @@ The prompt encodes the `llv-conveyor` loop the resident agent runs:
 
 Chat-first: the user reads the orchestrator's pane like any conversation.
 Every action closes with a compact status line (spawned X → link, draft Y →
-id, flow Z round N verdict). Board-native signals stay authoritative:
-spawned workers appear with lineage edges under the orchestrator node, flows
-show rounds, drafts sit on the scheme awaiting Start. Later phases add the
+id, pipeline Z stage verdict). Board-native signals stay authoritative:
+spawned workers appear with lineage edges under the orchestrator node, pipelines
+show stages and rounds, drafts sit on the scheme awaiting Start. Later phases add the
 dedicated scheme node (#183) and push notifications for decision points.
 
 ## Current implementation

@@ -1,5 +1,87 @@
 # Finished-agent process retirement
 
+## Bounded idle-sweep progress, 2026-10-28
+
+The idle sweep selected the first 512 structured rows on every pass. A refused
+prefix could therefore keep every later host out of both evaluation and its
+conversation lookup. Selection now orders the liveness projection by session
+key, resumes after a durable key, and wraps. Removed rows do not shift an
+offset; deferred eligible rows remain reachable on later circuits. Only the
+selected page's conversations are loaded, and final checks select one key.
+The timer admits one sweep at a time.
+
+`host-retirement-cursor.json` is a private, versioned checkpoint. Its reader
+accepts the writer's validated key or null, with a 256-byte read budget.
+An invalid checkpoint or a failed write raises an error before any host action.
+The cursor is persisted before the first asynchronous admission. A crash can
+defer the rest of that page until the next circuit; it cannot grant signal
+authority. Empty populations reset the checkpoint to null.
+
+A confirmed absent PID takes a separate reconciliation path. The asynchronous
+registry writer admission is labelled `registry.idle-reconcile-gone`. Inside
+it, publication ownership, PID absence, recorded identity, claim owner and both
+claim epochs are checked again. The existing `terminateStructuredHost` registry
+mutation also fences captured survivors and signal domains. Reconciliation
+clears host custody and marks the entry dead while keeping conversation and
+delivery records. It never calls the tree terminator or sends a signal.
+Unverifiable liveness refuses; changed custody and write failures retain their
+reason in the sweep's failure report.
+
+Live-host retirement keeps the existing seat, turn, attention, activity,
+handoff, pending-operation, event-flush, realtime, resumability, transcript and
+kernel-identity clauses. Runtime ownership and protected-tree checks remain in
+the existing terminator. Registry age only describes candidates outside the
+page and never authorizes a stop. Kernel PSS is sampled asynchronously under
+one second per tree; every volatile retirement fact is checked again after the
+measurement. Missing measurements report a null total and a measured-process
+count, independently of RSS and swap.
+
+### Shared records and readers
+
+- Candidate producers are the Claude and Codex host-column builders in
+  `src/lib/runtime/registry.ts`, written through `AgentRegistry`. Pane-hosted
+  rows remain excluded. The existing liveness selector omits archived history.
+- The cursor has one production reader and writer, both in
+  `src/lib/runtime/structuredHostRetirement.ts`. Its initial default is null.
+  Production builder output is persisted and reopened by the process fixture.
+- Gone reconciliation reuses `AgentRegistry.terminateStructuredHost` with
+  expected custody and confirmed retained identities. Its cascade releases the
+  host claim and pending action, preserves exit-process evidence, updates the
+  registry's readiness revision and leaves resumable conversation history.
+- The report writer adds optional `progress`, `gone` and per-retirement `pss`
+  fields to version 1. Progress describes the planning snapshot: before/after
+  keys, wrap, candidate count and the oldest registry timestamp outside the
+  current page. The journal copies these additions while aggregating refusals.
+- `src/lib/runtime/structuredHostRetirementStatus.ts` accepts the additive
+  report fields and keeps its existing project attribution. The process tests
+  pass actual report-writer bytes through this reader. The seat-tick readers in
+  `src/lib/monitor/seatTickSources.ts` continue to read failures, undetermined
+  refusals and journal actions. Old reports remain readable.
+
+### Verification procedure
+
+`src/lib/runtime/structuredHostRetirement.paging.test.ts` starts a fresh Bun
+process for each sweep against a private SQLite registry. Inputs pass through
+`codexHostColumns` and `normalizeRegistry`; identifiers, ordering and policy
+clock are fixed. Its starvation case places 520 flush-refused rows before four
+eligible hosts and requires the next process to retire all four. Other cases
+cover live busy/seat/protected hosts, gone reconciliation, writer-admission
+races and checkpoint failure. The existing retirement tests cover the full
+live termination policy and process-tree fence.
+
+Run that file and `src/lib/runtime/structuredHostRetirement.test.ts` by path, followed by
+`bunx tsc --noEmit`, serially through `scripts/gate-slot.sh` in a scratch source
+export. Repeat the starvation test on the base with the same test and isolation.
+This change claims no measured speed or memory reduction; reclamation figures
+are samples of each retired tree before termination.
+
+An additional run of `src/lib/runtime/structuredHostRetirementStatus.test.ts`
+found its unchanged corrupt-receipt setup failing with SQLite `malformed JSON`
+at the insert, before the observation reader runs. The same focused case fails
+on the starting main revision, `8c6a163f218708db9cfc034b103709d7852893f2`.
+The new process fixture independently checks that the production reader accepts
+the actual sweep report bytes.
+
 ## Terminal-path follow-up, 2026-10-19
 
 The controller previously excluded closed lanes without a close obligation and

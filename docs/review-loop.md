@@ -27,6 +27,11 @@ operator's view of a review is in [Pipelines in depth](guide/pipelines.md).
    head.
 5. `pass` follows the reviewer's own pass edge.
 
+A pass approves the exact head the reviewer saw. A commit after it is not
+covered: it needs a new review before it can merge. A stage that parks in
+`needs_decision` waits for an answer through `pipeline_action
+resolve-decision` (see [Control](pipelines.md#control)).
+
 ## The budget
 
 The number of rounds is fixed when the pipeline is created, on the reviewer's
@@ -97,13 +102,11 @@ A two-stage loop beside the build stage, from the example in
 }
 ```
 
-A legacy `review-loop` stage in a new pipeline is converted at creation into
-this pair (`src/lib/pipelines/legacyReviewDefinition.ts`) only when the
-conversion is provably safe: one read-write stage passes into it, its limit is a
-finite number from 1 to 9 and the fix stage fits within the eight-stage limit.
-Otherwise the stage is kept as written and the pipeline record carries
-`legacyReview` with the refusal codes (for example `stage-count` for a full
-eight-stage plan), so compose the pair yourself.
+A request that names a `review-loop` stage is refused with
+`STAGE_KIND_RETIRED` and is never converted implicitly; compose the pair above
+yourself. A stored pipeline that still carries one parks instead of running it;
+convert it explicitly with `pipeline_action` `preview-legacy-review` and then
+`convert-legacy-review` ([pipelines.md](pipelines.md#legacy-review-loop-stages)).
 
 ## Troubleshooting
 
@@ -124,8 +127,12 @@ Before pipelines, Delegatus ran implement and review rounds as a **flow**,
 started from the **Flow** chip of the scheme view. Flows are retired
 ([docs/design/retire-flows.md](design/retire-flows.md)): nothing in the
 interface starts one, the desktop has a single view, the board, and the phone
-shows old flow rounds as history only. Stored flows stay readable. `/api/flows`
-and the MCP tools `list_flows`, `get_flow` and `flow_action` still serve
-existing flows, and their artifacts live under the state directory's
-`flows/<id>/`. `.claude/skills/review-loop/` still describes flows, for agents
-that drive old ones.
+shows old flow rounds as history only. Stored flows stay readable:
+`GET /api/flows` and the MCP tools `list_flows` and `get_flow` serve existing
+flows as history, and their artifacts live under the state directory's
+`flows/<id>/`; the server refuses to start or drive one. `flow_action` reads
+no archive: it refuses every action with `FLOW_RETIRED`, except that an
+`agent-decision` repeating the owner's already accepted request under the
+same `clientRequestId` replays that stored receipt. The
+`.claude/skills/review-loop/` skill is a short pointer to this page for the
+compatibility window.

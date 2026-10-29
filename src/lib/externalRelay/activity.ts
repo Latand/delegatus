@@ -1,5 +1,14 @@
 import type { ExternalRelayProgress } from "./protocol";
 
+// Delivery cleanup and chain sweeping share the same process-local custody.
+const custody = globalThis as typeof globalThis & {
+  __llvExternalRelayInflight?: Set<string>;
+  __llvExternalRelayUnrecordedAcceptances?: Set<string>;
+};
+export const relayInflightRequests = custody.__llvExternalRelayInflight ??= new Set<string>();
+export const relayUnrecordedAcceptances = custody.__llvExternalRelayUnrecordedAcceptances ??= new Set<string>();
+export const relayRequestInFlight = (requestId: string): boolean => relayInflightRequests.has(requestId) || relayUnrecordedAcceptances.has(requestId);
+
 /* What the settings page shows of each relay's recent work: the outcome of
    the last settled request and the last progress label a run produced. It
    lives in memory on globalThis, because the route modules and the

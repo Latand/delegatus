@@ -92,7 +92,11 @@ export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
   const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
   try {
-    const pending = readRunLedger().runs.find(run => run.relayId === id && ownerStopPending(run));
+    const runs = readRunLedger().runs;
+    const alarm = runs.find(run => run.relayId === id && (run.ownerTurn?.quarantinedAt || run.ownerTurn?.lateAnswer?.status === "pending-delivery-context"));
+    if (alarm) return { ...status, lastOutcome: alarm.ownerTurn?.quarantinedAt ? "owner_stop_quarantined" : "pending-delivery-context",
+      lastOutcomeAt: alarm.ownerTurn?.quarantinedAt ?? alarm.startedAt };
+    const pending = runs.find(run => run.relayId === id && ownerStopPending(run));
     return { ...status, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
   } catch {
     console.error("External relay cancellation custody unreadable; run ledger preserved");
@@ -123,6 +127,10 @@ function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | nul
 }
 
 const ownerRecoveries = new Set<string>();
+function ownerFailureReplyPending(run: RunRecord): boolean {
+  return !!run.ownerTurn?.failureReply && !run.completionAccepted
+    && !run.ownerTurn.completionAttempt && !run.ownerTurn.lateAnswer;
+}
 export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Promise<void> {
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
   for (const run of readRunLedger().runs) {
@@ -154,7 +162,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // Accepted completion already ended execution. Finish abandoned cleanup
     // without controlling a host or sending a second service completion.
     // An unconfirmed owner stop still needs control below first.
-    if (run.capacityReleased && !ownerStopPending(run)) {
+    if (run.capacityReleased && !ownerStopPending(run) && !ownerFailureReplyPending(run)) {
       if (relayRequestInFlight(run.requestId) || run.ownerPid !== process.pid && processMatches(run.ownerPid, run.ownerIdentity)) continue;
       // Released owner custody keeps its cutoff and diagnostic readable for a bounded time.
       const released = run.ownerTurn?.released ? Date.parse(run.ownerTurn.released.at) : NaN;
@@ -201,7 +209,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // The accepted completion already reached the requester. Stop custody
     // only held capacity and files until the host confirmed the stop.
     if (held.ownerTurn?.completionAttempt && !held.completionAccepted) continue;
-    if (held.completionAccepted || held.capacityReleased) {
+    if (held.completionAccepted || held.capacityReleased && !ownerFailureReplyPending(held)) {
       removeRunDirectory(run.runDir);
       settle();
       continue;
@@ -210,7 +218,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     const recoveryRelay = readRelayStore().relays.find(item => item.id === run.relayId);
     const recoveryRequest = recoveryRelay && ownerRecoveryRequest(held, recoveryRelay);
     if (recoveryRelay && recoveryRequest && held.ownerTurn && !held.ownerTurn.restartRetries
-      && interruptedOwner
+      && interruptedOwner && !held.ownerTurn.quarantinedAt
       && recoveryRelay.paused === false && recoveryRelay.targets.some(target => target.id === run.targetId && target.enabled && target.ownerTier)) {
       changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, restartRetries: 1 } }));
       ownerRecoveries.add(run.requestId);
@@ -219,7 +227,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         .finally(() => ownerRecoveries.delete(run.requestId));
       continue;
     }
-    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries) {
+    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt) {
       const request = requestSchema.parse(recoveryRequest);
       const owner = held.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request);
       const diagnostic = ownerTurnDiagnostic("exception", "The owner retry was interrupted by another install restart. Resend the request.");

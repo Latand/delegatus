@@ -43,6 +43,24 @@ function isFixStage(pipeline: Pipeline, stage: PipelineStage): boolean {
     || pipeline.stages.some((candidate) => candidate.onFail?.to === stage.id);
 }
 
+export interface StagePromptContext {
+  taskDetails?: string;
+  /** Repository-relative paths already verified as tracked by the caller. */
+  skillPaths?: readonly string[];
+  /** A caller-produced handoff summary, never the source transcript. */
+  handoffDigest?: string;
+}
+
+export function isStagePromptContext(value: unknown): value is StagePromptContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const context = value as StagePromptContext;
+  return Object.keys(context).every(key => ["taskDetails", "skillPaths", "handoffDigest"].includes(key))
+    && [context.taskDetails, context.handoffDigest].every(text => text === undefined || typeof text === "string")
+    && (context.skillPaths === undefined || Array.isArray(context.skillPaths)
+      && context.skillPaths.every(skill => typeof skill === "string" && !!skill
+        && !/^(?:[/\\]|[A-Za-z]:)/.test(skill) && !skill.includes("\0") && !skill.split(/[/\\]/).includes("..")));
+}
+
 export function renderStagePrompt(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -54,6 +72,7 @@ export function renderStagePrompt(
   workerLimit?: number,
   /** Resolved by server assembly; browser previews cannot inspect tooling. */
   testGuidance = "Use the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.",
+  context?: StagePromptContext,
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
   body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
@@ -119,6 +138,9 @@ export function renderStagePrompt(
     "Pinned specification and acceptance criteria:",
     pipeline.spec?.trim() || "No separate pinned specification was supplied.",
     "",
+    ...(context?.taskDetails ? ["", "Task details:", context.taskDetails] : []),
+    ...(context?.skillPaths?.length ? ["", "Read the referenced tracked skills:", ...context.skillPaths] : []),
+    ...(context?.handoffDigest ? ["", "Source conversation handoff digest:", context.handoffDigest] : []),
     ...roleContext,
     ...(PROTOTYPE_STAGE_ROLES.includes(role.roleId)
       ? ["Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]

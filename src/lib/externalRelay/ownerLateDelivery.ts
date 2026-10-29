@@ -1,9 +1,10 @@
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { cloneClientKey, sendAsClone, type CloneSendInput } from "./cloneSend";
 import { ownerDeliverySchema, type ExternalRelayCompletion } from "./protocol";
-import { changeRunAsync, type PairedRelay, type RunRecord } from "./store";
+import { changeRunAsync, ownerStopPending, type PairedRelay, type RunRecord } from "./store";
 import type { StagedAttachment } from "./attachments";
 import type { RelayAnswerDelivery } from "./answers";
+import { relayRequestInFlight } from "./activity";
 
 type LateAnswer = NonNullable<NonNullable<RunRecord["ownerTurn"]>["lateAnswer"]>;
 const RETRY_MS = 30_000;
@@ -46,6 +47,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   const prepared = { pending: undefined as LateAnswer | undefined };
   let targetId = "";
+  let missingContextAlarm = false;
   try {
     await changeRunAsync(requestId, row => {
       if (!row.ownerTurn || row.relayId !== relay.id || !authorize()) return row;
@@ -63,14 +65,18 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
           ...(index === 0 && pending.firstAttemptAt !== undefined ? { firstAttemptAt: pending.firstAttemptAt } : {}) }));
       }
       pending.payload = pending.parts?.[0]?.payload ?? pending.payload;
-      if (!pending.parts) pending.status = "pending-delivery-context";
+      if (!pending.parts) {
+        missingContextAlarm = pending.status !== "pending-delivery-context";
+        pending.status = "pending-delivery-context";
+      }
       prepared.pending = pending;
-      return { ...row, ownerTurn: { ...row.ownerTurn, lateAnswer: pending } };
+      return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
+        ownerTurn: { ...row.ownerTurn, lateAnswer: pending } };
     }, Date.now() + 5000);
     let pending = prepared.pending;
     if (!pending || !authorize()) return { body, delivery: "refused" };
     if (!pending.parts) {
-      console.error("Owner relay late delivery pending-delivery-context", JSON.stringify({ requestId }));
+      if (missingContextAlarm) console.error("ALARM: Owner relay late delivery pending-delivery-context; answer retained without execution reservation", JSON.stringify({ requestId }));
       return { body, delivery: "unconfirmed" };
     }
     if (pending.parts.every(part => part.receipt)) return { body, delivery: "accepted" };

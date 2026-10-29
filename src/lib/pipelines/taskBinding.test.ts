@@ -122,6 +122,7 @@ test("an unlinked task produces a minimal builder pipeline request", () => {
     taskIds: ["task-binding-1"],
     repoDir: "/repo",
     src: "/sessions/assigned.jsonl",
+    inputContext: { handoffDigest: "Durable binding\nFull acceptance criteria" },
     autoStart: false,
     stages: [{
       id: "run",
@@ -135,6 +136,17 @@ test("an unlinked task produces a minimal builder pipeline request", () => {
       next: null,
     }],
   });
+});
+
+test("assignment handoffs preserve task details and scrub credentials before persistence", () => {
+  const secret = "gh" + "p_" + "fixture".repeat(6);
+  const assigned = { ...task(), details: `Keep the response format.\nAuthorization: Bearer ${secret}` };
+  const params = { repoDir: "/repo", engine: "codex" as const, model: null, effort: null, ...spawnIdentity };
+  const request = ensurePipelineForTask(assigned, [], { ...params, srcPath: "/sessions/assigned.jsonl" });
+  expect(request?.inputContext?.handoffDigest).toContain(assigned.text);
+  expect(request?.inputContext?.handoffDigest).toContain("Keep the response format.");
+  expect(request?.inputContext?.handoffDigest).not.toContain(secret);
+  expect(ensurePipelineForTask(assigned, [], { ...params, srcPath: null })?.inputContext).toEqual(request?.inputContext);
 });
 
 test("live links suppress auto-create while closed and hidden links remain history", () => {

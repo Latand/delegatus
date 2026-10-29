@@ -9,7 +9,7 @@ import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import type { AgentEnvironment } from "./agentHistoryGuard";
 
-import { FORGE_DIR_ENV, FORGE_PUSH_BASE as PUSH_BASE, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
+import { FORGE_AUDIT_ENV, FORGE_DIR_ENV, FORGE_PUSH_BASE as PUSH_BASE, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
 
 /* Joined here so the sources hold no address-shaped literal for the publication gate. */
 const at = (user: string, host: string) => [user, host].join("@");
@@ -269,6 +269,7 @@ export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly 
     PATH: [directory, ...rest].join(separator),
     [FORGE_DIR_ENV]: directory,
     [FORGE_REPOSITORIES_ENV]: declared.join(","),
+    [FORGE_AUDIT_ENV]: statePath("forge-app-tokens.ndjson"),
     GIT_CONFIG_COUNT: String(entries.length),
   };
   entries.forEach(([key, value], index) => {
