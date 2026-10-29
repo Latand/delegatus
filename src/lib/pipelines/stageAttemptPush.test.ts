@@ -1791,7 +1791,9 @@ test.each(["claude", "codex"] as const)("a fix commit made through regenerated %
   try {
     const home = path.join(f.root, "claude");
     await fs.mkdir(home);
-    const entry = { cwd: f.lane, artifactPath: path.join(f.root, "fix.jsonl"), structuredHostOperationId: f.attempt.launchId } as AgentRegistryEntry;
+    const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: f.lane, artifactPath: path.join(f.root, "fix.jsonl"),
+      structuredHostOperationId: f.attempt.launchId, accountId: null, status: "dead", host: null, claimEpoch: 0, claimOwner: null,
+      pendingAction: null, updatedAt: START, launchProfile: emptyLaunchProfile({ cwd: f.lane }) };
     let shell: NodeJS.ProcessEnv = {};
     if (engine === "claude") {
       const options = await claudeStartupHostOptions(entry, { home, kind: "managed", transcriptRoot: f.root, env: { HOME: f.root, PATH: process.env.PATH } }, null, {});
