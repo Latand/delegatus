@@ -30,7 +30,9 @@ if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
     const env = { ...process.env };
     isolateHomes(startup.root, env);
     env.LLV_TEST_STARTUP_HOME = env[process.platform === "win32" ? "USERPROFILE" : "HOME"];
-    const runner = Bun.spawn(argv, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    env.LLV_OWNED_RUN_PARENT_IDENTITY = JSON.stringify(captureProcessIdentity(process.pid));
+    const command = [process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), ...argv];
+    const runner = Bun.spawn(command, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     const terminate = () => runner.kill("SIGTERM");
     const interrupt = () => runner.kill("SIGINT");
     process.on("SIGTERM", terminate);
