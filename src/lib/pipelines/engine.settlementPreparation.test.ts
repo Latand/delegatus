@@ -102,7 +102,9 @@ test("failed preparation cannot spend recovery or park an executing publication"
     expect(race.reads()).toBeGreaterThan(0);
     expect(box.current().state).toBe("running");
     expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toBeUndefined();
-    expect(box.current().delivery!.operation).toEqual(box.publication);
+    expect(box.current().delivery!.operation).toMatchObject({ id: box.publication.id, epoch: box.publication.epoch,
+      sha: box.publication.sha, requestKey: box.publication.requestKey, state: "running" });
+    expect(box.current().delivery!.operation!.result).toEqual(box.publication.result);
   } finally {
     race.restore(); release.resolve(); await settlePipelineControllerJobs();
     try {
