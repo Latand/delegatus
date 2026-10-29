@@ -1,4 +1,4 @@
-import { expect, test, harness, create, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs } from "./engine.fixture";
+import { expect, test, harness, create as fixtureCreate, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs } from "./engine.fixture";
 import { normalizeStages } from "./engine";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
@@ -10,12 +10,22 @@ import { EventEmitter } from "node:events";
 import type WebSocket from "ws";
 import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
 import { stageDigest } from "./stageDigest";
-import { renderStagePrompt } from "./prompts";
-import { resolveStageTestGuidance } from "./testGuidance";
-import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
-import { hardenedRedact } from "@/lib/view/compactText";
+import { composeStageInput, composeStageText } from "./stageInput";
+import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
+import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
 import { spawn, spawnSync } from "node:child_process";
+import { spyOn } from "bun:test";
+import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 import type { PipelineStageInput, PatchPipelineRequest } from "./types";
+import type { BoardTask } from "@/lib/tasks/types";
+
+async function create(...args: Parameters<typeof fixtureCreate>) {
+  const result = await fixtureCreate(...args);
+  const record = loadPipelines()[0]!;
+  record.inputContext = { handoffDigest: "Preserve the accepted scope and verification plan." };
+  savePipelines([record]);
+  return result;
+}
 
 const taskId = "current-review-1";
 const taskUrl = `https://example.com/cloud/${taskId}`;
@@ -25,9 +35,21 @@ const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 const lane = () => loadPipelines()[0]!;
 const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 
-async function fixture(options: { enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[] } = {}) {
+async function fixture(options: { enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[]; deliveryBranch?: string } = {}) {
   await settlePipelineControllerJobs();
   const h = harness();
+  if (options.deliveryBranch) {
+    const execute = h.ports.exec;
+    h.ports.exec = async (command, args, cwd, env, execOptions) => {
+      const result = await execute(command, args, cwd, env, execOptions);
+      if (command === "git" && args[0] === "show-ref" && args.at(-1) === `refs/heads/${loadPipelines()[0]?.branch}`) {
+        return { ...result, code: 1, stdout: "" };
+      }
+      return command === "git" && args[0] === "ls-remote"
+        ? { ...result, stdout: result.stdout.replace(/refs\/heads\/[^\n]+/, options.deliveryBranch!) }
+        : result;
+    };
+  }
   let clock = Date.UTC(2026, 9, 23);
   h.ports.now = () => new Date(clock).toISOString();
   h.advanceWallClock = milliseconds => { clock += milliseconds; };
@@ -44,7 +66,8 @@ async function fixture(options: { enabled?: boolean; publication?: "internal" | 
     readFinalMessage: async () => ({ message: pass, model: "gpt-6.1-sol" }),
     readDiff: async () => { throw new Error("read-only stages must never read a diff"); },
   };
-  await create(h.ports, (options.stages ?? [stage]) as never, { publication: options.publication ?? "remote-branch" });
+  await create(h.ports, (options.stages ?? [stage]) as never, { publication: options.publication ?? "remote-branch",
+    ...(options.deliveryBranch ? { delivery: { branch: options.deliveryBranch } } : {}) });
   expect(setCodexCloudEnvironmentId(lane().project, options.enabled === false ? "" : "env-fixture")).toBe(true);
   return { h, submits, reads };
 }
@@ -55,6 +78,7 @@ async function step(h: ReturnType<typeof harness>) {
 }
 async function submitted(h: ReturnType<typeof harness>, expectedTaskId = taskId) {
   for (let i = 0; i < 4 && !lane().runs[0]?.attempts.at(-1)?.cloud?.taskId && ["provisioning", "running"].includes(lane().state); i++) await step(h);
+  if (!attempt()) throw new Error(`Cloud fixture has no attempt: ${lane().state}: ${lane().stateDetail}`);
   expect({ phase: attempt().cloud?.phase, error: attempt().error, cloudError: attempt().cloud?.error }).toEqual({ phase: "polling", error: null, cloudError: undefined });
   expect(attempt().cloud?.taskId).toBe(expectedTaskId);
 }
@@ -64,8 +88,7 @@ test("cloud reviewers submit the role scaffold, relay and lane facts, settle thr
   await submitted(h);
   expect(submits).toHaveLength(1);
   expect(submits[0]).toMatchObject({ environmentId: "env-fixture", branch: lane().branch, model: "gpt-6.1-sol", reasoningEffort: "xhigh", allowProviderModelFallback: false, account: { accountId: "cloud-account" } });
-  const composed = hardenedRedact(renderStagePrompt(lane(), lane().stages[0]!, attempt().effectiveRole,
-    attempt().input ?? "", effectiveWorkerLimit(lane().project).value, resolveStageTestGuidance()));
+  const composed = await composeStageText(lane(), lane().stages[0]!, attempt().effectiveRole, attempt().input ?? "");
   expect(submits[0]!.prompt.slice(0, composed.length)).toBe(composed);
   expect(attempt().definition?.runtime).toBe("codex-cloud");
   expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "polling" });
@@ -75,6 +98,32 @@ test("cloud reviewers submit the role scaffold, relay and lane facts, settle thr
   expect(attempt().cloud?.model).toBe("gpt-6.1-sol");
   expect(attempt().verdict).toMatchObject({ status: "pass", findings: [] });
   expect(attempt().output).toBe("All checked.");
+});
+
+test("runtime turn metadata retains credential scrubbing", async () => {
+  const secret = "gh" + "p_" + "fixture".repeat(6);
+  const { h, submits } = await fixture({ deliveryBranch: `refs/heads/pipeline/${secret}` });
+  await submitted(h);
+  expect(submits[0]!.prompt).not.toContain(secret);
+});
+
+test("Cloud keeps an activated empty relay instead of recovering an older output", async () => {
+  const { h, submits } = await fixture({ stages: [{ ...stage, id: "earlier", next: "review" }, stage] });
+  await submitted(h);
+  await step(h); await step(h);
+  const record = lane();
+  expect(record.cursor?.stageId).toBe("review");
+  expect(record.runs[0]!.attempts[0]!.output).toBe("All checked.");
+  // Retained activations can carry no relay even though an earlier run has output.
+  record.cursor!.input = null;
+  savePipelines([record]);
+  for (let index = 0; index < 4 && submits.length < 2; index++) await step(h);
+  expect(submits).toHaveLength(2);
+  const current = lane().runs[1]!.attempts.at(-1)!;
+  expect(current.input).toBeNull();
+  expect(current.activatedBy).not.toBeNull();
+  const local = await composeStageInput(lane(), lane().stages[1]!, current.effectiveRole, "", lane().worktreeDir, h.ports.exec);
+  expect(submits[1]!.prompt.slice(0, local.length)).toBe(local);
 });
 
 test.each(["default", "priority", "ultrafast"])("cloud admission refuses an explicit %s tier before any submission", async serviceTier => {
@@ -258,8 +307,9 @@ test.each(["local", "codex-cloud"] as const)("cloud review findings activate a %
     expect(h.spawnInputs).toHaveLength(0);
     const current = lane().runs.find(run => run.stageId === "fix")!.attempts.at(-1)!;
     const source = lane().stages.find(stage => stage.id === "fix")!;
-    const composed = hardenedRedact(renderStagePrompt(lane(), source, current.effectiveRole,
-      current.input ?? "", effectiveWorkerLimit(lane().project).value, resolveStageTestGuidance()));
+    const profile = stageMemoryForLaunch(lane(), source, current.effectiveRole.roleId);
+    const memory = await learnedRulesForLaunchProfile({ ...profile, learnedRules: profile.learnedRules ?? undefined });
+    const composed = [memory, await composeStageText(lane(), source, current.effectiveRole, current.input ?? "")].filter(Boolean).join("\n\n");
     expect(submits[1]!.prompt.slice(0, composed.length)).toBe(composed);
   }
 });
@@ -1150,3 +1200,188 @@ for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["build
     expect(h.spawnInputs).toHaveLength(0);
   } finally { await settlePipelineControllerJobs(); fs.rmSync(native.root, { recursive: true, force: true }); }
 }, 30_000);
+
+
+test("Cloud dispatch refuses a missing source handoff before submitting any work", async () => {
+  const { h, submits } = await fixture();
+  const record = lane();
+  delete record.inputContext;
+  savePipelines([record]);
+  for (let index = 0; index < 4 && ["provisioning", "running"].includes(lane().state); index++) await step(h);
+  expect(submits).toHaveLength(0);
+  expect(attempt().cloud?.error).toContain("requires a handoff digest");
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("creation context survives storage and invalid context is refused", async () => {
+  const { rawCreatePipelineFromRequest } = await import("./engine.fixture");
+  const { h } = await fixture();
+  const context = { taskDetails: "Accepted details", handoffDigest: "Preserve scope and compatibility." };
+  const parsed = TOOL_INPUT_SCHEMAS.create_pipeline.parse({ clientRequestId: "context-fixture", task: "Complete input",
+    repoDir: "/repo", spec: "Acceptance", stages: [stage], src: "/codex/creator.jsonl", publication: "remote-branch", inputContext: context });
+  const created = await rawCreatePipelineFromRequest(parsed as never, h.ports);
+  expect(created.error).toBeUndefined();
+  expect(loadPipelines().find(row => row.id === created.pipeline!.id)!.inputContext).toEqual(context);
+  const invalid = await rawCreatePipelineFromRequest({ ...parsed, inputContext: { skillPaths: ["../SKILL.md"] } } as never, h.ports);
+  expect(invalid.error).toContain("inputContext");
+});
+
+
+for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
+  const name = `the Cloud runtime enforces the remaining stage deadline: expired=${expired} size=${size}`;
+  test(name, async () => {
+    const budgetMs = expired ? 5_123 : 60_123;
+    if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
+    const { h } = await fixture({ stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
+    const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+    const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
+    const collection = roleMemoryCollection(true)!;
+    const scope = collection.get("s:machine"), existing = collection.get("r:r_cloud_runtime_fixture");
+    const rule = "Keep receipt ownership until the matching operation reaches completion";
+    collection.boundedPatch(2, tx => {
+      tx.put({ kind: "scope", scope: "machine", revision: 1, active: ["r_cloud_runtime_fixture"], history: [] });
+      tx.put({ kind: "rule", id: "r_cloud_runtime_fixture", scope: "machine", rule, why: "", state: "active", hints: [],
+        source: { project: lane().project, pipelineId: lane().id, stageId: "review", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+        createdAt: "2026-10-14T00:00:00Z", changedAt: "2026-10-14T00:00:00Z" });
+    });
+    const acknowledgement = heldCloudAcknowledgement();
+    const originalNow = h.ports.now;
+    // Keep the durable thirty-minute deadline, but start this controller job
+    // with only a bounded remainder. The production timer itself is unchanged.
+    h.ports.now = () => {
+      const deadline = lane().runs[0]?.attempts.at(-1)?.cloud?.deadlineAt;
+      return deadline ? new Date(Date.parse(deadline) - budgetMs).toISOString() : originalNow();
+    };
+    const realTimer = globalThis.setTimeout;
+    let armed = 0;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      const handle = realTimer(callback, ms);
+      if (ms === budgetMs) { armed++; deadlineReport("armed"); }
+      return handle;
+    }) as typeof setTimeout);
+    try {
+      const record = lane();
+      record.spec = "Acceptance 界🙂\n".repeat(4000);
+      record.inputContext = { taskDetails: rule + "\n" + "Accepted detail 界🙂. ".repeat(size), handoffDigest: "Keep the accepted API stable." };
+      savePipelines([record]);
+      setCodexCloudEnvironmentId(record.project, "asenvcfg_fixture");
+      const threadId = `00000000-0000-0000-0000-${String(size).padStart(12, "0")}`;
+      const environment = { environmentId: "ccarenv_fixture", environmentConfigId: "asenvcfg_fixture", cwd: "/workspace/project" };
+      const frames: { method?: string; params?: { input?: { text: string }[] } }[] = [];
+      let turnNumber = 0, acknowledged = 0;
+      let crossed = false;
+      class Socket extends EventEmitter {
+        readyState = 1;
+        send(value: string, done?: (error?: Error) => void) {
+          const frame = JSON.parse(value); frames.push(frame); done?.();
+          if (frame.id === undefined) return;
+          if (frame.method === "turn/start") expect(turnNumber).toBe(acknowledged);
+          const turn = { id: `input_${turnNumber}`, status: "completed", model: stage.model };
+          const result = frame.method === "thread/start" || frame.method === "thread/read"
+            ? { model: stage.model, thread: { id: threadId, ephemeral: false, environments: [environment] } }
+            : frame.method === "command/exec" ? { exitCode: 0, stdout: lane().lastPassedCommit, stderr: "" }
+            : frame.method === "turn/start" ? { turn: { ...turn, id: `input_${++turnNumber}` } }
+            : frame.method === "thread/turns/list" ? { data: [turn], nextCursor: null } : {};
+          const answer = () => {
+            if (frame.method === "thread/turns/list") acknowledged++;
+            this.emit("message", Buffer.from(JSON.stringify({ id: frame.id, result })));
+          };
+          if (frame.method === "thread/turns/list" && !crossed) {
+            crossed = true; acknowledgement.hold(answer);
+          } else queueMicrotask(answer);
+        }
+        terminate() { this.readyState = 3; this.emit("close"); }
+      }
+      const sockets: Socket[] = [];
+      h.ports.cloudClient = createHostedCloudStageClient({
+        authenticate: async () => ({ token: "fixture-auth" }), socket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; },
+        fetch: async () => Response.json({ id: "asenvcfg_fixture", repositories: [{ mount_path: environment.cwd }] }), uuid: () => "command-fixture",
+      });
+      if (expired) {
+        for (let index = 0; index < 4 && !attempt()?.cloud?.error; index++) await step(h);
+        expect(attempt().cloud?.error).toBe("Codex Cloud operation timed out");
+        expect(attempt().cloud?.taskId).toBeNull();
+        expect(attempt().cloud?.submissionUnresolved).toBe(true);
+        expect(attempt().cloud?.fallback).toBeUndefined();
+        expect(h.spawnInputs).toHaveLength(0);
+      } else await submitted(h, threadId);
+      expect(armed).toBe(1);
+      expect(crossed).toBe(true);
+      expect(sockets.every(socket => socket.readyState === 3)).toBe(true);
+      const sent = frames.filter(frame => frame.method === "turn/start").map(frame => frame.params!.input![0]!.text);
+      if (expired) {
+        expect(sent).toHaveLength(1);
+        expect(acknowledged).toBe(0);
+        deadlineReport("done");
+        return;
+      }
+      expect(sent.length).toBeGreaterThan(1);
+      expect(acknowledged).toBe(turnNumber - 1);
+      expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
+      const body = sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("");
+      expect(crossed).toBe(true);
+      if (size === 70_000) expect(Buffer.byteLength(body)).toBeGreaterThan(1024 * 1024);
+      const local = await composeStageText(lane(), lane().stages[0]!, attempt().effectiveRole, attempt().input ?? "");
+      expect(local).not.toContain(rule);
+      const memory = await learnedRulesForLaunchProfile({ learnedRules: { project: record.project, roleId: "builder" } });
+      expect(memory).toContain(rule);
+      expect(body.slice(0, `${memory}\n\n${local}`.length)).toBe(`${memory}\n\n${local}`);
+      const receipt = memoryDeliveries().find(row => row.delivery.conversationId === threadId);
+      expect(receipt).toBeDefined();
+      expect(receipt!.delivery.attempt).toEqual({ pipelineId: record.id, stageId: "review", attempt: 1 });
+      deadlineReport("done");
+    } finally {
+      timer.mockRestore();
+      acknowledgement.close();
+      collection.boundedPatch(2, tx => {
+        if (scope) tx.put(scope); else tx.delete("s:machine");
+        if (existing) tx.put(existing); else tx.delete("r:r_cloud_runtime_fixture");
+      });
+    }
+  }, 180_000);
+}
+
+for (const pendingSource of [false, true]) test(pendingSource
+  ? "task spawn drafts inherit a launchable Cloud stage before their source transcript exists"
+  : "task assignment drafts inherit a launchable Cloud stage", async () => {
+  const { ensurePipelineForTask } = await import("./taskBinding");
+  const { createPipelineFromRequest: rawCreate, ensureTaskPipelineForAssignment } = await import("./engine");
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const { h, submits } = await fixture();
+  const project = lane().project;
+  const secret = "gh" + "p_" + "fixture".repeat(6);
+  const boardTask: BoardTask = {
+    id: "assignment-cloud-task", project,
+    text: "Implement the accepted API and preserve its response",
+    details: `Keep the accepted response fields.\nAuthorization: Bearer ${secret}`,
+    status: "inbox", placement: "unplaced", assignments: [],
+    createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z",
+  };
+  const previousTasks = loadTasks();
+  saveTasks([...previousTasks, boardTask]);
+  savePipelines([]);
+  setPipelineStageRuntime(project, "codex-cloud");
+  try {
+    const params = { repoDir: "/repo", engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", srcPath: "/codex/creator.jsonl" };
+    const created = pendingSource
+      ? await ensureTaskPipelineForAssignment(boardTask, { ...params, srcPath: null, launchId: "launch-assignment-cloud", conversationId: "conversation_creator" }, h.ports)
+      : await rawCreate(ensurePipelineForTask(boardTask, [], params)!, h.ports);
+    expect({ error: created.error, code: created.code }).toMatchObject({ error: undefined });
+    expect(created.pipeline!.state).toBe("draft");
+    expect(created.pipeline!.stages[0]!.runtime).toBe("codex-cloud");
+    if (pendingSource) expect(created.pipeline!.srcPath).toBeNull();
+    const persisted = loadPipelines()[0]!;
+    expect(persisted.inputContext?.handoffDigest).toContain(boardTask.text);
+    expect(persisted.inputContext?.handoffDigest).toContain("Keep the accepted response fields.");
+    expect(persisted.inputContext?.handoffDigest).not.toContain(secret);
+    const started = await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+    expect(started.error).toBeUndefined();
+    await submitted(h);
+    expect(submits).toHaveLength(1);
+    expect(submits[0]!.prompt).toContain(persisted.inputContext!.handoffDigest!);
+    expect(submits[0]!.prompt).not.toContain(secret);
+  } finally {
+    setPipelineStageRuntime(project, "local");
+    saveTasks(previousTasks);
+  }
+});
