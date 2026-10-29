@@ -537,7 +537,7 @@ test("image count, escaped prompt budget and revocation refuse before a frame su
   } finally { await f.close(); }
 });
 
-test("ten exact-size native images and the exact serialized text budget fit one frame", async () => {
+test("ten exact-size native images and the exact text budget fit after restarting the writer process", async () => {
   const f = await fixture((_req, res) => { res.end(); });
   try {
     const sharp = (await import("sharp")).default;
@@ -547,12 +547,30 @@ test("ten exact-size native images and the exact serialized text budget fit one 
     const files = Array.from({ length: 10 }, (_, i) => ({ ref: `image_${i}`, path: image, kind: "photo" as const, mime_type: "image/png" }));
     const overhead = Buffer.byteLength(JSON.stringify({ type: "text", text: "" }));
     const prompt = "x".repeat(MiB - overhead);
-    const input = await writeInboundAgentInput(files, prompt, f.directory, options().signal, () => {});
-    expect((await fs.stat(input!)).size).toBeLessThan(16 * MiB);
-    const frame = JSON.parse(await fs.readFile(input!, "utf8"));
-    expect(frame.message.content[0].text).toBe(prompt);
-    expect(frame.message.content.slice(1)).toHaveLength(10);
-    for (const image of frame.message.content.slice(1)) expect(Buffer.from(image.source.data, "base64")).toEqual(bytes);
+    const script = `import fs from "node:fs/promises";
+      import { writeInboundAgentInput } from "./src/lib/externalRelay/mediaInput.ts";
+      const { files, prompt, directory } = JSON.parse(await Bun.stdin.text());
+      const input = await writeInboundAgentInput(files, prompt, directory, new AbortController().signal, () => {});
+      const frame = JSON.parse(await fs.readFile(input, "utf8"));
+      const original = await fs.readFile(files[0].path);
+      if (frame.message.content[0].text !== prompt || frame.message.content.length !== 11
+        || frame.message.content.slice(1).some(image => !Buffer.from(image.source.data, "base64").equals(original))) process.exit(2);
+      const stat = await fs.stat(input);
+      console.log(JSON.stringify({ count: frame.message.content.length - 1, bytes: stat.size, mode: stat.mode & 0o777 }));`;
+    for (let pass = 0; pass < 2; pass++) {
+      const sandbox = path.join(f.directory, `writer-${pass}`);
+      for (const name of ["home", "config", "state", "tmp", "run"]) await fs.mkdir(path.join(sandbox, name), { recursive: true });
+      const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env,
+        HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), LLV_STATE_DIR: path.join(sandbox, "state"), TMPDIR: path.join(sandbox, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+      }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      const completed = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      await child.stdin.write(JSON.stringify({ files, prompt, directory: path.join(sandbox, "run") }));
+      await child.stdin.end();
+      const [output, errors, status] = await completed;
+      expect({ status, errors }).toEqual({ status: 0, errors: "" });
+      const result = JSON.parse(output);
+      expect(result.count).toBe(10); expect(result.bytes).toBeLessThan(16 * MiB); expect(result.mode).toBe(0o600);
+    }
   } finally { await f.close(); }
 });
 
