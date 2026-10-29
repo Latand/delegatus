@@ -511,7 +511,7 @@ test("auto-rotation attempt and failure accounting survive restart and seat succ
 test("the delivery alarm clock survives a restart within its epoch and clears on succession without losing debt", () => {
   const file = path.join(fs.mkdtempSync(path.join(SANDBOX, "alarm-epoch-")), "tick.json");
   const since = "2026-10-28T12:00:00.000Z";
-  const initial = { ...emptySeatTickState(), seatEpoch: 7, eventsThrough: 41, wakeDecidedSince: since, checkErrorAlarmPending: true,
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, eventsThrough: 41, wakeDecidedSince: since, checkErrorAlarmPending: true, checkErrorAlarmVersion: 2,
     catchUpProgress: { key: "catch-up:7:gap", from: "2026-10-28T10:00:00.000Z", through: since, covers: ["earlier"],
       after: JSON.stringify(["", "ask", "worker", "v1"]) },
     reportsOwed: [{ key: "earlier", label: "held outcome", receivedAt: since }] };
@@ -521,6 +521,8 @@ test("the delivery alarm clock survives a restart within its epoch and clears on
   const successor = seatTickStateForEpoch(reopened, 8);
   expect(reopened.checkErrorAlarmPending).toBe(true);
   expect(successor.checkErrorAlarmPending).toBe(true);
+  expect(reopened.checkErrorAlarmVersion).toBe(2);
+  expect(successor.checkErrorAlarmVersion).toBe(2);
   expect(successor.wakeDecidedSince ?? null).toBeNull();
   expect(successor.catchUpProgress).toEqual(initial.catchUpProgress);
   expect(successor.reportsOwed).toEqual(initial.reportsOwed);
@@ -528,9 +530,9 @@ test("the delivery alarm clock survives a restart within its epoch and clears on
   const script = `const { readSeatTickState } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickState.ts"))});
     const state = readSeatTickState("viewer", ${JSON.stringify(file)});
     console.log(JSON.stringify({ epoch: state.seatEpoch, since: state.wakeDecidedSince ?? null,
-      progress: state.catchUpProgress, owed: state.reportsOwed, cursor: state.eventsThrough }));`;
+      alarmVersion: state.checkErrorAlarmVersion, progress: state.catchUpProgress, owed: state.reportsOwed, cursor: state.eventsThrough }));`;
   const child = spawnSync(process.execPath, ["-e", script], { env: { ...process.env }, encoding: "utf8", timeout: 30_000 });
   expect(child.status).toBe(0);
-  expect(JSON.parse(child.stdout)).toEqual({ epoch: 8, since: null, progress: initial.catchUpProgress,
+  expect(JSON.parse(child.stdout)).toEqual({ epoch: 8, since: null, alarmVersion: 2, progress: initial.catchUpProgress,
     owed: initial.reportsOwed, cursor: 41 });
 });
