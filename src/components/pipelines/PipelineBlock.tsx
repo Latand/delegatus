@@ -41,6 +41,7 @@ import {
   blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
   type ChainItem, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
+import { currentProviderWait } from "@/lib/pipelines/stageChip";
 import { laneState } from "@/components/kanban/cardState";
 
 /*
@@ -236,7 +237,7 @@ function CardLine({ summary, nameOf, suffixes, age, tail, opens, onOpenStage }: 
   onOpenStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
 }) {
   const { t } = useLocale();
-  const levels = useMemo(() => cardChainLevels(cardChain(summary)), [summary]);
+  const levels = useMemo(() => cardChainLevels(cardChain(summary), currentProviderWait(summary.pipeline) ? summary.pipeline.cursor?.stageId : undefined), [summary]);
   /* A chain that changed starts the fold over, as a new width does. */
   const key = `${summary.pipeline.id}|${levels.map((level) => level.map((item) => (item.kind === "stage" ? `${item.chip.stage.id}:${item.chip.state}` : `${item.kind}${item.n}`)).join(",")).join("/")}`;
   const [fit, setFit] = useState({ key, width: 0, level: 0, alone: false, wrap: false });
@@ -327,11 +328,11 @@ function DecisionReport({ pipeline, stage, names, nameOf }: {
 }) {
   const { t } = useLocale();
   const report: PipelineStageReportEntry | null = stage ? (pipeline.stageReports ?? []).filter((entry) => entry.stageId === stage.id).at(-1) ?? null : null;
-  if (report) return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
+  if (report && currentProviderWait(pipeline)?.condition.kind !== "transient") return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
   const reason = pipelineReason(t, pipeline, nameOf);
   return (
     <>
-      {reason ? <p className="stage-report">{reason}</p> : null}
+      {reason ? <p className="stage-report" data-provider-wait={currentProviderWait(pipeline)?.condition.kind === "transient" ? "" : undefined}>{reason}</p> : null}
       <FindingList findings={stage ? stageFindings(pipeline, stage.id) : []} shown={ANSWER_FINDINGS} />
     </>
   );
@@ -620,7 +621,8 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const moved = pipelineMovedAtMs(pipeline);
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
-  const progress = pipelineProgress(t, summary, nameOf);
+  const providerReason = currentProviderWait(pipeline)?.condition.kind === "transient" ? pipelineReason(t, pipeline, nameOf) : null;
+  const progress = providerReason ?? pipelineProgress(t, summary, nameOf);
   const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
   const root = {
@@ -630,7 +632,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
     "data-needs": owner === "you" ? "1" : undefined,
     "data-seat-stop": seatStop ? "1" : undefined,
     /* A stop nobody is asked about (an automatic retry, a cleared wait) waits in grey. */
-    "data-stop-waits": (needs || laneMergeWord(pipeline) === "stopped") && owner === "waiting" ? "1" : undefined,
+    "data-stop-waits": (needs || currentProviderWait(pipeline) || laneMergeWord(pipeline) === "stopped") && owner === "waiting" ? "1" : undefined,
   };
 
   if (density === "card") {
@@ -752,7 +754,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
      menu of its own keeps its head row; at 390 px the chain, the age and a
      44 px ⋯ do not fit one line. */
   const chainHead = !showTitle && !graphOpen && !props.onMenu;
-  const diskWait = !managed && pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
+  const laneReason = !managed && !answers ? providerReason ?? (pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null) : null;
   return (
     <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root} data-managed={managed ? "" : undefined}>
       {chainHead ? null : (
@@ -778,7 +780,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
         </div>
       )}
-      {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
+      {laneReason ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{laneReason}</p> : null}
       {managed ? (
         managed.note ? <p className="pb-note" data-managed-on={managed.host}>{managed.note}</p> : null
       ) : (
@@ -823,9 +825,10 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
     pipelineEnded(pipeline) ? null : position.charAt(0).toLocaleLowerCase() + position.slice(1),
     moved === null ? null : humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000)),
   ].filter((part): part is string => Boolean(part));
+  const waiting = pipeline.state === "running" && Boolean(currentProviderWait(pipeline));
   const head = (
     <>
-      <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
+      <span className="pstate-word" data-pstate={waiting ? "waiting" : pipeline.state}>{waiting ? t("pipelinePresentation.waiting") : pipelineStateLabel(t, pipeline.state)}</span>
       <MergeWord pipeline={pipeline} nowMs={nowMs} />
     </>
   );
@@ -924,6 +927,9 @@ function ScreenBlock(props: PipelineBlockProps & {
     const report = (pipeline.stageReports ?? []).filter((entry) => entry.stageId === chip.stage.id).at(-1) ?? null;
     if (report && (!attempt || report.attempt === attempt.n)) return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
     if (!attempt) return null;
+    if (pipeline.cursor?.stageId === chip.stage.id && currentProviderWait(pipeline)?.condition.kind === "transient") {
+      return <p className="stage-report" data-stage-now={chip.stage.id}>{pipelineReason(t, pipeline, nameOf)}</p>;
+    }
     const live = ATTEMPT_LIVE.has(attempt.state);
     const at = Date.parse((live ? attempt.startedAt : attempt.completedAt ?? attempt.startedAt) ?? "");
     const age = Number.isFinite(at) ? (live ? humanizeDuration(blockAgeSeconds((nowMs - at) / 1000)) : ago(at)) : "";

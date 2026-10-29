@@ -310,7 +310,7 @@ test("finishMerge supplies a controller identity when Git has none", async () =>
   expect((await box.exec("git", ["config", "--local", "--get", "user.email"], box.repo)).code).not.toBe(0);
 });
 
-test("finishMerge uses the controller identity despite configured and inherited identities", async () => {
+test("finishMerge uses repository user identity despite inherited identities", async () => {
   const box = (await makeIdentityIsolatedRepo());
   const email = ["configured", "example.invalid"].join("@");
   (await box.run("config", "--local", "user.name", "Configured Test"));
@@ -322,10 +322,10 @@ test("finishMerge uses the controller identity despite configured and inherited 
   const agentHead = (await box.run("rev-parse", box.wf.branch));
 
   expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
-  const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
   expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-    ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
+    ["Configured Test", email, "Configured Test", email].join("\n"),
   );
+  expect(await box.run("log", "-1", "--format=%B")).toContain("Co-Authored-By: Delegatus <" + ["noreply", "delegatus.invalid"].join("@") + ">");
   expect((await box.run("rev-parse", "HEAD^2"))).toBe(agentHead);
   expect((await box.run("config", "--local", "--get", "user.email"))).toBe(email);
   expect((await box.run("config", "--local", "--get", "user.name"))).toBe("Configured Test");
@@ -378,9 +378,9 @@ test("integration: provision + commit + local merge against a throwaway repo", a
   const merged = (await runFinish(wf, "body", realExec));
   if (!merged.ok) throw new Error(merged.error);
   expect(fs.existsSync(path.join(repoDir, "greeting.txt"))).toBe(true);
-  const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
+  const configuredEmail = ["test", "example.com"].join("@");
   expect((await realExec("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], repoDir)).stdout.trim()).toBe(
-    ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
+    ["Test", configuredEmail, "Test", configuredEmail].join("\n"),
   );
 });
 
