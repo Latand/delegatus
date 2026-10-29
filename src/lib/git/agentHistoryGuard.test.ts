@@ -408,6 +408,26 @@ test.each([false, true])("pre-push preserves the repository hook input and refus
   } finally { f.close(); }
 });
 
+test.each(["-c", "joined", "config-env", "config-env joined"])("a stage keeps receipts and forwards hook argv/stdin with a %s hooks override", spelling => {
+  const f = fixture();
+  try {
+    const receipt = path.join(f.root, "receipt"), hooks = path.join(f.root, "repository hooks");
+    fs.mkdirSync(receipt); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(receipt, "base"), f.ok(["rev-parse", "HEAD"]));
+    Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env, LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+    fs.writeFileSync(path.join(hooks, "reference-transaction"), '#!/bin/sh\nprintf "%s\\n" "$@" >> hook-argv\ncat >> hook-stdin\n', { mode: 0o700 });
+    const config = spelling === "-c" ? ["-c", "core.hooksPath=" + hooks] : spelling === "joined" ? ["-ccore.hooksPath=" + hooks]
+      : spelling === "config-env" ? ["--config-env", "core.hooksPath=FIXTURE_HOOK_PATH"] : ["--config-env=core.hooksPath=FIXTURE_HOOK_PATH"];
+    f.ok([...config, "-C", f.root, "commit", "--allow-empty", "-m", "stage command arguments"], { ...f.env, FIXTURE_HOOK_PATH: hooks });
+    const head = f.ok(["rev-parse", "HEAD"]);
+    expect(fs.readFileSync(path.join(receipt, "commits", head), "utf8")).toBe("");
+    expect(fs.readFileSync(path.join(f.root, "hook-argv"), "utf8")).toBe("prepared\ncommitted\n");
+    const input = fs.readFileSync(path.join(f.root, "hook-stdin"), "utf8");
+    expect(input).toContain(` ${head} refs/heads/main\n`);
+    expect(input.split("\n").filter(Boolean)).toHaveLength(4);
+  } finally { f.close(); }
+});
+
 test("a stage Git binding preserves pushes from an unrelated fixture repository", () => {
   const f = fixture();
   try {

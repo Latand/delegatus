@@ -2,6 +2,8 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { restoreStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { realExec } from "@/lib/workflows/provision";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -279,8 +281,11 @@ function tempOwnerForSpawn(input: StructuredSpawnInput) {
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
+  // Queued starts and resume successors reconstruct the account environment.
+  // Recover the exact launch's binding before either engine builds its policy.
+  const guard = await restoreStageGitGuard(input.receipt.launchId, input.spec.cwd, realExec);
   return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
-    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, undefined, tempOwnerForSpawn(input))));
+    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, undefined, tempOwnerForSpawn(input))));
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency

@@ -51,6 +51,8 @@ await import("./src/test-helpers/domInspect");
 // before test modules load, including the task database a gate waited on.
 // The gate has already claimed its CPU slot; fixtures get their own bindings.
 // Keep newly generated guards in this run too.
+if (process.env.PATH) process.env.PATH = process.env.PATH.split(path.delimiter)
+  .filter(directory => !/[/\\]delegatus[/\\]agent-git-hooks[/\\]/.test(directory)).join(path.delimiter);
 for (const key of Object.keys(process.env)) {
   if (/^GIT_(?:CONFIG(?:_|$)|DIR$|WORK_TREE$|COMMON_DIR$|INDEX_FILE$|OBJECT_DIRECTORY$|ALTERNATE_OBJECT_DIRECTORIES$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$)/.test(key)
     || /^LLV_(?:AGENT_GIT_GUARD_DIR|REPOSITORY_PUBLICATION_IDENTITY|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE|GATE_CPU_PRIORITY_SOURCE|GATE_PUSH_HEAD|GATE_LANE_ID|GATE_STAGE_ID|GATE_CLOUD_CONFIG|GATE_STATE_DIR)$/.test(key)) delete process.env[key];

@@ -8,6 +8,24 @@ export function stageGitReceiptDirectory(launchId: string): string {
   return statePath("pipeline-git-attempts", crypto.createHash("sha256").update(launchId).digest("hex"));
 }
 
+/** Rehost the original attempt without claiming or refreshing its start head.
+ * The launch id selects the receipt; a worktree's newest owner alone must
+ * never grant an older conversation the successor's binding. */
+export async function restoreStageGitGuard(launchId: string | null | undefined, worktree: string, exec: ExecPort): Promise<Record<string, string>> {
+  if (!launchId) return {};
+  const directory = stageGitReceiptDirectory(launchId);
+  let start: { launchId?: string; worktree?: string };
+  try { start = JSON.parse(await fs.readFile(path.join(directory, "start.json"), "utf8")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {}; throw error; }
+  if (start.launchId !== launchId || start.worktree !== worktree) throw new Error("stage Git rehost binding does not match its launch");
+  const gitDirectory = await exec("git", ["rev-parse", "--absolute-git-dir"], worktree);
+  if (gitDirectory.code !== 0 || !path.isAbsolute(gitDirectory.stdout.trim())) throw new Error("stage Git rehost cannot read the worktree Git directory");
+  const ownerFile = path.join(gitDirectory.stdout.trim(), "delegatus-stage-owner");
+  if (await fs.readFile(path.join(directory, "owner"), "utf8") !== ownerFile
+    || await fs.readFile(ownerFile, "utf8") !== directory) throw new Error("stage Git rehost was superseded by another attempt");
+  return { LLV_STAGE_GIT_RECEIPT: directory, LLV_STAGE_GIT_WORKTREE: worktree };
+}
+
 export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string, assertActivation: () => void | Promise<void>): Promise<Record<string, string>> {
   const directory = stageGitReceiptDirectory(launchId);
   const gitDirectory = await exec("git", ["rev-parse", "--absolute-git-dir"], worktree);
@@ -64,6 +82,22 @@ export function stageAttemptGuardScript(): string {
 stage_owner_check() { :; }
 stage_receipt=\${LLV_STAGE_GIT_RECEIPT:-}
 stage_worktree=\${LLV_STAGE_GIT_WORKTREE:-}
+if [ -z "$stage_receipt" ] || [ -z "$stage_worktree" ]; then
+  # The per-worktree owner survives a lost environment. Diagnose at the hook
+  # boundary, before a mutation can silently lose its creation receipt.
+  stage_git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || stage_git_dir=
+  if [ -n "$stage_git_dir" ] && [ -f "$stage_git_dir/delegatus-stage-owner" ]; then
+    diagnostic_receipt=$(cat "$stage_git_dir/delegatus-stage-owner") || exit 1
+    missing=
+    [ -n "$stage_receipt" ] || missing="LLV_STAGE_GIT_RECEIPT"
+    [ -n "$stage_worktree" ] || missing="$missing LLV_STAGE_GIT_WORKTREE"
+    case "$diagnostic_receipt" in /*)
+      printf '%s\\n' "hook=$hook missing=$missing" >> "$diagnostic_receipt/binding-diagnostics" || exit 1 ;;
+    esac
+    echo "stage Git guard missing binding:$missing (hook $hook)" >&2
+    exit 1
+  fi
+fi
 if [ -n "$stage_receipt" ] || [ -n "$stage_worktree" ]; then
   case "$stage_receipt:$stage_worktree" in /*:/*) ;; *) echo 'Invalid stage Git guard binding' >&2; exit 1 ;; esac
   receipt=$stage_receipt

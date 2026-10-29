@@ -1,4 +1,6 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
+import { restoreStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { realExec } from "@/lib/workflows/provision";
 import { withHostStopOrigin } from "./hostExit";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
@@ -2125,7 +2127,8 @@ export async function claudeStartupHostOptions(
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
-    withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
+    { ...withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
+      ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
     capability,
   );
   /* No owner means no account answered for this transcript, so there is no
@@ -2684,7 +2687,7 @@ async function adoptStructuredHostsPass(
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = materializeStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
-          startupEnvironment,
+          { ...startupEnvironment, ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
           capability,
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);

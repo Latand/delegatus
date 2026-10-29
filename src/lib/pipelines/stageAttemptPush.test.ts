@@ -4,10 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { realExec } from "@/lib/workflows/provision";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
-import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import * as stageGuard from "@/lib/git/stageAttemptGuard";
+import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { settleStageAttemptPush } from "./stageAttemptPush";
 import { commitAndAdoptStageBranch } from "./stageBranch";
+import { adoptStructuredHostsAtStartup, claudeStartupHostOptions } from "@/lib/runtime/startup";
+import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
+import { AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
@@ -527,7 +533,9 @@ test.each(["own commit, receipt lost", "own hooks-off commit", "imported commit"
     if (predecessor === "own commit, receipt lost") {
       await commitThenDie(f, "unreceipted predecessor");
     } else if (predecessor === "own hooks-off commit") {
-      await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
+      const made = await realExec("git", ["-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor"],
+        f.lane, { ...f.env, PATH: process.env.PATH });
+      expect(made.code, made.stderr).toBe(0);
     } else {
       await f.git(f.foreign, "commit", "--allow-empty", "-m", "unreceipted predecessor");
       await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
@@ -718,7 +726,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
       } else {
         const args = ["commit", "--allow-empty", "-m", "divergent prelaunch rewrite"];
         const made = await realExec("git", origin === "hooks off" ? ["-c", "core.hooksPath=", ...args] : args,
-          f.lane, f.env);
+          f.lane, origin === "hooks off" ? { ...f.env, PATH: process.env.PATH } : f.env);
         expect(made.code, made.stderr).toBe(0);
         divergent = await f.own("rev-parse", "HEAD");
         if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
@@ -771,7 +779,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
       } else {
         const args = ["commit", "--allow-empty", "-m", "ordinary retry divergent start"];
         const made = await realExec("git", origin === "hooks off" ? ["-c", "core.hooksPath=", ...args] : args,
-          f.lane, f.env);
+          f.lane, origin === "hooks off" ? { ...f.env, PATH: process.env.PATH } : f.env);
         expect(made.code, made.stderr).toBe(0);
         divergent = await f.own("rev-parse", "HEAD");
         if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
@@ -1759,11 +1767,7 @@ test.each(["clean merge", "clean merge concluded by commit", "conflicted merge"]
     } finally { await f.close(); }
   });
 
-// A command-line hooks path beats the guard's GIT_CONFIG_COUNT entry, so no
-// launch hook runs. The reflog entry alone is caller-controlled text
-// (`GIT_REFLOG_ACTION`, `update-ref -m`), so such a commit stays unproved and
-// the park names the in-place acceptance instead.
-test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line hooks path override stays unproved", async shape => {
+test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line hooks path override settles with a creation receipt", async shape => {
   const f = await fixture();
   try {
     const withRepositoryHooks = await repositoryHooks(f);
@@ -1772,9 +1776,78 @@ test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line 
       : ["commit", "--allow-empty", "-m", "own work, hooks path overridden"]);
     expect(made.code, made.stderr).toBe(0);
     const head = await f.own("rev-parse", "HEAD");
-    expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+    expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
     await f.push();
-    expect(await f.settle()).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${head} was not created in the attempt worktree`) });
+    expect(await f.settle()).toEqual({ ok: true, sha: head });
+  } finally { await f.close(); }
+});
+
+test.each(["claude", "codex"] as const)("a fix commit made through regenerated %s settings after a rehost settles", async engine => {
+  const f = await fixture();
+  try {
+    const home = path.join(f.root, "claude");
+    await fs.mkdir(home);
+    const entry = { cwd: f.lane, artifactPath: path.join(f.root, "fix.jsonl"), structuredHostOperationId: f.attempt.launchId } as AgentRegistryEntry;
+    let shell: NodeJS.ProcessEnv = {};
+    if (engine === "claude") {
+      const options = await claudeStartupHostOptions(entry, { home, kind: "managed", transcriptRoot: f.root, env: { HOME: f.root, PATH: process.env.PATH } }, null, {});
+      try {
+        const policy = applyClaudeSpawnPolicy(home, { publicationEnv: options.env });
+        const settings = JSON.parse(await fs.readFile(policy.settingsPath, "utf8"));
+        shell = settings.env;
+      } finally { options.releaseCleanup?.(); }
+    } else {
+      const registry = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+      const key = { engine, sessionId: "stage-rehost" };
+      registry.upsert({ ...entry, key, accountId: null, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+        launchProfile: emptyLaunchProfile({ cwd: f.lane }) });
+      await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+        resolveCodexOwner: () => ({ home, kind: "managed" }),
+        adopt: async (store, optionsFor) => {
+          const options = await optionsFor(store.readOnlySnapshot().entries["codex:stage-rehost"]!);
+          try { shell = agentCodexPublicationPolicy({}, { ...options.env, HOME: f.root }).set as NodeJS.ProcessEnv; }
+          finally { options.releaseCleanup?.(); }
+          return [];
+        }, adoptClaude: async () => [],
+      });
+    }
+    const rehosted = { ...f.env, ...shell };
+    expect(shell.LLV_STAGE_GIT_RECEIPT).toBe(f.receipt);
+    expect(shell.LLV_STAGE_GIT_WORKTREE).toBe(f.lane);
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "fix after rehost"], f.lane, rehosted);
+    expect(made.code, made.stderr).toBe(0);
+    const head = await f.own("rev-parse", "HEAD");
+    expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
+    await f.push();
+    expect(await f.settle()).toEqual({ ok: true, sha: head });
+  } finally { await bindStructuredDeliveryQueue([]); await f.close(); }
+});
+
+test.each(["another launch", "another worktree", "successor owner"])("a rehost refuses to borrow a binding from %s", async mismatch => {
+  const f = await fixture();
+  const successor = `stage-proof-rehost-successor-${nextFixture}`;
+  try {
+    if (mismatch === "successor owner") await prepareStageGitGuard(successor, f.lane, realExec, START, async () => {});
+    if (mismatch === "another launch") {
+      const start = JSON.parse(await fs.readFile(path.join(f.receipt, "start.json"), "utf8"));
+      await fs.writeFile(path.join(f.receipt, "start.json"), JSON.stringify({ ...start, launchId: "another-launch" }));
+    }
+    await expect(stageGuard.restoreStageGitGuard(f.attempt.launchId, mismatch === "another worktree" ? f.foreign : f.lane, realExec)).rejects.toThrow(/stage Git rehost/);
+  } finally { await fs.rm(stageGitReceiptDirectory(successor), { recursive: true, force: true }); await f.close(); }
+});
+
+test.each(["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE", "both"])("a lost %s binding records the hook diagnostic and refuses the mutation", async missing => {
+  const f = await fixture();
+  try {
+    const env = { ...f.env };
+    for (const name of ["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE"]) if (missing === name || missing === "both") delete env[name];
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "lost binding"], f.lane, env);
+    expect(made.code).not.toBe(0);
+    const diagnostic = await fs.readFile(path.join(f.receipt, "binding-diagnostics"), "utf8");
+    expect(diagnostic).toContain("hook=pre-commit");
+    if (missing === "both") for (const name of ["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE"]) expect(diagnostic).toContain(name);
+    else expect(diagnostic).toContain(missing);
+    expect(await f.own("rev-parse", "HEAD")).toBe(f.pipeline.baseRef);
   } finally { await f.close(); }
 });
 
