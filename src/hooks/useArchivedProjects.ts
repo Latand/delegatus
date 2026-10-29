@@ -63,7 +63,9 @@ export function useArchivedProjects(
      for the cascading-render rationale). */
   const storedRef = useRef(stored);
   /* The presses the server has not confirmed yet, by project. */
-  const [pending, setPending] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const [pending, setPending] = useState<ReadonlyMap<string, { archived: boolean; accepted: boolean }>>(new Map());
+  const writes = useRef(new Map<string, Promise<ProjectActionResult>>());
+  const confirmed = useRef(new Map<string, boolean>());
   /* Server-shelved projects this page has already told the server are active again. */
   const restored = useRef(new Set<string>());
 
@@ -106,7 +108,10 @@ export function useArchivedProjects(
     for (const project of serverArchived) {
       if (!active.has(project) || restored.current.has(project)) continue;
       restored.current.add(project);
-      void writeProjectPresentation(project, { archived: false }).then((result) => { if (result.ok) requestFilesRefresh(); });
+      void writeProjectPresentation(project, { archived: false }).then((result) => {
+        if (result.ok) requestFilesRefresh();
+        else restored.current.delete(project);
+      });
     }
   }, [active, serverArchived]);
 
@@ -117,16 +122,17 @@ export function useArchivedProjects(
     setPending((previous) => {
       if (!previous.size) return previous;
       const next = new Map(previous);
-      for (const [project, archived] of previous) if (serverArchived.includes(project) === archived) next.delete(project);
+      for (const [project, press] of previous) if (press.accepted && serverArchived.includes(project) === press.archived) next.delete(project);
       return next.size === previous.size ? previous : next;
     });
+    for (const project of confirmed.current.keys()) if (!pending.has(project) && !writes.current.has(project)) confirmed.current.delete(project);
     for (const project of restored.current) if (!serverArchived.includes(project)) restored.current.delete(project);
-  }, [serverArchived]);
+  }, [serverArchived, pending]);
 
   const archivedProjects = useMemo(() => {
     const next = new Set([...serverArchived, ...stored]);
-    for (const [project, archived] of pending) {
-      if (archived) next.add(project);
+    for (const [project, press] of pending) {
+      if (press.archived) next.add(project);
       else next.delete(project);
     }
     for (const project of active) next.delete(project);
@@ -134,24 +140,34 @@ export function useArchivedProjects(
   }, [serverArchived, stored, pending, active]);
 
   const press = useCallback(async (project: string, archived: boolean): Promise<ProjectActionResult> => {
-    setPending((previous) => new Map(previous).set(project, archived));
-    if (!archived && storedRef.current.has(project)) {
+    const request = { archived, accepted: false };
+    setPending((previous) => new Map(previous).set(project, request));
+    /* Preserve press order on the server while the newest press draws immediately. */
+    const write = (writes.current.get(project) ?? Promise.resolve()).then(() => writeProjectPresentation(project, { archived }));
+    writes.current.set(project, write);
+    const result = await write;
+    if (writes.current.get(project) === write) writes.current.delete(project);
+    if (result.ok) confirmed.current.set(project, archived);
+    if (result.ok && !archived && storedRef.current.has(project)) {
       const next = new Set(storedRef.current);
       next.delete(project);
       storedRef.current = next;
       setStored(next);
       writeStored(next);
     }
-    const result = await writeProjectPresentation(project, { archived });
     if (result.ok) {
+      setPending((previous) => previous.get(project) === request
+        ? new Map(previous).set(project, { ...request, accepted: true })
+        : previous);
       requestFilesRefresh();
       return result;
     }
     /* Only this press is dropped: a later press on the same project keeps its own. */
     setPending((previous) => {
-      if (previous.get(project) !== archived) return previous;
+      if (previous.get(project) !== request) return previous;
       const next = new Map(previous);
-      next.delete(project);
+      if (confirmed.current.has(project)) next.set(project, { archived: confirmed.current.get(project)!, accepted: true });
+      else next.delete(project);
       return next;
     });
     return result;

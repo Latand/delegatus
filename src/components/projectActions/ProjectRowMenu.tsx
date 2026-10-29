@@ -110,6 +110,10 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
   const [named, setNamed] = useState<NameRead>({ state: "reading" });
   const close = useRef(onClose);
   const rowOf = useRef(row);
+  /* The row of the main page that opened a page, to take the focus back to once that page closes. */
+  const returnTo = useRef<Page | null>(null);
+  /* Escape with the focus outside the menu (a page that unmounted under it) still closes it. */
+  const escape = useRef<() => void>(() => {});
   useEffect(() => { close.current = onClose; rowOf.current = row; });
 
   /* Whether a name was chosen decides the reset row: it appears only once the read says so. */
@@ -149,8 +153,13 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
     first?.focus();
   }, [opened]);
   useEffect(() => {
-    if (page === "move") panel.current?.querySelector<HTMLElement>("[data-row-menu-space][aria-checked='true']")?.focus();
+    if (page === "move") (panel.current?.querySelector<HTMLElement>("[data-row-menu-space][aria-checked='true']")
+      ?? panel.current?.querySelector<HTMLElement>("[data-row-menu-space]"))?.focus();
     else if (page !== "rest") panel.current?.querySelector<HTMLElement>("[data-row-menu-cancel]")?.focus();
+    else if (returnTo.current) {
+      panel.current?.querySelector<HTMLElement>(`[data-row-menu-item='${returnTo.current}']`)?.focus();
+      returnTo.current = null;
+    }
   }, [page, doomed]);
   useEffect(() => {
     const down = (event: PointerEvent) => {
@@ -160,25 +169,40 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
       if ((node as Element).closest?.(`[data-rail-row-menu]`)) return;
       close.current(false);
     };
-    const scrolled = (event: Event) => { if (!panel.current?.contains(event.target as Node)) close.current(false); };
+    /* A scroll that moves the row leaves the menu beside nothing; a pane scrolling elsewhere does not. */
+    const scrolled = (event: Event) => {
+      const target = event.target;
+      const element = rowOf.current();
+      if (target === document || target === window || (target instanceof Node && element && target.contains(element))) close.current(false);
+    };
+    const resized = () => close.current(false);
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || panel.current?.contains(event.target as Node)) return;
+      event.preventDefault();
+      escape.current();
+    };
     window.addEventListener("pointerdown", down);
     window.addEventListener("scroll", scrolled, true);
-    window.addEventListener("resize", scrolled);
+    window.addEventListener("resize", resized);
+    window.addEventListener("keydown", key);
     return () => {
       window.removeEventListener("pointerdown", down);
       window.removeEventListener("scroll", scrolled, true);
-      window.removeEventListener("resize", scrolled);
+      window.removeEventListener("resize", resized);
+      window.removeEventListener("keydown", key);
     };
   }, []);
 
   const back = () => {
     if (busy) return;
-    const from = page;
+    returnTo.current = page;
     setPage("rest");
     setError(null);
     setDoomed(null);
-    requestAnimationFrame(() => panel.current?.querySelector<HTMLElement>(`[data-row-menu-item='${from}']`)?.focus());
   };
+  useEffect(() => {
+    escape.current = () => { if (page !== "rest") back(); else close.current(true); };
+  });
   const onKey = (event: ReactKeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();

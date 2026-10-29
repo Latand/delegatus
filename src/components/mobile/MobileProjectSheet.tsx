@@ -152,6 +152,8 @@ export function MobileProjectSheet({
   };
   /* The project whose menu stands in the list's place. */
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const currentSelection = useRef(selected);
+  useLayoutEffect(() => { currentSelection.current = selected; }, [selected]);
   const working = useMemo(() => new Set(files.filter((file) => file.proc === "running" || file.activity === "live").map((file) => projectKey(file))), [files]);
   const roots = useMemo(() => {
     const known = new Map<string, string>();
@@ -243,7 +245,7 @@ export function MobileProjectSheet({
   if (menuSummary) {
     const project = menuSummary.project;
     const back = (error?: string) => {
-      setMenuFor(null);
+      setMenuFor((current) => current === project ? null : current);
       if (error) setRowError({ project, text: error });
     };
     return (
@@ -259,9 +261,9 @@ export function MobileProjectSheet({
           onMove={workspace ? move : undefined}
           onDone={back}
           onDeleted={(deleted) => {
-            setMenuFor(null);
+            setMenuFor((current) => current === project ? null : current);
             requestFilesRefresh();
-            if (selected === deleted) onSelect(OVERVIEW);
+            if (currentSelection.current === deleted) onSelect(OVERVIEW);
           }}
         />
       </MobileSheet>

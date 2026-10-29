@@ -717,11 +717,11 @@ function ViewerApp() {
     archive: async (target) => {
       const result = await archiveProject(target);
       /* As the board's ⋯ does: the project on screen leaves for the Overview. */
-      if (result.ok && target === project) selectProject(OVERVIEW);
+      if (result.ok && target === phoneRef.current.project) selectProject(OVERVIEW);
       return result;
     },
     unarchive: unarchiveProject,
-  }), [archiveProject, unarchiveProject, project, selectProject]);
+  }), [archiveProject, unarchiveProject, selectProject]);
 
   /* Workspaces (docs/design/workspaces.md §13.4): on a team install with at
      least one, the rail, the phone's project sheet and the Overview show the

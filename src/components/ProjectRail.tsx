@@ -1,7 +1,7 @@
 "use client";
 
 import { LayoutGrid, User } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
@@ -10,7 +10,6 @@ import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/
 import { projectMatchesQuery } from "@/lib/displayNames";
 import { PRODUCT_NAME } from "@/lib/brand";
 import { useLocale } from "@/lib/i18n";
-import type { Workspace } from "@/lib/team/contract";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
@@ -213,6 +212,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   };
   /* One row's menu at a time, and the rename dialog it opens. */
   const [menu, setMenu] = useState<{ project: string; at: ProjectMenuAt } | null>(null);
+  const currentRowState = useRef({ menu, selected });
+  useLayoutEffect(() => { currentRowState.current = { menu, selected }; }, [menu, selected]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const triggers = useRef(new Map<string, HTMLButtonElement>());
   const rows = useRef(new Map<string, HTMLDivElement>());
@@ -500,10 +501,11 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           onRename={() => { setMenu(null); setRenaming(menu.project); }}
           onDeleted={(project) => {
             requestFilesRefresh();
-            if (selected === project) onSelect(OVERVIEW);
+            if (currentRowState.current.selected === project) onSelect(OVERVIEW);
           }}
           onError={(project, text) => setRowError({ project, text })}
           onClose={(back) => {
+            if (currentRowState.current.menu !== menu) return;
             const project = menu.project;
             setMenu(null);
             if (back) triggers.current.get(project)?.focus();

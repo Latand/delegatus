@@ -221,12 +221,20 @@ test("crowned projects pin to the top section with a crown marker and a working 
   expect(rows[pinnedIndex]!.querySelector('[data-testid="crown-marker"]')).toBeNull();
   expect(sections(container)).toEqual([["Pinned", "1", true], ["Projects", "1", false]]);
 
-  const uncrown = container.querySelector('button[aria-label="Remove crown"]');
-  const crown = container.querySelector('button[aria-label="Crown — pin to top"]');
-  expect(uncrown).not.toBeNull();
-  expect(crown).not.toBeNull();
-  flushSync(() => uncrown!.dispatchEvent(click()));
-  flushSync(() => crown!.dispatchEvent(click()));
+  /* The crown is a row of each project's menu: a crowned project's says Remove crown. */
+  const crownItem = (project: string) => {
+    flushSync(() => container.querySelector(`[data-rail-row-menu="${project}"]`)!.dispatchEvent(click()));
+    const item = document.querySelector(`[data-row-menu="${project}"] [data-row-menu-item="crown"]`);
+    expect(item).not.toBeNull();
+    return item!;
+  };
+  const uncrown = crownItem("CelestiaCompose");
+  expect(uncrown.textContent).toContain("Remove crown");
+  flushSync(() => uncrown.dispatchEvent(click()));
+  expect(document.querySelector("[data-row-menu]")).toBeNull();
+  const crown = crownItem("-agents-tools-live-log-viewer-next");
+  expect(crown.textContent).toContain("Crown — pin to top");
+  flushSync(() => crown.dispatchEvent(click()));
   expect(toggles).toEqual([
     ["CelestiaCompose", false],
     ["-agents-tools-live-log-viewer-next", true],

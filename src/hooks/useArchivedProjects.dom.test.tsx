@@ -146,3 +146,77 @@ test("an agent working in a shelved project takes it off the shelf and tells the
     expect(puts).toEqual([{ project: "atlas", archived: false }]);
   } finally { mounted.unmount(); }
 });
+
+
+test("a refused restore keeps the older local shelf", async () => {
+  dom.localStorage.setItem("llvArchivedProjects", JSON.stringify(["atlas"]));
+  reply = async () => new Response(JSON.stringify({ error: "forbidden" }), { status: 403 });
+  const mounted = await mount({ files: [], server: [] });
+  try {
+    await act(async () => { await mounted.hook().unarchiveProject("atlas"); });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(true);
+    expect(JSON.parse(dom.localStorage.getItem("llvArchivedProjects")!)).toEqual(["atlas"]);
+  } finally { mounted.unmount(); }
+});
+
+test("an older refused press cannot discard a newer identical press", async () => {
+  const releases: Array<(response: Response) => void> = [];
+  reply = () => new Promise<Response>((resolve) => releases.push(resolve));
+  const mounted = await mount({ files: [], server: [] });
+  try {
+    let first!: Promise<unknown>, second!: Promise<unknown>;
+    await act(async () => { first = mounted.hook().archiveProject("atlas"); second = mounted.hook().archiveProject("atlas"); });
+    await act(async () => { releases[0]!(new Response("{}", { status: 403 })); await first; });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(true);
+    await act(async () => { releases[1]!(new Response("{}")); await second; });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(true);
+  } finally { mounted.unmount(); }
+});
+
+test("an activity restore refused by the server is retried on the next files answer", async () => {
+  reply = async () => new Response("{}", { status: 503 });
+  const live = [file("atlas", { activity: "live" })];
+  const mounted = await mount({ files: live, server: ["atlas"] });
+  try {
+    await flush();
+    expect(puts).toHaveLength(1);
+    reply = async () => new Response("{}");
+    await mounted.update({ files: [...live], server: ["atlas"] });
+    await flush();
+    expect(puts).toEqual([{ project: "atlas", archived: false }, { project: "atlas", archived: false }]);
+    await mounted.update({ files: [...live], server: ["atlas"] });
+    expect(puts).toHaveLength(2);
+  } finally { mounted.unmount(); }
+});
+
+
+test("an already-matching server answer retires a successful local restore", async () => {
+  dom.localStorage.setItem("llvArchivedProjects", JSON.stringify(["atlas"]));
+  const mounted = await mount({ files: [], server: [] });
+  try {
+    await act(async () => { await mounted.hook().unarchiveProject("atlas"); });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(false);
+    await mounted.update({ files: [], server: ["atlas"] });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(true);
+  } finally { mounted.unmount(); }
+});
+
+
+test("opposing presses reach the server in order and a refusal keeps the last accepted value", async () => {
+  const releases: Array<(response: Response) => void> = [];
+  reply = () => new Promise<Response>((resolve) => releases.push(resolve));
+  const mounted = await mount({ files: [], server: [] });
+  try {
+    let archive!: Promise<unknown>, restore!: Promise<unknown>;
+    await act(async () => { archive = mounted.hook().archiveProject("atlas"); restore = mounted.hook().unarchiveProject("atlas"); });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(false);
+    expect(puts).toEqual([{ project: "atlas", archived: true }]);
+    await act(async () => { releases[0]!(new Response("{}")); await archive; });
+    expect(puts).toEqual([{ project: "atlas", archived: true }, { project: "atlas", archived: false }]);
+    await act(async () => { releases[1]!(new Response("{}", { status: 403 })); await restore; });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(true);
+    await mounted.update({ files: [], server: ["atlas"] });
+    await mounted.update({ files: [], server: [] });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(false);
+  } finally { mounted.unmount(); }
+});

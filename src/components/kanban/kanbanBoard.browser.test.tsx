@@ -38093,7 +38093,7 @@ describe("a project row's menu in the rail, variant 2", () => {
     const out = path.resolve(process.env.LLV_ROW_MENU_OUT ?? ".artifacts/project-row-menu");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
     const failures: string[] = [];
     const readings: Array<Record<string, unknown>> = [];
     const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
@@ -38179,6 +38179,22 @@ describe("a project row's menu in the rail, variant 2", () => {
       await page.waitForTimeout(650);
       await page.mouse.up();
     };
+    /* Escape closes the open menu, whatever holds the focus. */
+    const dismiss = async (page: Page) => {
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.querySelector("[data-row-menu]"), undefined, { timeout: 5_000 });
+    };
+
+    const refuseNextName = (page: Page) => page.evaluate(() => {
+      const previous = window.fetch;
+      window.fetch = (async (input, init) => {
+        if (String(input).startsWith("/api/projects/settings") && init?.method === "PUT") {
+          window.fetch = previous;
+          return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+        }
+        return previous(input, init);
+      }) as typeof window.fetch;
+    });
 
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [820, 900], [390, 844]] as const) {
@@ -38213,8 +38229,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-rail-row-menu='paper-kite']").click();
             await page.locator("[data-row-menu='paper-kite']").waitFor();
             await frame(page, tag, "menu", [words(lang, "rail.row.rename"), words(lang, "rail.row.renameHint"), words(lang, "workspaces.moveTo"), words(lang, "rail.row.moveHint", { where: words(lang, "workspaces.unassigned") }), words(lang, "rail.row.archive"), words(lang, "rail.row.delete")], desk, "[data-row-menu]", true);
-            await page.keyboard.press("Escape");
-            await page.waitForFunction(() => !document.querySelector("[data-row-menu]"));
+            await dismiss(page);
             if (!(await page.evaluate(() => document.activeElement?.getAttribute("data-rail-row-menu") === "paper-kite"))) failures.push(`${tag} Escape: the focus did not come back to the ⋯`);
             /* Right-click: the same menu at the pointer, under the row. */
             const row = (await page.locator("[data-rail-project='harbor-docs'] [data-rail-name]").boundingBox())!;
@@ -38227,8 +38242,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             });
             if (!(under.menuTop >= under.rowBottom - 0.5 || under.menuBottom <= under.rowTop + 0.5)) failures.push(`${tag} context: the menu covers its own row ${JSON.stringify(under)}`);
             await frame(page, tag, "context", [words(lang, "rail.row.rename"), words(lang, "rail.crown")], desk, "[data-row-menu]");
-            await page.keyboard.press("Escape");
-            if (width !== 1440) { if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`); continue; }
+            await dismiss(page);
             /* The keyboard alone: Shift+F10 on the row, the arrows, → opens Move to…, ← comes back. */
             await page.locator("[data-rail-project='paper-kite']").focus();
             await page.keyboard.press("Shift+F10");
@@ -38239,15 +38253,22 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.keyboard.press("ArrowLeft");
             await page.locator("[data-row-menu-view='rest']").waitFor();
             if (!(await page.evaluate(() => document.activeElement?.getAttribute("data-row-menu-item") === "move"))) failures.push(`${tag} ←: the focus is not on Move to…`);
-            await page.keyboard.press("Escape");
+            await dismiss(page);
             /* Rename: a dialog over an inert page; the name lands on the row; the menu then offers the folder's name back. */
             await page.locator("[data-rail-project='paper-kite']").hover();
             await page.locator("[data-rail-row-menu='paper-kite']").click();
             await page.locator("[data-row-menu-item='rename']").click();
+            await page.locator("[data-project-rename-input]").fill("");
+            await page.locator("[data-project-rename-save]").click();
+            await frame(page, tag, "rename-empty", [words(lang, "rail.row.emptyName")], desk);
             await page.locator("[data-project-rename-input]").fill(renamed[lang]);
             const inert = await page.evaluate(() => Boolean(document.querySelector("aside[data-project-rail]")?.closest("[inert]")));
             if (!inert) failures.push(`${tag} rename: the page behind the dialog is not inert`);
             await frame(page, tag, "rename", [words(lang, "rail.row.renameTitle"), words(lang, "rail.row.folderLead"), "/srv/projects/paper-kite"], desk);
+            await refuseNextName(page);
+            await page.locator("[data-project-rename-save]").click();
+            await page.locator("[data-project-rename-error]").waitFor();
+            await frame(page, tag, "rename-refused", [words(lang, "rail.row.failed")], desk);
             await page.keyboard.press("Enter");
             await page.locator("[data-project-rename]").waitFor({ state: "detached" });
             await page.locator(`[data-rail-project='paper-kite']:has-text("${renamed[lang]}")`).waitFor();
@@ -38256,14 +38277,18 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-row-menu-item='reset']").waitFor();
             await frame(page, tag, "renamed", [renamed[lang], words(lang, "rail.row.resetName"), words(lang, "rail.row.resetNameHint", { folder: "paper-kite" })], desk, "[data-row-menu]", true);
             await page.locator("[data-row-menu-item='reset']").click();
-            await page.waitForFunction((name) => document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]")?.textContent?.trim() === name, "Paper Kite");
+            /* The row's name line also holds its marks and age: the chosen name is gone and the folder's is back. */
+            await page.waitForFunction((chosen) => {
+              const text = document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]")?.textContent ?? "";
+              return text.includes("Paper Kite") && !text.includes(chosen);
+            }, renamed[lang]);
             /* Archive and Delete ask first; Cancel leaves the project where it was. */
             await page.locator("[data-rail-project='paper-kite']").hover();
             await page.locator("[data-rail-row-menu='paper-kite']").click();
             await page.locator("[data-row-menu-item='archive']").click();
             await frame(page, tag, "archive", [words(lang, "rail.row.archiveTitle", { name: "Paper Kite" }), words(lang, "rail.row.archiveYes"), words(lang, "common.cancel")], desk, "[data-row-menu]", true);
             await page.locator("[data-row-menu-cancel]").click();
-            await page.keyboard.press("Escape");
+            await dismiss(page);
             /* Delete counts the project's conversations before it asks. */
             await page.locator("[data-rail-project='harbor-docs']").hover();
             await page.locator("[data-rail-row-menu='harbor-docs']").click();
@@ -38271,7 +38296,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
             await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Harbor Docs" }), words(lang, "rail.row.deleteBody", { count: 1 }), words(lang, "trash.confirmYes")], desk, "[data-row-menu]", true);
             await page.locator("[data-row-menu-cancel]").click();
-            await page.keyboard.press("Escape");
+            await dismiss(page);
             /* Archive confirmed: the row goes to the archive fold, and its menu there restores it. */
             await page.locator("[data-rail-project='paper-kite']").hover();
             await page.locator("[data-rail-row-menu='paper-kite']").click();
@@ -38281,6 +38306,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-rail-archive]").click();
             await page.locator("[data-rail-archived] [data-rail-project='paper-kite']").hover();
             await page.locator("[data-rail-archived] [data-rail-row-menu='paper-kite']").click();
+            await frame(page, tag, "archived", [words(lang, "dash.unarchive"), words(lang, "rail.row.unarchiveHint")], desk, "[data-row-menu]", true);
             await page.locator("[data-row-menu-item='unarchive']").click();
             await page.locator("[data-rail-archive]").waitFor({ state: "detached" });
             /* A project with agents working: Archive and Delete closed, with the reason. */
@@ -38292,7 +38318,6 @@ describe("a project row's menu in the rail, variant 2", () => {
             await frame(page, tag, "working", [words(lang, "rail.row.working"), words(lang, "rail.uncrown")], desk, "[data-row-menu]", true);
             if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
-          if (width !== 1440) continue;
           /* A member: the closed rows say who may do them; the crown stays open. */
           {
             const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all&member=1");
@@ -38349,21 +38374,50 @@ describe("a project row's menu in the rail, variant 2", () => {
             await frame(page, tag, "move", [words(lang, "headerMenu.back"), "Client work"], sheet);
             await page.locator("[data-row-menu-back]").click();
             await page.locator("[data-row-menu-item='rename']").click();
+            await page.locator("[data-project-rename-input]").fill("");
+            await page.locator("[data-project-rename-save]").click();
+            await frame(page, tag, "rename-empty", [words(lang, "rail.row.emptyName")], sheet);
             await page.locator("[data-project-rename-input]").fill(renamed[lang]);
             await frame(page, tag, "rename", [words(lang, "rail.row.name"), words(lang, "rail.row.save")], sheet);
-            await page.locator("[data-row-menu-back]").click();
+            await refuseNextName(page);
+            await page.locator("[data-project-rename-save]").click();
+            await page.locator("[data-project-rename-error]").waitFor();
+            await frame(page, tag, "rename-refused", [words(lang, "rail.row.failed")], sheet);
+            await page.locator("[data-project-rename-save]").click();
+            await page.locator("[data-mobile2-project='harbor-docs']").filter({ hasText: renamed[lang] }).waitFor();
+            await door.first().click();
+            await page.locator("[data-row-menu-item='reset']").waitFor();
+            await frame(page, tag, "renamed", [renamed[lang], words(lang, "rail.row.resetName")], sheet);
+            await page.locator("[data-row-menu-item='reset']").click();
+            await page.locator("[data-mobile2-project='harbor-docs']").filter({ hasText: "Harbor Docs" }).waitFor();
+            await door.first().click();
+            await page.locator("[data-row-menu-item='archive']").click();
+            await frame(page, tag, "archive", [words(lang, "rail.row.archiveTitle", { name: "Harbor Docs" }), words(lang, "rail.row.archiveYes")], sheet);
+            await page.locator("[data-row-menu-cancel]").click();
             /* Back to the list, then a held press on another row opens that row's menu. */
             await page.keyboard.press("Escape");
             await page.locator("[data-mobile2-longpress='harbor-docs']").waitFor();
             if (await page.locator("[data-mobile2-project-hint]").count()) failures.push(`${tag} list again: the hint is still drawn after a menu opened`);
-            await page.locator("[data-mobile2-longpress='harbor-docs']").scrollIntoViewIfNeeded();
-            await hold(page, "[data-mobile2-longpress='harbor-docs']");
-            await page.locator("[data-row-menu='harbor-docs']").waitFor();
-            await frame(page, tag, "longpress", ["Harbor Docs", words(lang, "rail.row.rename"), words(lang, "rail.uncrown")], sheet);
-            await page.locator("[data-row-menu='harbor-docs'] [data-row-menu-item='delete']").click();
+            await page.locator("[data-mobile2-longpress='paper-kite']").scrollIntoViewIfNeeded();
+            await hold(page, "[data-mobile2-longpress='paper-kite']");
+            await page.locator("[data-row-menu='paper-kite']").waitFor();
+            await frame(page, tag, "longpress", ["Paper Kite", words(lang, "rail.row.rename"), words(lang, "rail.crown")], sheet);
+            await page.locator("[data-row-menu='paper-kite'] [data-row-menu-item='delete']").click();
             await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
-            await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Harbor Docs" }), words(lang, "trash.confirmYes"), words(lang, "common.cancel")], sheet);
+            await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Paper Kite" }), words(lang, "trash.confirmYes"), words(lang, "common.cancel")], sheet);
             await page.locator("[data-row-menu-cancel]").click();
+            await page.locator("[data-row-menu-item='archive']").click();
+            await page.locator("[data-row-menu-confirm='archive']").click();
+            await page.locator("[data-mobile2-project-archive]").click();
+            await page.locator("[data-mobile2-longpress='paper-kite']").scrollIntoViewIfNeeded();
+            await hold(page, "[data-mobile2-longpress='paper-kite']");
+            await page.locator("[data-row-menu-item='unarchive']").waitFor();
+            await frame(page, tag, "archived", [words(lang, "dash.unarchive"), words(lang, "rail.row.unarchiveHint")], sheet);
+            await page.locator("[data-row-menu-item='unarchive']").click();
+            await page.locator("[data-mobile2-longpress='acme-ledger']").scrollIntoViewIfNeeded();
+            await hold(page, "[data-mobile2-longpress='acme-ledger']");
+            await page.locator("[data-row-menu='acme-ledger']").waitFor();
+            await frame(page, tag, "working", [words(lang, "rail.row.working"), words(lang, "rail.uncrown")], sheet);
             if (pageErrors.length) failures.push(`${tag} phone: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }

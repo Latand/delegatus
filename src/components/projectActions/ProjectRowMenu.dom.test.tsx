@@ -65,7 +65,8 @@ const base = {
   proc: null, pid: null, model: null, waitingInput: null, activity: "idle", pendingQuestion: null,
 } as unknown as FileEntry;
 const file = (project: string, over: Partial<FileEntry> = {}) => ({ ...base, project, path: `/sessions/${project}.jsonl`, name: `${project}.jsonl`, title: project, ...over }) as FileEntry;
-const files = [file("atlas"), file("busy-lab", { activity: "live", proc: "running" })];
+/* As /api/files sends them: each conversation carries its project's name. */
+const files = [file("atlas", { projectName: "Atlas" }), file("busy-lab", { projectName: "Busy Lab", activity: "live", proc: "running" })];
 const catalog: ProjectCatalogEntry[] = [
   { project: "atlas", displayName: "Atlas", projectRoot: "/srv/work/atlas-checkout", smt: 1_000, conversations: 3 },
   { project: "busy-lab", displayName: "Busy Lab", smt: 990, conversations: 1 },
@@ -131,11 +132,14 @@ const key = async (target: unknown, name: string, shiftKey = false) => {
   await act(async () => { ((target ?? document.body) as Element).dispatchEvent(new dom.KeyboardEvent("keydown", { key: name, shiftKey, bubbles: true, cancelable: true }) as unknown as Event); });
   await settle();
 };
+/* Type through React's own onChange, as ProjectRail.firstRun.dom.test.tsx does: in happy-dom an input
+   event dispatched in a portal on document.body reaches the body, yet React never records the change. */
 const type = async (input: HTMLInputElement, value: string) => {
+  const propsKey = Object.keys(input).find((name) => name.startsWith("__reactProps$"))!;
+  const props = (input as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!;
   await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    props.onChange({ target: input, currentTarget: input });
   });
 };
 const menu = () => document.querySelector("[data-row-menu]");
@@ -184,6 +188,29 @@ describe("at rest and opening", () => {
     expect(document.activeElement?.getAttribute("data-row-menu-item")).toBe("delete");
     await key(document.activeElement, "ArrowDown");
     expect(document.activeElement?.getAttribute("data-row-menu-item")).toBe("rename");
+  });
+
+  test("Escape closes the menu with the focus outside it; only a scroll that moves its row closes it", async () => {
+    const host = await render();
+    const pane = dom.document.createElement("div");
+    dom.document.body.appendChild(pane);
+    const scroll = async (target: unknown) => {
+      await act(async () => { (target as Element).dispatchEvent(new dom.Event("scroll") as unknown as Event); });
+      await settle();
+    };
+    await click(host.querySelector("[data-rail-row-menu='atlas']"));
+    (document.activeElement as HTMLElement | null)?.blur();
+    await key(document.body, "Escape");
+    expect(menu()).toBeNull();
+    expect(document.activeElement?.getAttribute("data-rail-row-menu")).toBe("atlas");
+
+    await click(host.querySelector("[data-rail-row-menu='atlas']"));
+    /* A live pane elsewhere on the page scrolls by itself: the menu stays. */
+    await scroll(pane);
+    expect(menu()?.getAttribute("data-row-menu")).toBe("atlas");
+    /* The rail's list scrolls under it: the menu would stand beside nothing, so it closes. */
+    await scroll(host.querySelector("nav"));
+    expect(menu()).toBeNull();
   });
 
   test("a project with an agent working keeps Archive and Delete closed with its reason", async () => {
@@ -317,6 +344,21 @@ describe("crown, archive, delete", () => {
     expect(requests.at(-1)).toEqual({ url: "/api/projects/settings", method: "PUT", body: { project: "atlas", archived: false } });
   });
 
+  test("an archive answer cannot close another project's newly opened menu", async () => {
+    let release!: (answer: Answer) => void;
+    answerFor = (_url, method) => method === "PUT" ? new Promise<Answer>((resolve) => { release = resolve; }) : { status: 404, body: {} };
+    const host = await render();
+    await click(host.querySelector("[data-rail-row-menu='atlas']"));
+    await click(menu()!.querySelector("[data-row-menu-item='archive']"));
+    await click(menu()!.querySelector("[data-row-menu-confirm='archive']"));
+    expect(archived).toEqual(["atlas"]);
+    await click(host.querySelector("[data-rail-row-menu='busy-lab']"));
+    expect(menu()?.getAttribute("data-row-menu")).toBe("busy-lab");
+    await act(async () => { release({ status: 200, body: { ok: true } }); });
+    await settle();
+    expect(menu()?.getAttribute("data-row-menu")).toBe("busy-lab");
+  });
+
   test("Delete counts the conversations, asks, then deletes those paths and leaves the selected project", async () => {
     const conversations = [file("atlas", { path: "/sessions/atlas-1.jsonl" }), file("atlas", { path: "/sessions/atlas-2.jsonl" })];
     answerFor = (url, method) => {
@@ -362,6 +404,22 @@ describe("who may do what", () => {
       { id: RESEARCH, name: "Research", color: "violet", createdAt: "2026-10-20T09:01:00.000Z", projects: ["lab"] },
     ],
     ...over,
+  });
+
+  test("a manager moving an Unassigned project can reach the first destination by keyboard", async () => {
+    const moved: Array<[string, string | null]> = [];
+    const host = await render({ workspace: {
+      view: view({ managedWorkspaceIds: [CLIENT] }), chosen: "all", choose: () => {}, leave: () => {},
+      place: async (project, workspaceId) => { moved.push([project, workspaceId]); return { ok: true }; },
+    } });
+    await click(host.querySelector("[data-rail-row-menu='atlas']"));
+    await key(document.activeElement, "ArrowDown");
+    expect(document.activeElement?.getAttribute("data-row-menu-item")).toBe("move");
+    await key(document.activeElement, "ArrowRight");
+    expect(document.activeElement?.getAttribute("data-row-menu-space")).toBe(CLIENT);
+    await click(document.activeElement);
+    expect(moved).toEqual([["atlas", CLIENT]]);
+    expect(menu()).toBeNull();
   });
 
   test("without workspaces everything opens and there is no move", () => {
