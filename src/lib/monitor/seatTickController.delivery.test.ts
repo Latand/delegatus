@@ -828,13 +828,22 @@ test("a retired and an outstanding attempt share one card, which names the outst
   expect(card.text).toContain(`monitor-ref: ${SEAT_TICK_WAKE_UNRESOLVED_REF}`);
   expect(card.text).toContain("Attempts on this card: 2");
 
-  /* A later check inside the attempt's age bound re-raises the same
-     condition and writes nothing. */
+  /* Re-reading the same instant changes neither the card nor its count. */
+  await runSeatTickCheck(project, { ...second.deps, ensureCard: undefined });
+  expect(cardsOn()).toEqual(standing);
+
+  /* Only the watchdog's age advances inside the attempt's age bound. */
+  expect(card.text).toContain("without delivery for 61 minutes;");
+  expect(card.text).toContain(`ageMs=${61 * MINUTE};`);
   const third = harness({ ...shared, now: NOW + 90 * MINUTE, state: { ...shared.state, outstandingWake: undefined as never } });
   third.deps.readState = first.deps.readState;
   third.deps.writeState = first.deps.writeState;
   await runSeatTickCheck(project, { ...third.deps, ensureCard: undefined });
-  expect(cardsOn()).toEqual(standing);
+  expect(cardsOn()).toEqual(standing.map(card => ({
+    ...card,
+    text: card.text.replace("without delivery for 61 minutes;", "without delivery for 90 minutes;")
+      .replace(`ageMs=${61 * MINUTE};`, `ageMs=${90 * MINUTE};`),
+  })));
 });
 
 /* The retired release on affirmed absence, pinned across every dispatch state
