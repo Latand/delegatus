@@ -229,8 +229,11 @@ test.each([0, 5])("a fresh process honours the saved retry time after %i continu
 
 test("a persisted long capacity chain can close on another transient error after restart", async () => {
   const f = await capacity();
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
   const lane = loadPipelines()[0]!;
-  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 40, startedAt: f.h.ports.now() };
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.providerRecoveryBudget!.tries = 40;
+  attempt.providerWait!.tries = 40;
   savePipelines([lane]);
   f.advance(1_000);
   fs.appendFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: {
