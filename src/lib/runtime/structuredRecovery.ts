@@ -21,6 +21,7 @@ import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -451,7 +452,8 @@ async function recoverCandidate(
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 cwd: current.spec.cwd, codexHome: account.home,
-                env: withoutUnsupportedApiCredentials(account.env), socketOwner,
+                env: { ...withoutUnsupportedApiCredentials(account.env),
+                  ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
                 initialEventCursor: claim.structuredHost.eventCursor,
                 readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
