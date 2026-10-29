@@ -366,12 +366,15 @@ test.each(["fresh", "exhausted"] as const)("a pending publication cannot bypass 
       race.restore(); race = undefined;
       clock += 60_000;
       await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
-      expect(current().delivery!.operation!.state).toBe("settled");
+      // The native publisher promotes its pending admission to an execution.
+      // Once verified, that execution must remain the original publication.
+      const executed = structuredClone(current().delivery!.operation!);
+      expect(executed).toMatchObject({ requestKey: operation.requestKey, epoch: operation.epoch,
+        sha: operation.sha, state: "settled", result: { ok: true, remote: "published" } });
       expect(current().runs[0]!.attempts[0]!.settlementPreparationWait?.startedAt).toBe(window!.startedAt);
       for (let n = 0; n < 2; n++) { await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs(); }
       expect(current().cursor?.stageId).toBe("audit");
-      expect(current().delivery!.operation).toMatchObject({ id: operation.id, requestKey: operation.requestKey,
-        epoch: operation.epoch, sha: operation.sha, state: "settled", result: { ok: true, remote: "published" } });
+      expect(current().delivery!.operation).toEqual(executed);
       expect(pushes).toBe(1);
     } else {
       clock += 15 * 60_000;
