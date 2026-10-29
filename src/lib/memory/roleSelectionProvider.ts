@@ -101,10 +101,10 @@ export function openRouterRoleSelectionProvider(options: { apiKey?: string | nul
           signal.throwIfAborted();
           details.limit = finite(data.limit) ? data.limit : null;
           details.remaining = finite(data.limit_remaining) ? data.limit_remaining : null;
-          // A null limit has no per-key cap. A numeric remaining balance still
-          // governs admission when returned; malformed values fail closed.
+          // Remaining credit governs a funded key even if its total-limit
+          // metadata is absent. Only an explicit null/null pair is unlimited.
           details.status = data.limit === null && data.limit_remaining === null ? "admitted"
-            : (data.limit === null || nonnegative(data.limit)) && finite(data.limit_remaining) ? (data.limit_remaining >= ceilingUsd ? "admitted" : "insufficient") : "shape";
+            : finite(data.limit_remaining) ? (data.limit_remaining >= ceilingUsd ? "admitted" : "insufficient") : "shape";
           return details;
         },
         async decide(key, signal, authorize, observe) {

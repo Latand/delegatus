@@ -186,8 +186,9 @@ test.each([
   [{ limit: null, limit_remaining: null }, "admitted", true],
   [{ limit: null, limit_remaining: 1 }, "admitted", true],
   [{ limit: null, limit_remaining: 0 }, "insufficient", false],
+  [{ limit: undefined, limit_remaining: 1 }, "admitted", true],
   [{ limit: 3 }, "shape", false],
-  [{ limit: "3", limit_remaining: 1 }, "shape", false],
+  [{ limit: 3, limit_remaining: "1" }, "shape", false],
   [{ limit: 3, limit_remaining: -1 }, "insufficient", false],
 ] as const)("provider admission records %j and dispatches only within its budget", async (limits, status, admitted) => {
   const { fetcher, requests } = provider();

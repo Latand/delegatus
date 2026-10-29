@@ -18,10 +18,10 @@ therefore requires the operator to restore that key's budget first.
 OpenRouter documents `limit` and `limit_remaining` as per-key credit controls:
 [limits](https://openrouter.ai/docs/api/reference/limits) and
 [current key](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key).
-Finite remaining credit must cover the conservative byte-based cost ceiling.
-A null limit means no per-key cap; a numeric remaining balance still governs
-admission when returned. Missing or invalid fields refuse admission. Negative
-remaining credit is an insufficient-budget result.
+Finite remaining credit must cover the conservative byte-based cost ceiling,
+including when no numeric total key limit is returned. An explicit null limit
+and null remaining balance means no per-key cap. Otherwise, missing or invalid
+remaining credit refuses admission. Negative remaining credit is insufficient.
 HTTP refusals, invalid metadata, and insufficient credit have distinct evidence
 statuses. The adapter never stores the key endpoint's labels, account metadata,
 credentials, or response text.
