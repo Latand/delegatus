@@ -114,8 +114,8 @@ function returnedNote(route: { returnedFrom?: string }): string {
     : "";
 }
 
-/** Completion releases publication, while the latest claim still names the
- * lane delivering that target. Index the projection once, without store reads. */
+/** Completion releases publication while an admitted merge can still deliver
+ * that target. Index the latest claim once, without store reads. */
 function deliveryOwners(pipelines: readonly Pipeline[]): Map<string, Pipeline> {
   const owners = new Map<string, Pipeline>();
   for (const pipeline of pipelines) {
@@ -150,6 +150,9 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
       if (laneNeedKind(pipeline) === "lane-merge" && pipeline.delivery && pipeline.merge?.prNumber != null) {
         const owner = owners.get(deliveryTargetKey(pipeline));
         if (owner && owner.id !== pipeline.id && owner.state !== "closed"
+          // A completed claim alone may have been refused merge admission;
+          // its parent still carries the actionable merge stop in that case.
+          && (owner.state !== "completed" || owner.merge != null)
           && owner.delivery!.target.pr === pipeline.merge?.prNumber) return [];
       }
       const state = laneState(pipeline);

@@ -1029,6 +1029,49 @@ describe("refresh retry recovery", () => {
     return { waiting, child };
   }
 
+  test("completed refresh refused admission retains the parent seat ask", async () => {
+    const { waiting, child: template } = await waitingRefresh("completed");
+    const child = buildPipeline({ id: template.id, task: template.task, project: PROJECT, repoDir: template.repoDir,
+      stages: template.stages, srcPath: null, srcConversationId: null, now: iso(T0), publication: "remote-branch" });
+    assignPipelineDelivery(child, waiting.delivery!.target);
+    child.runs = template.runs;
+    child.refreshOf = template.refreshOf;
+    child.workLinks = template.workLinks;
+    child.lastPassedCommit = template.lastPassedCommit;
+    child.state = "completed";
+    child.cursor = null;
+    child.closedAt = iso(T0);
+    savePipelines([waiting, child]);
+    expect(loadPipelines().find(row => row.id === child.id)!.delivery!.active).toBe(false);
+    setMergeOnReview(PROJECT, false, "operator", iso(T0 + 1_000));
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 + 2_000));
+    let clock = T0 + 3_000;
+    const ports = productionAutoMergePorts({ now: () => clock, loadPipelines, cachedState: () => null, log: () => undefined,
+      run: async () => { throw new Error("a refused refresh needs no forge read"); } });
+    let firstKey: string | undefined;
+    for (let pass = 0; pass < 2; pass++) {
+      await sweepAutoMerge(ports);
+      const rows = loadPipelines();
+      const parent = rows.find(row => row.id === waiting.id)!;
+      expect(parent.merge!.state).toBe("blocked");
+      expect(parent.merge!.reason).toBe("Refresh was not admitted: lane did not complete after the merge setting was enabled");
+      expect(rows.find(row => row.id === child.id)!.merge).toBeUndefined();
+      for (const lanes of [rows, [...rows].reverse()]) {
+        const asks = workerAsks(parent, lanes);
+        expect(asks.map(ask => ask.id)).toEqual([parent.id]);
+        firstKey ??= asks[0]!.key;
+        expect(asks[0]!.key).toBe(firstKey);
+      }
+      clock += 60_000;
+    }
+    const pipelinePorts = defaultPipelinePorts();
+    pipelinePorts.now = () => iso(clock);
+    expect((await patchPipeline(waiting.id, { action: "dismiss" }, pipelinePorts)).error).toBeUndefined();
+    await sweepAutoMerge(ports);
+    const rows = loadPipelines();
+    expect(workerAsks(rows.find(row => row.id === waiting.id)!, rows)).toEqual([]);
+  });
+
   test.each(["closed", "needs_decision"] as const)("an unchanged %s refresh stays dismissed across sweeps and a process restart", async state => {
     const { waiting } = await waitingRefresh(state);
     let clock = T0;
