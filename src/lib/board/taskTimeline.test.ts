@@ -91,7 +91,8 @@ test("only tasks with an open lane appear, with project and task membership chec
   pipelines[4]!.hiddenAt = stamp(-20);
   // A foreign lane claiming an own task id must never contribute history.
   pipelines[5]!.taskIds.push(tasks[0]!.id);
-  pipelines[0]!.taskIds.push(tasks[0]!.id, "missing-task");
+  pipelines[0]!.taskIds.push(tasks[0]!.id, tasks[5]!.id, "missing-task");
+  pipelines[3]!.taskIds.push(tasks[0]!.id);
   const result = read(pipelines, tasks);
   expect(result.tasks.map(row => row.taskId)).toEqual(["task-main"]);
   expect(result.tasks[0]!.pipelines.map(row => row.id)).toEqual(["lane-task-main"]);
@@ -107,6 +108,14 @@ test.each(["provisioning", "running", "needs_decision", "needs_review", "paused"
   const later = read([pipeline], [task()], ms(10)).tasks[0]!;
   expect([first.endAtMs, later.endAtMs, first.live]).toEqual([NOW, ms(10), false]);
   expect(later.pipelines[0]!.attempts[0]!.endAtMs).toBe(ms(-90));
+});
+
+test.each(["passed", "failed", "needs_decision", "skipped"] as const)("%s with an unrecorded completion never grows as live work", state => {
+  const pipeline = lane();
+  const current = attempt(pipeline, 1, -90, null, "running");
+  expect(read([pipeline]).tasks[0]!.live).toBe(true);
+  current.state = state;
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: false, endAtMs: null });
 });
 
 test("unknown, reversed and future times never invent elapsed agent work", () => {
@@ -144,7 +153,7 @@ test("closed, superseded, historical and non-cursor attempts never grow through 
   expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts.at(-1)!.endAtMs).toBe(ms(10));
   pipeline.cursor = { ...pipeline.cursor!, stageId: "review" };
   expect(read([pipeline]).tasks[0]!.live).toBe(false);
-  pipeline.cursor = null;
+  pipeline.cursor.stageId = "build";
   pipeline.state = "closed";
   pipeline.closedAt = stamp(-10);
   const next = lane("refresh");
