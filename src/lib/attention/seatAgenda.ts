@@ -6,10 +6,11 @@ import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { MERGE_REASON_PATTERNS, MERGE_REASONS } from "@/lib/forge/mergeReasons";
 import { laneStopKind } from "@/lib/pipelines/laneStop";
+import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { laneNeedKind } from "./routeTypes";
+import { laneNeedKind, laneWaitCleared } from "./routeTypes";
 
 /*
  * The seat's half of routing (docs/design/attention-auto-resolve.md,
@@ -114,25 +115,6 @@ function returnedNote(route: { returnedFrom?: string }): string {
     : "";
 }
 
-/** Completion releases publication while an admitted merge can still deliver
- * that target. Index the latest claim once, without store reads. */
-function deliveryOwners(pipelines: readonly Pipeline[]): Map<string, Pipeline> {
-  const owners = new Map<string, Pipeline>();
-  for (const pipeline of pipelines) {
-    const delivery = pipeline.delivery;
-    if (!delivery || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id) continue;
-    const key = deliveryTargetKey(pipeline);
-    const previous = owners.get(key);
-    if (!previous || delivery.epoch > previous.delivery!.epoch) owners.set(key, pipeline);
-  }
-  return owners;
-}
-
-function deliveryTargetKey(pipeline: Pipeline): string {
-  const target = pipeline.delivery!.target;
-  return JSON.stringify([canonicalOrchestratorProject(target.repository), target.branch]);
-}
-
 /** Every wait the board routes to this project's seat, oldest first. */
 export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }, now: number, project: string): SeatTickWorkerAskInput[] {
   const canonical = canonicalOrchestratorProject(project);
@@ -143,18 +125,11 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
     asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
   }
-  const owners = deliveryOwners(body.pipelines);
+  const successorOwners = indexMergeSuccessors(body.pipelines);
   const lanes = body.pipelines
     .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
     .flatMap((pipeline) => {
-      if (laneNeedKind(pipeline) === "lane-merge" && pipeline.delivery && pipeline.merge?.prNumber != null) {
-        const owner = owners.get(deliveryTargetKey(pipeline));
-        if (owner && owner.id !== pipeline.id && owner.state !== "closed"
-          // A completed claim alone may have been refused merge admission;
-          // its parent still carries the actionable merge stop in that case.
-          && (owner.state !== "completed" || owner.merge != null)
-          && owner.delivery!.target.pr === pipeline.merge?.prNumber) return [];
-      }
+      if (laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];
