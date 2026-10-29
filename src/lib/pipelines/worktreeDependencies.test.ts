@@ -156,10 +156,11 @@ test.each(["missing", "lagging-link", "lagging-directory", "matching"].flatMap(s
     expect(fs.existsSync(path.join(path.dirname(resolved), "lifecycle-ran"))).toBe(false);
     await prepareWorktreeDependencies(f.pipeline);
     expect(fs.realpathSync(local)).toBe(resolved);
-    fs.writeFileSync(path.join(f.repoDir, ".git/hooks/pre-commit"), "#!/bin/sh\nexec node_modules/.bin/fixture-tool\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(f.repoDir, ".git/hooks/pre-commit"), "#!/bin/sh\nnode_modules/.bin/fixture-tool || exit $?\nprintf checked > \"$(git rev-parse --git-common-dir)/commit-hook-ran\"\n", { mode: 0o755 });
     fs.writeFileSync(path.join(f.worktreeDir, "change.txt"), "stage output\n");
     await f.run(["git", "add", "change.txt"], f.worktreeDir);
     await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "-m", "hooked stage output"], f.worktreeDir);
+    expect(fs.readFileSync(path.join(f.repoDir, ".git/commit-hook-ran"), "utf8")).toBe("checked");
     if (shape === "lagging-link") expect(JSON.parse(fs.readFileSync(path.join(source, "fixture-tool/package.json"), "utf8")).version).toBe("1.0.0");
   } finally { f.close(); }
 }, 30_000);
@@ -260,10 +261,10 @@ test("a production caller gets development tools without installation scripts", 
   const f = await lockedFixture();
   const previous = process.env.NODE_ENV;
   try {
-    process.env.NODE_ENV = "production";
+    Reflect.set(process.env, "NODE_ENV", "production");
     try { await prepareWorktreeDependencies(f.pipeline); }
     finally {
-      if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous;
+      if (previous === undefined) Reflect.deleteProperty(process.env, "NODE_ENV"); else Reflect.set(process.env, "NODE_ENV", previous);
     }
     const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
     const installedRoot = path.dirname(modules);
@@ -277,7 +278,7 @@ test("a production caller gets development tools without installation scripts", 
     expect(fs.existsSync(path.join(control, "lifecycle-ran"))).toBe(true);
     expect(fs.existsSync(path.join(installedRoot, "lifecycle-ran"))).toBe(false);
   } finally {
-    if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous;
+    if (previous === undefined) Reflect.deleteProperty(process.env, "NODE_ENV"); else Reflect.set(process.env, "NODE_ENV", previous);
     f.close();
   }
 }, 30_000);

@@ -7286,7 +7286,7 @@ async function spawnRunStage(
   try {
     // Validate Delegatus's shared graph even on a resumed stage. Other
     // repositories release old source links before package code can run.
-    const lockedDependencies = await performanceSpans.wait("pipeline.dependency-setup",
+    const lockedDependencies = await performanceSpans.wait("pipeline.shared",
       () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
     if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
     if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {

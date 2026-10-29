@@ -30,6 +30,7 @@ export async function lockedFixture() {
   };
   try {
     await run(["git", "init", "--initial-branch=main"]);
+    fs.mkdirSync(path.join(repoDir, ".git/hooks"), { recursive: true });
     fs.writeFileSync(path.join(repoDir, ".gitignore"), "/node_modules\n");
     fs.writeFileSync(path.join(repoDir, "package.json"), JSON.stringify({ name: "delegatus-cli",
       devDependencies: { "fixture-tool": `http://127.0.0.1:${server.port}/fixture.tgz` },
