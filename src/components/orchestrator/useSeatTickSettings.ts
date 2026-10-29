@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+import type { SeatNoteRemoval } from "@/lib/monitor/seatTickInstructions";
 
 /**
  * One project's seat tick settings, read and written through the one route
@@ -43,6 +44,7 @@ export interface SeatTickChange {
   reason?: string | null;
   clearUnknownInstructions?: boolean;
   replaceOtherInstructions?: boolean;
+  removeSeatNotes?: SeatNoteRemoval[];
   untilMinutes?: number | null;
   /**
    * The board maintenance timer (#2162). `intervalHours` follows the same
