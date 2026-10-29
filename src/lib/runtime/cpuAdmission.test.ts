@@ -736,7 +736,7 @@ test("two releases opening an older queue at once never remove a live, just-poll
   m.at(day);
   older.check(LIVE, true);
   let other: ReturnType<typeof checkInAnotherProcess> | undefined;
-  let installedSchema: unknown;
+  let installedSchema: unknown[] = [];
   const q = new CpuAdmissionQueue(m.file, () => {
     if (other === undefined) {
       other = checkInAnotherProcess(m.file, day, "command:later", owner);
