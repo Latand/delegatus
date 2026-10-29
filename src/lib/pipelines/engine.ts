@@ -3302,6 +3302,10 @@ async function recoverProviderCut(
       const unavailableIds = usageLimitsOn(attempt, engine)
         .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
         .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts);
+      if (capacity && engine === "codex" && attempt.effectiveRole.model && attempt.effectiveRole.serviceTier
+        && attempt.effectiveRole.serviceTierSource !== "role-default") {
+        unavailableIds.push(...tierOffers(listCodexAccounts(), attempt.effectiveRole.model, attempt.effectiveRole.serviceTier).lacking);
+      }
       const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
         project: pipeline.project, model: attempt.effectiveRole.model,
         unavailableIds: capacity && wait.accountId ? [...unavailableIds, wait.accountId] : unavailableIds,
@@ -3310,6 +3314,7 @@ async function recoverProviderCut(
       const pool = ports.allowedAccountIds?.(pipeline.project, engine);
       if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
         && (!pool || pool.includes(resolution.account.accountId)) && !wait.failedAccounts?.includes(resolution.account.accountId)
+        && (!capacity || !unavailableIds.includes(resolution.account.accountId))
         && !triedAccounts.includes(resolution.account.accountId)) target = resolution.account.accountId;
       // With no spare, the source may be retried only when ordinary reset-aware
       // selection still admits it. Excluded or exhausted pools keep waiting.
