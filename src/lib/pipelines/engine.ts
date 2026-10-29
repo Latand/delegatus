@@ -5398,6 +5398,7 @@ async function settlePublicationRepair(
   // Unknown activity and a live producer retain the ordinary repair protocol.
   const evidence = !repair.committedSha && worker?.attempt.effectiveRole.access === "read-write" ? await readRepairProducerEvidence(pipeline, stage, attempt, ports) : undefined;
   const producerGone = (observed: RepairProducerEvidence | undefined) => !!observed?.conversationId && observed.dead === true && observed.active === false
+    && observed.conversationId === worker?.attempt.conversationId
     && observed.repairIdentity === publicationRepairIdentity(pipeline, attempt)
     && !ports.conversationDeliveryOutstanding?.(observed.conversationId!)
     && liveBackgroundTasks(observed.durable?.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
@@ -5455,7 +5456,7 @@ async function settlePublicationRepair(
         const abandonment = attempt.publicationRepairAbandonment;
         if (!abandonment) attempt.publicationRepairAbandonment = { at: ports.now(), reason };
         else if (!abandonment.reason.includes("The publication repair producer is dead;")) abandonment.reason += `\n${reason}`;
-        // Preserve the send's rejection rather than invent a producer answer.
+        // Keep the send's rejection as the abandoned turn's outcome.
         repair.settledAt ??= ports.now();
         repair.outcome ??= { status: "rejected", reason };
         await persist();

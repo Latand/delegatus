@@ -952,10 +952,12 @@ test.each([false, true])("a real refused pre-push admits one fresh decision atte
   } finally { f.close(); }
 });
 
-test.each(["committed", "staged", "parked-staged", "committed-staged", "unstaged", "live"] as const)(
+test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-unstaged", "unstaged", "live"] as const)(
   "a requested publication repair hands a %s dead producer head to review", async shape => {
     const f = await fixture();
     try {
+      let clock = f.h.ports.now();
+      f.h.ports.now = () => clock;
       let sends = 0;
       f.h.ports.resumeSeveredTurn = async () => { sends++; return true; };
       const accepted = await f.commit("implementation");
@@ -968,12 +970,14 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "unstaged
       let repaired = accepted;
       if (shape === "committed" || shape === "committed-staged" || shape === "live") repaired = await f.commit("producer repair");
       const parent = repaired;
-      if (shape === "staged" || shape === "parked-staged" || shape === "unstaged" || shape === "committed-staged") {
+      if (shape === "staged" || shape === "parked-staged" || shape === "staged-unstaged" || shape === "unstaged" || shape === "committed-staged") {
         fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged producer repair\n");
         if (shape !== "unstaged") await f.agentGit(f.lane(), "add", "file.txt");
+        if (shape === "staged-unstaged") fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged remainder\n");
       }
       fs.unlinkSync(path.join(f.hooks, "pre-push"));
       if (shape === "parked-staged") {
+        clock = new Date(Date.parse(clock) + 21 * 60_000).toISOString();
         f.h.advanceWallClock(21 * 60_000);
         await tickPipelines([], f.h.ports);
         expect(current().state).toBe("needs_decision");
@@ -995,7 +999,7 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "unstaged
         expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(repaired);
         return;
       }
-      if (shape === "staged" || shape === "parked-staged" || shape === "committed-staged") {
+      if (shape === "staged" || shape === "parked-staged" || shape === "staged-unstaged" || shape === "committed-staged") {
         repaired = await f.git(f.lane(), "rev-parse", "HEAD");
         expect(repaired).not.toBe(accepted);
         expect(await f.git(f.lane(), "show", "HEAD:file.txt")).toBe("staged producer repair");
@@ -1012,13 +1016,19 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "unstaged
       expect(attempt.publicationRepairAbandonment?.reason).toContain("dead");
       expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
       await tickPipelines([], f.h.ports);
-      expect(current().runs.find(run => run.stageId === "review")?.attempts[0]?.expectedReviewHeadSha).toBe(repaired);
+      const reviewer = current().runs.find(run => run.stageId === "review")?.attempts[0];
+      expect(reviewer?.effectiveRole.roleId).toBe("reviewer");
+      const start = JSON.parse(fs.readFileSync(path.join(stageGitReceiptDirectory(reviewer!.launchId!), "start.json"), "utf8"));
+      expect(start.head).toBe(repaired);
+      expect(start.worktree).toBe(f.lane());
     } finally { f.close(); }
   });
 
 test("a controller restart adopts the dead producer repair checkpoint without another commit", async () => {
   const f = await fixture();
   try {
+    const clock = f.h.ports.now();
+    f.h.ports.now = () => clock;
     f.h.ports.resumeSeveredTurn = async () => true;
     const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
     const original = structuredClone(current().runs[0]!.attempts[0]!);
@@ -1056,33 +1066,41 @@ test("a controller restart adopts the dead producer repair checkpoint without an
     const checkpoint = current().runs[0]!.attempts[0]!.publicationRepair!;
     expect(checkpoint.committedSha).toBeDefined();
     expect(checkpoint.republishQueued).toBeUndefined();
+    const abandonment = current().runs[0]!.attempts[0]!.publicationRepairAbandonment;
+    expect(abandonment?.at).toBe(clock);
+    expect(abandonment?.reason).toContain("dead");
     expect(current().lastPassedCommit).toBe(accepted);
     const restarted = await controller(false);
     expect(restarted.code, restarted.stderr).toBe(0);
     expect(current()).toMatchObject({ lastPassedCommit: checkpoint.committedSha,
       publishedCommit: checkpoint.committedSha, cursor: { stageId: "review", state: "pending" } });
     expect(current().runs[0]!.attempts[0]!.report).toEqual(original.report);
+    expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment).toEqual(abandonment);
     expect(await f.git(f.lane(), "rev-parse", "HEAD^")).toBe(accepted);
   } finally { f.close(); }
 });
 
-test.each(["unknown", "idle", "queued", "revived", "unrecorded", "rewritten", "untracked", "no-review"] as const)(
+test.each(["active", "unknown", "idle", "queued", "background", "revived", "unrecorded", "rewritten", "untracked", "no-review"] as const)(
   "a dead publication repair retains its %s fence", async fence => {
     const f = await fixture();
     try {
+      const clock = f.h.ports.now();
+      f.h.ports.now = () => clock;
       f.h.ports.resumeSeveredTurn = async () => true;
       const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
       const original = current().runs[0]!.attempts[0]!;
       expect(original.publicationRepair?.requestedAt).toBeDefined();
       f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null,
         lastRecordAt: Date.parse(f.h.ports.now()) });
-      const repaired = await f.commit("producer repair");
+      const repaired = fence === "rewritten" ? accepted : await f.commit("producer repair");
       fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
       await f.agentGit(f.lane(), "add", "file.txt");
       fs.unlinkSync(path.join(f.hooks, "pre-push"));
-      f.h.setConversationActive(fence === "unknown" ? null : false);
+      f.h.setConversationActive(fence === "active" ? true : fence === "unknown" ? null : false);
       f.h.ports.conversationTurnInterrupted = async () => fence === "idle" ? "idle" : "dead";
       if (fence === "queued") f.h.ports.conversationDeliveryOutstanding = () => true;
+      if (fence === "background") f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null,
+        backgroundTasks: [{ id: "repair-command", kind: "command", startedAt: Date.parse(clock), expiresAt: null }] });
       if (fence === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(original.launchId!), "commits", repaired));
       if (fence === "rewritten") await f.agentGit(f.lane(), "commit", "--amend", "-m", "rewritten repair");
       if (fence === "untracked") fs.writeFileSync(path.join(f.lane(), "untracked.txt"), "preserve this\n");
