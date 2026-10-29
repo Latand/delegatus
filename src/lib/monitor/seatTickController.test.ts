@@ -595,7 +595,8 @@ test("a rotation onto a seat that is still refusing closes the stale circuit car
   await check(NOW + 35 * MINUTE, { ...refusing, seat: successor });
   const currentCards = await unresolvedCardsOn(project);
   expect(currentCards).toHaveLength(1);
-  expect(currentCards[0]!.id).toBe(oldCards[0]!.id);
+  // The predecessor's resolved occurrence stays closed when the new alarm opens.
+  expect(currentCards[0]!.id).not.toBe(oldCards[0]!.id);
   expect(currentCards[0]!.text).toContain("without delivery for 15 minutes;");
   expect(currentCards[0]!.text).toContain(`ageMs=${15 * MINUTE};`);
   expect(currentCards[0]!.text).not.toContain("3 consecutive attempts");
