@@ -6761,8 +6761,14 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
               }
               const action = [...document.querySelectorAll("[data-keys-row='openai'] > div:first-child > button")].at(-1);
               if (coarse && action) for (const track of group.querySelectorAll("[data-proto-switch] > span")) {
-                const gap = track.getBoundingClientRect().right - action.getBoundingClientRect().right;
-                if (Math.abs(gap) > 1) misaligned.push(`switch track ends ${Math.round(gap)} px off the row action's right edge`);
+                const glyph = action.querySelector("svg");
+                const matrix = glyph?.getScreenCTM();
+                const ink = glyph?.getBBox();
+                const right = glyph && matrix && ink
+                  ? new DOMPoint(ink.x + ink.width + parseFloat(getComputedStyle(glyph).strokeWidth) / 2, 0).matrixTransform(matrix).x
+                  : action.getBoundingClientRect().right;
+                const gap = track.getBoundingClientRect().right - right;
+                if (Math.abs(gap) > 1) misaligned.push(`switch track ends ${Math.round(gap)} px off the visible row action's right edge`);
               }
             }
             for (const row of document.querySelectorAll("[data-proto-who] [data-proto-feature]")) {

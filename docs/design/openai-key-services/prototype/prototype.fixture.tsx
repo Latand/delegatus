@@ -284,9 +284,9 @@ function UnderOpenAiRow() {
   const slot = useSlot("variant-1", afterOpenAiRow.find, afterOpenAiRow.place);
   if (!slot) return null;
   const rows = state.keySaved ? FEATURES : FEATURES.filter((feature) => waiting(state, feature.id));
-  /* On the phone the group hangs from the OpenAI row's label column (its 44 px dot cell, then the name at 52 px), and each
-     switch's track ends on the row actions' right edge: the rows' right padding gives the switch's 6 px of hit area beyond its track. */
-  const box = sheet ? "ml-[52px] mb-2 [&_[data-proto-feature]]:pr-2.5" : "ml-2 mr-1 mb-1";
+  /* Nest under the OpenAI label. Align tracks with the visible action: the overflow glyph for a saved key,
+     or the Add button border for a missing key. Both controls retain their full touch area. */
+  const box = sheet ? `ml-[52px] mb-2 ${state.keySaved ? "[&_[data-proto-feature]]:pr-[25px]" : "[&_[data-proto-feature]]:pr-2.5"}` : "ml-2 mr-1 mb-1";
   const body = !state.keySaved && rows.length === 0 ? (
     <div className={`${box} ${WITHIN} ${sheet ? "mr-4 px-4 py-1" : "px-2 py-0.5"}`}>
       <Muted data={{ "data-proto-defining": "" }}>{L("Add the key to choose what OpenAI serves.", "Додайте ключ, щоб вибрати, що обслуговує OpenAI.")}</Muted>
