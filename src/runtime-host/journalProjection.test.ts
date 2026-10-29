@@ -85,7 +85,7 @@ test("rolled-back local SQL edits evict safely and a later edit cannot replay th
 });
 
 test("row and byte limits bound both the cache and its SQL invalidation keys", () => {
-  for (const [rows, textSize] of [[8200, 1], [18, 1024 * 1024]]) {
+  for (const [rows, textSize] of [[8200, 1], [18, 1024 * 1024], [1, 17 * 1024 * 1024]]) {
     const journal = new RuntimeJournal(":memory:", { now: () => now });
     const state = journal as unknown as { db: Database; entityReadBytes: number; entityReads: Map<string, unknown> };
     try {

@@ -2323,10 +2323,12 @@ export class SqliteAgentRegistryStore {
       // Routing/quota metadata cannot change row projections or their grant
       // dependencies. Keep the validated immutable collections on these
       // passes instead of walking all hot and archived headers again.
-      if (this.coldViewCache && changes.length && changes.every(change => change.collection === "meta" && META_FIELDS.includes(change.row_key as typeof META_FIELDS[number]))) {
+      if (this.coldViewCache && changes.length && changes.every(change => change.collection === "meta"
+        && (change.row_key === "revision" || META_FIELDS.includes(change.row_key as typeof META_FIELDS[number])))) {
         const file = { ...previous.file };
         const hot = { ...this.readOnlyHotFile! };
         for (const { row_key: key } of changes) {
+          if (key === "revision") continue;
           const field = key as typeof META_FIELDS[number];
           const raw = this.meta(field);
           const value = this.normalizePartial({ version: 2, entries: {}, receipts: {}, [field]: raw === null ? undefined : parseSqliteJson(raw, this.db) })[field];

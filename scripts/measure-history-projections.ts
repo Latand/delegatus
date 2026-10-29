@@ -17,6 +17,7 @@ import type { FileEntry } from "../src/lib/types";
 const at = Date.parse("2026-10-28T00:00:00Z");
 assert(process.env.LLV_STATE_DIR && process.env.LLV_VIEWER_CONTROL_URL === "http://127.0.0.1:1");
 const [mode, corpus] = process.argv.slice(2);
+const singleChange = process.argv.includes("--single-change");
 assert(corpus);
 if (mode === "seed") {
   fs.mkdirSync(corpus, { recursive: true });
@@ -95,24 +96,31 @@ if (mode === "seed") {
   let contextReads = 0;
   const activity = registry.activityConversationSnapshot.bind(registry);
   registry.activityConversationSnapshot = (...args) => { contextReads++; return activity(...args); };
+  const inventoryCalls: Array<Array<{ path: string; size: number; mtime: number }>> = [];
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files, projectCatalog: [], complete: true }),
-    reconcileInventory: async () => ({ conversations: {}, entries: {}, receipts: {} } as ReturnType<AgentRegistry["readOnlySnapshot"]>),
+    reconcileInventory: async (_registry, changed) => {
+      inventoryCalls.push(changed.map(file => ({ path: file.path, size: file.size, mtime: file.mtime })));
+      return { conversations: {}, entries: {}, receipts: {} } as ReturnType<AgentRegistry["readOnlySnapshot"]>;
+    },
     reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
   await controller.poll();
+  inventoryCalls.length = 0;
   contextReads = 0;
-  await measure("migration-controller", "unchanged", () => controller.poll());
-  console.log(JSON.stringify({ site: "migration-controller", contextReads }));
-  const cursorPaths = [...files].sort((left, right) => left.path.localeCompare(right.path)).slice(64, 96);
+  await measure("migration-controller", "unchanged", async () => { await controller.poll(); return inventoryCalls; });
+  console.log(JSON.stringify({ site: "migration-controller", kind: "unchanged", contextReads }));
+  const cursorPaths = [...files].sort((left, right) => left.path.localeCompare(right.path)).slice(64, singleChange ? 65 : 96);
   const selected = new Set(cursorPaths.map(file => file.path));
   const changedFiles = files.map(file => selected.has(file.path) ? { ...file, size: file.size + 1 } : file);
   files.splice(0, files.length, ...changedFiles);
+  inventoryCalls.length = 0;
   contextReads = 0;
-  await measure("migration-controller", "changed-catalog", () => controller.poll());
-  console.log(JSON.stringify({ site: "migration-controller", contextReads }));
+  const changeKind = singleChange ? "one-path-change" : "changed-catalog";
+  await measure("migration-controller", changeKind, async () => { await controller.poll(); return inventoryCalls; });
+  console.log(JSON.stringify({ site: "migration-controller", kind: changeKind, mutationPaths: selected.size, contextReads }));
   await measure("worktree-cwd-deferred", "unchanged", () => conversationCwdStatus(registry.readOnlySnapshot(), at, () => true));
   writer.close(); registry.close();
   const journal = new RuntimeJournal(path.join(copy, "journal.sqlite"), { now: () => at });
@@ -124,7 +132,9 @@ if (mode === "seed") {
     assert(performance.now() < deadline, "session metadata did not settle");
     await new Promise<void>(resolve => setTimeout(resolve, 5));
   }
-  journal.snapshot(); journal.snapshotJson(); journal.snapshotJson([]);
+  await measure("journal-snapshot", "cold", () => journal.snapshot());
+  await measure("journal-json", "first-frame-after-object", () => journal.snapshotJson());
+  await measure("journal-summary", "first-frame", () => journal.snapshotJson([]));
   await measure("journal-snapshot", "unchanged", () => journal.snapshot());
   await measure("journal-json", "unchanged", () => journal.snapshotJson());
   await measure("journal-summary", "unchanged", () => journal.snapshotJson([]));
