@@ -32,7 +32,7 @@ unverified even though the feed could render the message.
 The transcript reader uses the existing queued-prompt normalizer. Content comes
 from `attachment.prompt`, and identity from `attachment.source_uuid`; the outer
 attachment UUID and the reminder in `rendered` supply no delivery proof.
-Copies with the same engine UUID, text and image count count once, including
+Copies sharing an engine UUID, text and number of images count once, including
 an attachment followed by an ordinary user record with transcoded image bytes. Task notifications remain
 outside this contract. Existing content, time,
 UUID-allocation and batch-membership checks still decide confirmation.

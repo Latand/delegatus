@@ -2442,6 +2442,7 @@ function canonicalClaudeUser(uuid: string, text: string, timestamp: string): str
 }
 
 test("Claude canonical evidence accepts transcoded image bytes and leaves a different image message uncertain", async () => {
+  setSystemTime(Date.parse("2026-10-29T10:22:11Z"));
   const active = fixture("claude-transcoded-image", { engine: "claude" });
   try {
     const image = { sha256: "a".repeat(64), mime: "image/png" as const, bytes: 12 };
@@ -2481,7 +2482,7 @@ test("Claude canonical evidence accepts transcoded image bytes and leaves a diff
       .toMatchObject({ state: "delivered", resend: "not-needed" });
     expect(await resolveSendReceipt("op_claude_other_image", { registry: reopened, client: null }))
       .toMatchObject({ state: "failed", resend: "verify-first" });
-  } finally { active.close(); }
+  } finally { active.close(); setSystemTime(); }
 });
 
 test("an explicit status recovery with late canonical delivery never rearms the operation", async () => {
