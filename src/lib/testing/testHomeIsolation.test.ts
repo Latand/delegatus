@@ -27,7 +27,7 @@ test("preload confines default account resolvers and CLI homes to its sandbox", 
 });
 
 test("preload also isolates native-home fallbacks without environment overrides", () => {
-  expect(os.homedir()).toBe(process.env.LLV_TEST_STARTUP_HOME);
+  expectInside(path.dirname(os.tmpdir()), os.homedir());
   expectInside(path.dirname(os.homedir()), claudeTranscriptPath("/workspace", "session"));
   for (const key of ["codex-sessions", "claude-projects", "openclaw-sessions"] as const) {
     expectInside(path.dirname(os.homedir()), ROOTS[key]);
@@ -61,7 +61,9 @@ test.each([
           expect(path.isAbsolute(relative)).toBe(false);
           expect(relative === ".." || relative.startsWith(".." + path.sep)).toBe(false);
         }
-        expect(os.homedir()).toBe(process.env.LLV_TEST_STARTUP_HOME);
+        const nativeRelative = path.relative(path.dirname(os.tmpdir()), os.homedir());
+        expect(path.isAbsolute(nativeRelative)).toBe(false);
+        expect(nativeRelative === ".." || nativeRelative.startsWith(".." + path.sep)).toBe(false);
         expect(readCodexAuth()).toBeNull();
         fs.writeFileSync(process.env.LLV_TEST_HOME_RECEIPT, os.homedir());
         if (${fails}) throw new Error("fixture refusal after home checks");
@@ -85,6 +87,7 @@ test.each([
       cwd: root, env, encoding: "utf8", timeout: 60_000,
     });
     expect(result.status, result.stdout + result.stderr).toBe(fails ? 1 : 0);
+    expect(fs.existsSync(receipt), result.stdout + result.stderr).toBe(true);
     const startupHome = fs.readFileSync(receipt, "utf8");
     expectInside(env.TMPDIR, startupHome);
     expect(fs.existsSync(path.dirname(startupHome))).toBe(false);

@@ -103,7 +103,7 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
  * write the user's real viewer state. A test that wants its own isolated dir
  * still overrides this value itself.
  */
-const isolatedKeys = [...homeKeys, "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY"] as const;
+const isolatedKeys = [...homeKeys, "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY", "LLV_TEST_STARTUP_HOME"] as const;
 const inherited = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
 let run: ReturnType<typeof claimProcessTempRoot> | undefined;
 let releaseChildren: (() => Promise<void>) | undefined;
@@ -112,6 +112,9 @@ function beginRepetition(): void {
   // Bun caches os.homedir() at process start. Pin account and CLI overrides
   // too, including inherited ones, before a resolver or scanner can load.
   isolateHomes(run.root, process.env);
+  // Children inheriting this home already start isolated. A fixture changing
+  // its launch home invalidates this binding and re-enters the preload above.
+  process.env.LLV_TEST_STARTUP_HOME = process.env[process.platform === "win32" ? "USERPROFILE" : "HOME"];
   process.env.GIT_CONFIG_GLOBAL = path.join(process.env.HOME!, ".gitconfig");
   // `git init` must never copy a template hook pointing outside this root.
   process.env.GIT_TEMPLATE_DIR = path.join(run.root, "git-template");
