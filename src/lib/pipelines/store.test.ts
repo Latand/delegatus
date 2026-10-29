@@ -1193,7 +1193,7 @@ test("startup owner handoff deadlines round-trip and malformed deadlines are ref
 test("suspension custody round-trips independently and rejects malformed stop evidence", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
   const suspension = { reason: "account" as const, detail: "account left binding", requestedAt: "2026-10-15T00:00:00Z",
-    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z" };
+    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z", retryRequestedAt: "2026-10-15T00:00:03Z" };
   lane.runs[0]!.attempts[0]!.suspension = suspension;
   savePipelines([lane]);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension).toEqual(suspension);
@@ -1201,7 +1201,8 @@ test("suspension custody round-trips independently and rejects malformed stop ev
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail).toBe(suspension.detail);
   for (const bad of [{}, { ...suspension, reason: "unknown" }, { ...suspension, stoppedAt: "invalid" },
     { ...suspension, requestedAt: null }, { ...suspension, operatorStoppedAt: 123 },
-    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" }]) {
+    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" },
+    { ...suspension, retryRequestedAt: "invalid" }, { ...suspension, retryRequestedAt: null }]) {
     lane.runs[0]!.attempts[0]!.suspension = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
   }
