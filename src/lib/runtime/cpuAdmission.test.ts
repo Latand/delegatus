@@ -11,6 +11,8 @@ import { captureProcessIdentity } from "../processIdentity";
 import * as cpuPriority from "./cpuPriority";
 import { CPU_TASK_PRIORITY_SQL, cpuPriorityEnv, cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
 import { cpuOwnerExited, cpuOwnerIdentity, cpuOwnerStatus } from "./signalSandboxContext";
+import { machineCpuPressureGate, setMachineCpuPressureForTests, waitForCpuPressure } from "./cpuPressure";
+import { instanceCpuAdmissionQueue } from "./cpuAdmissionScope";
 
 const directories: string[] = [];
 const queues: { close(): void }[] = [];
@@ -946,7 +948,7 @@ test("a priority read failure leaves the queue unchanged and succeeds after its 
   expect(q.check("stage:one", true, undefined, true, source)).toBeNull();
 });
 
-test("a binding replaced during its priority read rolls back admission and is refreshed on retry", () => {
+test("a binding replaced during its priority read holds admission and is refreshed on retry", () => {
   const f = fixture(), q = f.open(), owner = captureProcessIdentity(process.pid);
   const database = path.join(path.dirname(f.file), "tasks.sqlite"), tasks = new Database(database); queues.push(tasks);
   tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
@@ -968,12 +970,9 @@ test("a binding replaced during its priority read rolls back admission and is re
     return result;
   });
   try {
-    let refusal: unknown;
-    try { q.check("command:next", true, owner); } catch (error) { refusal = error; }
-    expect(refusal).toMatchObject({ code: "SQLITE_BUSY" });
-    expect(String(refusal)).toContain("queue changed during observation");
+    expect(q.check("command:next", true, owner)).toMatchObject({ heldBy: "queue" });
     expect(replaced).toBe(true);
-    expect(db.query("SELECT key FROM tickets WHERE key = 'command:next'").get()).toBeNull();
+    expect(db.query("SELECT key FROM tickets WHERE key = 'command:next'").get()).toEqual({ key: "command:next" });
     expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
     expect(q.check("command:next", true, owner, false)).toBeNull(); // normal now precedes the replaced low binding
     expect(db.query("SELECT priority FROM tickets WHERE key = 'command:first'").get()).toEqual({ priority: 2 });
@@ -1006,11 +1005,7 @@ test.each(["high", "normal"])("a completed peer refresh to %s cannot be overwrit
     expect(b.check("stage:target", false, undefined, false)?.position).toBe(1);
   });
   try {
-    let outcome;
-    try { outcome = a.check("stage:normal", true); }
-    catch (error) { outcome = error; }
-    if (outcome instanceof Error) expect(outcome).toMatchObject({ code: "SQLITE_BUSY" });
-    else expect(outcome).toMatchObject({ position: 2, heldBy: "queue" });
+    expect(a.check("stage:normal", true)).toMatchObject({ position: 2, heldBy: "queue" });
     expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:target'").get()).toEqual({ priority: priority === "high" ? 0 : 1 });
     expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
     // A fresh observation recovers without losing either ticket's order.
@@ -1018,6 +1013,108 @@ test.each(["high", "normal"])("a completed peer refresh to %s cannot be overwrit
     expect(a.check("stage:target", true)).toBeNull();
     f.at(CPU_QUEUE_SPACING_MS);
     expect(a.check("stage:normal", true)).toBeNull();
+  } finally { probe.mockRestore(); }
+});
+
+test.each(["admit", "cancel"])("the production pressure waiter survives a peer priority refresh and can %s", async outcome => {
+  const f = fixture(), directory = path.dirname(f.file), tasks = priorityTasks(f.file);
+  const previousLockDir = process.env.LLV_GATE_LOCK_DIR;
+  const previousPressure = process.env.DELEGATUS_CPU_PRESSURE;
+  process.env.LLV_GATE_LOCK_DIR = directory;
+  process.env.DELEGATUS_CPU_PRESSURE = "off";
+  let now = 10_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  setMachineCpuPressureForTests(undefined);
+  let probe: ReturnType<typeof beforeNextWriter> | undefined;
+  let queue: CpuAdmissionQueue | undefined;
+  const abort = new AbortController();
+  try {
+    const gate = machineCpuPressureGate();
+    queue = instanceCpuAdmissionQueue();
+    const peer = new CpuAdmissionQueue(cpuAdmissionFile(), () => now); queues.push(peer);
+    const owner = cpuOwnerIdentity(process.pid);
+    expect(peer.check("command:raised", false, owner, false, tasks.source(["raised"])))
+      .toMatchObject({ position: 1, priority: "low" });
+    const db = new Database(cpuAdmissionFile()); queues.push(db);
+    probe = beforeNextWriter(() => {
+      tasks.set("raised", "high");
+      expect(peer.check("command:raised", false, owner, false)).toMatchObject({ priority: "high" });
+    });
+    let holds = 0;
+    expect(await waitForCpuPressure(gate, {
+      subject: "publication-install", signal: abort.signal, pollMs: outcome === "cancel" ? 60_000 : 1,
+      onReason: () => {
+        holds++;
+        expect(db.query("SELECT priority FROM tickets WHERE key = 'command:raised'").get()).toEqual({ priority: 0 });
+        expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+        expect(db.query("SELECT key FROM tickets").all()).toHaveLength(2);
+        if (outcome === "cancel") queueMicrotask(() => abort.abort());
+        else {
+          expect(peer.check("command:raised", true, owner)).toBeNull();
+          now += CPU_QUEUE_SPACING_MS;
+        }
+      },
+    })).toBe(outcome === "admit");
+    expect(holds).toBe(1);
+    expect(db.query("SELECT key FROM tickets").all()).toEqual(outcome === "cancel" ? [{ key: "command:raised" }] : []);
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: outcome === "cancel" ? null : now });
+    queue.cancel("command:raised");
+  } finally {
+    probe?.mockRestore();
+    queue?.close();
+    clock.mockRestore();
+    setMachineCpuPressureForTests(undefined);
+    if (previousLockDir === undefined) delete process.env.LLV_GATE_LOCK_DIR;
+    else process.env.LLV_GATE_LOCK_DIR = previousLockDir;
+    if (previousPressure === undefined) delete process.env.DELEGATUS_CPU_PRESSURE;
+    else process.env.DELEGATUS_CPU_PRESSURE = previousPressure;
+  }
+}, 5_000);
+
+test("an invalidated head keeps its ticket and waits for a fresh observation", () => {
+  const f = fixture(), q = f.open(), peer = f.open(), tasks = priorityTasks(f.file);
+  tasks.set("first", "low");
+  tasks.set("raised", "high");
+  q.check("stage:first", false, undefined, false, tasks.source(["first"]));
+  q.check("stage:raised", false, undefined, false, tasks.source(["raised"]));
+  q.check("stage:caller", false);
+  const db = new Database(f.file); queues.push(db);
+  const probe = beforeNextWriter(() => {
+    // Refresh the rank seen by this caller, then change another task after
+    // its sample. All samples from this invalidated observation must wait.
+    tasks.set("raised", "low");
+    peer.check("stage:raised", false, undefined, false);
+    tasks.set("first", "high");
+  });
+  try {
+    expect(q.check("stage:caller", true)).toMatchObject({ position: 1, heldBy: "queue" });
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    expect(db.query("SELECT key FROM tickets").all()).toHaveLength(3);
+    expect(q.check("stage:caller", true)).toMatchObject({ position: 2 });
+    expect(q.check("stage:first", true)).toBeNull();
+    f.at(CPU_QUEUE_SPACING_MS);
+    expect(q.check("stage:caller", true)).toBeNull();
+    f.at(2 * CPU_QUEUE_SPACING_MS);
+    expect(q.check("stage:raised", true)).toBeNull();
+  } finally { probe.mockRestore(); }
+});
+
+test("a later invalidated binding leaves earlier sampled priorities unapplied", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  tasks.set("first", "high");
+  q.check("stage:first", false, undefined, false, tasks.source(["first"]));
+  q.check("stage:raised", false, undefined, false, tasks.source(["raised"]));
+  tasks.set("first", "low");
+  const db = new Database(f.file); queues.push(db);
+  const probe = beforeNextWriter(() => {
+    db.query("UPDATE tickets SET source = ? WHERE key = 'stage:raised'").run(JSON.stringify(tasks.source(["replacement"])));
+  });
+  try {
+    expect(q.check("stage:caller", true)).toMatchObject({ heldBy: "queue" });
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:first'").get()).toEqual({ priority: 0 });
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    expect(q.check("stage:caller", true)).toMatchObject({ position: 2 });
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:first'").get()).toEqual({ priority: 2 });
   } finally { probe.mockRestore(); }
 });
 

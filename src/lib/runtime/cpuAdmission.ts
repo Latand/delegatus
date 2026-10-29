@@ -291,7 +291,6 @@ export class CpuAdmissionQueue {
     // queue's writer. Re-read the rows under the lock and match observations
     // by their exact owner/binding and observed rank. Peers may poll or reorder
     // freely; an unobserved owner keeps its ticket until a check can verify it.
-    const changed = () => Object.assign(new Error("CPU admission queue changed during observation; retry the check"), { code: "SQLITE_BUSY" });
     const owners = new Map(this.db.query<{ owner: string }, []>("SELECT DISTINCT owner FROM tickets WHERE owner IS NOT NULL").all().map(row => {
       const identity = parseSqliteJson(row.owner, this.db) as ProcessIdentity;
       const status = this.observer.status(identity);
@@ -369,20 +368,27 @@ export class CpuAdmissionQueue {
       // A peer may already have committed a newer rank for the same binding.
       // Apply samples only while both the binding and observed rank still match.
       // A newly bound ticket must be observed before any caller can dispatch.
-      let priorityChanged = false;
+      let observationChanged = false;
+      const updates: { key: string; priority: number }[] = [];
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").all()) {
         const priority = priorities.get(row.source!);
         const observed = sampledTickets.get(row.key);
         const ownBinding = row.key === key && source !== undefined;
         if (priority === undefined || (observed
           ? observed.priority !== row.priority || !ownBinding && observed.source !== row.source
-          : row.key !== key || row.priority !== 1)) throw changed();
-        if (priority !== row.priority) {
-          this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(priority, row.key);
-          priorityChanged = true;
+          : row.key !== key || row.priority !== 1)) {
+          observationChanged = true;
+          break;
         }
+        if (priority !== row.priority) updates.push({ key: row.key, priority });
       }
-      if (priorityChanged) this.orderLegacyTicketsByPriority();
+      // Keep the poll and FIFO age, but apply no stale sample or admission.
+      // Every consumer already retries queue holds on its asynchronous poll;
+      // a changed observation must not escape as a database lock failure.
+      if (!observationChanged && updates.length) {
+        for (const update of updates) this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(update.priority, update.key);
+        this.orderLegacyTicketsByPriority();
+      }
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
       const waitedMs = Math.max(0, now - ticket.since);
       const budget = Math.max(0, this.maxWaitMs - waitedMs);
@@ -407,7 +413,7 @@ export class CpuAdmissionQueue {
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
       // Heavy gates must keep waiting under load even after the queue's stage
       // fairness bound. Readiness and the final slot claim use the same guard.
-      if (position === 1 && spacing === 0 && (pressureAllows || !requireLowPressure && budget === 0)) {
+      if (!observationChanged && position === 1 && spacing === 0 && (pressureAllows || !requireLowPressure && budget === 0)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.
@@ -422,7 +428,7 @@ export class CpuAdmissionQueue {
       // admission, is stalled. This reading never estimates a remaining wait.
       const stalledMs = now - Math.max(head.since + this.maxWaitMs, last ?? 0);
       return {
-        since: ticket.since, position, waitedMs, heldBy: position > 1 || spacing > 0 ? "queue" as const : "pressure" as const,
+        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 ? "queue" as const : "pressure" as const,
         ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }),
         ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
       };
