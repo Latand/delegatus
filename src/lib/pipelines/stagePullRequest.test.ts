@@ -1355,6 +1355,43 @@ test("PR inspection adopts an open PR created during the failed inspection and r
   } finally { f.close(); }
 });
 
+test("PR inspection content repair retires its prior counter before a concurrent summary report", async () => {
+  const f = await inspectionFixture("empty");
+  try {
+    const waiting = await f.finish();
+    waiting.runs[0]!.attempts[0]!.paneId = null;
+    savePipelines([waiting]);
+    const exec = f.h.ports.exec;
+    let finding = true, reports = 0;
+    f.h.ports.exec = async (...input) => {
+      if (finding && input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
+        && input[1].at(-1)?.endsWith("body.md")) {
+        finding = false;
+        return { code: 1, stdout: "known_value: 1\n", stderr: "" };
+      }
+      return exec(...input);
+    };
+    f.setExpectedBody(publicSummary);
+    f.h.ports.resumeSeveredTurn = async () => {
+      reports++;
+      const result = await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
+        { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
+      expect(result.error).toBeUndefined();
+      return true;
+    };
+    f.advance(1_001);
+    await tickPipelines([], f.h.ports);
+    const answered = loadPipelines().find(p => p.id === f.id)!;
+    expect(reports).toBe(1);
+    expect(answered.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("answered");
+    expect(answered.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    const retried = loadPipelines().find(p => p.id === f.id)!;
+    expect(retried.runs[0]!.attempts[0]!.pullRequestInspection?.failures).toBe(1);
+    expect(reports).toBe(1);
+  } finally { f.close(); }
+});
+
 test("PR inspection real content finding still refuses beside an inspection error and withholds its diagnostic", async () => {
   const f = await inspectionFixture("finding");
   try {
