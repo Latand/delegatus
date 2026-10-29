@@ -1804,12 +1804,12 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
     const home = path.join(f.root, "account");
     await fs.mkdir(home);
     const registry = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-    const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: f.lane, artifactPath: path.join(f.root, "fix.jsonl"),
+    const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: f.lane, artifactPath: path.join(f.root, "stage-rehost.jsonl"),
       structuredHostOperationId: proof === "original operation" ? f.attempt.launchId : "resume-host-operation",
       accountId: null, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: START,
       launchProfile: emptyLaunchProfile({ cwd: f.lane }) };
     registry.upsert(entry);
-    const conversation = registry.conversationForPath(entry.artifactPath)!;
+    const conversation = registry.ensureForkedConversation(engine, entry.artifactPath, null, entry.launchProfile!);
     const role = { roleId: null, engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
     const pipeline = buildPipeline({ id: "rehost-proof", task: "Stage custody", project: "fixture", repoDir: f.lane,
       stages: [{ id: "build", kind: "run", "prompt": "", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: START });
