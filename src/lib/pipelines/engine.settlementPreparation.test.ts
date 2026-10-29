@@ -112,7 +112,7 @@ test("failed preparation cannot spend recovery or park an executing publication"
   }
 });
 
-test("a failed decision note cannot prevent the durable preparation park", async () => {
+test.each(["ack-loss", "superseded"] as const)("decision-note delivery preserves the preparation decision and newer controls (%s)", async outcome => {
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
@@ -133,6 +133,8 @@ test("a failed decision note cannot prevent the durable preparation park", async
     const write = taskNotes.writeParkedTaskNote;
     const note = spyOn(taskNotes, "writeParkedTaskNote").mockImplementation(async (...args) => {
       notes++;
+      if (outcome === "superseded") expect((await patchPipeline(box.id,
+        { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, box.h.ports)).error).toBeUndefined();
       await write(...args);
       throw new Error("fixture note unavailable");
     });
@@ -141,8 +143,8 @@ test("a failed decision note cannot prevent the durable preparation park", async
     clock += 15 * 60_000;
     await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
     expect(notes).toBeGreaterThan(0);
-    expect(loadTasks().find(row => row.id === task.task.id)!.note?.author.kind).toBe("orchestrator");
-    expect(box.current().state).toBe("needs_decision");
+    expect(loadTasks().find(row => row.id === task.task.id)!.note?.author.kind).toBe(outcome === "ack-loss" ? "orchestrator" : undefined);
+    expect(box.current().state).toBe(outcome === "ack-loss" ? "needs_decision" : "running");
     expect(box.current().delivery!.operation).toEqual({ ...box.publication, passedStage: false });
     expect(box.pushes()).toBe(1);
   } finally { restoreRace(); restoreNote(); await settlePipelineControllerJobs(); saveTasks(previousTasks); fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -162,8 +164,7 @@ test("preparation retries honor their persisted backoff without renewing the fir
     expect(box.current().runs[0]!.attempts[0]!.error).toBeNull();
     const reads = race.reads();
     expect(reads).toBeGreaterThan(0);
-    await tickPipelinesController([], box.h.ports);
-    await settlePipelineControllerJobs();
+    await expect(settlePendingStageGit(box.h.ports)).rejects.toThrow();
     expect(race.reads()).toBe(reads);
     expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toEqual(first);
     clock = Date.parse(first!.retryAfter);
