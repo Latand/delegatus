@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { pipelineRecordReader, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { agentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -12,8 +13,10 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
-import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, digest, custodyClock, terminalSchema, completionSchema, type Descriptor, type Manifest } from "./wire";
+import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, retainFile, digest, custodyClock, terminalSchema, completionSchema, type Descriptor, type Manifest } from "./wire";
 import { openRecordedChecks, type Binding, type CheckRow, type CheckResult } from "./store";
+import { withRecordedHostFence } from "./hostFence";
+import { wakeRecordedChecks } from "./signal";
 
 export function callingAttempt(conversationId: string): Binding {
   const registry = agentRegistry();
@@ -31,7 +34,7 @@ export function callingAttempt(conversationId: string): Binding {
   if (!pipeline || !attempt || !stage || stage.kind !== "run" || !["running", "needs_decision"].includes(pipeline.state)
     || pipeline.cursor?.stageId !== stage.id || pipeline.closedAt || pipeline.activationCloseRequested
     || !["running", "needs_decision"].includes(attempt.state)
-    || attempt.historical || !attempt.launchId || registry.spawnReceipt(attempt.launchId)?.sessionId !== generation.id || attempt.conversationId !== conversation.id
+    || attempt.historical || !attempt.launchId || registry.spawnReceipt(attempt.launchId)?.key?.sessionId !== generation.id || attempt.conversationId !== conversation.id
     || attempt.sessionId !== generation.id || member.round !== attempt.n || member.slot !== `${stage.id}:${attempt.n}`
     || !host?.process || host.kind !== "codex-app-server" || entry?.pendingAction || entry?.structuredTerminationCaptureId || entry?.structuredTerminationSurvivors?.length
     || !host.process.startIdentity || !host.process.bootEpoch || !verifiedCodexSocketOwner({ endpoint: host.endpoint, process: host.process })) throw new Error("recorded check native custody is unavailable");
@@ -61,6 +64,9 @@ export function verifyLiveCustody(binding: Binding, descriptor: Descriptor, dire
     || !processIdentityMayRun(descriptor.recorder) || !descendant(descriptor.recorder.pid, binding.host.pid)
     || !descriptor.wrapper || !processIdentityMayRun(descriptor.wrapper)
     || !descendant(descriptor.wrapper.pid, descriptor.recorder.pid)) throw new Error("recorded check recorder custody is unknown");
+  const configuration = procBackend.readEnvVar(descriptor.recorder.pid, "LLV_AGENT_SANDBOX_ROOT");
+  if (configuration && !descriptor.manifest.roots.some(root => root.purpose === "configuration" && root.directory === configuration))
+    throw new Error("recorded check omitted its native configuration dependency");
   if (fs.existsSync(path.join(directory, "running"))) {
     const report = readEnvelope(path.join(directory, "supervisor.json"));
     // Import the strict producer decoder only once the supervisor has dispatched.
@@ -91,7 +97,7 @@ export type HandoffPorts = { binding(conversation: string): Binding; verify(bind
 export async function handoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
   const binding = ports.binding(conversation), registry = agentRegistry();
   const key = { engine: "codex" as const, sessionId: binding.session };
-  const admitted = await registry.withOperationLock(key, captureProcessIdentity(process.pid), async () => {
+  const admitted = await registry.withOperationLock(key, captureProcessIdentity(process.pid), () => withRecordedHostFence(binding.host, async () => {
     const temps = new AttemptTempStore();
     try {
       return await withFileTransactionAsync(temps.filename + ".sweep", "recorded-check handoff", async () => {
@@ -108,6 +114,7 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           }
           const descriptor = prior?.descriptor ?? descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
           const assertAuthority = () => {
+            if (descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired before admission");
             if (digest(ports.binding(conversation)) !== digest(binding)) throw new Error("recorded check stage or native owner changed");
             verifyRoots(descriptor.manifest, binding, temps);
             sameDescriptor(descriptor, directory);
@@ -116,7 +123,7 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded check ticket is outside its evidence roots");
           if (descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired");
           let row: CheckRow = prior ?? { id: descriptor.runId, request, binding, log, descriptor, revision: 1, admission: "preparing", reason: "verifying native custody",
-            result: null, notification: null, acknowledgement: null };
+            result: null, notification: null, acknowledgement: null, observerFault: null };
           if (!prior) await store.write(row, null, assertAuthority);
           try {
             await verifyManifest(descriptor.manifest);
@@ -127,14 +134,15 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
               await store.write(row, row.revision - 1, () => { assertAuthority(); ports.verify(binding, descriptor, directory); });
             }, "recorded check final custody", undefined, true);
           } catch (error) {
-            row = { ...row, revision: row.revision + 1, admission: "refused", reason: (error instanceof Error ? error.message : "custody unknown").slice(0, 1024) };
-            await store.write(row, row.revision - 1);
+            const current = store.get(row.id)!;
+            row = { ...current, revision: current.revision + 1, admission: "refused", reason: (error instanceof Error ? error.message : "custody unknown").slice(0, 1024) };
+            await store.write(row, current.revision);
           }
           return store.get(row.id)!;
         } finally { store.close(); }
       });
     } finally { temps.close(); }
-  });
+  }));
   // Do not carry custody locks into observation or a recovery of preparation.
   // The observer subscribes before its first snapshot, including an early close.
   await ports.observe(admitted.id);
@@ -152,6 +160,7 @@ function terminalFor(row: CheckRow) {
 }
 
 export async function retainResult(row: CheckRow): Promise<CheckResult> {
+  const deadline = performance.now() + 30_000;
   let terminal: ReturnType<typeof terminalFor> | null = null;
   let reason = "recorded check has no terminal producer receipt";
   try { terminal = terminalFor(row); } catch (error) { reason = (error instanceof Error ? error.message : reason).slice(0, 1024); }
@@ -163,7 +172,7 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
     row.descriptor.manifest.completion, { root: path.dirname(row.log), file: path.basename(row.log) },
     ...["descriptor.json", "owner.json", "result.json", "supervisor.json", "exit"].map(file => ({ root: `${row.log}.gate`, file }))];
   try {
-    await verifyManifest(row.descriptor.manifest);
+    await verifyManifest(row.descriptor.manifest, deadline);
     const seen = new Set<string>();
     let missing = false;
     for (const entry of entries) {
@@ -171,13 +180,15 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
       const source = ownedFile(entry.root, entry.file);
       if (seen.has(source)) continue;
       seen.add(source);
-      const sha256 = await fileDigest(source), file = digest(source);
-      const target = path.join(destination, file), temporary = `${target}.copy`;
+      const sha256 = await fileDigest(source, deadline), file = digest(source);
+      const target = path.join(destination, file), temporary = `${target}.${randomUUID()}.copy`;
       // Atomic publication; a reader never sees an incomplete retained file.
-      await fs.promises.copyFile(source, temporary);
-      if (await fileDigest(source) !== sha256 || await fileDigest(temporary) !== sha256) throw new Error("recorded evidence changed during retention");
-      const fd = fs.openSync(temporary, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      fs.renameSync(temporary, target);
+      try {
+        await retainFile(source, temporary, deadline);
+        if (await fileDigest(source, deadline) !== sha256 || await fileDigest(temporary, deadline) !== sha256) throw new Error("recorded evidence changed during retention");
+        const fd = fs.openSync(temporary, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(temporary, target);
+      } finally { fs.rmSync(temporary, { force: true }); }
       evidence.push({ file, sha256, bytes: fs.statSync(target).size });
       } catch { missing = true; }
     }
@@ -221,6 +232,7 @@ export async function acknowledgeRecordedCheck(row: CheckRow, actor: string, inp
           if (!consumerPermitted(current, actor)) throw new Error("recorded check consumer changed");
           for (const root of current.descriptor.manifest.roots) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed before release");
         });
+        wakeRecordedChecks();
         return updated;
       } finally { store.close(); }
     });

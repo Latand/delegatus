@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { uptime } from "node:os";
+import { pipeline } from "node:stream/promises";
 import { cpuOwnerIdentity } from "../runtime/signalSandboxContext";
 import type { ProcessIdentity } from "../processIdentity";
 
@@ -57,10 +58,37 @@ export function ownedFile(root: string, file: string): string {
   if (!stat.isFile() || stat.nlink !== 1 || (process.getuid && stat.uid !== process.getuid())) throw new Error("recorded check file is not an owned regular file");
   return target;
 }
-export async function fileDigest(filename: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of fs.createReadStream(filename)) hash.update(chunk);
-  return hash.digest("hex");
+function evidenceFile(filename: string) {
+  if (path.resolve(filename) !== fs.realpathSync(filename)) throw new Error("recorded evidence path changed");
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || process.getuid && stat.uid !== process.getuid()
+      || process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== filename)
+      throw new Error("recorded evidence file identity changed");
+    return { fd, stat };
+  } catch (error) { fs.closeSync(fd); throw error; }
+}
+function evidenceSignal(deadline: number) {
+  const remaining = Math.ceil(deadline - performance.now());
+  if (remaining <= 0) throw new Error("recorded evidence operation deadline exceeded");
+  return AbortSignal.timeout(remaining);
+}
+export async function fileDigest(filename: string, deadline = performance.now() + 30_000): Promise<string> {
+  const signal = evidenceSignal(deadline), { fd, stat } = evidenceFile(filename);
+  try {
+    const hash = createHash("sha256");
+    for await (const chunk of fs.createReadStream(filename, { fd, autoClose: false, signal })) hash.update(chunk);
+    const after = fs.fstatSync(fd);
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("recorded evidence changed during read");
+    return hash.digest("hex");
+  } finally { fs.closeSync(fd); }
+}
+export async function retainFile(source: string, target: string, deadline: number) {
+  const signal = evidenceSignal(deadline), { fd } = evidenceFile(source);
+  try {
+    await pipeline(fs.createReadStream(source, { fd, autoClose: false }), fs.createWriteStream(target, { flags: "wx", mode: 0o600 }), { signal });
+  } finally { fs.closeSync(fd); }
 }
 export function readEnvelope(filename: string): unknown {
   const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -85,15 +113,21 @@ export function writeEnvelope(filename: string, value: unknown) {
 export async function buildManifest(input: Omit<Manifest, "version" | "inputs" | "roots"> & {
   roots: Array<{ directory: string; purpose: "evidence" | "configuration" }>;
   inputs: Array<{ root: string; file: string }>;
+  executionEnvironment?: NodeJS.ProcessEnv;
 }): Promise<Manifest> {
-  const roots = input.roots.map(root => ({ ...root, directory: path.resolve(root.directory), identity: physical(path.resolve(root.directory)) }));
+  const { executionEnvironment, ...declaration } = input;
+  const requiredRoots = [...declaration.roots];
+  const configuration = (executionEnvironment ?? process.env).LLV_AGENT_SANDBOX_ROOT;
+  if (configuration && !requiredRoots.some(root => path.resolve(root.directory) === path.resolve(configuration)))
+    requiredRoots.push({ directory: configuration, purpose: "configuration" });
+  const roots = requiredRoots.map(root => ({ ...root, directory: path.resolve(root.directory), identity: physical(path.resolve(root.directory)) }));
   const inputs = [];
   for (const entry of input.inputs) inputs.push({ ...entry, sha256: await fileDigest(ownedFile(entry.root, entry.file)) });
-  const manifest = manifestSchema.parse({ ...input, version: 1, roots, inputs });
+  const manifest = manifestSchema.parse({ ...declaration, version: 1, roots, inputs });
   await verifyManifest(manifest);
   return manifest;
 }
-export async function verifyManifest(manifest: Manifest) {
+export async function verifyManifest(manifest: Manifest, deadline = performance.now() + 10_000) {
   const roots = new Map(manifest.roots.map(root => [root.directory, root]));
   if (roots.size !== manifest.roots.length || new Set(manifest.selection).size !== manifest.selection.length) throw new Error("duplicate recorded check identity");
   for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed");
@@ -102,7 +136,7 @@ export async function verifyManifest(manifest: Manifest) {
     if (!roots.has(entry.root) || roots.get(entry.root)!.purpose !== "evidence") throw new Error("recorded check file is outside its evidence roots");
   }
   if (!path.isAbsolute(manifest.cwd) || !manifest.roots.some(root => manifest.cwd === root.directory || manifest.cwd.startsWith(root.directory + path.sep))) throw new Error("recorded check cwd is outside its roots");
-  for (const entry of manifest.inputs) if (await fileDigest(ownedFile(entry.root, entry.file)) !== entry.sha256) throw new Error("recorded check source changed");
+  for (const entry of manifest.inputs) if (await fileDigest(ownedFile(entry.root, entry.file), deadline) !== entry.sha256) throw new Error("recorded check source changed");
   for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed during verification");
 }
 export function descriptorDigest(value: Omit<Descriptor, "descriptorDigest" | "wrapper">): string { return digest(value); }

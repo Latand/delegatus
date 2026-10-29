@@ -6,7 +6,9 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { processIdentityMayRun } from "@/lib/processIdentity";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { agentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
@@ -26,6 +28,7 @@ export class RecordedCheckObserver {
   private watches = new Map<string, Watch>();
   private pending = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
+  private faults = new Map<string, string>();
   private directoryWatcher?: fs.FSWatcher;
   private stopped = false;
   constructor(private ports: ObserverPorts, readonly filename = statePath("state.sqlite")) {}
@@ -36,7 +39,11 @@ export class RecordedCheckObserver {
     this.directoryWatcher = fs.watch(path.dirname(this.filename), (_event, name) => {
       if (name?.toString().startsWith("delivery-progress.sqlite")) this.receiptsChanged();
     });
-    this.directoryWatcher.on("error", () => { console.error("[recorded checks] delivery observation unavailable"); });
+    this.directoryWatcher.on("error", () => {
+      for (const id of this.watches.keys()) this.faults.set(id, "delivery event observation unavailable");
+      console.error("[recorded checks] delivery observation unavailable");
+      this.receiptsChanged();
+    });
     const store = await this.store();
     try {
       let cursor = "";
@@ -57,7 +64,8 @@ export class RecordedCheckObserver {
     const pending = withViewerOperation("recorded-check.observe", async () => {
       do {
         this.dirty.delete(id);
-        await withFileTransactionAsync(path.join(path.dirname(this.filename), "recorded-check-observers", id), "recorded-check observation", () => this.reconcile(id));
+        const slot = parseInt(id.slice(0, 8), 16) % 128;
+        await withFileTransactionAsync(path.join(path.dirname(this.filename), "recorded-check-observers", String(slot)), "recorded-check observation", () => this.reconcile(id));
       } while (this.dirty.has(id) && this.active());
     });
     this.pending.set(id, pending);
@@ -74,8 +82,11 @@ export class RecordedCheckObserver {
       watch.watcher = fs.watch(`${row.log}.gate`, (_event, name) => {
         if (!name || ["result.json", "exit", "supervisor.json", "cancellation.json"].includes(name.toString())) wake();
       });
-      watch.watcher.on("error", () => { watch.watcher?.close(); watch.watcher = undefined; wake(); });
-    } catch { /* The snapshot below records missing custody without losing the row. */ }
+      watch.watcher.on("error", () => {
+        this.faults.set(row.id, "recorded sidecar observation failed");
+        watch.watcher?.close(); watch.watcher = undefined; wake();
+      });
+    } catch { this.faults.set(row.id, "recorded sidecar observation unavailable"); }
     const arm = () => {
       const remaining = row.descriptor.deadlineUptimeMs + 10_000 - custodyClock();
       if (remaining <= 0) wake();
@@ -92,6 +103,11 @@ export class RecordedCheckObserver {
       const authority = () => {
         if (!this.active()) throw new Error("recorded check observer lost serving authority");
       };
+      const fault = this.faults.get(id);
+      if (fault && row.observerFault !== fault) {
+        const updated: CheckRow = { ...row, revision: row.revision + 1, observerFault: fault };
+        await store.write(updated, row.revision, authority); row = updated;
+      }
       if (row.admission === "preparing") {
         try {
           row = await handoffRecordedCheck(row.binding.conversation, "reconcile-preparation", row.log,
@@ -117,7 +133,7 @@ export class RecordedCheckObserver {
         const target = this.ports.recipient(row.binding.project);
         if (!target) return;
         const result = row.result;
-        const notification: NonNullable<CheckRow["notification"]> = { key: `recorded-check:${row.id}`, ...target,
+        const notification: NonNullable<CheckRow["notification"]> = { key: `${seatMessageKeys.recordedCheck}${row.id}`, ...target,
           text: `[Delegatus] Recorded check ${row.id}: ${result.state}; ${result.completed}/${row.descriptor.manifest.selection.length} completed; ${result.reason}. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
           operation: null, state: "reserved", reason: null };
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification };
@@ -131,7 +147,7 @@ export class RecordedCheckObserver {
       }
     } finally { store.close(); }
   }
-  private release(id: string) { const watch = this.watches.get(id); watch?.watcher?.close(); clearTimeout(watch?.timer); this.watches.delete(id); }
+  private release(id: string) { const watch = this.watches.get(id); watch?.watcher?.close(); clearTimeout(watch?.timer); this.watches.delete(id); this.faults.delete(id); }
   stop() { this.stopped = true; this.directoryWatcher?.close(); for (const id of this.watches.keys()) this.release(id); }
 }
 
@@ -139,7 +155,7 @@ export const productionObserverPorts: ObserverPorts = {
   active: viewerReleaseOwnsTraffic,
   recipient(project) {
     const seat = currentSeat(project);
-    const generation = seat?.conversationId ? agentRegistry().conversation(seat.conversationId)?.generations.at(-1) : null;
+    const generation = seat?.conversationId ? agentRegistry().conversation(seat.conversationId as ViewerConversationId)?.generations.at(-1) : null;
     return generation && seat?.conversationId ? { conversation: seat.conversationId, path: generation.path } : null;
   },
   async deliver(row) {
@@ -152,6 +168,7 @@ export const productionObserverPorts: ObserverPorts = {
     }
     if (notification.state === "uncertain" || notification.operation) return { operation: notification.operation, state: "uncertain", reason: "original completion send awaits reconciliation" };
     const outcome = await deliverConversationMessage({ path: notification.path, conversationId: notification.conversation,
+      pid: null, images: [],
       text: notification.text, clientMessageId: notification.key,
       origin: agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: row.binding.conversation }), row.binding.conversation) });
     const operation = outcome.ok ? outcome.operationId ?? null : null;

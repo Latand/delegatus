@@ -19,6 +19,7 @@ import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
 import { cancelRecordedHost } from "@/lib/recordedChecks/service";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
+import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -2857,7 +2858,9 @@ export async function terminateStructuredDeliveryHost(
   key: SessionKey,
   expected?: Readonly<ProcessIdentity>,
 ): Promise<boolean> {
-  return await state.terminateActiveHost?.(key, expected) ?? false;
+  const process = expected ?? state.activeRegistry?.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost?.process;
+  if (!process) return false;
+  return withRecordedHostFence(process, async () => await state.terminateActiveHost?.(key, expected) ?? false);
 }
 
 

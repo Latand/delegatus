@@ -1,6 +1,7 @@
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
-import { recordedHostHeld } from "@/lib/recordedChecks/store";
+import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
+import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -434,6 +435,13 @@ export async function terminateStructuredHostTree(
   ref: StructuredHostKillRef,
   dependencies: StructuredHostTerminationDependencies = {},
 ): Promise<StructuredHostTerminationOutcome> {
+  return withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+}
+
+async function terminateStructuredHostTreeFenced(
+  ref: StructuredHostKillRef,
+  dependencies: StructuredHostTerminationDependencies,
+): Promise<StructuredHostTerminationOutcome> {
   const identityOf = dependencies.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid));
   const alive = dependencies.pidAlive ?? ((pid: number) => procBackend.pidAlive(pid));
   const bootEpoch = dependencies.bootEpoch ?? systemBootEpoch;
@@ -618,7 +626,7 @@ export async function terminateStructuredHostTree(
      still end it. Both are asked at the same points, and either refusal stops
      the ladder before the next signal. */
   const authorityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
-    if (ref.conversationId && recordedHostHeld(ref.conversationId)) return {
+    if (recordedOwnerHeld({ pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch ?? null })) return {
       ok: false, status: 409, error: "recorded check still owns this native host", remaining: survivors(), ...partialEvidence(),
     };
     const refused = dependencies.authorize?.() ?? null;

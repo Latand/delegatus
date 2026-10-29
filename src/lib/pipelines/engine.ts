@@ -12047,7 +12047,9 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       survivors.push({ ...target, operationId: null, detail: unresolved });
       continue;
     }
+    if (target.conversationId && recordedHostHeld(target.conversationId)) { liveWork = true; continue; }
     if (!(await ports.stageHostResident(target))) {
+      if (target.conversationId && recordedHostHeld(target.conversationId)) { liveWork = true; continue; }
       settledAttempts.add(attemptKey);
       continue;
     }
@@ -16831,6 +16833,7 @@ export type StageCompletionResult = {
   stageId?: string;
   attempt?: number;
   report?: PipelineStageReport;
+  recordedChecks?: ReturnType<typeof recordedAttemptReceipts>;
   /** True when this call replaced an earlier report of the same attempt. */
   replaced?: boolean;
   error?: string;
@@ -17188,7 +17191,8 @@ export async function reportStageCompletion(
       ? { ...existing, provenanceState: "unknown" as const, provenanceAt: report.at }
       : existing), entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
     await persist();
-    return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null };
+    return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null,
+      recordedChecks: attempt.launchId ? recordedAttemptReceipts(attempt.launchId) : [] };
   });
 }
 

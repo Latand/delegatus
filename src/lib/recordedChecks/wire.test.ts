@@ -10,7 +10,7 @@ afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursiv
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "recorded-wire-")); roots.push(root);
   fs.writeFileSync(path.join(root, "source.ts"), "export const value = 1;\n");
-  const input = { cwd: root, deadline: 1_900_000_000_000, executionMs: 1000, selection: ["first", "second"],
+  const input = { executionEnvironment: {}, cwd: root, deadline: 1_900_000_000_000, executionMs: 1000, selection: ["first", "second"],
     configurationDigest: digest({ fixture: true }), roots: [{ directory: root, purpose: "evidence" as const }],
     inputs: [{ root, file: "source.ts" }], outputs: [{ root, file: "late.patch" }], completion: { root, file: "complete.json" } };
   return { root, input, manifest: await buildManifest(input) };

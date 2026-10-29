@@ -103,12 +103,15 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   let cancellation: Terminal["cancellation"] = null;
   const originalRemaining = descriptor ? Math.max(0, descriptor.deadlineUptimeMs - custodyClock()) : Infinity;
   const monotonicDeadline = performance.now() + originalRemaining;
+  const inheritedAllowance = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
+  const executionAllowance = Math.min(manifest?.executionMs ?? Infinity,
+    Number.isFinite(inheritedAllowance) && inheritedAllowance > 0 ? inheritedAllowance : 900_000);
   try {
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
       env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"), ...(descriptor ? {
         LLV_RECORDED_CHECK_DIRECTORY: dir, LLV_RECORDED_CHECK_ID: descriptor.runId,
-        LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(manifest!.executionMs, Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000))),
+        LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(executionAllowance),
       } : {}) },
     });
     if (descriptor) {
