@@ -55,13 +55,14 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
       const readVersion = store.controllerPipelineVersion;
       let rejected = 0;
       let resumedReservation: string | undefined;
+      let retrying = false;
       const versionSpy = spyOn(store, "controllerPipelineVersion").mockImplementation(async id => {
         const lane = loadPipelines().find(row => row.id === id);
         if (!rejected && lane?.lastPassedCommit === publisher.passedSha && lane.delivery?.operation?.state === "pending") {
           rejected++;
           throw new Error("publication startup version unavailable");
         }
-        if (rejected && lane?.delivery?.operation?.state === "pending") resumedReservation ??= lane.delivery.operation.id;
+        if (retrying && lane?.delivery?.operation?.state === "pending") resumedReservation ??= lane.delivery.operation.id;
         return readVersion(id);
       });
       try {
@@ -71,6 +72,7 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         expect(pipelineControllerJobLanes()).toHaveLength(0);
         expect(publisher.order.some(value => value.startsWith("push:"))).toBe(false);
         const reservation = loadPipelines()[0]!.delivery!.operation!;
+        retrying = true;
         for (let n = 0; n < 3; n++) {
           await tickPipelinesController([], h.ports);
           await settlePipelineControllerJobs();
