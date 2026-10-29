@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-state-"));
 const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR };
@@ -504,4 +505,30 @@ test("auto-rotation attempt and failure accounting survive restart and seat succ
   const reopened = readSeatTickState("viewer", file);
   expect(reopened.autoRotation).toEqual(autoRotation);
   expect(seatTickStateForEpoch(reopened, 8).autoRotation).toEqual(autoRotation);
+});
+
+
+test("the delivery alarm clock survives a restart within its epoch and clears on succession without losing debt", () => {
+  const file = path.join(fs.mkdtempSync(path.join(SANDBOX, "alarm-epoch-")), "tick.json");
+  const since = "2026-10-28T12:00:00.000Z";
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, eventsThrough: 41, wakeDecidedSince: since,
+    catchUpProgress: { key: "catch-up:7:gap", from: "2026-10-28T10:00:00.000Z", through: since, covers: ["earlier"],
+      after: JSON.stringify(["", "ask", "worker", "v1"]) },
+    reportsOwed: [{ key: "earlier", label: "held outcome", receivedAt: since }] };
+  writeSeatTickState("viewer", initial, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(seatTickStateForEpoch(reopened, 7).wakeDecidedSince).toBe(since);
+  const successor = seatTickStateForEpoch(reopened, 8);
+  expect(successor.wakeDecidedSince ?? null).toBeNull();
+  expect(successor.catchUpProgress).toEqual(initial.catchUpProgress);
+  expect(successor.reportsOwed).toEqual(initial.reportsOwed);
+  writeSeatTickState("viewer", successor, file);
+  const script = `const { readSeatTickState } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickState.ts"))});
+    const state = readSeatTickState("viewer", ${JSON.stringify(file)});
+    console.log(JSON.stringify({ epoch: state.seatEpoch, since: state.wakeDecidedSince ?? null,
+      progress: state.catchUpProgress, owed: state.reportsOwed, cursor: state.eventsThrough }));`;
+  const child = spawnSync(process.execPath, ["-e", script], { env: { ...process.env }, encoding: "utf8", timeout: 30_000 });
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout)).toEqual({ epoch: 8, since: null, progress: initial.catchUpProgress,
+    owed: initial.reportsOwed, cursor: 41 });
 });

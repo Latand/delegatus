@@ -542,11 +542,22 @@ test("three consecutive permanent refusals open the circuit: the fourth check pr
   expect(cards[0]!.text).toContain("Attempts on this card: 3");
   expect(cards[0]!.text).toContain("prepares no new wake");
 
-  /* Held: the next check sends nothing and rewrites nothing. */
+  /* A same-instant check sends nothing and leaves the card byte-identical. */
+  const repeated = await check(NOW + 15 * MINUTE, refusing);
+  expect(repeated.rig.sent).toHaveLength(0);
+  expect(repeated.record.delivery?.outcome).toBe("refusal-circuit");
+  expect(await unresolvedCardsOn(project)).toEqual(cards);
+
+  /* The circuit stays held while only the alarm's age advances. */
+  expect(cards[0]!.text).toContain("without delivery for 15 minutes;");
+  expect(cards[0]!.text).toContain(`ageMs=${15 * MINUTE};`);
   const fifth = await check(NOW + 20 * MINUTE, refusing);
   expect(fifth.rig.sent).toHaveLength(0);
   expect(fifth.record.delivery?.outcome).toBe("refusal-circuit");
-  expect(await unresolvedCardsOn(project)).toEqual(cards);
+  expect(await unresolvedCardsOn(project)).toEqual(cards.map(card => ({ ...card,
+    text: card.text.replace("without delivery for 15 minutes;", "without delivery for 20 minutes;")
+      .replace(`ageMs=${15 * MINUTE};`, `ageMs=${20 * MINUTE};`),
+  })));
 
   /* An operator's settings write for the project resets it, without the tick
      having touched the settings or the seat. */
@@ -573,10 +584,21 @@ test("a rotation onto a seat that is still refusing closes the stale circuit car
   const { project, check } = standingProject("refusal-rotation-refusing");
   const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
   for (let index = 0; index < 4; index++) await check(NOW + index * 5 * MINUTE, refusing);
-  expect(await unresolvedCardsOn(project)).toHaveLength(1);
-  const rotated = await check(NOW + 20 * MINUTE, { ...refusing, seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } });
+  const oldCards = await unresolvedCardsOn(project);
+  expect(oldCards).toHaveLength(1);
+  const successor = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+  const rotated = await check(NOW + 20 * MINUTE, { ...refusing, seat: successor });
   expect(rotated.rig.sent).toHaveLength(1);
+  expect(rotated.row.wakeDecidedSince).toBe(new Date(NOW + 20 * MINUTE).toISOString());
   expect(await unresolvedCardsOn(project)).toEqual([]);
+  /* The successor earns its own alarm only after its own fifteen minutes. */
+  await check(NOW + 35 * MINUTE, { ...refusing, seat: successor });
+  const currentCards = await unresolvedCardsOn(project);
+  expect(currentCards).toHaveLength(1);
+  expect(currentCards[0]!.id).toBe(oldCards[0]!.id);
+  expect(currentCards[0]!.text).toContain("without delivery for 15 minutes;");
+  expect(currentCards[0]!.text).toContain(`ageMs=${15 * MINUTE};`);
+  expect(currentCards[0]!.text).not.toContain("3 consecutive attempts");
 });
 
 test("a project that never had an unresolved wake asks nothing of the board", async () => {

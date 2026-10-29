@@ -1040,7 +1040,10 @@ async function reconcileOutstandingWake(context: {
   /* An attempt written before the instant existed is stamped when first seen,
      so the attention bound below is measured from a fact. */
   if (!outstanding.preparedAt) state = await persist({ ...state, outstandingWake: { ...outstanding, preparedAt: context.at } });
-  if (!state.wakeDecidedSince) state = await persist({ ...state, wakeDecidedSince: state.outstandingWake!.preparedAt ?? context.at });
+  if (!state.wakeDecidedSince && state.outstandingWake!.seatEpoch === context.seat?.seatEpoch
+    && state.outstandingWake!.conversationId === context.seat?.conversationId) {
+    state = await persist({ ...state, wakeDecidedSince: state.outstandingWake!.preparedAt ?? context.at });
+  }
   let wake = state.outstandingWake!;
   const preparedAt = Date.parse(wake.preparedAt!);
   const overdue = Number.isFinite(preparedAt) && context.now - preparedAt >= context.wakeIntervalMs;

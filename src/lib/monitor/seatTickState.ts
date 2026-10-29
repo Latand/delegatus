@@ -413,12 +413,13 @@ function readFile(filePath: string): SeatTickStateFile {
  *   a rotation that cleared it would lose exactly the outcomes the operator
  *   reads the log for.
  */
+// The watchdog clock belongs to one recipient epoch. A successor starts its
+// own clock when work is decided, while the uncredited backlog stays owed.
 export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: number | null): SeatTickProjectState {
   if (row.seatEpoch === seatEpoch) return row;
   return {
     ...emptySeatTickState(),
     seatEpoch,
-    ...(row.wakeDecidedSince ? { wakeDecidedSince: row.wakeDecidedSince } : {}),
     ...(row.catchUpProgress ? { catchUpProgress: row.catchUpProgress } : {}),
     autoRotation: row.autoRotation,
     hostRecovery: row.hostRecovery,
