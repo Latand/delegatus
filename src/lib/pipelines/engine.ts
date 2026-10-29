@@ -943,7 +943,7 @@ async function spawnPipelineAgent(
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString(), () =>
         onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
-          accountId: begun.receipt.accountId ?? account.accountId }), buildReleaseTagPolicy(guardPipeline, guardStage)));
+          accountId: begun.receipt.accountId ?? account.accountId }), buildReleaseTagPolicy(guardPipeline, guardStage, input.role)));
     guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.

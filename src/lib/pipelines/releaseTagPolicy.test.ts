@@ -170,7 +170,7 @@ test.each(["matching", "stale head", "other review", "other attempt"])("explicit
   } finally { await f.close(); }
 });
 
-test("the production spawn adapter installs the release binding before native dispatch", async () => {
+test.each(["deployer", "builder", "read-only"])("the production spawn adapter binds the actual host role before native dispatch: %s", async kind => {
   const f = await fixture();
   const registry = new AgentRegistry(path.join(f.root, "registry.json"));
   const clientModule = await import("@/lib/runtime/client");
@@ -181,13 +181,17 @@ test("the production spawn adapter installs the release binding before native di
   }});
   const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
   let dispatched = false;
+  const role = structuredClone(f.stage.effectiveRole);
+  if (kind === "builder") role.roleId = "builder";
+  if (kind === "read-only") role.access = "read-only";
   let receipt: string | undefined;
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
     receipt = input.account.env.LLV_STAGE_GIT_RECEIPT;
     expect(receipt).toBeDefined();
     const env = { ...input.account.env, ...agentPublicationIdentityEnv(input.account.env) };
     const pushed = await f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], env);
-    expect(pushed.code, pushed.stderr).toBe(0);
+    if (kind === "deployer") expect(pushed.code, pushed.stderr).toBe(0);
+    else { expect(pushed.code).not.toBe(0); expect(pushed.stderr).toContain("tag publication requires a release-mode deployer stage"); }
     dispatched = true;
     return { path: null } as never;
   });
@@ -196,13 +200,14 @@ test("the production spawn adapter installs the release binding before native di
     await f.tag();
     savePipelines([f.pipeline]);
     await defaultPipelinePorts().spawnAgent({
-      role: f.stage.effectiveRole, runtimeProfile: { access: f.stage.effectiveRole.access, sandbox: "full" }, cwd: f.lane,
+      role, runtimeProfile: { access: role.access, sandbox: "full" }, cwd: f.lane,
       project: f.pipeline.project, requestedAccountId: null, title: "Release", prompt: "Release", parentPath: null,
       clientAttemptId: "release-native-dispatch", creatorConversationId: null,
-      membership: { kind: "pipeline", containerId: f.pipeline.id, role: "deployer", slot: "publish:1", stageId: "publish", stageOrder: 6, round: 1, parentConversationId: null },
+      membership: { kind: "pipeline", containerId: f.pipeline.id, role: role.roleId!, slot: "publish:1", stageId: "publish", stageOrder: 6, round: 1, parentConversationId: null },
     }, async () => {});
     expect(dispatched).toBe(true);
-    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(f.head);
+    if (kind === "deployer") expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(f.head);
+    else expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
   } finally {
     resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); setAgentRegistryForTests(null); registry.close();
     savePipelines([]);

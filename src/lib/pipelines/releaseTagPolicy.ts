@@ -11,8 +11,9 @@ export type ReleaseTagPolicy = { head: string; remote: string; branch: string } 
 /** Controller-owned inputs. The version is read from this exact Git tree by
  * prepareStageGitGuard; neither the working package nor the role's cut SHA
  * selects the release commit. Approval and release preflight remain required. */
-export function buildReleaseTagPolicy(pipeline: Pipeline | null | undefined, stage: PipelineStage | undefined): ReleaseTagPolicy | null {
-  if (!stage || !isReleasePublishStage(stage)) return null;
+export function buildReleaseTagPolicy(pipeline: Pipeline | null | undefined, stage: PipelineStage | undefined,
+  role: EffectivePipelineRole | undefined = stage?.effectiveRole): ReleaseTagPolicy | null {
+  if (!stage || !isReleasePublishStage(stage) || !role || !isReleasePublishStage(stage, role)) return null;
   const delivery = pipeline?.delivery;
   if (!pipeline || !delivery?.active || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id || delivery.publish === "disabled"
     || !delivery.target.remote || !delivery.target.branch.startsWith("refs/heads/")
