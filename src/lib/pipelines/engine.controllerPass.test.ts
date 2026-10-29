@@ -99,8 +99,8 @@ test("settlement admission retries three timed out windows before parking the pr
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
 });
 
-test.each(["settles", "exhausts"] as const)("publication capacity retries retain the reservation: %s", async outcome => {
-  const exhausted = outcome === "exhausts";
+test.each(["settles", "exhausts", "publish", "publish-head"] as const)("publication capacity retries retain the reservation: %s", async outcome => {
+  const exhausted = outcome !== "settles";
   const { h, lane } = await committing("remote-branch");
   const publication = publishHarness(h);
   let now = Date.parse(h.ports.now());
@@ -145,7 +145,10 @@ test.each(["settles", "exhausts"] as const)("publication capacity retries retain
     try {
       for (let n = 0; n < 4; n++) expect(startPipelineControllerJob(`manual-publication-${n}`,
         () => manualRelease.promise, async () => "unchanged", "publication")).toBe(true);
-      expect((await engineModule.patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+      const request = outcome === "publish" ? { action: "publish" as const }
+        : outcome === "publish-head" ? { action: "publish" as const, acceptedSha: publication.passedSha }
+          : { action: "retry-stage" as const };
+      expect((await engineModule.patchPipeline(lane.id, request, h.ports)).error).toBeUndefined();
       await tickPipelinesController([], h.ports);
       await observed(() => current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures === 0);
       expect(current().state).toBe("running");

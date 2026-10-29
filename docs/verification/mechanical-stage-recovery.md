@@ -40,6 +40,15 @@ publication history. Restart tests hold capacity through two immediate polls
 after retry, then release it and settle once. No live lane was changed.
 First-message ownership recovery remains outside this change.
 
+A subsequent read-only audit at 18:33–18:34 UTC identified four live
+publishers holding that pool, each with its matching publication lock and a
+`git push` child waiting in pre-push CPU admission. This establishes actual
+saturation at that observation, alongside the earlier code-path diagnosis.
+The audit also found that explicit `publish acceptedSha` retained the expired
+admission clock. Both publication recovery spellings now renew that window;
+the controller regression holds publication capacity through recovery, then
+settles the same passed head once capacity returns.
+
 ### Interrupted spawn
 
 Lane `22074cb0`, publish attempt 2, retained a start at 08:47:16 UTC with no
@@ -221,7 +230,7 @@ failures retain the existing decision or producer-repair path.
   reader resumes an admitted launch.
 - `parkUnadmittedStageSettlement` writes `settlementAdmissionRetry`;
   `settlePendingStageGit` and controller admission consume its due time.
-  Explicit passed-stage commit and publication retry clear that admission
+  Explicit passed-stage commit retry and publication recovery clear that admission
   window; they retain the existing per-head publication history and receipts.
 - `commitStageTree` writes the typed `commitCancelled` result;
   `commitPassedStage` consumes it using the existing `stageCommitWait` writer

@@ -15476,6 +15476,7 @@ export async function patchPipeline(
         // Retry that proof outside the mutation lease before reserving a push.
         attempt!.state = "committing";
         attempt!.error = null;
+        delete attempt!.settlementAdmissionRetry;
         current.state = "running";
         current.pausedState = null;
         current.stateDetail = "passed stage head verification and publication pending";
@@ -15500,6 +15501,7 @@ export async function patchPipeline(
       const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      if (resumesPass && current.state === "needs_decision" && attempt) delete attempt.settlementAdmissionRetry;
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
         if (current.publicationAdmission?.state === "pending" && current.publicationAdmission.sha !== acceptedSha) return { error: "another publication admission is pending", status: 409 };
