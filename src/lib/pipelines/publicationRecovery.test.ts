@@ -1231,6 +1231,7 @@ test("dead repair custody refuses a head moved after its producer receipt was pr
     await tickPipelines([], f.h.ports);
     expect(moves).toBe(1);
     expect(current().lastPassedCommit).toBe(accepted);
+    expect(current().stateDetail).toContain("repair head moved");
     expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
     expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(moved);
     expect(await f.git(f.lane(), "show", ":file.txt")).toBe("staged repair");

@@ -5503,7 +5503,9 @@ async function settlePublicationRepair(
     if (deadProducer && writable) protectedHead = repair.commitStartedHead!;
     const result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, exec,
       attemptStage(worker.stage, worker.attempt).outputs, protectedHead, ports.stageCommitReceiptFile);
-    if (!result.ok) return fail(result.error);
+    if (!result.ok) return fail(deadProducer && writable && result.error === `read-only stage ${worker.stage.id} created a commit`
+      ? "The dead producer's repair head moved after its creation receipts were proved; preserve the checkout."
+      : result.error);
     const current = await currentPipelineBranchHead(pipeline, ports.exec);
     if (!current.ok || current.sha !== result.sha) return fail(current.ok ? "The publication repair head moved during settlement." : current.error);
     const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", repair.baseSha, result.sha], pipeline.worktreeDir, pipelineLiteralGitEnv());
