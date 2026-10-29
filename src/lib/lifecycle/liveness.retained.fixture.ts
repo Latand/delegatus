@@ -10,6 +10,7 @@ import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/sto
 import type { CachedFileScan, FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 import { describe } from "@/lib/scanner/describe";
+import { catalogEntryToFileEntry } from "@/lib/scanner/conversationCatalog";
 import { productionLivenessSources } from "./liveness";
 
 /** Production readers over retained cold history, with one real transcript and
@@ -65,8 +66,11 @@ export function retainedLivenessFixture(count = 120) {
     savePipelines([...previousPipelines, pipeline]);
     fs.utimesSync(worker.transcript, new Date(), new Date());
     const stat = fs.statSync(worker.transcript);
-    const files: FileEntry[] = [{ ...describe("codex-sessions", path.join(directory, "sessions"), worker.transcript, stat),
-      conversationId, project: "fixture", title: "Retained liveness", activity: "live" }];
+    const sessions = path.join(directory, "sessions");
+    const entry = catalogEntryToFileEntry({ ...describe("codex-sessions", sessions, worker.transcript, stat),
+      path: worker.transcript, root: "codex-sessions", name: path.relative(sessions, worker.transcript),
+      mtime: stat.mtimeMs / 1000, size: stat.size, firstPrompt: "" });
+    const files: FileEntry[] = [{ ...entry, conversationId, project: "fixture", title: "Retained liveness", activity: "live" }];
     let cacheStatus: CachedFileScan["cacheStatus"] = "hit";
     const completedFileScan = async (): Promise<CachedFileScan> => ({
       snapshot: structuredClone({ files, projectCatalog: [], complete: true } as FileScanSnapshot),
