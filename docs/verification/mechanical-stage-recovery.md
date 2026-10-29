@@ -100,6 +100,33 @@ authority-reader instance while a real Git hook is held, then restores the
 reader. It checks that the controller's own signal cancels the command and
 that the preserved pass retries without a producer repair turn.
 
+### Pre-push admission expiry
+
+The retained history for lane `010e56e7` classifies three refusals at
+13:46:22, 14:40:14 and 15:14:18 UTC on 2026-10-29. All three name the
+CPU-admission phase on the same accepted head, with seven changed files.
+The history records zero recoverable failures and three total attempts.
+These are classification times: the corresponding publisher journal entries
+are at 13:40:07, 14:40:10 and 15:14:17 UTC.
+
+At `4389d935`, `scripts/cpu-admission.ts:45` supplies a default 30-second
+SQLite contention budget to the admission helper. Each busy episode spends
+the remaining budget (`scripts/cpu-admission-lock.ts:24` and `:37`), while
+ordinary queue waiting does not. Repeated short lock waits can therefore
+exhaust those thirty seconds after many minutes in the CPU queue. The helper
+then reports that checks did not start (`:12`); the CLI exits 1
+(`scripts/cpu-admission.ts:103`). This is independent of the publication
+execution budget: `scripts/local-gate.ts:823` waits for admission without an
+execution deadline, and credits CPU waiting separately.
+
+The publisher classifies the complete captured output before bounding it
+(`src/lib/pipelines/git.ts:2017` at `4389d935`). Its deadline classifier
+(`src/lib/pipelines/publication.ts:26`) recognized execution expiry, but did
+not recognize this admission expiry. The resulting refusal retained
+`retryableDeadline: false`. With changed files, recovery treated it as a
+check failure and requested a producer repair despite the absence of a check
+verdict. The retained producer response reported no file defect.
+
 ### Restart continuation delivery (deferred)
 
 The additional class is confirmed in the retained frontend attempt 3 of lane
@@ -131,12 +158,25 @@ runtime-host or delivery-queue behavior changes here.
 | Settlement job unavailable | Three retries after 1, 5 and 15 minutes, each with a new 15-minute admission window | Attempt, accepted head, pass, publication reservation |
 | Restart before spawn reservation | Three retries after 1, 5 and 15 minutes | Attempt and original launch keys; an admitted matching receipt is adopted |
 | Bare commit cancellation or controller deadline | Four retries after 30, 60, 120 and 240 seconds | Passed attempt, index, worktree, accepted head and ownership receipts |
+| Pre-push admission lock-wait expiry before checks start | Three retries after 1, 5 and 15 minutes | Accepted head, passed attempt and per-head publication history |
 
 Admission clocks start at the first capacity refusal. Publication has its own
 four-job pool; settlement releases its active permit while its publisher
 waits. The scheduler still retains custody of both jobs. Git's existing locks,
 ownership checks and receipts decide whether a result can be accepted. This
 change makes no latency or throughput claim.
+
+The settlement wait follows the publication job's complete lifetime, including
+an initial version-read failure before its callback starts. That failure releases
+scheduling custody so the same pending publication can be retried.
+
+Admission recovery requires the admission phase and the helper's explicit
+expiry with no started heavy-check phase or decisive refusal in the complete
+output. Queue progress alone supplies no such proof. The existing
+`retryableDeadline` flag retains the capacity policy across readers; optional
+`admissionDeadline` metadata preserves the admission reason. Classification
+happens before output truncation. The existing per-head history counts each
+operation once across restart and takeover, and stops after three retries.
 
 An unchanged declared-output tree reuses its original ownership receipt. A
 repaired tree receives a new receipt after the earlier receipt is validated;
@@ -162,6 +202,10 @@ failures retain the existing decision or producer-repair path.
   checkpoints preserve the optional attempt fields. The registry decoder
   accepts their writer output. List projections expose the existing state
   detail; no new settings or schema migration is needed.
+- `publishPipelineBranch` writes admission metadata with its captured failure;
+  executor and operation receipts retain the same result. The store, recovery
+  history and takeover keep the existing retryable-deadline flag. New readers
+  use the optional admission field for the reason; older readers ignore it.
 
 The seat controller, merge queue timeout and stage push guard are outside this
 change. The shared engine edits concern settlement and spawn checkpointing.
@@ -178,6 +222,11 @@ Run each named file separately through the project's gate wrapper, using
   launch receipt adoption and rejection, atomic activation checkpoint.
 - `src/lib/pipelines/stageCommitRepair.test.ts`: cancellation versus hook
   diagnostics, successful retry, exhaustion, existing producer repair controls.
+- `src/lib/pipelines/publication.test.ts`: production admission-helper output,
+  started-check and refusal vetoes, incomplete admission evidence.
+- `src/lib/pipelines/parkedPublication.test.ts`: real Git hook admission expiry,
+  unchanged accepted head, persisted retry history, process restarts, exhaustion
+  and a subsequent genuine check refusal.
 
 The publication-pool regression, admission recovery, launch recovery and
 commit cancellation regressions fail on the captured main implementation.

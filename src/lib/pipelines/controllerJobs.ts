@@ -82,6 +82,11 @@ export function startPipelineControllerJob(id: string, run: (waitOutsideCapacity
   return true;
 }
 
+/** Includes failure before the admitted callback starts. */
+export function waitForPipelineControllerJob(id: string, kind: JobKind): Promise<void> {
+  return jobs.get(key(id, kind)) ?? Promise.resolve();
+}
+
 /** Used for shutdown diagnostics and replay settlement, never phase completion. */
 export async function settlePipelineControllerJobs(): Promise<void> {
   const root = statePath("pipelines");

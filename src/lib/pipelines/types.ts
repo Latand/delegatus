@@ -1007,6 +1007,8 @@ export type PipelinePublicationFailure = {
   hookStoppedCheck?: string;
   /** Full output proved a deadline with no decisive check or cleanup refusal. */
   retryableDeadline?: boolean;
+  /** The proven deadline expired during CPU admission before checks started. */
+  admissionDeadline?: true;
   /** Git refused HTTP access after its App credential helper verified a fresh mint. */
   retryableApp403?: boolean;
   /** Observation clock captured with the refusal, before recovery can restart. */
@@ -1139,7 +1141,16 @@ export type PipelineRemoteAction = {
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
 
+export type PipelineConversationSource = {
+  conversationId: string;
+  branch: string;
+  head: string;
+  capturedAt: string;
+};
+
 export type Pipeline = {
+  /** Historical context only; never grants creator or spawn authority. */
+  conversationSource?: PipelineConversationSource;
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
   /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */

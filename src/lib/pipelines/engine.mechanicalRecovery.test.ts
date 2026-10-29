@@ -1,8 +1,8 @@
 import { expect, test, harness, tickPipelines, reserveActivationOnly, loadPipelines, savePipelines,
-  create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn, engineModule } from "./engine.fixture";
+  create, BUILD_ONLY, realWorktreeLane, realExec, fs, path, spawn, engineModule, publishHarness } from "./engine.fixture";
 import type { Pipeline } from "./types";
 import { tickPipelinesController } from "./controllerPass";
-import { settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
+import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -49,7 +49,37 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         } finally { watcher.close(); fs.rmSync(path.join(root, "mechanical-hook-ready"), { force: true }); }
       };
     }
-    if (mode.startsWith("settlement")) {
+    if (mode === "publication-startup") {
+      const publisher = publishHarness(h);
+      const store = await import("./store");
+      const readVersion = store.controllerPipelineVersion;
+      let rejected = 0;
+      const versionSpy = spyOn(store, "controllerPipelineVersion").mockImplementation(async id => {
+        const lane = loadPipelines().find(row => row.id === id);
+        if (!rejected && lane?.lastPassedCommit === publisher.passedSha && lane.delivery?.operation?.state === "pending") {
+          rejected++;
+          throw new Error("publication startup version unavailable");
+        }
+        return readVersion(id);
+      });
+      try {
+        await tickPipelinesController([], h.ports);
+        await settlePipelineControllerJobs();
+        expect(rejected).toBe(1);
+        expect(pipelineControllerJobLanes()).toHaveLength(0);
+        expect(publisher.order.some(value => value.startsWith("push:"))).toBe(false);
+        const reservation = loadPipelines()[0]!.delivery!.operation!.id;
+        for (let n = 0; n < 3; n++) {
+          await tickPipelinesController([], h.ports);
+          await settlePipelineControllerJobs();
+        }
+        const lane = loadPipelines()[0]!;
+        expect(lane.delivery!.operation!.id).toBe(reservation);
+        expect(lane.delivery!.operation!.result?.ok).toBe(true);
+        expect(publisher.order.filter(value => value === "commit")).toHaveLength(1);
+        expect(publisher.order.filter(value => value.startsWith("push:"))).toHaveLength(1);
+      } finally { versionSpy.mockRestore(); }
+    } else if (mode.startsWith("settlement")) {
       let release!: () => void;
       const held = new Promise<void>(resolve => { release = resolve; });
       try {
@@ -62,6 +92,20 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
     console.log(JSON.stringify({ lane: loadPipelines()[0], spawns: h.spawnInputs }));
   } finally { process.env.LLV_STATE_DIR = fixtureState; }
 });
+
+test("a publication startup read failure releases settlement custody before retrying its reservation", async () => {
+  const h = harness();
+  await create(h.ports, BUILD_ONLY as never, { publication: "remote-branch" });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  lane.cursor!.state = "committing";
+  Object.assign(lane.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
+  savePipelines([lane]);
+  const recovered = await restartedTick("2026-10-29T08:48:00.000Z", "publication-startup");
+  expect(recovered.lane.state).toBe("completed");
+  expect(recovered.lane.runs[0]!.attempts).toHaveLength(1);
+  expect(recovered.spawns).toHaveLength(0);
+}, 120_000);
 
 test.each(["settles", "exhausts"] as const)("settlement admission survives process restarts: %s", async outcome => {
   const exhausted = outcome === "exhausts";

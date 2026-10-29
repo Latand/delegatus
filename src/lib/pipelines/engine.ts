@@ -1,3 +1,4 @@
+import { isPipelineConversationSource } from "./store";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
@@ -14,7 +15,7 @@ import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
-import { startPipelineControllerJob, pipelineControllerJobLanes } from "./controllerJobs";
+import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
@@ -4653,6 +4654,11 @@ function publicationNotLanded(published: RefusedPublication): boolean {
   return publicationInterrupted(published);
 }
 
+function publicationDeadlineCause(failure: import("./types").PipelinePublicationFailure): string {
+  return failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
+    : "a check reached its execution deadline without a verdict";
+}
+
 /** The first line of a publication park: the cause and what a person does. */
 function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
@@ -4662,7 +4668,7 @@ function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: R
     return `publishing the passed stage: checking the remote pipeline branch failed${retried}. Check remote access and connectivity, then use publish to try again.\n${published.error}`;
   }
   if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
-    return `publishing the passed stage: a check reached its execution deadline without a verdict after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
+    return `publishing the passed stage: ${publicationDeadlineCause(failure)} after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
   }
   if (publicationNotLanded(published)) {
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
@@ -4709,7 +4715,7 @@ async function retryRefusedPublication(
   const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
     cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
-    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? "a check reached its execution deadline without a verdict"
+    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error).slice(0, 400),
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
   if (!recoverable) return false;
@@ -4734,7 +4740,7 @@ async function retryRefusedPublication(
   }
   const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
-  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
+  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `${publicationDeadlineCause(failure!)}; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
     : published.remote === "unreachable" ? `${published.error}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
@@ -4753,7 +4759,7 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   const deadlineOnly = failure?.retryableDeadline === true;
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
     cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
-    detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
+    detail: (deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
@@ -13159,13 +13165,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           const current = findPipelineRecord(lane.id);
           const operation = current?.delivery?.operation;
           if (current?.delivery?.active && operation?.state === "pending") {
-            let complete!: () => void;
-            const published = new Promise<void>(resolve => { complete = resolve; });
             const admitted = startPipelineControllerJob(lane.id, async () => {
-              try { await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha, now: jobPorts.now }); }
-              finally { complete(); }
+              await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha, now: jobPorts.now });
             }, () => controllerPipelineVersion(lane.id), "publication");
-            if (admitted) await waitOutsideCapacity(published);
+            if (admitted) await waitOutsideCapacity(waitForPipelineControllerJob(lane.id, "publication"));
             else await parkUnadmittedStageSettlement(current, jobPorts, true);
           }
           return changed;
@@ -13843,6 +13846,7 @@ function withPipelineControllerMutation<T>(
 }
 
 export type PipelineMutationResult = {
+  replayed?: boolean;
   repositoryInitialization?: import("./types").RepositoryInitialization;
   pipeline?: Pipeline;
   error?: string;
@@ -13918,6 +13922,11 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  conversationSource?: Pipeline["conversationSource"];
+  /** Source capture and live authority are rechecked after asynchronous creation probes. */
+  beforeConversationCreate?: () => Promise<void>;
+  admitConversationCreate?: () => void;
+  admitConversationReplay?: (pipeline: Pipeline) => void;
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
@@ -14003,6 +14012,9 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  if (options.conversationSource !== undefined && !isPipelineConversationSource(options.conversationSource)) {
+    return { error: "invalid conversation source", status: 400 };
+  }
   const proactiveError = proactiveTaskExecutionError([...(Array.isArray(req.taskIds) ? req.taskIds.filter((id): id is string => typeof id === "string") : []),
     ...(options.ensureTask?.proactive ? [options.ensureTask.id] : [])]);
   if (proactiveError) return { error: proactiveError, status: 403 };
@@ -14011,7 +14023,7 @@ export async function createPipelineFromRequest(
     if (replay) {
       if (replay.creationRequest?.digest !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
       const repositoryInitialization = await readRepositoryInitialization(replay.repoDir);
-      return { pipeline: replay, ...(repositoryInitialization ? { repositoryInitialization } : {}) };
+      return { pipeline: replay, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
   }
   if (hasRetiredStage(req.stages)) return STAGE_RETIREMENT;
@@ -14202,6 +14214,7 @@ export async function createPipelineFromRequest(
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
+  if (options.conversationSource) pipeline.conversationSource = { ...options.conversationSource };
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
     const tasks = loadTasks();
@@ -14210,15 +14223,19 @@ export async function createPipelineFromRequest(
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
     let created: Pipeline;
+    let replayed = false;
     try {
-      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf });
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, {
+        requireOwner: !!options.refreshOf, prepare: options.beforeConversationCreate,
+        admit: options.admitConversationCreate, admitReplay: options.admitConversationReplay, onReplay: () => { replayed = true; },
+      });
     } catch (error) {
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
     }
-    return { pipeline: created, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
+    return { pipeline: created, ...(replayed && options.conversationSource ? { replayed: true } : {}), ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
     if (options.ensureTask && options.spawnParams) {

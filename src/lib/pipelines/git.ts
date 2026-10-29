@@ -25,7 +25,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineKind } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -1608,6 +1608,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
+  if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -2036,10 +2037,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null : hookBudgetStop(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(output);
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          retryableDeadline: deadlineKind !== null,
+          ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
           ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
