@@ -131,6 +131,7 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastCheckAt: from, lastWakeAt: from,
     lastProposalAt: AT, unreachableSince: from, eventsThrough: 0, reportsOwed: [priorReport], accounting: undefined }, f.stateFile);
   setAgentRegistryForTests(f.registry);
+  await f.registry.prepareRecoveryIndexes();
   const hosted = hostedSeat(f);
   const rig = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now, events, pipelines: [lane],
     realWakeState: true, journal: { client: hosted.client },
@@ -160,9 +161,10 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   const queued = rig.deps.readState!(PROJECT).outstandingWake!;
   expect(queued.operationId).toBeTruthy();
   hosted.journal.transitionOperation(queued.operationId!, "delivered");
-  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(await rig.deps.sources!.wakeState(queued)).toMatchObject({ state: "landed" });
+  const credited = await runSeatTickCheck(PROJECT, rig.deps);
   const row = rig.deps.readState!(PROJECT);
-  expect(row.eventsThrough).toBe(500);
+  expect({ eventsThrough: row.eventsThrough, result: credited, journal: rig.journal.slice(-2) }).toMatchObject({ eventsThrough: 500 });
   expect(row.itemsShown).toHaveLength(501);
   expect(row.announcedLanes).toEqual([`${lane.id}:completed`]);
   expect(row.reportsOwed?.map(report => report.key)).toEqual([`catch-up:7:${from}`]);
@@ -170,7 +172,7 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   const later = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now + 61 * MINUTE,
     events, pipelines: [lane], realWakeState: true, journal: { client: hosted.client },
     deliverWith: realTransport(f, hosted.client) });
-  await runSeatTickCheck(f.project, later.deps);
+  await runSeatTickCheck(PROJECT, later.deps);
   expect(later.sent.every(message => !message.text.includes("manifest catch-up:7:")
     && !message.text.includes(lane.id) && !message.text.includes(events[0]!.pipelineId))).toBe(true);
 });
@@ -471,4 +473,189 @@ test("targeted production liveness keeps a live alternate owner of the seat tran
   expect(unrelatedEntryReads).toBeLessThanOrEqual(2);
   expect(f.row().unreachableSince ?? null).toBeNull();
   expect(rig.sent.every(message => !message.text.includes("Catch-up manifest"))).toBe(true);
+});
+
+test("oversized catch-up pages resume their durable cursor and owe a report only after the final landing", async () => {
+  const many = Array.from({ length: 600 }, (_, index) => ({ ...lanes[0]!,
+    id: `lane-${String(index).padStart(4, "0")}-${"x".repeat(60)}`,
+    movedAt: new Date(Date.parse(AT) + index * 1000).toISOString(),
+  }));
+  const first = recoveryRig({ pipelines: many });
+  const firstResult = await runSeatTickCheck(PROJECT, first.deps);
+  expect(firstResult?.verdict).toBe("wake");
+  expect(firstResult!.deferred).toBeGreaterThan(0);
+  expect(first.sent).toHaveLength(1);
+  expect(Buffer.byteLength(first.sent[0]!.text)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES - 2_000);
+  let row = first.deps.readState!(PROJECT);
+  expect(row.catchUpProgress?.after).toBeTruthy();
+  expect(row.unreachableSince).toBe(FROM);
+  expect(row.reportsOwed?.some(entry => entry.key.startsWith("catch-up:"))).toBe(false);
+  const file = `${row.accounting!.filename.slice(0, -7)}`;
+  const agendaText = (text: string) => text.split("\nItems:\n")[1]!.split("\nWhy you were woken:")[0]!;
+  const seen = new Set(many.filter(lane => agendaText(first.sent[0]!.text).includes(lane.id)).map(lane => lane.id));
+  expect(row.announcedLanes).toHaveLength(seen.size);
+  for (let page = 1; page < 10 && row.catchUpProgress; page++) {
+    // Every page is read by a fresh process, including the persisted cursor
+    // and snapshot that keep page identity stable across a release change.
+    const directory = path.dirname(file);
+    const script = path.join(directory, `page-${page}.test.ts`), resultFile = path.join(directory, `page-${page}.json`);
+    fs.writeFileSync(script, `import { test } from "bun:test";
+      const { harness, runSeatTickCheck, PROJECT } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickController.fixture.ts"))});
+      test("resume page", async () => {
+        const rig = harness({ stateFile: ${JSON.stringify(file)}, pipelines: ${JSON.stringify(many)}, now: ${NOW + page * 61 * MINUTE} });
+        rig.deps.sources.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+        await runSeatTickCheck(PROJECT, rig.deps);
+        await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ sent: rig.sent, row: rig.deps.readState(PROJECT) }));
+      });`);
+    const child = spawn(process.execPath, ["test", script], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    try { expect({ code: await exited, output }).toMatchObject({ code: 0 }); }
+    finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await exited; }
+    const next = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+    expect(next.sent).toHaveLength(1);
+    const text = next.sent[0]!.text;
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES - 2_000);
+    for (const lane of many.filter(lane => agendaText(text).includes(lane.id))) {
+      expect(seen.has(lane.id)).toBe(false);
+      seen.add(lane.id);
+    }
+    row = next.row;
+  }
+  expect(seen.size).toBe(600);
+  expect(row.catchUpProgress).toBeNull();
+  expect(row.unreachableSince).toBeNull();
+  expect(row.reportsOwed?.filter(entry => entry.key.startsWith("catch-up:"))).toEqual([
+    { key: `catch-up:7:${FROM}`, label: `catch-up ${FROM} through ${new Date(NOW).toISOString()}`, receivedAt: row.lastWakeAt! },
+  ]);
+});
+
+
+const pagedLanes = () => Array.from({ length: 600 }, (_, index) => ({ ...lanes[0]!,
+  id: `pending-lane-${String(index).padStart(4, "0")}-${"x".repeat(60)}`,
+  movedAt: new Date(Date.parse(AT) + index * 1000).toISOString(),
+}));
+
+test("a priority deployment preserves unfinished catch-up until the remaining pages land", async () => {
+  const many = pagedLanes();
+  const first = recoveryRig({ pipelines: many });
+  await runSeatTickCheck(PROJECT, first.deps);
+  const before = first.deps.readState!(PROJECT);
+  expect(before.catchUpProgress?.after).toBeTruthy();
+  const file = before.accounting!.filename.slice(0, -7);
+  const deploymentId = "priority-during-catch-up";
+  const deploy = recoveryRig({ stateFile: file, pipelines: many, now: NOW + MINUTE,
+    seatDeployments: [{ conversationId: CONVERSATION, deploymentId }],
+    deployments: { [deploymentId]: { phase: "succeeded", terminal: true, revision: "a".repeat(40) } } });
+  await runSeatTickCheck(PROJECT, deploy.deps);
+  expect(deploy.sent).toHaveLength(1);
+  expect(deploy.sent[0]!.text).toContain(deploymentId);
+  const afterDeploy = deploy.deps.readState!(PROJECT);
+  expect(afterDeploy.catchUpProgress).toEqual(before.catchUpProgress);
+  expect(afterDeploy.unreachableSince).toBe(FROM);
+  expect(afterDeploy.announcedLanes).toEqual(before.announcedLanes);
+  expect(afterDeploy.announcedDeploys).toEqual([deploymentId]);
+  expect(afterDeploy.reportsOwed?.some(entry => entry.key === before.catchUpProgress!.key)).toBe(false);
+  let row = afterDeploy;
+  for (let page = 1; page <= 4 && row.catchUpProgress; page++) {
+    const next = recoveryRig({ stateFile: file, pipelines: many, now: NOW + page * 61 * MINUTE });
+    await runSeatTickCheck(PROJECT, next.deps);
+    expect(next.sent).toHaveLength(1);
+    row = next.deps.readState!(PROJECT);
+  }
+  expect(row.announcedLanes).toHaveLength(many.length);
+  expect(row.catchUpProgress).toBeNull();
+  expect(row.unreachableSince).toBeNull();
+  expect(row.reportsOwed?.filter(entry => entry.key === before.catchUpProgress!.key)).toHaveLength(1);
+});
+
+test.each(["delivered", "refused", "unreadable"] as const)("an empty remaining agenda completes catch-up only after a readable landing (%s)", async outcome => {
+  const first = recoveryRig({ pipelines: pagedLanes(), state: { ...OVERDUE, unreachableSince: FROM } });
+  await runSeatTickCheck(PROJECT, first.deps);
+  const before = first.deps.readState!(PROJECT);
+  expect(before.catchUpProgress?.after).toBeTruthy();
+  const file = before.accounting!.filename.slice(0, -7);
+  const final = recoveryRig({ stateFile: file, pipelines: [], now: NOW + 61 * MINUTE,
+    ...(outcome === "refused" ? { delivery: { ok: false, outcome: "failed", status: 503, error: "host unavailable", admission: "refused" } as const } : {}),
+  });
+  if (outcome === "unreadable") final.deps.sources!.tasks = () => { throw new Error("remaining agenda unavailable"); };
+  const result = await runSeatTickCheck(PROJECT, final.deps);
+  if (outcome === "unreadable") {
+    expect(result?.verdict).toBe("error");
+    expect(final.sent).toHaveLength(0);
+  } else {
+    expect(result?.verdict).toBe("wake");
+    expect(final.sent).toHaveLength(1);
+  }
+  const row = final.deps.readState!(PROJECT);
+  if (outcome !== "delivered") {
+    expect(row.catchUpProgress).toEqual(before.catchUpProgress);
+    if (outcome === "refused") expect(row.outstandingWake?.commit.catchUp?.key).toBe(before.catchUpProgress!.key);
+    expect(row.unreachableSince).toBe(FROM);
+    expect(row.reportsOwed?.some(entry => entry.key === before.catchUpProgress!.key)).toBe(false);
+    const retry = recoveryRig({ stateFile: file, pipelines: [], now: NOW + 122 * MINUTE, wakeState: "dropped" });
+    expect((await runSeatTickCheck(PROJECT, retry.deps))?.verdict).toBe("wake");
+    expect(retry.sent).toHaveLength(1);
+  }
+  const completed = final.deps.readState!(PROJECT);
+  expect(completed.catchUpProgress).toBeNull();
+  expect(completed.unreachableSince).toBeNull();
+  expect(completed.reportsOwed?.filter(entry => entry.key === before.catchUpProgress!.key)).toHaveLength(1);
+  const next = recoveryRig({ stateFile: file, pipelines: [], now: Date.parse(completed.lastWakeAt!) + MINUTE });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent).toHaveLength(0);
+  expect(next.deps.readState!(PROJECT).reportsOwed).toEqual(completed.reportsOwed);
+});
+
+
+test.each(["failure", "admission", "timeout"] as const)("an unreadable worker-ask agenda preserves partial catch-up through %s and recovery", async failure => {
+  for (const knownWork of [false, true]) {
+    const asks = Array.from({ length: 600 }, (_, index) => ({ key: `ask-${String(index).padStart(4, "0")}-${"k".repeat(100)}`,
+      id: `worker-${String(index).padStart(4, "0")}-${"w".repeat(100)}`, label: `waiting worker ${index}`, sinceMs: Date.parse(FROM) + index }));
+    const first = recoveryRig({ pipelines: [], state: { ...OVERDUE, unreachableSince: FROM } });
+    first.deps.sources!.workerAsks = async () => asks;
+    await runSeatTickCheck(PROJECT, first.deps);
+    const before = first.deps.readState!(PROJECT);
+    expect(before.catchUpProgress?.after).toBeTruthy();
+    const file = before.accounting!.filename.slice(0, -7);
+    const failed = recoveryRig({ stateFile: file, pipelines: knownWork ? [{ ...lanes[0]!, id: "known-outcome",
+      movedAt: new Date(NOW + 60 * MINUTE).toISOString() }] : [], now: NOW + 61 * MINUTE });
+    let clock = 0;
+    failed.deps.workBudgetMs = 800;
+    failed.deps.workClock = () => clock;
+    failed.deps.sources!.workerAsks = async () => {
+      if (failure === "admission") {
+        const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+        throw new StateLockDeferredError("fixture.worker-asks");
+      }
+      if (failure === "timeout") { clock += 101; return asks; }
+      throw new Error("fixture worker asks unreadable");
+    };
+    await runSeatTickCheck(PROJECT, failed.deps);
+    const afterFailure = failed.deps.readState!(PROJECT);
+    expect(afterFailure.catchUpProgress).toEqual(before.catchUpProgress);
+    expect(afterFailure.unreachableSince).toBe(FROM);
+    expect(afterFailure.reportsOwed?.some(report => report.key === before.catchUpProgress!.key)).toBe(false);
+    expect(failed.sent).toHaveLength(knownWork ? 1 : 0);
+    if (knownWork) {
+      expect(failed.sent[0]!.text).toContain("known-outcome");
+      expect(afterFailure.announcedLanes).toContain("known-outcome:completed");
+    }
+    let row = afterFailure;
+    const messages = [...first.sent, ...failed.sent];
+    for (let page = 1; page <= 8 && row.catchUpProgress; page++) {
+      const next = recoveryRig({ stateFile: file, pipelines: [], now: NOW + (page + 1) * 61 * MINUTE });
+      next.deps.sources!.workerAsks = async () => asks;
+      await runSeatTickCheck(PROJECT, next.deps);
+      messages.push(...next.sent);
+      row = next.deps.readState!(PROJECT);
+    }
+    expect(row.catchUpProgress).toBeNull();
+    expect(row.unreachableSince).toBeNull();
+    expect(row.reportsOwed?.filter(report => report.key === before.catchUpProgress!.key)).toHaveLength(1);
+    for (const ask of asks) expect(messages.filter(message => message.text.includes(ask.id))).toHaveLength(1);
+  }
 });
