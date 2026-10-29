@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,8 @@ import { legacyCopilotHome } from "../accounts/copilot";
 import { readCodexAuth } from "../codexAuth";
 import { claudeTranscriptPath } from "../agent/transcript";
 import { openclawStateDir, ROOTS } from "../scanner/roots";
+import { processIdentityStatus, type ProcessIdentity } from "../processIdentity";
+import { fixtureReport, stopFixtureIdentity, stopFixtureProcess } from "./fixtureProcess";
 
 function expectInside(root: string, candidate: string): void {
   const relative = path.relative(root, candidate);
@@ -23,6 +25,46 @@ test("preload confines default account resolvers and CLI homes to its sandbox", 
   }
   for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "CLAUDE_CODE_TMPDIR", "USERPROFILE"]) {
     expectInside(os.tmpdir(), process.env[key]!);
+  }
+});
+
+test.skipIf(process.platform !== "linux").each(["SIGTERM", "SIGKILL"] as const)("startup-home runner ends when its supervisor receives %s", async (signal) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "home-runner-lifetime-"));
+  const repository = path.resolve(import.meta.dir, "../../..");
+  const home = path.join(root, "launch-home");
+  fs.mkdirSync(home);
+  const temporary = path.join(root, "tmp");
+  fs.mkdirSync(temporary);
+  fs.writeFileSync(path.join(root, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(path.join(repository, "test-preload.ts"))}]\n`);
+  fs.writeFileSync(path.join(root, "held.test.ts"), `
+    import { test } from "bun:test";
+    import { captureProcessIdentity } from ${JSON.stringify(path.join(repository, "src/lib/processIdentity.ts"))};
+    test("held runner", async () => {
+      setInterval(() => {}, 1000);
+      console.log(JSON.stringify(captureProcessIdentity(process.pid)));
+      await new Promise(() => {});
+    });
+  `);
+  const child = spawn(process.execPath, ["test", "--timeout=60000", "./held.test.ts"], {
+    cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home, TMPDIR: temporary }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+  let identity: ProcessIdentity | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    identity = await fixtureReport<ProcessIdentity>(child, "startup-home runner", []);
+    expect(identity.pid).not.toBe(child.pid);
+    expect(processIdentityStatus(identity)).toBe("alive");
+    expect(child.kill(signal)).toBe(true);
+    await Promise.race([closed, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("isolated runner outlived its supervisor")), 10_000);
+    })]);
+    expect(processIdentityStatus(identity)).toBe("dead");
+  } finally {
+    clearTimeout(timer);
+    await stopFixtureProcess(child);
+    if (identity) await stopFixtureIdentity(identity);
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
