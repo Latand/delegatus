@@ -40,8 +40,9 @@ compatibility raises the major version.
   the local machine and records the reason, and a Cloud diff is applied
   through the repository's own hooks ([#3398]).
 - **Codex 0.164.0 and GPT-6.1 Terra.** The Codex integration speaks the
-  0.164.0 protocol and offers GPT-6.1 Terra. The accounts list gives a
-  safe reason when a Codex login failed ([#3426], [#3404]).
+  0.164.0 protocol and offers GPT-6.1 Terra. The accounts API returns a
+  safe login failure code for a Codex account whose login failed
+  ([#3426], [#3404]); the accounts panel does not show it yet.
 - **An orchestrator stopped by a Claude session limit resumes itself.**
   When the limit resets, the seat continues from the message it was
   working on, once, and stays correct across restarts, replies, seat
@@ -170,7 +171,7 @@ compatibility raises the major version.
   `DELEGATUS_LEGACY_TMUX_EXTERNAL` switch are removed; tmux endpoints and
   Compose volumes work as before ([#3407]). Unused components and capture
   scripts are removed ([#3397]).
-- Tests: eight already-fixed issues are pinned ([#3388]), the Claude stage
+- Tests: four already-fixed issues are pinned ([#3388]), the Claude stage
   scratch directory is pinned ([#3389]), voice reads with an unlisted
   argument are pinned ([#3390]), behaviour pins for scanner resources,
   release image reuse and device sessions ([#3403]), historical red DOM
