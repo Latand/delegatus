@@ -114,8 +114,11 @@ export type RunRecord = {
         receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
       status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
     diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
-    /** When the cutoff was first written; older rows fall back to startedAt. */
+    /** When the cutoff was first written; older rows are stamped on recovery. */
     cancelledAt?: string;
+    /** Terminal local recovery; executor termination is still unproven. The
+     * cutoff and evidence stay durable, without reserving execution or a chain. */
+    quarantinedAt?: string;
     /** The target slot was released while this custody record is retained. */
     released?: OwnerStopRelease;
     /** The scrubbed failure reply and the request deadline it may be sent before,
@@ -133,16 +136,21 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
-/** `no_execution`: the attempt provably never had a session to stop; the stop
- * is confirmed. `stop_unconfirmed`: stop control stayed unconfirmed past its
- * bound; only the target slot is released and stop recovery continues. */
+/** `no_execution` confirms absence of an executor. `stop_unconfirmed` records
+ * the bounded stop's release; quarantinedAt makes local recovery terminal. */
 export type OwnerStopRelease = { at: string; reason: "no_execution" | "stop_unconfirmed" };
 /** Released owner custody stays readable this long before the sweep drops it. */
 export const OWNER_RELEASED_CUSTODY_RETENTION_MS = 24 * 60 * 60_000;
-/** A cutoff whose stop is unconfirmed: execution may still run, so stop
- * recovery, files and the conversation pin stay held, released slot or not. */
+/** A cutoff still undergoing bounded stop recovery. Quarantine retains the
+ * evidence and revocation without claiming that the executor has stopped. */
 export function ownerStopPending(run: RunRecord): boolean {
-  return !!run.ownerTurn?.cancel && !run.ownerTurn.confirmed;
+  return !!run.ownerTurn?.cancel && !run.ownerTurn.confirmed && !run.ownerTurn.quarantinedAt;
+}
+/** Delivery and quarantine retention are independent of execution reservation. */
+export function runHoldsConversation(run: RunRecord): boolean {
+  if (!run.ownerTurn) return true;
+  if (ownerStopPending(run)) return true;
+  return !run.capacityReleased && !run.ownerTurn?.confirmed && !run.ownerTurn?.quarantinedAt;
 }
 export function runHoldsCapacity(run: RunRecord): boolean {
   return !run.capacityReleased && !run.ownerTurn?.confirmed && !run.ownerTurn?.released;
