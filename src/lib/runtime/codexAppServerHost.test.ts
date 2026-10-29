@@ -167,21 +167,23 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test("a self-updated CLI whose schema extends a pin additively starts under that pin and says so", async () => {
+test.each(["0.162.7", "0.165.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+  const pin = version === "0.165.0" ? "0.164.0" : "0.162.1";
+  const schemaVersion = version === "0.165.0" ? "0.164.0" : "0.163.0";
   const server = new FakeAppServer("unpinned-cli");
-  const schemas = (name: string) => fs.readFileSync(path.join(import.meta.dir, "../accounts/protocol/0.163.0", `${name}.json`), "utf8");
+  const schemas = (name: string) => fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
   const generated: string[] = [];
   const host = await CodexAppServerHost.start({
-    cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => "0.162.7", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => version, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
     generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
   });
   try {
     const health = await host.health();
     // The registry keeps the pin, so a successor reconnects under the same reviewed contract.
-    expect(health.protocolVersion).toBe("0.162.1");
-    expect(health.diagnostics?.version).toBe("0.162.7");
-    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: "0.162.1",
-      unpinnedCli: { cliVersion: "0.162.7", cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex") } });
+    expect(health.protocolVersion).toBe(pin);
+    expect(health.diagnostics?.version).toBe(version);
+    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: pin,
+      unpinnedCli: { cliVersion: version, cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex") } });
     expect(generated).toEqual(["codex-fixture"]);
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
   } finally { await host.release(); }
@@ -194,7 +196,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8 has no pinned schema and is not an additive extension of pin 0.162.1. Pin the CLI to a supported version");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 

@@ -12,6 +12,7 @@ import oldestManifest from "./protocol/0.154.0/manifest.json";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
+import { hardenedRedact } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
@@ -39,6 +40,22 @@ export function installedCodexVersion(binary: string, env: NodeJS.ProcessEnv): s
   const version = result.status === 0 && /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(result.stdout)?.[1];
   if (!version) throw new CodexAppServerProtocolError("cannot identify executable version with --version");
   return version;
+}
+
+/** The route checks the same executable before reserving a new launch. */
+export async function preflightCodexProtocol(env: NodeJS.ProcessEnv): Promise<void> {
+  const binary = process.env.LLV_CODEX_BINARY ?? "codex";
+  const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+  await withViewerOperation("codex.protocol-admission", () => withCodexCliLaunch(binary, async () => {
+    let stdout: string;
+    try { stdout = await runCodexProbe(binary, ["--version"], env, 5_000, "--version", 4096); }
+    catch (error) {
+      throw protocolAdmissionError("unknown", `cannot identify executable version with --version; ${error instanceof Error ? error.message : "probe failed"}`);
+    }
+    const version = /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(stdout)?.[1];
+    if (!version) throw protocolAdmissionError("unknown", "cannot identify executable version with --version");
+    await resolveCodexProtocol(version, binary, env);
+  }));
 }
 
 function methodSchema(schema: Schema, kind: string, method: string): Schema | undefined {
@@ -70,6 +87,10 @@ function strictObjects(value: unknown): unknown {
 
 const REMEDY = "Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility";
 const supported = () => pins.map(row => row.manifest.version).join(", ");
+
+function protocolAdmissionError(version: string, cause: string): CodexAppServerProtocolError {
+  return new CodexAppServerProtocolError(`CLI ${version}; Supported: ${supported()}; cause: ${hardenedRedact(cause).replace(/\s+/g, " ").trim().slice(0, 180)}. ${REMEDY}`);
+}
 
 /** An executable whose own generated schema extends `pin` additively. */
 export interface CodexUnpinnedCli {
@@ -213,18 +234,28 @@ function nearestOlderPin(version: string): typeof pins[number] | undefined {
     .sort((left, right) => compareSemver(semver(right.manifest.version)!, semver(left.manifest.version)!))[0];
 }
 
-/* One generator run, bounded without the child's cooperation: at the deadline
+/* One CLI probe, bounded without the child's cooperation: at the deadline
  * its whole process group (an npm shim keeps the native binary as a child) is
- * SIGKILLed and the run rejects at once, so a CLI that ignores signals cannot
- * hold the shared admission past the bound. */
-function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, label: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+ * SIGKILLed. Settlement waits for exit and bounded group-cleanup verification,
+ * including output overflow, before releasing the launch guard. */
+function runCodexProbe(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, label: string, maxOutputBytes = 0): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const fail = (reason: string) => new CodexAppServerProtocolError(`${label} failed (${reason})`);
     let settled = false, failure: Error | undefined;
-    const settle = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(); };
-    const child = spawn(binary, args, { env, detached: true, stdio: "ignore" });
+    const output: Buffer[] = [];
+    let outputBytes = 0;
+    const settle = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(Buffer.concat(output).toString("utf8")); };
+    const child = spawn(binary, args, { env, detached: true, stdio: maxOutputBytes ? ["ignore", "pipe", "pipe"] : "ignore" });
     const abort = (error: Error) => { failure ??= error; signalDetachedProcessGroup(child, "SIGKILL"); };
     const timer = setTimeout(() => abort(fail("timed out")), timeoutMs);
+    const readOutput = (chunk: Buffer, stdout: boolean) => {
+      if (failure) return;
+      outputBytes += chunk.length;
+      if (outputBytes > maxOutputBytes) { abort(fail("output limit exceeded")); return; }
+      if (stdout) output.push(chunk);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => readOutput(chunk, true));
+    child.stderr?.on("data", (chunk: Buffer) => readOutput(chunk, false));
     child.once("error", error => { failure ??= fail(`exit ${String((error as NodeJS.ErrnoException).code ?? "unknown")}`); });
     child.once("close", async (code, signal) => {
       clearTimeout(timer);
@@ -234,7 +265,7 @@ function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, ti
         signalDetachedProcessGroup(child, "SIGKILL");
         const deadline = Date.now() + 5_000;
         for (;;) {
-          const running = generatorGroupAlive(child.pid);
+          const running = probeGroupAlive(child.pid);
           if (running === false) break;
           if (Date.now() >= deadline) { settle(fail(`${failure.message}; process group cleanup could not be verified`)); return; }
           await new Promise<void>(resolve => setTimeout(resolve, 25));
@@ -245,7 +276,7 @@ function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, ti
   });
 }
 
-function generatorGroupAlive(groupId: number): boolean | null {
+function probeGroupAlive(groupId: number): boolean | null {
   if (process.platform === "linux") {
     let entries: string[];
     try { entries = fs.readdirSync("/proc"); } catch { return null; }
@@ -277,7 +308,7 @@ export const generateCodexSchemas = async (binary: string, env: NodeJS.ProcessEn
     for (const name of ["stable", "experimental"] as const) {
       const out = path.join(scratch, name);
       const experimental = name === "experimental" ? ["--experimental"] : [];
-      await runGenerator(binary, ["app-server", "generate-json-schema", "--out", out, ...experimental], env,
+      await runCodexProbe(binary, ["app-server", "generate-json-schema", "--out", out, ...experimental], env,
         options.timeoutMs ?? GENERATION_TIMEOUT_MS, `generate-json-schema${experimental.length ? " --experimental" : ""}`);
       result[name] = await fs.promises.readFile(path.join(out, "codex_app_server_protocol.schemas.json"), "utf8");
     }
@@ -293,15 +324,15 @@ async function admitUnpinned(version: string, pin: typeof pins[number], binary: 
     // A comparison verdict is retained; a failed generation is retried by the next launch.
     forget();
     const detail = error instanceof Error ? error.message.replace(/^Codex app-server protocol error: /, "") : "generation failed";
-    throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and its schema could not be compared with pin ${pinned}. ${REMEDY}. Supported: ${supported()}; cause: ${detail}`);
+    throw protocolAdmissionError(version, detail);
   }
   let breaks: string[];
   try {
     breaks = [...codexSchemaBreaks(pin.stable, JSON.parse(generated.stable)).map(row => `stable ${row}`),
       ...codexSchemaBreaks(pin.schema, JSON.parse(generated.experimental)).map(row => `experimental ${row}`)].slice(0, 3);
   } catch { breaks = ["generated schema is not JSON"]; }
-  // The remedy precedes the details: protocol errors are clipped to 500 characters.
-  if (breaks.length) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and is not an additive extension of pin ${pinned}. ${REMEDY}. Supported: ${supported()}; breaks: ${breaks.map(row => row.slice(0, 100)).join("; ")}`);
+  // Keep supported versions and the comparison cause ahead of the remedy.
+  if (breaks.length) throw protocolAdmissionError(version, `not an additive extension of pin ${pinned}; ${breaks.join("; ")}`);
   const cliSchemaDigest = createHash("sha256").update(generated.experimental).digest("hex");
   console.warn(`[codex protocol] CLI ${version} has no pinned schema; admitted under pin ${pinned} because its generated schema (${cliSchemaDigest.slice(0, 12)}) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it`);
   return { cliVersion: version, cliSchemaDigest };
@@ -312,7 +343,7 @@ async function admitUnpinned(version: string, pin: typeof pins[number], binary: 
 export async function resolveCodexProtocol(version: string, binary: string, env: NodeJS.ProcessEnv, generate: CodexSchemaGenerator = generateCodexSchemas): Promise<CodexPinnedProtocol> {
   if (pins.some(row => row.manifest.version === version)) return new CodexPinnedProtocol(version);
   const pin = nearestOlderPin(version);
-  if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and no older pin to compare it with. ${REMEDY}. Supported: ${supported()}`);
+  if (!pin) throw protocolAdmissionError(version, "no older pin to compare it with");
   let admission = admissions.get(version);
   if (!admission) {
     const started: Promise<CodexUnpinnedCli> = withViewerOperation("codex.protocol-admission", () =>

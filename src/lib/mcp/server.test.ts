@@ -2961,6 +2961,46 @@ describe("original-key recovery (#1490)", () => {
     expect(await owned.service.callTool("send_message", { ...SEND, text: "changed" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
   });
 
+  test("legacy spawn acceptance replays current durable launch facts", async () => {
+    const store = new MemoryMcpReceiptStore();
+    const key = `spawn_agent:${SPAWN.clientRequestId}`;
+    const digest = requestDigest("spawn_agent", SPAWN);
+    const ids = { launchId: "launch_legacy", conversationId: "conversation_legacy" };
+    store.claim(key, digest, "durable");
+    store.complete(key, digest, {
+      ok: true, toolName: "spawn_agent", clientRequestId: SPAWN.clientRequestId, replayed: false,
+      state: "starting", initialMessage: "pending", ...ids,
+    });
+    const evidence: McpRecoveryEvidence = { outcome: "settled", evidence: "spawn-receipt", ownership: "established",
+      reason: "protocol comparison refused", ids, facts: { state: "failed", launched: false } };
+    const owned = recoveryHarness(OWNER, store, { evidence });
+    for (const recoveryOnly of [false, true, false]) {
+      expect(await owned.service.callTool("spawn_agent", { ...SPAWN, ...(recoveryOnly ? { recoveryOnly } : {}) }))
+        .toMatchObject({ ok: true, replayed: true, state: "failed", launched: false, reason: evidence.reason, ...ids });
+    }
+    expect(owned.bindingCalls).toHaveLength(0);
+    expect(await store.lookup(key)).toMatchObject({ result: { state: "starting" } });
+    const unowned = recoveryHarness(OTHER, store, { evidence: { ...evidence, ownership: "unknown" } });
+    const refused = await unowned.service.callTool("spawn_agent", SPAWN);
+    expect(refused).toMatchObject({ ok: false, code: "outcome_unknown" });
+    expect(JSON.stringify(refused)).not.toContain(ids.conversationId);
+  });
+
+  test("recovery preserves an initial terminal spawn failure", async () => {
+    const ids = { launchId: "launch_failed", conversationId: "conversation_failed" };
+    const harness = recoveryHarness(OWNER, new MemoryMcpReceiptStore(), {
+      bindingImpl: async () => ({ ...ids, state: "failed", launched: false, initialMessage: "failed", outcome: "settled",
+        reason: "protocol comparison refused", error: "protocol comparison refused", retrySafe: true }),
+      evidence: { outcome: "unknown", evidence: "none", reason: "downstream unreadable", ids: {} },
+    });
+    expect(await harness.service.callTool("spawn_agent", SPAWN)).toMatchObject({ ok: true, state: "failed", launched: false });
+    for (const recoveryOnly of [true, false, true]) {
+      expect(await harness.service.callTool("spawn_agent", { ...SPAWN, ...(recoveryOnly ? { recoveryOnly } : {}) }))
+        .toMatchObject({ ok: true, replayed: true, state: "failed", launched: false, ...ids });
+    }
+    expect(harness.bindingCalls).toHaveLength(1);
+  });
+
   test("the original response completing after a recovery settles once, and a later error cannot overwrite it", async () => {
     const store = new MemoryMcpReceiptStore();
     let release!: () => void;
@@ -3202,7 +3242,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
 
 for (const tool of ["send_message", "spawn_agent"] as const) {
   for (const backend of ["memory", "file", "sqlite"] as const) {
-    test(`${tool}: ${backend} preserves ordinary acceptance and stronger terminal recovery separately`, async () => {
+    test(`${tool}: ${backend} retains acceptance and replays current terminal spawn facts`, async () => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-accepted-terminal-"));
       scratch.push(directory);
       const filename = path.join(directory, backend === "sqlite" ? "receipts.sqlite" : "receipts.json");
@@ -3220,7 +3260,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
       original.evidence = terminal;
       const recovered = await original.service.callTool(tool, { ...args, recoveryOnly: true });
       expect(recovered).toMatchObject({ ok: true, outcome: "settled", ...ids, resend: "verify-first", duplicateRisk: true });
-      expect(await original.service.callTool(tool, args)).toEqual({ ...accepted, replayed: true });
+      expect(await original.service.callTool(tool, args)).toEqual({ ...(tool === "spawn_agent" ? recovered : accepted), replayed: true });
       expect(original.bindingCalls).toHaveLength(1);
       const key = `${tool}:${args.clientRequestId}`;
       const record = (await store.lookup(key))!;
@@ -3248,7 +3288,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
           expect(await restarted.service.callTool(tool, { ...args, recoveryOnly: true })).toMatchObject({
             ok: true, outcome: "settled", evidence: "mcp-receipt", ...ids, resend: "verify-first", duplicateRisk: true,
           });
-          expect(await restarted.service.callTool(tool, args)).toEqual({ ...accepted, replayed: true });
+          expect(await restarted.service.callTool(tool, args)).toEqual({ ...(tool === "spawn_agent" ? recovered : accepted), replayed: true });
         }
         const stranger = recoveryHarness(OTHER, store);
         expect(await stranger.service.callTool(tool, { ...args, recoveryOnly: true })).toMatchObject({ code: "recovery_not_permitted" });

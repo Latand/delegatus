@@ -1746,7 +1746,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
       expect(terminal).toMatchObject({ ok: true, outcome: "settled", ...ids });
       const disposition = tool === "send_message" ? { state: terminal.state, resend: terminal.resend, duplicateRisk: terminal.duplicateRisk }
         : { state: terminal.state, launched: terminal.launched };
-      expect(await call(mcp, tool, args)).toEqual({ ...accepted, replayed: true });
+      expect(await call(mcp, tool, args)).toEqual({ ...(tool === "spawn_agent" ? terminal : accepted), replayed: true });
       await mcp.close();
       await host.kill();
       removeDownstreamEvidence(fixture, tool, effect);
@@ -1756,7 +1756,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
       expect(await call(mcp, tool, { ...args, recoveryOnly: true })).toMatchObject({
         ok: true, outcome: "settled", evidence: "mcp-receipt", ...ids, ...disposition,
       });
-      expect(await call(mcp, tool, args)).toEqual({ ...accepted, replayed: true });
+      expect(await call(mcp, tool, args)).toEqual({ ...(tool === "spawn_agent" ? terminal : accepted), replayed: true });
       expect(fixture.effects()).toHaveLength(1);
       expect(fixture.responses()).toHaveLength(1);
     } finally {
