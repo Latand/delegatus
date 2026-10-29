@@ -1148,7 +1148,7 @@ async function reconcileOutstandingWake(context: {
     // The caller and its journal operation have ended. Preserve uncertainty
     // without letting it occupy the admission slot for the next wake.
     settlement = { verdict: "dropped", outcome: "terminal-unverified", row: "clear",
-      detail: `the returned dispatch passed its arrival deadline and its operation ended without proof of arrival: ${observation.evidence.journal.reason ?? wake.dispatch.reason ?? "arrival unverified"}; nothing is credited and the current wake carries the uncredited obligations` };
+      detail: `the returned dispatch passed its arrival deadline and its operation ended without proof of arrival: ${redactBounded(observation.evidence.journal.reason ?? wake.dispatch.reason ?? "arrival unverified", REASON_LIMIT)}; nothing is credited and the current wake carries the uncredited obligations` };
   } else if (observed === "uncertain") {
     settlement = { verdict: "uncertain", outcome: "uncertain", row: "keep",
       detail: "the layer holding the wake ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };

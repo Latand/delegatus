@@ -282,7 +282,9 @@ test.each(["in-flight", "unverified"] as const)("reconciliation preserves arriva
 test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interrupted"], [20, "failed"]] as const)(
   "a returned terminal-unverified operation releases its obligations at age %s minutes (%s)", async (age, status) => {
   const f = childFixture(`terminal-${status}-${age}`);
-  const reason = status === "failed" ? SEND_UNVERIFIED_REASON : "terminal arrival uncertainty";
+  const diagnostic = status === "failed" ? SEND_UNVERIFIED_REASON : "terminal arrival uncertainty";
+  const privatePath = ["", "home", "fixture", "nested", "problem.txt"].join("/");
+  const reason = age === 2 ? `${diagnostic}; path ${privatePath}` : diagnostic;
   const prepared = NOW - age * MINUTE;
   const wake = outstandingWake({ conversationId: f.seat.conversationId!, seatEpoch: f.seat.seatEpoch,
     text: "original wake with uncredited work", preparedAt: new Date(prepared).toISOString(),
@@ -306,7 +308,11 @@ test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interr
   expect(rig.sent[0]!.clientMessageId).not.toBe(wake.clientMessageId);
   expect(rig.sent[0]!.text).toContain("unreported-outcome");
   const released = rig.journal.find(record => record.delivery?.clientMessageId === wake.clientMessageId);
-  expect(released?.detail).toContain(reason);
+  expect(released?.detail).toContain(diagnostic);
+  if (age === 2) {
+    expect(released?.detail).not.toContain(privatePath);
+    expect(released?.detail).toContain("problem.txt");
+  }
   expect(released?.verdict).toBe("dropped");
   expect(f.row().eventsThrough).toBe(before.eventsThrough);
   expect(f.row().announcedLanes).toContain("unreported-outcome:completed");
