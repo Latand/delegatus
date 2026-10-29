@@ -980,6 +980,94 @@ test("a binding replaced during its priority read rolls back admission and is re
   } finally { probe.mockRestore(); }
 });
 
+/** Interleave a peer after observations, just before the real SQLite writer. */
+function beforeNextWriter(run: () => void) {
+  const transaction = Database.prototype.transaction;
+  let pending = true;
+  return spyOn(Database.prototype, "transaction").mockImplementation(function (this: Database, body: (...args: unknown[]) => unknown) {
+    const wrapped = transaction.call(this, body);
+    return Object.assign((...args: unknown[]) => wrapped(...args), {
+      deferred: wrapped.deferred, exclusive: wrapped.exclusive,
+      immediate: (...args: unknown[]) => {
+        if (pending) { pending = false; run(); }
+        return wrapped.immediate(...args);
+      },
+    });
+  } as typeof transaction);
+}
+
+test.each(["high", "normal"])("a completed peer refresh to %s cannot be overwritten by an older sample of the same binding", priority => {
+  const f = fixture(), a = f.open(), b = f.open(), tasks = priorityTasks(f.file);
+  a.check("stage:target", false, undefined, false, tasks.source(["raised"]));
+  a.check("stage:normal", false, undefined, false);
+  const db = new Database(f.file); queues.push(db);
+  const probe = beforeNextWriter(() => {
+    tasks.set("raised", priority);
+    expect(b.check("stage:target", false, undefined, false)?.position).toBe(1);
+  });
+  try {
+    let outcome;
+    try { outcome = a.check("stage:normal", true); }
+    catch (error) { outcome = error; }
+    if (outcome instanceof Error) expect(outcome).toMatchObject({ code: "SQLITE_BUSY" });
+    else expect(outcome).toMatchObject({ position: 2, heldBy: "queue" });
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:target'").get()).toEqual({ priority: priority === "high" ? 0 : 1 });
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    // A fresh observation recovers without losing either ticket's order.
+    expect(a.check("stage:normal", true)).toMatchObject({ position: 2, heldBy: "queue" });
+    expect(a.check("stage:target", true)).toBeNull();
+    f.at(CPU_QUEUE_SPACING_MS);
+    expect(a.check("stage:normal", true)).toBeNull();
+  } finally { probe.mockRestore(); }
+});
+
+test("admission time is sampled after acquiring a contended writer", async () => {
+  const f = fixture(), directory = path.dirname(f.file);
+  const clock = path.join(directory, "clock"), release = path.join(directory, "release");
+  fs.writeFileSync(clock, "0");
+  const q = new CpuAdmissionQueue(f.file, () => Number(fs.readFileSync(clock, "utf8"))); queues.push(q);
+  q.check("stage:first", false, undefined, false);
+  q.check("stage:second", false, undefined, false);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite"), fs = require("node:fs");
+    const [file, clock, release] = process.argv.slice(1);
+    const db = new Database(file);
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("held");
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(release)) {
+      if (Date.now() > deadline) throw new Error("writer release was not signalled");
+      await Bun.sleep(1);
+    }
+    fs.writeFileSync(clock, "3000");
+    db.exec("COMMIT"); db.close();
+  `, f.file, clock, release], { stdout: "pipe", stderr: "pipe" });
+  const stderr = new Response(child.stderr).text();
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  let probe: ReturnType<typeof beforeNextWriter> | undefined;
+  try {
+    const reader = child.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("held"); }
+    finally { reader.releaseLock(); }
+    probe = beforeNextWriter(() => fs.writeFileSync(release, "release"));
+    expect(q.check("stage:first", true)).toBeNull();
+    expect(await child.exited, await stderr).toBe(0);
+    const db = new Database(f.file); queues.push(db);
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: 3000 });
+    expect(q.check("stage:second", true)).toMatchObject({ position: 1, waitedMs: 3000, heldBy: "queue" });
+    fs.writeFileSync(clock, String(3000 + CPU_QUEUE_SPACING_MS - 1));
+    expect(q.check("stage:second", true)).toMatchObject({ position: 1, heldBy: "queue" });
+    fs.writeFileSync(clock, String(3000 + CPU_QUEUE_SPACING_MS));
+    expect(q.check("stage:second", true)).toBeNull();
+  } finally {
+    probe?.mockRestore();
+    clearTimeout(watchdog);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await stderr;
+  }
+});
+
 test("an abandoned ticket's unavailable task database does not block its removal", () => {
   const f = fixture(), q = f.open(), database = path.join(path.dirname(f.file), "tasks.sqlite");
   const tasks = new Database(database);

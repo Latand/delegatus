@@ -289,8 +289,8 @@ export class CpuAdmissionQueue {
   check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false): CpuQueueWait | null {
     // Process probes and reads of the task database must not hold this
     // queue's writer. Re-read the rows under the lock and match observations
-    // by their exact owner/binding. Peers may poll or reorder freely; an
-    // unobserved owner keeps its ticket until the next check can verify it.
+    // by their exact owner/binding and observed rank. Peers may poll or reorder
+    // freely; an unobserved owner keeps its ticket until a check can verify it.
     const changed = () => Object.assign(new Error("CPU admission queue changed during observation; retry the check"), { code: "SQLITE_BUSY" });
     const owners = new Map(this.db.query<{ owner: string }, []>("SELECT DISTINCT owner FROM tickets WHERE owner IS NOT NULL").all().map(row => {
       const identity = parseSqliteJson(row.owner, this.db) as ProcessIdentity;
@@ -305,7 +305,8 @@ export class CpuAdmissionQueue {
       }
     };
     const sampledAt = this.now();
-    for (const row of this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE (source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)) OR key = ?").all(key)) {
+    const sampledTickets = new Map(this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE (source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)) OR key = ?").all(key).map(row => [row.key, row]));
+    for (const row of sampledTickets.values()) {
       const observed = owners.get(row.owner!);
       if (observed?.dead) continue;
       // The calling ticket returns from a hold and refreshes its binding below.
@@ -319,7 +320,7 @@ export class CpuAdmissionQueue {
     // Reported only once the transaction has committed what they describe.
     const decisions: string[] = [];
     const wait = this.db.transaction(() => {
-      const now = sampledAt;
+      const now = this.now();
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
@@ -365,12 +366,17 @@ export class CpuAdmissionQueue {
         this.db.query("INSERT INTO suspended VALUES (?)").run(row.key);
         this.db.query("INSERT INTO unpolled VALUES (?)").run(row.key);
       }
-      // Apply the sampled ranks only to bindings still present under the lock.
+      // A peer may already have committed a newer rank for the same binding.
+      // Apply samples only while both the binding and observed rank still match.
       // A newly bound ticket must be observed before any caller can dispatch.
       let priorityChanged = false;
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").all()) {
         const priority = priorities.get(row.source!);
-        if (priority === undefined) throw changed();
+        const observed = sampledTickets.get(row.key);
+        const ownBinding = row.key === key && source !== undefined;
+        if (priority === undefined || (observed
+          ? observed.priority !== row.priority || !ownBinding && observed.source !== row.source
+          : row.key !== key || row.priority !== 1)) throw changed();
         if (priority !== row.priority) {
           this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(priority, row.key);
           priorityChanged = true;
