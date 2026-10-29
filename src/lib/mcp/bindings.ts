@@ -1,5 +1,3 @@
-import { agentBrowserAccess, type AgentBrowserSeat } from "@/lib/team/agentBrowserAccess";
-import { TeamError } from "@/lib/team/members";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
@@ -254,7 +252,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { recordAuthors, type RecordAuthor } from "@/lib/team";
+import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";

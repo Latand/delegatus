@@ -174,7 +174,7 @@ test("refuses another member id even in the seat's own workspace", async () => {
 
 test("refuses an authenticated non-seat caller, including replay of a seat receipt", async () => {
   const f = await fixture();
-  expect(await f.call({}, f.workerClient)).toMatchObject({ ok: false, code: "agent_browser_seat_required" });
+  expect(await f.call({ conversationId: SEAT, project: PROJECT }, f.workerClient)).toMatchObject({ ok: false, code: "agent_browser_seat_required" });
   f.assertUnchanged();
   expect(await f.call({ clientRequestId: "seat-receipt" })).toMatchObject({ ok: true });
   expect(await f.call({ clientRequestId: "seat-receipt" }, f.workerClient)).toMatchObject({ ok: false, code: "agent_browser_seat_required" });
