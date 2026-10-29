@@ -5448,10 +5448,27 @@ async function settlePublicationRepair(
       return fail("The dead producer's repaired head requires a next review stage.");
     }
     const writable = worker.attempt.effectiveRole.access === "read-write";
+    let custodyHead = repair.commitCustody ? repair.commitStartedHead : undefined;
+    let custodyBranch = repair.commitCustody?.branch;
+    const custodyMoved = "The dead producer's repair head moved after its creation receipts were proved; preserve the checkout.";
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (deadProducer && command === "git" && ["restore", "add", "commit"].includes(args[0])
         && !producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports, true))) {
         return { code: 1, stdout: "", stderr: "The publication repair producer changed while custody was being settled; preserve its work." };
+      }
+      if (deadProducer && custodyHead && command === "git" && ["restore", "add", "commit"].includes(args[0])) {
+        const branch = await ports.exec("git", ["branch", "--show-current"], cwd, pipelineLiteralGitEnv());
+        const head = await ports.exec("git", ["rev-parse", "HEAD"], cwd, pipelineLiteralGitEnv());
+        if (branch.code !== 0 || branch.stdout.trim() !== custodyBranch || head.code !== 0 || head.stdout.trim() !== custodyHead) {
+          return { code: 1, stdout: "", stderr: custodyMoved };
+        }
+        if (repair.commitCustody) {
+          const tree = await ports.exec("git", ["write-tree"], cwd, pipelineLiteralGitEnv());
+          const unstaged = await ports.exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv"], cwd, pipelineLiteralGitEnv());
+          if (tree.code !== 0 || tree.stdout.trim() !== repair.commitCustody.tree || unstaged.code !== 0) {
+            return { code: 1, stdout: "", stderr: "The repair custody index or worktree changed; preserve its contents before retrying." };
+          }
+        }
       }
       return ports.exec(command, args, cwd, pipelineLiteralGitEnv(env), options);
     };
@@ -5460,9 +5477,10 @@ async function settlePublicationRepair(
     if (branch.code !== 0 || ![pipeline.branch, deliveryBranch].includes(branch.stdout.trim())) {
       return fail("The publication repair checkout is not on its pipeline or delivery branch.");
     }
-    // Consume the commit before invoking a hook. If its outcome is lost, a
-    // replay may recover a clean owned commit, but never retry dirty work.
+    // A dead producer's intent pins its staged work. Recovery can retry that
+    // unchanged intent or prove the exact completed commit from its receipt.
     const replay = !!repair.commitStartedHead;
+    if (deadProducer && replay && !repair.commitCustody) return fail("The repair commit intent has no exact custody checkpoint; preserve the checkout for recovery.");
     if (!replay) {
       const starting = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
       if (starting.code !== 0 || !/^[0-9a-f]{40}$/i.test(starting.stdout.trim())) return fail("The publication repair's starting head cannot be read.");
@@ -5472,6 +5490,8 @@ async function settlePublicationRepair(
             { acceptedHead: repair.sha, allowDirty: true });
           if (!proof?.ok || proof.sha !== starting.stdout.trim()) return fail(proof && !proof.ok ? proof.error : "The dead producer's repair custody could not be verified.");
         }
+        custodyHead = starting.stdout.trim();
+        custodyBranch = branch.stdout.trim();
         const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z"], pipeline.worktreeDir);
         if (untracked.code !== 0 || untracked.stdout) return fail("The dead producer left untracked repair files; stage them before retrying, preserving their contents.");
         const unstaged = await exec("git", ["diff", "--name-only", "--no-ext-diff", "--no-textconv", "-z"], pipeline.worktreeDir);
@@ -5487,25 +5507,51 @@ async function settlePublicationRepair(
         await persist();
         if (paths.length) {
           const restored = await exec("git", ["restore", "--worktree", "--", ...paths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
-          if (restored.code !== 0) return fail("The dead producer's unstaged repair could not be discarded; staged work is preserved.");
+          if (restored.code !== 0) return fail(restored.stderr.includes(custodyMoved) ? custodyMoved
+            : "The dead producer's unstaged repair could not be discarded; staged work is preserved.");
           attempt.publicationRepairAbandonment!.reason = attempt.publicationRepairAbandonment!.reason
             .replace("; discarding unstaged repair", "; discarded unstaged repair");
           await persist();
         }
       }
+      if (deadProducer) {
+        const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+        const paths = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z"], pipeline.worktreeDir);
+        if (tree.code !== 0 || !/^[0-9a-f]{40}$/.test(tree.stdout.trim()) || paths.code !== 0) {
+          return fail("The dead producer's staged repair custody cannot be pinned; preserve the index and worktree.");
+        }
+        repair.commitCustody = { branch: custodyBranch!, tree: tree.stdout.trim(), paths: paths.stdout.split("\0").filter(Boolean) };
+      }
       repair.commitStartedHead = starting.stdout.trim();
       await persist();
     }
-    const recovered = replay ? await currentPipelineBranchHead(pipeline, exec) : null;
-    if (recovered && !recovered.ok) return fail(`The publication repair commit was already attempted; its outcome cannot be recovered: ${recovered.error}`);
-    // Custody commits only on the head whose producer receipts were proved.
-    let protectedHead = writable ? null : repair.sha;
-    if (deadProducer && writable) protectedHead = repair.commitStartedHead!;
-    const result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, exec,
-      attemptStage(worker.stage, worker.attempt).outputs, protectedHead, ports.stageCommitReceiptFile);
+    let result: Awaited<ReturnType<typeof commitPipelineStage>>;
+    if (repair.commitCustody) {
+      if (!deadProducer) return false;
+      const custody = repair.commitCustody;
+      if (branch.stdout.trim() !== custody.branch) return fail(custodyMoved);
+      const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+      if (head.code !== 0) return fail("The repair custody head cannot be read; preserve the checkout.");
+      if (head.stdout.trim() === repair.commitStartedHead) {
+        const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+        const unstaged = await exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv"], pipeline.worktreeDir);
+        if (tree.code !== 0 || tree.stdout.trim() !== custody.tree || unstaged.code !== 0) {
+          return fail("The repair custody index or worktree changed; preserve its contents before retrying.");
+        }
+      }
+      const key = crypto.createHash("sha256").update(JSON.stringify([stage.id, attempt.n, worker.attempt.launchId, repair.operationId, repair.sha])).digest("hex");
+      // The existing output-commit protocol writes a parent/tree/nonce receipt
+      // before Git runs and requires that exact receipt to recover a moved head.
+      result = await commitPipelineStage(pipeline, worker.stage.id, false, exec, custody.paths,
+        repair.commitStartedHead!, path.join(pipelineArtifactsDir(pipeline.id), `repair-commit-${key}.json`));
+    } else {
+      const recovered = replay ? await currentPipelineBranchHead(pipeline, exec) : null;
+      if (recovered && !recovered.ok) return fail(`The publication repair commit was already attempted; its outcome cannot be recovered: ${recovered.error}`);
+      result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, exec,
+        attemptStage(worker.stage, worker.attempt).outputs, writable ? null : repair.sha, ports.stageCommitReceiptFile);
+    }
     if (!result.ok) return fail(deadProducer && writable && result.error === `read-only stage ${worker.stage.id} created a commit`
-      ? "The dead producer's repair head moved after its creation receipts were proved; preserve the checkout."
-      : result.error);
+      ? custodyMoved : result.error);
     const current = await currentPipelineBranchHead(pipeline, ports.exec);
     if (!current.ok || current.sha !== result.sha) return fail(current.ok ? "The publication repair head moved during settlement." : current.error);
     const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", repair.baseSha, result.sha], pipeline.worktreeDir, pipelineLiteralGitEnv());

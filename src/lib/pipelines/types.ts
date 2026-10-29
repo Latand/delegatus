@@ -701,6 +701,9 @@ export type PipelineStageAttempt = {
     stageId: string;
     attempt: number;
     commitStartedHead?: string;
+    /** Dead-producer custody pins the branch and staged tree before committing.
+        An unchanged intent can retry; a moved head needs the controller receipt. */
+    commitCustody?: { branch: string; tree: string; paths: string[] };
     committedSha?: string;
     republishQueued?: true;
     reviewRequired?: boolean;
