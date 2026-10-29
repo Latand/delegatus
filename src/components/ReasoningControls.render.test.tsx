@@ -2,10 +2,11 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { effortTierLabel } from "@/components/builderCopy";
 import { effortScale } from "@/lib/agent/efforts";
+import { ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { translate } from "@/lib/i18n";
 import { ReasoningControls } from "./ReasoningControls";
 
-for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"]) {
+for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"]) {
   test(`launch reasoning selector follows ${model}`, () => {
     const html = renderToStaticMarkup(<ReasoningControls engine="codex" model={model} effort="max" speed="" onModel={() => {}} onEffort={() => {}} onSpeed={() => {}} />);
     expect(html).toContain('value="max" selected=""');
@@ -35,5 +36,22 @@ test("the ultrafast speed option never reads like a reasoning option beside it, 
     const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
     const efforts = [t("draft.effortDefault"), ...effortScale("codex", "gpt-6.1-sol")!.map((tier) => effortTierLabel(t, tier))];
     expect(efforts).not.toContain(t("draft.speedUltra"));
+  }
+});
+
+test("a fresh launch offers only current choices, and a saved retired choice stays selected under its label", () => {
+  const options = (html: string) => [...html.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((match) => match[1]);
+  const modelSelect = (html: string) => html.slice(0, html.indexOf("</select>"));
+  for (const engine of ["codex", "claude"] as const) {
+    const fresh = modelSelect(renderToStaticMarkup(<ReasoningControls engine={engine} model="" effort="" speed="" onModel={() => {}} onEffort={() => {}} onSpeed={() => {}} />));
+    expect(options(fresh)).toEqual(["", ...(engine === "codex"
+      ? ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]
+      : ["opus", "fable", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"])]);
+  }
+  for (const [engine, model] of [["codex", "gpt-5.6-terra"], ["codex", "gpt-6-sol"], ["claude", "claude-haiku-4-5"]] as const) {
+    const html = modelSelect(renderToStaticMarkup(<ReasoningControls engine={engine} model={model} effort="" speed="" onModel={() => {}} onEffort={() => {}} onSpeed={() => {}} />));
+    const label = ENGINE_MODELS[engine].find((option) => option.id === model)!.label;
+    expect(html).toContain(`<option value="${model}" selected="">${label}</option>`);
+    expect(options(html)).toEqual(["", ...listedModels(engine).map((option) => option.id), model]);
   }
 });

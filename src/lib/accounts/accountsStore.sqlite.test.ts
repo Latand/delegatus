@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
@@ -95,6 +96,113 @@ function isTombstone(directory: string, name: AccountSourceName): boolean {
   try { return fs.lstatSync(accountSourcePath(name, directory)).isDirectory(); }
   catch { return false; }
 }
+
+test("an unpromoted candidate scans accounts from an older SQLite schema without changing it", () => {
+  const root = sandbox();
+  const directory = path.join(root, "state");
+  fs.mkdirSync(directory);
+  seed(directory, CODEX_ACCOUNTS_SOURCE, registry("fixture"));
+  importLegacyAccounts(directory, { reconcile: true });
+  resetAccountCollectionsForTests();
+  const database = accountsDatabasePath(directory);
+  const db = new Database(database);
+  db.exec("DROP INDEX state_rows_task_due");
+  db.close();
+  deployedRelease(directory);
+  const script = `
+    const { completedFileScan } = await import(${JSON.stringify(path.resolve("src/lib/scanner/scanCache.ts"))});
+    const scan = await completedFileScan();
+    if (!scan.snapshot.complete) throw new Error("scan incomplete");
+    const { viewerMcpBindings } = await import(${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))});
+    const board = await viewerMcpBindings().board_snapshot({ clientRequestId: "candidate-test", limit: 1 });
+    if (typeof board.count !== "number") throw new Error("board snapshot did not return");
+    const { readAccountSource, writeAccountSource, CODEX_ACCOUNTS_SOURCE } = await import(${JSON.stringify(path.resolve("src/lib/accounts/accountsStore.ts"))});
+    const read = readAccountSource(CODEX_ACCOUNTS_SOURCE);
+    if (read.kind !== "collection" || read.body.active !== "fixture") throw new Error("account registry was not read");
+    let refused = false;
+    try { writeAccountSource(CODEX_ACCOUNTS_SOURCE, read.body); }
+    catch (error) { refused = String(error).includes("fenced during release handoff"); }
+    if (!refused) throw new Error("candidate account write was not fenced");
+  `;
+  const before = fs.readFileSync(database);
+  const wal = `${database}-wal`;
+  const walBefore = fs.existsSync(wal) ? fs.readFileSync(wal) : null;
+  const child = Bun.spawnSync([process.execPath, "-e", script], {
+    cwd: process.cwd(), stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: path.join(root, "config"),
+      LLV_STATE_DIR: directory, LLV_STATE_OWNER: "viewer", PORT: "19717",
+      LLV_HOT_STATE_RELEASE_REVISION: "a".repeat(40), LLV_VIEWER_DEPLOY_TARGET: path.join(directory, "viewer-release.json"),
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+  });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  expect(fs.readFileSync(database)).toEqual(before);
+  expect(fs.existsSync(wal) ? fs.readFileSync(wal) : null).toEqual(walBefore);
+  const verify = new Database(database, { readonly: true });
+  expect(verify.query("SELECT name FROM sqlite_master WHERE name = 'state_rows_task_due'").get()).toBeNull();
+  verify.close();
+});
+
+test.each([...new Set([process.platform, "darwin", "win32"])])("candidate account scans defer interrupted archive cleanup until promotion (%s)", (recoveryPlatform) => {
+  const root = sandbox();
+  const directory = path.join(root, "state");
+  fs.mkdirSync(directory);
+  const journal = [{ id: "fixture", phase: "scrubbing", startedAt: 1 }];
+  for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE] as const) {
+    seed(directory, name, registry("default", [], { removals: journal }));
+  }
+  importLegacyAccounts(directory, { reconcile: true });
+  resetAccountCollectionsForTests();
+  const secrets = [
+    path.join(root, "shared", "codex", "retired", "fixture", "auth.json"),
+    path.join(root, "shared", "claude", "retired", "fixture", ".credentials.json"),
+  ];
+  for (const secret of secrets) {
+    fs.mkdirSync(path.dirname(secret), { recursive: true });
+    fs.writeFileSync(secret, "fixture");
+  }
+  const histories = secrets.map((secret) => path.join(path.dirname(secret), "history.jsonl"));
+  for (const history of histories) fs.writeFileSync(history, "retained history\n");
+  deployedRelease(directory);
+  const script = `
+    const fs = await import("node:fs");
+    const { codexSessionRoots } = await import(${JSON.stringify(path.resolve("src/lib/accounts/codex.ts"))});
+    const { claudeProjectRoots } = await import(${JSON.stringify(path.resolve("src/lib/accounts/claude.ts"))});
+    codexSessionRoots(); claudeProjectRoots();
+    for (const file of ${JSON.stringify(secrets)}) if (!fs.existsSync(file)) throw new Error("candidate cleaned an archive");
+    const { readAccountSource } = await import(${JSON.stringify(path.resolve("src/lib/accounts/accountsStore.ts"))});
+    for (const name of ${JSON.stringify([CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE])}) {
+      const read = readAccountSource(name);
+      if (read.kind !== "collection" || JSON.stringify(read.body.removals) !== ${JSON.stringify(JSON.stringify(journal))}) {
+        throw new Error("candidate changed the removal journal");
+      }
+    }
+    fs.writeFileSync(${JSON.stringify(path.join(directory, "viewer-release.json"))}, JSON.stringify({
+      revision: "a".repeat(40), endpoint: "http://127.0.0.1:19717", hotStateBackend: "sqlite-v1",
+    }));
+    const { publishHotStateAuthority } = await import(${JSON.stringify(path.resolve("src/lib/state/hotStateAuthority.ts"))});
+    publishHotStateAuthority(${JSON.stringify(directory)}, "sqlite", "a".repeat(40), { activationReadyAt: new Date().toISOString() });
+    // Exercise the non-Linux refusal on every host, after native setup and activation.
+    Object.defineProperty(process, "platform", { value: ${JSON.stringify(recoveryPlatform)} });
+    codexSessionRoots(); claudeProjectRoots();
+  `;
+  const child = Bun.spawnSync([process.execPath, "-e", script], {
+    cwd: process.cwd(), stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: path.join(root, "config"),
+      LLV_STATE_DIR: directory, LLV_STATE_OWNER: "viewer", PORT: "19717",
+      LLV_HOT_STATE_RELEASE_REVISION: "a".repeat(40), LLV_VIEWER_DEPLOY_TARGET: path.join(directory, "viewer-release.json"),
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+  });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const cleanupSupported = recoveryPlatform === "linux";
+  for (const secret of secrets) {
+    expect(fs.existsSync(secret)).toBe(!cleanupSupported);
+    if (!cleanupSupported) expect(fs.readFileSync(secret, "utf8")).toBe("fixture");
+  }
+  for (const history of histories) expect(fs.readFileSync(history, "utf8")).toBe("retained history\n");
+  for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE] as const) {
+    expect(body(directory, name)).toMatchObject({ removals: cleanupSupported ? [] : journal });
+  }
+});
 
 async function child(mode: string, directory: string, arg?: string, gate?: string) {
   const proc = Bun.spawn({

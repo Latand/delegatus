@@ -1856,8 +1856,9 @@ describe("#2075 every image an agent looks at", () => {
   /*
    * Rendered evidence for #2075: one conversation per engine viewing pictures
    * the way that engine records it (Claude Read and an MCP screenshot, a Codex
-   * code-mode exec and two app-server imageView items, a Copilot view) and a
-   * live view_image row. Every picture is a thumbnail under its line at both
+   * code-mode exec, two app-server imageView items and three generated images
+   * in their fileId, migration and inline forms, a Copilot view) and a live
+   * view_image row. Every picture is a thumbnail under its line at both
    * widths, with no "show" chip and no "[image output]" text; a tap opens the
    * viewer; a file gone from disk is a pill naming it.
    *
@@ -1874,7 +1875,7 @@ describe("#2075 every image an agent looks at", () => {
     { name: "desktop-1280", width: 1280, height: 800, touch: false, scheme: "dark" },
   ] as const;
   const LANGS = ["en", "uk"] as const;
-  const SERVED = new Set(["/w/shot.png", "/w/live.png"]);
+  const SERVED = new Set(["/w/shot.png", "/w/live.png", "/w/generated/widget.png", "/w/generated/migrated.png", "/w/generated/inline.png"]);
 
   /* A flat two-tone PNG, encoded in place so no raster is committed. */
   function png(width: number, height: number): Buffer {
@@ -1971,9 +1972,9 @@ describe("#2075 every image an agent looks at", () => {
             });
             await page.screenshot({ path: path.join(OUT, `${frame.name}-${frame.scheme}-${lang}.png`), fullPage: true });
             expect(pageErrors).toEqual([]);
-            /* Claude ×3, Codex exec + one served imageView, Copilot, the live row. */
-            expect(reading.thumbnails).toBe(7);
-            expect(reading.drawn).toBe(7);
+            /* Claude ×3, Codex exec + one served imageView + three generated, Copilot, the live row. */
+            expect(reading.thumbnails).toBe(10);
+            expect(reading.drawn).toBe(10);
             expect(reading.insideClosedDisclosure).toBe(0);
             expect(reading.chips).toBe(0);
             expect(reading.placeholderText).toBe(0);
@@ -1984,7 +1985,7 @@ describe("#2075 every image an agent looks at", () => {
             expect(reading.overflowX).toBe(0);
             if (frame.touch) expect(reading.smallControls).toBe(0);
             expect(reading.liveLeft).not.toBeNull();
-            expect(reading.settledLeft).toHaveLength(6);
+            expect(reading.settledLeft).toHaveLength(9);
             for (const left of reading.settledLeft) expect(Math.abs(left - reading.liveLeft!)).toBeLessThanOrEqual(1);
             /* The desktop keeps the feed's avatar-column indent: 36 px gutter plus the 22 px glyph inset. */
             if (!frame.touch) expect(Math.round(reading.liveLeft!)).toBe(16 + 36 + 22);
@@ -2668,6 +2669,112 @@ describe("the runtime pill names the model the conversation runs on", () => {
       served.stop();
     }
   }, 600_000);
+});
+
+describe("the runtime pill offers only current models and keeps a saved one", () => {
+  /*
+   * The production pill over the production composer: its model list for a
+   * conversation saved on a retired Codex model, on Terra 6.1 at its top tier,
+   * on Luna at its top tier, on the retired Haiku 4.5 and on Haiku 5.5 through
+   * its alias, at the desktop width, one between it and the phone, and the
+   * phone width, both languages, both schemes. Every model and tier row is
+   * scrolled into view and measured from its text range. Frames go to
+   * `.artifacts/runtime-model-picker/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const reasoningLabel = (lang: "en" | "uk", tier: string) => translate(lang, `reasoningTier.${tier}` as Parameters<typeof translate>[1]);
+  const CODEX = ["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"];
+  const CLAUDE = ["Opus 5.5", "Fable", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
+  const FILES = {
+    "legacy-sol": { models: [...CODEX, "GPT-5.6-Sol"], model: "GPT-5.6-Sol", tiers: 6, tier: "high" },
+    "terra-ultra": { models: CODEX, model: "GPT-6.1-Terra", tiers: 6, tier: "ultra" },
+    "luna-max": { models: CODEX, model: "GPT-6-Luna", tiers: 5, tier: "max" },
+    "haiku-legacy": { models: [...CLAUDE, "Haiku 4.5"], model: "Haiku 4.5", tiers: null, tier: "max" },
+    haiku: { models: CLAUDE, model: "Haiku 5.5", tiers: null, tier: "high" },
+  } as const;
+
+  browserTest("each model list names the current choices, keeps the saved one checked, and every row is whole", async () => {
+    const out = path.resolve(".artifacts/runtime-model-picker");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(FILES)) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face&lang=${lang}&file=${name}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = `${name}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const pill = page.locator("[data-runtime-pill]");
+          await pill.waitFor();
+          await pill.click();
+          await page.locator("[data-runtime-popover], [data-runtime-sheet]").first().waitFor();
+          /* Each row as text ranges see it once scrolled into view: one line, inside the window and every clipping ancestor. */
+          const rows = (selector: string) => page.evaluate((selector) => [...document.querySelectorAll(selector)].map((row) => {
+            row.scrollIntoView({ block: "nearest" });
+            const text = row.querySelector(".truncate") ?? row;
+            const range = document.createRange();
+            range.selectNodeContents(text);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+            const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+            const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+            let clipped = (text as HTMLElement).scrollWidth > (text as HTMLElement).clientWidth + 1;
+            for (let ancestor = text.parentElement; ancestor; ancestor = ancestor.parentElement) {
+              const style = getComputedStyle(ancestor);
+              if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+              const box = ancestor.getBoundingClientRect();
+              if (left < box.left - 0.5 || right > box.right + 0.5 || top < box.top - 0.5 || bottom > box.bottom + 0.5) clipped = true;
+            }
+            const box = row.getBoundingClientRect();
+            return {
+              text: text.textContent?.trim() ?? "", checked: row.getAttribute("aria-checked") === "true",
+              lines: new Set(rects.map((r) => Math.round(r.top))).size, clipped,
+              inView: left >= 0 && right <= innerWidth && top >= 0 && bottom <= innerHeight,
+              height: Math.round(box.height), width: Math.round(box.width),
+            };
+          }), selector);
+          const group = (label: string) => `[data-runtime-sheet] [role="radiogroup"][aria-label="${label}"] [data-runtime-sheet-row]`;
+          const tierSelector = viewport.touch ? group(translate(lang, "composer.reasoningGroup")) : '[data-runtime-row="tier"]';
+          const tiers = await rows(tierSelector);
+          await page.screenshot({ path: path.join(out, `${key}-tiers.png`) });
+          if (!viewport.touch) {
+            await page.locator('[data-runtime-row="submenu"][data-runtime-value="model"]').click();
+            await page.locator('[data-runtime-row="model"]').first().waitFor();
+          }
+          const models = await rows(viewport.touch ? group(translate(lang, "composer.modelGroup")) : '[data-runtime-row="model"]');
+          const face = (await pill.textContent())?.trim() ?? "";
+          readings[key] = { face, models, tiers };
+          await page.screenshot({ path: path.join(out, `${key}-models.png`) });
+          expect(pageErrors).toEqual([]);
+          expect({ key, models: models.map((row) => row.text) }).toEqual({ key, models: [...expected.models] });
+          expect({ key, checked: models.filter((row) => row.checked).map((row) => row.text) }).toEqual({ key, checked: [expected.model] });
+          if (expected.tiers !== null) expect({ key, tiers: tiers.length }).toEqual({ key, tiers: expected.tiers });
+          const checkedTier = tiers.filter((row) => row.checked);
+          expect(checkedTier).toHaveLength(1);
+          expect(checkedTier[0]!.text).toBe(viewport.touch ? expected.tier : reasoningLabel(lang, expected.tier));
+          for (const row of [...models, ...tiers]) {
+            expect({ key, row: row.text, lines: row.lines, clipped: row.clipped, inView: row.inView }).toEqual({ key, row: row.text, lines: 1, clipped: false, inView: true });
+            if (viewport.touch) expect(row.height).toBeGreaterThanOrEqual(44);
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-picker/picker.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model picker: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 900_000);
 });
 
 describe("the headers name the model the conversation runs on", () => {

@@ -1,6 +1,28 @@
 import { expect, test } from "bun:test";
-import { publicationDeadlineOnly, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineOnly, pipelinePublishesRemoteBranch } from "./publication";
+import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
+
+test.each([
+  "remote: Permission to acme/widgets.git denied to delivery[bot].",
+  "fatal: unable to access repository: The requested URL returned error: 403",
+  "fatal: HTTP 403",
+])("App git denial after a verified fresh mint is transient: %s", output => {
+  expect(publicationApp403(`${FORGE_PUSH_MINT_MARKER}\n${output}`)).toBe(true);
+  expect(publicationApp403(output)).toBe(false);
+});
+
+test.each(["HTTP 401", "HTTP 404", "HTTP 500", "Permission denied (publickey)", "Everything up-to-date",
+  "Delegatus refused this GitHub write: HTTP 403 while verifying the App installation"])("other failures keep their classification: %s", output => {
+  expect(publicationApp403(`${FORGE_PUSH_MINT_MARKER}\n${output}`)).toBe(false);
+});
+
+test("a failed transport retains its error when git finishes with Everything up-to-date", async () => {
+  const { publicationFailureCause } = await import("./git");
+  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1700,
+    outputTail: "error: RPC failed; HTTP 403 curl 22\nfatal: the remote end hung up unexpectedly\nEverything up-to-date" }))
+    .toBe("git push was refused (exit 1): error: RPC failed; HTTP 403 curl 22");
+});
 
 for (const [publication, disposition, remote, publishes] of [
   ["remote-branch", "owner", "", true],

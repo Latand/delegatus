@@ -5824,13 +5824,13 @@ export class AgentRegistry {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+      const snapshot = deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+    return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */
@@ -6592,30 +6592,41 @@ export class AgentRegistry {
       () => check(`${caller} admission`), { waitMs: remaining() });
     if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
-    if (result.kind === "created" || result.kind === "replay") {
-      await new Promise<void>(resolve => setImmediate(resolve));
-      // Reservation is durable. Retry only its idempotent prerequisite, with
-      // no registry writer held while the task store takes its own writer.
-      const admission = await waitForStateLock(`${caller}.membership`, async () => {
-        try {
-          return await withAccountMutationLockAsync(() => {
-            check(`${caller} membership`);
-            return this.admitSpawnMembership(input, result);
-          }, { caller: `${caller} membership`, waitMs: remaining() });
-        } catch (error) {
-          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
-          throw error;
-        }
-      }, { waitMs: remaining(), subject: result.receipt.launchId });
-      if (admission.ok) {
+    try {
+      if (result.kind === "created" || result.kind === "replay") {
         await new Promise<void>(resolve => setImmediate(resolve));
-        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
-          this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, () => check(`${caller} membership record`), { waitMs: remaining() });
-        if (!recorded.acquired) throw busy(`${caller} membership record`);
+        // Reservation is durable. Retry only its idempotent prerequisite, with
+        // no registry writer held while the task store takes its own writer.
+        const admission = await waitForStateLock(`${caller}.membership`, async () => {
+          try {
+            return await withAccountMutationLockAsync(() => {
+              check(`${caller} membership`);
+              return this.admitSpawnMembership(input, result);
+            }, { caller: `${caller} membership`, waitMs: remaining() });
+          } catch (error) {
+            if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+            throw error;
+          }
+        }, { waitMs: remaining(), subject: result.receipt.launchId });
+        if (admission.ok) {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+            this.recordSpawnMembership(result.receipt, admission.taskIds);
+          }, () => check(`${caller} membership record`), { waitMs: remaining() });
+          if (!recorded.acquired) throw busy(`${caller} membership record`);
+        }
       }
+      check(`${caller} admission`);
+    } catch (error) {
+      // Only this invocation's fresh reservation carries dispatch custody.
+      // Replays belong to their original dispatcher. Release by exact owner
+      // so a later claimant or a settled host keeps its custody.
+      if (result.kind === "created" && result.receipt.admissionOwner) {
+        await this.deliveryWriteOrBusy({ label: `${caller} admission release`, operationId: result.receipt.launchId }, () =>
+          this.releaseSpawnActuation(result.receipt.launchId, result.receipt.admissionOwner!));
+      }
+      throw error;
     }
-    check(`${caller} admission`);
     return result;
   }
 
@@ -9856,6 +9867,11 @@ export class AgentRegistry {
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
     return this.readKeyed(file => clone(file.engineRouting[engine]));
+  }
+
+  /** Both compatibility routes from one read transaction. */
+  engineRoutingSnapshot(): RegistryFile["engineRouting"] {
+    return this.readKeyed(file => clone(file.engineRouting));
   }
 
   migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {
