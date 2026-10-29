@@ -6,10 +6,11 @@ import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { MERGE_REASON_PATTERNS, MERGE_REASONS } from "@/lib/forge/mergeReasons";
 import { laneStopKind } from "@/lib/pipelines/laneStop";
+import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { laneNeedKind } from "./routeTypes";
+import { laneNeedKind, laneWaitCleared } from "./routeTypes";
 
 /*
  * The seat's half of routing (docs/design/attention-auto-resolve.md,
@@ -124,9 +125,11 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
     asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
   }
+  const successorOwners = indexMergeSuccessors(body.pipelines);
   const lanes = body.pipelines
     .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
     .flatMap((pipeline) => {
+      if (laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];
