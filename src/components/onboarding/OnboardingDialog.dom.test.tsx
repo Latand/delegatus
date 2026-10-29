@@ -917,6 +917,36 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
   }
 });
 
+test("the mapping keeps a role saved on a retired model, under its label, beside only the current choices", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { listedModels } = await import("@/lib/agent/models");
+  const saved = { engine: "codex" as const, model: "gpt-5.6-terra", effort: "ultra" };
+  const current = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high" };
+  const roles = mergeRoleDefinitions({ reviewer: { config: saved }, architect: { config: current } }).map((role) => ({ ...role, promptPreview: role.promptScaffold }));
+  rolesBody = { schemaVersion: 5, roles };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row]")));
+    const selects = (row: string) => [...host.querySelectorAll<HTMLSelectElement>(`[data-mapping-row='${row}'] select`)];
+    const [model, effort] = selects("reviewer");
+    expect(model!.value).toBe("gpt-5.6-terra");
+    expect(model!.selectedOptions[0]?.textContent).toBe("GPT-5.6-Terra");
+    expect([...model!.options].map((option) => option.value)).toEqual(listedModels("codex", "gpt-5.6-terra").map((option) => option.id));
+    expect(effort!.value).toBe("ultra");
+    // A row on a current model offers the fresh choices alone.
+    expect([...selects("architect")[0]!.options].map((option) => option.value)).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+    expect(requests.filter((request) => request.method === "PUT")).toEqual([]);
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { schemaVersion: 2, roles: [] };
+  }
+});
+
 test("the mapping effort edit carries a stored Codex tier for role and variant rows", async () => {
   const { mergeRoleDefinitions } = await import("@/lib/roles/store");
   const config = { engine: "codex" as const, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" };

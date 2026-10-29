@@ -6,6 +6,7 @@ import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./fin
 import path from "node:path";
 
 import { isTaskNote } from "./note";
+import { isTaskProgress } from "./progress";
 import { storedDueHistory } from "./helpers";
 
 import { statePath } from "@/lib/configDir";
@@ -245,6 +246,7 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
   }
   if (task.findingKey === undefined || !validStoredFinding(task.finding)) delete task.finding;
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
+  if (task.progress !== undefined && !isTaskProgress(task.progress)) delete task.progress;
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
   if (!steps) delete task.steps;

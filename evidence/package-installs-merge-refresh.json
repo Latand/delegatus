@@ -1,0 +1,3986 @@
+{
+  "purpose": "Checkpoint the merged source and available evidence while the final confirmation is blocked.",
+  "verificationStatus": "incomplete: operator decision required for admission or evidence acceptance",
+  "admissionBlocker": {
+    "normalHeadStatus": "unverified",
+    "normalHeadAgeMinutes": 86.18721666666667,
+    "cpuPressureAvg10": 0.84,
+    "kernelSlotsAvailableObserved": true,
+    "checksWaiting": "three whole-file observations per side",
+    "latestReadonlyHeadStillUnverified": true,
+    "latestObservedAgeMinutes": 98.3
+  },
+  "ownQueuedRequestCleanup": {
+    "ownCallerDead": true,
+    "ownTicketRemoved": true,
+    "signals": [
+      "SIGTERM"
+    ],
+    "confirmationExecuted": false,
+    "foreignTicketsEdited": false
+  },
+  "createdAt": "2026-10-24T02:06:17.023487+00:00",
+  "priorEvidence": "evidence/package-installs-merge-verification.json",
+  "retainedMerge": "edcbf9c3d89f4dafbda58762b2c939679b8abfbd",
+  "conflicts": [
+    {
+      "file": "src/lib/agent/headless.ts:1",
+      "resolution": "Keep repository identity and memory-scope imports."
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts:54",
+      "resolution": "Keep persistent fixture Git identity configuration and construct the synthetic email from separate strings."
+    },
+    {
+      "file": "src/lib/runtime/copilotAcpHost.test.ts:20",
+      "resolution": "Keep repository identity and MCP HTTP access imports."
+    }
+  ],
+  "followupConflicts": [],
+  "mergeResolution": "Retain the earlier committed conflict resolutions. Replace only unfinished clean refreshes with a clean merge of captured current main.",
+  "priorComparisonAudit": {
+    "branchFiles": 213,
+    "baseFiles": 213,
+    "branchOnlyFailedCases": [],
+    "main": "a3d27b76ac62737078c796ac681eea492e69291a"
+  },
+  "captureAudit": {
+    "priorInventoryGateHarnessConsumers": [],
+    "captureMechanism": "scripts/gate-runner/harness.fixture.ts:109 copies modified and untracked export files into its fixture.",
+    "checks": [
+      {
+        "file": "scripts/local-gate.fixture.ts:14",
+        "observation": "Hook fixtures copy explicit hook/script/workflow inputs."
+      },
+      {
+        "file": "scripts/privacy-publication-gate.test.ts:406",
+        "observation": "The scan helper passes --paths explicitly; repository cases use their own fixture roots."
+      },
+      {
+        "file": "src/lib/pipelines/controllerArtifacts.test.ts:221",
+        "observation": "Artifact cases create synthetic fixture repositories."
+      }
+    ],
+    "conclusion": "The capture contamination affects the new gate follow-up runs. The original importer inventory has no consumer of that fixture harness."
+  },
+  "additionalMainChange": {
+    "files": [
+      "src/lib/accounts/manager.ts",
+      "src/lib/accounts/spawnHealth.test.ts",
+      "docs/verification/spawn-health-macos.md"
+    ],
+    "validation": "The four added account test files exercise the real changed selection function; other discovered references substitute it or exercise other engines."
+  },
+  "execution": {
+    "perFileCommand": [
+      "setsid",
+      "bun",
+      "test",
+      "--timeout=60000",
+      "<explicit file>"
+    ],
+    "serial": true,
+    "stdin": "closed",
+    "isolationKeys": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR",
+      "CODEX_HOME",
+      "CLAUDE_CONFIG_DIR",
+      "LLV_CODEX_HOME",
+      "LLV_CLAUDE_HOME"
+    ],
+    "environment": {
+      "NODE_ENV": "test",
+      "LLV_GATE_RUNNER": "off",
+      "LLV_OWNED_RUN_TIMEOUT_MS": "900000",
+      "CLAUDE_CODE_TMPDIR": "the private TMPDIR",
+      "LLV_VIEWER_CONTROL_URL": "a closed loopback endpoint"
+    },
+    "capture": "Sibling directories outside every tested checkout; the driver refuses in-tree capture paths.",
+    "baseline": "A detached Git clone at captured main, with the same origin and a read-only dependency link. No baseline install or commit."
+  },
+  "runtime": {
+    "sha256": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+    "version": "1.4.0"
+  },
+  "sourceProof": {
+    "before": {
+      "main": {
+        "sha256": "26d00bed0c0ec8de94e27f43fed1224a33ba9824e8e7ad1302bf8a7849501831",
+        "paths": 7041
+      },
+      "branch": {
+        "sha256": "ba5e8d69d68d6838365f148b60299b9b25a98b4b36007e4b467f7a078d6d27f4",
+        "paths": 7048
+      }
+    },
+    "after": {
+      "main": {
+        "sha256": "26d00bed0c0ec8de94e27f43fed1224a33ba9824e8e7ad1302bf8a7849501831",
+        "paths": 7041
+      },
+      "branch": {
+        "sha256": "ba5e8d69d68d6838365f148b60299b9b25a98b4b36007e4b467f7a078d6d27f4",
+        "paths": 7048
+      }
+    }
+  },
+  "sourceProofCoverage": "The source proofs and full typecheck cover the checkedMain snapshot. A later upstream-only evidence document and native integration fixture are listed as pending validation; all other product source is unchanged.",
+  "interruptedCapture": {
+    "exit": 255,
+    "mainFilesCompleted": 22,
+    "branchFilesCompleted": 11,
+    "remainingBranchFiles": [
+      "scripts/gate-runner/remoteOutputs.test.ts",
+      "scripts/gate-runner/remotePrivacy.test.ts",
+      "scripts/gate-runner/remoteShip.test.ts",
+      "scripts/gate-runner/remoteTree.test.ts",
+      "scripts/gate-runner/remoteVerdict.test.ts",
+      "scripts/gate-slot.queue.test.ts",
+      "scripts/pipeline-park-proof.test.ts",
+      "src/lib/accounts/spawnHealth.test.ts",
+      "src/lib/accounts/managerProjectBinding.test.ts",
+      "src/lib/orchestrator/rotationAccountChoice.test.ts",
+      "src/app/api/spawn/route.test.ts"
+    ],
+    "recordedLocalSurvivor": "dead (verified host namespace and start identity)",
+    "remoteRunDirectoryRemoved": true,
+    "remoteProcessesReferencingRun": 0,
+    "retryTransport": "private SSH/SCP connections; no shared ControlMaster socket"
+  },
+  "sourceProofExclusion": "The final report is added after the checked source snapshot. Post-commit verification excludes only this report and compares the full remaining source digest.",
+  "pairedMain": [
+    {
+      "file": "scripts/gate-runner/client.test.ts",
+      "exit": 1,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/client.test.ts"
+      ],
+      "seconds": 0.974,
+      "counts": {
+        "pass": 17,
+        "fail": 1
+      },
+      "failedCases": [
+        "every environment variable the four drivers and scripts/local-gate*.ts read is classified"
+      ],
+      "logSha256": "151f9c740c708e611863d40899f094759f04367079fb2e185a6fb94aceb54f3a",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/load.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/load.test.ts"
+      ],
+      "seconds": 23.624,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "4d96f96b99ff3b67aaecfc58f186732b01d652b38da0fe3c31960ef220a0428d",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remote.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remote.test.ts"
+      ],
+      "seconds": 34.617,
+      "counts": {
+        "pass": 3,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "a79e88bcf51bfaa7f879d28f4496d45a4498bc04f61a5a87dc2d6a8640908358",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteCheckout.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteCheckout.test.ts"
+      ],
+      "seconds": 25.617,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "d3d7916aa80dcb92149791adab259a54955058e0b07e61f41c7b9bbc9d5404b5",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteCleanup.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteCleanup.test.ts"
+      ],
+      "seconds": 20.967,
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "69ec96e53a13ffd36d16a83023092ecda76a780b3dbd4db17ec3c5af96db60d4",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteControl.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteControl.test.ts"
+      ],
+      "seconds": 29.723,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "cad76c2287aa05e907ac5fbefb016ca4cce0b07ffb4d983d6ba37c08e96cb7bb",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteEntry.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteEntry.test.ts"
+      ],
+      "seconds": 42.269,
+      "counts": {
+        "pass": 4,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "6e524473214b30d7d955537e67facdb43cdb18e95497fddeefe3a1906f95eadf",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteExport.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteExport.test.ts"
+      ],
+      "seconds": 18.123,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "7ee5e767cb45a5b3392d147835545e2762fa5c8472c6b78e722d43711ed87e7e",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteFaults.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteFaults.test.ts"
+      ],
+      "seconds": 20.982,
+      "counts": {
+        "pass": 3,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "a06534de4b90f18d2b2b68a6c00b4d2ef53efd7ce0d7e171453636b5fdb2fb95",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteHook.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteHook.test.ts"
+      ],
+      "seconds": 68.259,
+      "counts": {
+        "pass": 6,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "e5e6f925d5ef0d95b7959f64b717b9562e366f5c834672a37e2d71838b29f1f8",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteLifecycle.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteLifecycle.test.ts"
+      ],
+      "seconds": 67.444,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "71e14b714e97059fc59169414f42ff7dcd05c41add8510fecce3489f760d92ed",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteOutputs.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteOutputs.test.ts"
+      ],
+      "seconds": 23.503,
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "bdaa9d2d0387c7fe16b55abe941315d6e8f2df008635366190d174b51e2039e7",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remotePrivacy.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remotePrivacy.test.ts"
+      ],
+      "seconds": 28.008,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "ad52bb5a2a0beb8ee09e77d833f3c5cdfc7088906feea3396863006ef03d46da",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteShip.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteShip.test.ts"
+      ],
+      "seconds": 11.272,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "44fd91ee46bc64a13dd6c8f9439ddd0feed846776fb1665b52048c5f3c04d181",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteTree.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteTree.test.ts"
+      ],
+      "seconds": 15.894,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "ccbb0a252bd38bf2b3e61913c6a010064d6fae2855f682227027b887d6b6de78",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteVerdict.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteVerdict.test.ts"
+      ],
+      "seconds": 24.945,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "817e04f316aa4b7a7c67d45b25d8f1854bd68e6e3c714b6c9bb1ab0e9581a00d",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/gate-slot.queue.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-slot.queue.test.ts"
+      ],
+      "seconds": 21.99,
+      "counts": {
+        "pass": 9,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "495d9c818a897c5cd1b1df2aada12b1da4e20acc4db208bfeeea10552158eaae",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "scripts/pipeline-park-proof.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/pipeline-park-proof.test.ts"
+      ],
+      "seconds": 3.952,
+      "counts": {
+        "pass": 24,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "43bbe114e355db3afb182b8b229a66b25cdf545339564b0c7d2280b850f62238",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "src/lib/accounts/spawnHealth.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/accounts/spawnHealth.test.ts"
+      ],
+      "seconds": 8.462,
+      "counts": {
+        "pass": 86,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "15079d87a31d098c145971183a7cc9943fc5a2a869be697ec8268c462126a9a3",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "src/lib/accounts/managerProjectBinding.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/accounts/managerProjectBinding.test.ts"
+      ],
+      "seconds": 5.378,
+      "counts": {
+        "pass": 40,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "402d256bd2db5a18fb05a37b6427e1d6634a3fa40c019b9d6062682960980a9e",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "src/lib/orchestrator/rotationAccountChoice.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/orchestrator/rotationAccountChoice.test.ts"
+      ],
+      "seconds": 1.448,
+      "counts": {
+        "pass": 4,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "5592d25f29df29122d9c6c5b7656da932074fb5192f97c97db1db4a13191e8a7",
+      "capture": "completed main phase before transport interruption"
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "exit": 1,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "seconds": 15.548,
+      "counts": {
+        "pass": 70,
+        "fail": 23
+      },
+      "failedCases": [
+        "an automatic bound-project health revision race stays retryable and preserves the same request key",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch"
+      ],
+      "logSha256": "e79bfdd81c339de024a22ddc0e7733480597f9561a41ff604a641c860181b046",
+      "capture": "completed main phase before transport interruption"
+    }
+  ],
+  "pairedBranch": [
+    {
+      "file": "scripts/gate-runner/client.test.ts",
+      "exit": 1,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/client.test.ts"
+      ],
+      "seconds": 1.15,
+      "counts": {
+        "pass": 17,
+        "fail": 1
+      },
+      "failedCases": [
+        "every environment variable the four drivers and scripts/local-gate*.ts read is classified"
+      ],
+      "logSha256": "276cd509ff36ea8562f4332b352236612205e24869b1e5e19fd7cb4fe788142c",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/load.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/load.test.ts"
+      ],
+      "seconds": 23.954,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "e0e0bc99ef38d80cb94b4dace0b01a4202444c9f7cbfe9f5b190823da9889175",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remote.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remote.test.ts"
+      ],
+      "seconds": 35.036,
+      "counts": {
+        "pass": 3,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "407855dcf9d3cf4a2c18516d19bb07fdb7d212ab0537bef151eb6ee8efde0f99",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteCheckout.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteCheckout.test.ts"
+      ],
+      "seconds": 28.648,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "15c067055b5e6111afd038a5ef74207ffccff436f39d3046e1f9f54964c5d13e",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteCleanup.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteCleanup.test.ts"
+      ],
+      "seconds": 24.666,
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "73a2082f34cb557382aa599173975af6d1cf11dbe6982c117d6e9043d6ddec42",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteControl.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteControl.test.ts"
+      ],
+      "seconds": 36.952,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "c6ef0ea53a5d4967fa8d672f1df2eff4a66c0bf0b06f526e30c5b0a54e07f87e",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteEntry.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteEntry.test.ts"
+      ],
+      "seconds": 50.147,
+      "counts": {
+        "pass": 4,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "2397fbd4d797a963aedc18efba096e6baf8b774f8e9bfa58333df70874e8a8cd",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteExport.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteExport.test.ts"
+      ],
+      "seconds": 21.364,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "fcf53d51aa3113e4ac49952393777630ee24cd4d02836e6b9ab0926eef9200cd",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteFaults.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteFaults.test.ts"
+      ],
+      "seconds": 21.821,
+      "counts": {
+        "pass": 3,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "9de2d0ec08e1d84a18602f17f55b17aca8caf06f768a8685177f498c8c70756f",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteHook.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteHook.test.ts"
+      ],
+      "seconds": 79.984,
+      "counts": {
+        "pass": 6,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "336cb5813b3ae0301b39764b4d0ea4d19c3985b31d41e913dc6ee07eb328da0a",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteLifecycle.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteLifecycle.test.ts"
+      ],
+      "seconds": 83.382,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "ac1595b73759a896ec180b3e1d5c56752beedbdf336c45527d05668d8615491f",
+      "capture": "completed branch file before transport interruption"
+    },
+    {
+      "file": "scripts/gate-runner/remoteOutputs.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteOutputs.test.ts"
+      ],
+      "seconds": 26.595,
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "ad9cd94bb2a31ffc1a9091e1a20afde9c00095ad1a060e9491cc6332866dd1f8",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "scripts/gate-runner/remotePrivacy.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remotePrivacy.test.ts"
+      ],
+      "seconds": 33.566,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "2a185a2ca926a08828081a60319284be6361a73c563bf81cc573d6a349e2e4ad",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "scripts/gate-runner/remoteShip.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteShip.test.ts"
+      ],
+      "seconds": 12.779,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "d9046facbe9fd21aec5b07167c885c8d18e7f60f9c1ebb296c4046511544284c",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "scripts/gate-runner/remoteTree.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteTree.test.ts"
+      ],
+      "seconds": 18.792,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "db44a076baa83f02dbd068abab1c42cf90090f4bca9afe61d621c46c467247c8",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "scripts/gate-runner/remoteVerdict.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-runner/remoteVerdict.test.ts"
+      ],
+      "seconds": 27.538,
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "740e75da3e8b93fb4d118b2630f51e74c556727ac7c1e750cbc29d0d2dae0998",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "scripts/gate-slot.queue.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/gate-slot.queue.test.ts"
+      ],
+      "seconds": 20.225,
+      "counts": {
+        "pass": 9,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "884e85b963d53506e7a4b6a3d1923a1bdb1c4fe0e34a79c0ec9ca35c9ab3fa98",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "scripts/pipeline-park-proof.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "scripts/pipeline-park-proof.test.ts"
+      ],
+      "seconds": 2.242,
+      "counts": {
+        "pass": 24,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "58bcc6535c753eed14def908c7d7b9ee56792095f60038a9eb53c6d28104c409",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "src/lib/accounts/spawnHealth.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/accounts/spawnHealth.test.ts"
+      ],
+      "seconds": 9.265,
+      "counts": {
+        "pass": 86,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "ad9dbcd08087f4a74ef932b168e2db62938eeb726387f273f1d2d2e34347cb01",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "src/lib/accounts/managerProjectBinding.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/accounts/managerProjectBinding.test.ts"
+      ],
+      "seconds": 7.698,
+      "counts": {
+        "pass": 40,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "642c9344506538fd23d1cf34c4ac90fa7fcabc58d1d967b4ed1f6d51d8bcd5e4",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "src/lib/orchestrator/rotationAccountChoice.test.ts",
+      "exit": 0,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/orchestrator/rotationAccountChoice.test.ts"
+      ],
+      "seconds": 1.39,
+      "counts": {
+        "pass": 4,
+        "fail": 0
+      },
+      "failedCases": [],
+      "logSha256": "9cdcfc3a2b9baf873cad997081e4b01b3e00177c490809de63f54c8893b19745",
+      "capture": "resumed branch file over private SSH"
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "exit": 1,
+      "command": [
+        "setsid",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "seconds": 13.22,
+      "counts": {
+        "pass": 69,
+        "fail": 24
+      },
+      "failedCases": [
+        "a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch"
+      ],
+      "logSha256": "11d0d5d1e895770769a90012ec0474f6442fdae590f137d3a796e88b3f700a39",
+      "capture": "resumed branch file over private SSH"
+    }
+  ],
+  "branchOnlyFailedCases": [
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "failedCases": [
+        "a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt"
+      ]
+    }
+  ],
+  "initialPairedBranchOnlyCases": [
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "case": "a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt"
+    }
+  ],
+  "wholeFileRouteConfirmations": [],
+  "confirmationSourceProof": null,
+  "typesAndLint": [
+    {
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exit": 0,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "appliesToSourceDigest": "ba5e8d69d68d6838365f148b60299b9b25a98b4b36007e4b467f7a078d6d27f4"
+    },
+    {
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "scripts/gate-runner/client.ts",
+        "scripts/gate-runner/harness.fixture.ts",
+        "scripts/gate-runner/load.test.ts",
+        "scripts/gate-runner/load.ts",
+        "scripts/gate-runner/remoteEntry.test.ts",
+        "scripts/gate-runner/remoteExport.test.ts",
+        "scripts/gate-runner/remoteFaults.test.ts",
+        "scripts/gate-runner/remoteShip.test.ts",
+        "scripts/gate-runner/remoteVerdict.test.ts",
+        "scripts/pipeline-park-proof.test.ts",
+        "scripts/pipeline-park-proof.ts",
+        "src/lib/accounts/manager.ts",
+        "src/lib/accounts/spawnHealth.test.ts",
+        "src/lib/agent/cli.ts",
+        "src/lib/agent/headless.ts",
+        "src/lib/git/agentHistoryGuard.test.ts",
+        "src/lib/git/agentHistoryGuard.ts",
+        "src/lib/git/agentPublicationIdentity.ts",
+        "src/lib/git/repositoryCommitIdentity.test.ts",
+        "src/lib/git/repositoryCommitIdentity.ts",
+        "src/lib/pipelines/engine.fixture.ts",
+        "src/lib/pipelines/engine.ports.part2.test.ts",
+        "src/lib/pipelines/engine.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/pipelines/git.ts",
+        "src/lib/pipelines/packageInstalls.test.ts",
+        "src/lib/pipelines/stageAttemptPush.test.ts",
+        "src/lib/pipelines/stageAttemptPush.ts",
+        "src/lib/pipelines/stageCommitRepair.test.ts",
+        "src/lib/pipelines/worktreeDependencies.test.ts",
+        "src/lib/pipelines/worktreeDependencies.ts",
+        "src/lib/runtime/agentSignalSandbox.test.ts",
+        "src/lib/runtime/claudeStreamBrokerHost.ts",
+        "src/lib/runtime/codexAppServerHost.test.ts",
+        "src/lib/runtime/codexAppServerHost.ts",
+        "src/lib/runtime/copilotAcpHost.test.ts",
+        "src/lib/runtime/copilotAcpHost.ts",
+        "src/lib/workflows/provision.test.ts",
+        "src/lib/workflows/provision.ts",
+        "test-preload.ts"
+      ],
+      "exit": 0,
+      "logSha256": "2981b4233d0bce6ede99b540dc05e2c1002289e63adc032ecb669b58c3108c4d",
+      "appliesToSourceDigest": "ba5e8d69d68d6838365f148b60299b9b25a98b4b36007e4b467f7a078d6d27f4"
+    }
+  ],
+  "finalSourceHashes": {
+    "bun.lock": "33729b224a5441fb984347939e411caa1e79228f7c4c09ca97a21b9ff0d315c0",
+    "bunfig.toml": "ed8f2ed463f820d1a9c844bce4578391aee3b6eeff1a635d81d08d9cac62d71c",
+    "docs/design/cloud-checks.md": "8453af739dfa88bf722a47a6e565610e9731c9a16b649b3009143c356900e710",
+    "docs/design/remote-gate-runner.md": "de046c0e7da918f234e498f4aae855a9fa4140b01fff15fcabc83459954e74ba",
+    "docs/verification/spawn-health-macos.md": "00a4816e2afc771847991e491c416adf5d90a17c784e84b80edb399e94fcb617",
+    "eslint.config.mjs": "309fe7f883557da9512aa6be8c711ab5ff5f256a3e4bcfb5d57284bfcb309975",
+    "package.json": "f3a74ed995f2151d369f20cc479a00759300beffed1f2a9a03f57d4ad8bf9254",
+    "scripts/ci-platform-scope.test.ts": "7f15b10c9af7c5a4347a37df6c78fbd7a84fd83829f79b694aa6f97c36f8d42b",
+    "scripts/gate-cache.test.ts": "45373eed3d4a33a18ebb2449ae7dbb167dae38414900c6f0897c082f8156be64",
+    "scripts/gate-runner/client.test.ts": "ba7d351954fc68841fc946040dc88c68b3834058e2e1daacce1576cf6dbf1876",
+    "scripts/gate-runner/client.ts": "b46ee8ee24022aab9c7006f54ff2a02f5873afd9ce8a7dd76f0a361c48525842",
+    "scripts/gate-runner/harness.fixture.ts": "7771a9fc5673204dbb2865073a5d55a25b07996d4f927e9291ab5bdebd6e2d72",
+    "scripts/gate-runner/load.test.ts": "71bbe7bfd61dab8b5748beeb10538a27c5f4677e260393d59d5593af324fd1b4",
+    "scripts/gate-runner/load.ts": "524fca9493c62647f5848fba97a179ad5db39a49296307a71c383ba997d83af5",
+    "scripts/gate-runner/remote.test.ts": "4cdd8e17cc2341704159e53aae2c1ca8d88bd333b4e6fc7198510aa20cf4bb59",
+    "scripts/gate-runner/remoteCheckout.test.ts": "e9fd98114950c98be5d6b8253cb14fc61c4f6204e031ca9cb0bc7c0cbdb25df2",
+    "scripts/gate-runner/remoteCleanup.test.ts": "4f9a9f2a9b70896371cbd2ca29c742f5c2173424e81472b36118e48142b62257",
+    "scripts/gate-runner/remoteControl.test.ts": "0c9085f82403df1ab3cb284fbbbe7b3183813abe912de0695861508848bf118c",
+    "scripts/gate-runner/remoteEntry.test.ts": "f84bf3953308aaa9f7ee2639c360de18ebb503ae3de0d487b11da6c206547af2",
+    "scripts/gate-runner/remoteExport.test.ts": "a0c1837799a04f37c7a1d2fb4b4c6888162fe205719cfbd5ccb23a70d6b4983d",
+    "scripts/gate-runner/remoteFaults.test.ts": "cbdb3ae46550ec74daf4cc78e65122d86437f05fe7b74971a94e96db53249601",
+    "scripts/gate-runner/remoteHook.test.ts": "56d79e48fc5e0764d3402bf15df815e123fdf34d3e05c7e7d9158bef358ebadf",
+    "scripts/gate-runner/remoteLifecycle.test.ts": "ee7559770e6ee1e56710db32bd4f7a6842c506c21715700203df5678b30622a9",
+    "scripts/gate-runner/remoteOutputs.test.ts": "531e2bd55ec5ce6f9f898b319467830abfdf9d7a13f74988f34c33392ceb2079",
+    "scripts/gate-runner/remotePrivacy.test.ts": "b6c0426e571b97cf692b02308f4912744fe4e47557ea89579fc33428b9cc401a",
+    "scripts/gate-runner/remoteShip.test.ts": "d35a51c85dc609c4adf3a1874ba3caa2e612a838ebd3c4b4377114cf29431e93",
+    "scripts/gate-runner/remoteTree.test.ts": "69c82031f3a7c1bfce7b323118d73f9e1527ed25cfd69c9cf07acfabadeada4d",
+    "scripts/gate-runner/remoteVerdict.test.ts": "fa4d60b3c14be5f2c420e7814f79cb638dd1339502316eaba905760454e3d8b2",
+    "scripts/gate-slot.queue.test.ts": "da0e84d95d582bddfd0e836d8b29607b243e22c64a5e88fe552d6d26205ed753",
+    "scripts/gate-slot.sh": "772795bf07b2d0b9c8e7001bdabc084474be7e15983623ad99a849c40cc6f987",
+    "scripts/local-gate.receipts.test.ts": "589f8f5b1a8dfb3d49a5fff042fa8d539b0e67bee250cdf7c39d5ae85a07f823",
+    "scripts/local-gate.test.ts": "37ac351f474827ba6384fd357c1521918c2c0c44a1c81b2b49fc2f013a7e9239",
+    "scripts/merge-batch.test.ts": "5bf68d75f117cb2789bc4d6ad08e1c08d50b6ea280fcfd4e9f6f74da2c3b7780",
+    "scripts/owned-runner.ts": "59fd4bfaad68c1ed13f0015fb12f22349c1bf71814587810b440b6f398296b47",
+    "scripts/pipeline-park-proof.test.ts": "19d8d1597a3534ecca4187b2fe7a82f731539c53d2e2494f024c2bebefc3e552",
+    "scripts/pipeline-park-proof.ts": "38d75fad37758efe7453b05dc3b030daf9c1f24ed5ee0edd457827cd5f51f30b",
+    "scripts/privacy-publication-gate.test.ts": "b5dc444adffc1ef5485cda5699eb7f09fc96830395684b1d17180065c1094e15",
+    "src/app/api/accounts/copilot/route.test.ts": "1ef40b1066c7b6efdd86d66214cdfd30aa7da8a73321a42644eec117ff8f3aba",
+    "src/app/api/pipelines/[id]/route.lifecycle.test.ts": "6980adbc15f1f4a7d39da7bdf0706f8cda901cb5f4ad9783c7d3c639a743ed4f",
+    "src/app/api/pipelines/route.admission.test.ts": "2582e2e880f7f9ce7b2b8b20c512f870bc19975e5092f65efa7b37a156f29e50",
+    "src/app/api/pipelines/route.busy.test.ts": "39899fdc012a360b301f254c17e8285b8930dcef0db39cf7a5dec7504d7e6de8",
+    "src/app/api/spawn/route.test.ts": "fd744e0ccc759c2732454407a96db9e65121fa5622193d25cb64adb76ba40fec",
+    "src/app/api/voice-companion/calls/route.test.ts": "6880e479208685e293e37bb1398c07019b9b9cbd067ea30d752b1043643709fb",
+    "src/components/BranchPane.spawn.dom.test.tsx": "b9d211e34c27df3881be04548a1276af3659379ced521b5598d676ae0c0e09ec",
+    "src/components/LogFeed.startingWindow.dom.test.tsx": "7b78cc993b277a792c8277383d2fb719915259fc3d04520138e766377d68320c",
+    "src/components/feed/inboxBatch.test.ts": "a25bda269a52e9b242d018a59d80e487dcd4b23487b6941e4960251784920313",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "95975b67b4014adbde676a58858834a85ac6b2111bb0d6afeb5ac4196d706537",
+    "src/lib/accounts/claudeLogin.test.ts": "5e2bc218436bcc39379b640182b4df360796215ca65f160b885a268ef8def840",
+    "src/lib/accounts/claudeProvider.smoke.test.ts": "311145e2822a18ec3176db7316037a3867ae2d93b8a274a1ae7b2a3a44410340",
+    "src/lib/accounts/claudeProvider.test.ts": "84aa4cdf85dcc4016ea5d4db04de4f58d6e8a3ea9a748abb4b90b52eff39a788",
+    "src/lib/accounts/codexPinnedProtocol.test.ts": "179005665143b3b9a78455de34f23fe87a13f973f9b4824095cd381f5066da7e",
+    "src/lib/accounts/manager.ts": "c7a5ccc08714927f7b22b27993b2e33a2437b91598eb3253e73a553f8ce0d383",
+    "src/lib/accounts/managerProjectBinding.test.ts": "34aa1a293f53633e3c3d000c4719395ec49f7594f1e6392c3fb965a3b6e83c5f",
+    "src/lib/accounts/migration/provider.test.ts": "57efc450f78c473f790a9cebaca095d532377a701e1dd3cd41f49dde0e1c4a49",
+    "src/lib/accounts/spawnHealth.test.ts": "d647fae8806822afca33204048bab0a7d6426f920aaa518859725e25b64c3781",
+    "src/lib/activity/pull.test.ts": "054ac9674ae85d583f6e8370a28e5b10c0604633861192081657acc40fed6cdb",
+    "src/lib/agent/attachCommand.test.ts": "8a9bbdd47b88f55de5d4b98d4f09bd8ca78945dd9f57e23c3d47a0fa3d46fb38",
+    "src/lib/agent/claudeHeadless.test.ts": "e54aa9636966268bcd64e6ea50d0bb56cb0bda80ce84da275bb3a0b160b78436",
+    "src/lib/agent/cli.integration.test.ts": "acf6f7df62424209cbc3ef88195243004e0e333c21108688337a5302b88b4ff1",
+    "src/lib/agent/cli.mcp.test.ts": "7177e7250a92f3a986fba30bf489bdd0e0081aa1f70b1b3219c9c3407feaa42b",
+    "src/lib/agent/cli.test.ts": "492cec7e372826a7c3eacbfa014ad3a71eaeabbe219f722c7c52be2d03b541a4",
+    "src/lib/agent/cli.ts": "603f84390bb795d662bd705074f49b4bbf5e91f6502889297db3c71572005de6",
+    "src/lib/agent/codexSpawnPolicy.test.ts": "380a21343f80ffe9bf32e3d7365400f53897ee77d355cfb244578cbb024f2f30",
+    "src/lib/agent/ephemeral.test.ts": "8aff5d523dbab34ee7948291e385a6f01ea34e90070a10d602da26aa090c6f03",
+    "src/lib/agent/headless.ts": "0992af099acf66fdf9f4109f0d52249c052eafe74d952501ba3ad60e5492461a",
+    "src/lib/agent/registry.servingWriters.test.ts": "fa3c43698a345a61716c6431c50396a15c93bc36431e51b6d4843f8d5d428ede",
+    "src/lib/agent/resumeEligibility.test.ts": "e20febad3ed0a766f45c6e53cce0af85e8e1e3546402ce6eaedd7f86fcae1b6a",
+    "src/lib/agent/spawnPolicy.test.ts": "d2bffabf19474ba94b0100e8eefd7a0efaf2090429dd88f03b6f88ca9a68f624",
+    "src/lib/agent/transcriptHost.test.ts": "1058bfa6f3f161614aae5eabd10f6d01541d5413cd8177dce2471d30c1219176",
+    "src/lib/attention/landing.test.ts": "4bf9658efc9e9f4e07adee3a451d284d890cc2267ac3e5e9cd893a5e8012eecc",
+    "src/lib/codexUpdate/update.test.ts": "50093efd460baefb02900de913ac6d03c3f575d435fd4d01a0500731ca889dc4",
+    "src/lib/conversation/resumeLiveness.test.ts": "5e40ca03375544624753bd57542e3af1f73464d8bce0e3f7fe1fd1d190d4ad2f",
+    "src/lib/delivery.test.ts": "795c3c67655ca472e2c60564f2ed57d020d976b2ee69d72ca2cb9d032ba50344",
+    "src/lib/externalRelay/runner.test.ts": "f253e75e2bab9e08f310a04f68a0319676ef391f3f851b08881a5a4d70b412a8",
+    "src/lib/flows/engine.test.ts": "2f77b0cc9731d9ef925530117137bfccd9214e7739cdb6ac41a747b55895d52e",
+    "src/lib/flows/exec.test.ts": "602157d7a16e490ef02cb97861c4876eaf2c80824bd43bdccceb51b943ef5cae",
+    "src/lib/flows/retirement.test.ts": "8dace6f5e27912bd59b4128d0cdd255e37f3ffea473f21bc107f49d53e06c8bb",
+    "src/lib/forge/autoMergeStore.test.ts": "ebee4c1adf888355535ffe7bcbeb399c3d9fda860199a8ad8c402f537451aeff",
+    "src/lib/git/agentForgeCredentials.test.ts": "ec57405febc5aa7d76e8674c0a79678dcb3d639cf9b061f1f082ceb79782f3f7",
+    "src/lib/git/agentHistoryGuard.test.ts": "ff55a7d90adc00d9b1fc5d3b3ed20c0eeb4d7f699ade5e2e0527497a5bac09bf",
+    "src/lib/git/agentHistoryGuard.ts": "a807ed4c5dfbba77f86173413dc6504f2ba2089e0378c613339933e2467d416a",
+    "src/lib/git/agentPublicationIdentity.test.ts": "08d91ea0c03db21ac4a9dc66a8553f8430b1036296de55b96d5b660e44d1218d",
+    "src/lib/git/agentPublicationIdentity.ts": "5119ebe32c9a7dd24728653684bf2b0410b32a6c0424a86a116c6c0ef808fd5d",
+    "src/lib/git/codexShellPolicy.test.ts": "2316aef384e821ad496a6facfaa9a0ca8889fdd882842a8d73a17c5e5dc03ffb",
+    "src/lib/git/repositoryCommitIdentity.test.ts": "4edadeb0233ac77cb5638fa9c2371396783bfbad68348f8a4bc38b72fc5d7e5e",
+    "src/lib/git/repositoryCommitIdentity.ts": "4377c67d9e063f87a9afa34ef05119c8b5b160376f4f6b996ddefbea59ac9ea9",
+    "src/lib/issueReports/approvalForm.test.ts": "614175277ebad37ee26c2ff907c7d79a0a7a8317fd9cd8bb5117d1401ef35dc2",
+    "src/lib/lifecycle/projector.test.ts": "3c3957dd19e5238d051955ab927cb373653e32216772c3d664cb85b289352be1",
+    "src/lib/links/hostStartCoverage.test.ts": "24c23575f9b3295754a4ab96914981c6999f091794c00d93fff1c85d84df14d9",
+    "src/lib/mainThreadInstrumentation.test.ts": "34cbd4ced0240b1ce9f7c99ebc06af4cbbb332da371f671a6b8f863cc15216bc",
+    "src/lib/mcp/bindings.test.ts": "31869e126cd9bd145336bdc32f5b3e027280316665692910e616841d133af7b4",
+    "src/lib/mcp/conversationAction.integration.test.ts": "41ad7ca80bda7ad63c73cff59d36625d984f5d26895fd184dead42d89c76307e",
+    "src/lib/mcp/http.test.ts": "b41a1fc6be36cf8229e3992a1185b7493b679384f94b27e1c0050b4c79bef863",
+    "src/lib/mcp/inputLimits.test.ts": "d539448288c879850f7131ea89cc329e55b301aef3829a035df1da50693462f5",
+    "src/lib/mcp/issueReport.test.ts": "160f12a5edcdf223e98206bdb22c8c5f6be2e7a12347b7ed413e510df47f910a",
+    "src/lib/mcp/pipelineBusyAdmission.test.ts": "10e300d908a18bc953ed0e3730e2bcc67599bb6adc8a06864bd5abc8400b489e",
+    "src/lib/mcp/pipelineRoleFence.test.ts": "5db3209fae37e26cc64380f7702d82980c65953b662c60a7e31c97cdae78bab3",
+    "src/lib/mcp/retryStageLaunch.integration.test.ts": "9f50fffebcac053fa71e5184c8cf5c232b2d4d99e5050c712e17da27a12ac2ce",
+    "src/lib/memory/cleanLaunch.test.ts": "c68fd7f69ebe2ce4effaa63305476bc36e090f4904ae54b9bca44cea99cbf0d7",
+    "src/lib/memory/context.test.ts": "db19e7aa1297fe9661bdb3dc6c9a2012a339320af14177daecfbc88c6289bebd",
+    "src/lib/memory/controller.test.ts": "05840a952c56662acfb490ce2b459551b6506e1addb554517235045e31ab1834",
+    "src/lib/memory/roleDelivery.test.ts": "fa0f7df11c35fa30f7c816a8066739dea3d62caa7b070781b2d7032d7e59e45e",
+    "src/lib/memory/roleLane.test.ts": "0c7ea39db337a0e827040f025e61d601b54100d112bd52b69bec1b3256a46080",
+    "src/lib/memory/roleLaunch.test.ts": "47f6657f0c4186f328dc9bf899097d092ee8699d426fd4f9a85490011816ef42",
+    "src/lib/memory/roleProblems.test.ts": "9fa5bd7e707b001be0f095565bad989c869fc88d56b151b87bcec56081078aa0",
+    "src/lib/memory/source.launch.test.ts": "812f3bd46958778509711a04a6d109b3d6b6d4a628bd2471f8f6bfeb9903463d",
+    "src/lib/monitor/seatTickSources.test.ts": "1c7144d5eca81e0b59bee8c82eaeffd432bfd256ddd2b9f74b69ea3d09276100",
+    "src/lib/orchestrator/operatorDecisionForms.test.ts": "d91ab8b7ae3ab37abed1716c6569dfc0c267b913b45b1a410b11e6ec37553b3f",
+    "src/lib/orchestrator/rotationAccountChoice.test.ts": "595e394942ab8bb9fe2c1d5463e1fa5618ba5bc54fe0e543dd654d95e6cc8aae",
+    "src/lib/orchestrator/rotationAuthority.test.ts": "ffedbd6601109250d7654e6e3257c61b1dc7957b8c13f0c409be668369d21b00",
+    "src/lib/orchestrator/seatProjectIdentity.test.ts": "a18b2791313a58cfbeb4e394be9958283f1bb10649f8583e14852d1f376ec5f7",
+    "src/lib/pipelines/adoptionHistory.test.ts": "afb91836cb07aae511346ed2899f746a3da476c960dafce2a50211fffa225698",
+    "src/lib/pipelines/autoRefreshStore.test.ts": "8f660cc57e1376ea4e1f05a87c19d8c8a4f745e589c6bf270ac3b7502617ab95",
+    "src/lib/pipelines/backgroundTaskSettlement.test.ts": "d17e7908584539a01677920d0f481c456d21301b2663837cf74ffff948cc4db9",
+    "src/lib/pipelines/controllerArtifacts.test.ts": "103b6f5d1fd471ca28891d80f147c256504d2462e600318afb65bb3f67e5e6e5",
+    "src/lib/pipelines/controllerLease.reproduction.test.ts": "10b26e14a037aaf9a406af863fc736c6530224e034d3bdd533bdf6dd61a8f7a8",
+    "src/lib/pipelines/decisionAuthority.test.ts": "7fe75acbceb18c89a2ff1feecbea072ae243164ce7a295dd6341d3c20cd3f765",
+    "src/lib/pipelines/deputyLineage.test.ts": "d9702d4c31b22345be21905c4264b21c233c55ac8e8bd31f1129e64d9c4340ce",
+    "src/lib/pipelines/durableEvidence.test.ts": "fea8f2f4973782953f0beecd4bfc51133241695de94c455b8135125f457f71e1",
+    "src/lib/pipelines/engine.accountGuard.test.ts": "97961069a5aa2a338a12717ba4522f180ef0721411e87d7fa26413f0ec39bb05",
+    "src/lib/pipelines/engine.activation.test.ts": "4356e91d3875ff87105ab21d4e11adbcea0080dfd73abae9c7de6031f498c148",
+    "src/lib/pipelines/engine.containment.test.ts": "bb19b5d5d4ae49ef09300122b8687985553492d79568e2895b5a7f1bef986626",
+    "src/lib/pipelines/engine.controllerPass.test.ts": "261be95d24af64635f9fc1ddb57266a550c78cc98121827aadad67effcbe0b62",
+    "src/lib/pipelines/engine.controllerSnapshot.test.ts": "6bd4eaef40b28a59113ef3ae581f91e32e01464b49ee63dabe5319fd41095fcc",
+    "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts": "747611f8da9b1423f359af2f7c9fbfbef9ad21081f274a3763379aabcc83c81c",
+    "src/lib/pipelines/engine.cpuQueue.test.ts": "dccbd8e08794370232cd29d81b4538473f190299104c653b0983ff8d9367ef93",
+    "src/lib/pipelines/engine.creation.test.ts": "8b1506bed04cfd39f4453d7610c04f5ef3829890130750c77b637ee3df62f508",
+    "src/lib/pipelines/engine.fencedMessage.test.ts": "f7b4e162023da85b9c2e6b9d110d35a2a47267ca340b760503a046407e0ed941",
+    "src/lib/pipelines/engine.fixture.ts": "73d9e9d80d6fb53a00ce03889d6fa3f26652118408f82d8a7778a8d9a7c096b3",
+    "src/lib/pipelines/engine.pauseMetadata.test.ts": "814ccaa5b117980a935a171030b01242a1b5595de324228349bac38b0072f3de",
+    "src/lib/pipelines/engine.ports.part2.test.ts": "f8872a15bb58d0d23dfc425188589818362fdf0135c5018eab938eda9f929304",
+    "src/lib/pipelines/engine.ports.part3.test.ts": "55db20a108cfb4439d5674f6006efa38c37b49410b9811c8150483001090d7ef",
+    "src/lib/pipelines/engine.ports.test.ts": "75b5f7b6a29af2b96c71b061007d59bb712d1824d4dd543924a27bcd78fce252",
+    "src/lib/pipelines/engine.providerBudget.test.ts": "0aea6ca22c132e090dede7375b5a4f8d9a02cba88670455853b37df9eb343681",
+    "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts": "1dc2af49b56f66fda6da2679611db854f406b802908f9b64f69a27ae637509c2",
+    "src/lib/pipelines/engine.providerBudgetKinds.test.ts": "b17d74ed4cf0c6208f5834e804d08c9bcea7a5eefa17c66349e0c7298135f6d4",
+    "src/lib/pipelines/engine.providerChains.part2.test.ts": "f25f9c18dc21f823cca4d2e4d19f82099c0bfd9d11170e644c349441bfed678d",
+    "src/lib/pipelines/engine.providerChains.test.ts": "a91a1d5ff515ba5d7d50c97992d2cda357c4546a9ea18611e5f6743b8a35c47c",
+    "src/lib/pipelines/engine.providerReset.part2.test.ts": "0ccabe07174d857c498da5d573b42e599d89f64a7f4cd5fd8b16ef5f6e3e49a2",
+    "src/lib/pipelines/engine.providerReset.part3.test.ts": "aadb248a260f500464f63b544653f78b30c91434b63523c501f6d8b055e779c4",
+    "src/lib/pipelines/engine.providerReset.test.ts": "8265071119ddbb659a7123851b48b409bd4e21f00e9d3775cad350ee8584d141",
+    "src/lib/pipelines/engine.providerSignals.test.ts": "a9c28c04c479a01ffde085d32099d67f7c492765b3ce89a1ef9843184b47cb4e",
+    "src/lib/pipelines/engine.provisioning.test.ts": "e6d5aa1ced059e4715238a13128331c1cf72e452a33e78372112c964b8f4898a",
+    "src/lib/pipelines/engine.publication.test.ts": "8059e40872c12260210a26b986aa047142ee03a89d6f1029796b25e0ff55ee85",
+    "src/lib/pipelines/engine.recoveredPending.test.ts": "b43f9ce668c0e7099d4f3d6db447fcfdefbf6cd2b914b6824cc6be1e3318b597",
+    "src/lib/pipelines/engine.recovery.part2.test.ts": "b5690403324169ec425c5663158f4ae39afb9c9d1a85cc79584b20f007685b64",
+    "src/lib/pipelines/engine.recovery.test.ts": "d3309d4e9023417132d8523a3369e7c79d4b4b4b53939e30c3fc3d85afa3bdbd",
+    "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts": "b852ca1544180faf2462e9e37fdc2d8cc87cd18dc571784b29fb52c8abbb0ac9",
+    "src/lib/pipelines/engine.recoveryAdmission.test.ts": "c5fadc748a3575a4d862faeac4931b0a19f93899eaca9add6653a362fe47ba80",
+    "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts": "563f447c0fc02344d222c6578833d06f6683fcbbc5804331149f8f67f69ab29f",
+    "src/lib/pipelines/engine.recoveryAuthority.test.ts": "ef6831936d4affbd9ae9cf6f0e8160750f43268b8b6a30203b702d78e2afb473",
+    "src/lib/pipelines/engine.rolePrivacy.test.ts": "c752eb5897006d0e62f26679aeac80f11e4f5fac17a4e6e224f8ac8d3562532f",
+    "src/lib/pipelines/engine.routing.test.ts": "f91f98484d4eb546e7ad948344054df7a2b382fcec123c66b32fd5652dd92f6d",
+    "src/lib/pipelines/engine.settlement.test.ts": "af8a28aaaf12e1318733e8b369e8b7d384ec60cacc3459f097c75313bf2d7caa",
+    "src/lib/pipelines/engine.spawnSilence.test.ts": "5f77d3ce84d7e81defc4932734980118f0600ff29af87b23a4999b16b4e6a92a",
+    "src/lib/pipelines/engine.succession.part2.test.ts": "78bfbcdce73c0d679ffabadb527394570e69539b2846119ec633cd72b8fb154c",
+    "src/lib/pipelines/engine.succession.part3.test.ts": "4eca01a7f5ba46f04078ab21f56704465362c01bcf8e053bf7cd563567c8d4bb",
+    "src/lib/pipelines/engine.succession.test.ts": "78a3e38509064099689b91067974b21e6b25f10ed18b8bf8aa9d6b13e3aafb61",
+    "src/lib/pipelines/engine.ts": "4708ed8d5407c39fafd880ca564214d5744af60a3cbae1fcf040feaddd0c5c59",
+    "src/lib/pipelines/engine.watchdogRegression.test.ts": "f2662c4a8e7e2df1993bc0c7c5f414a773698c5809399b175c6e63257fa42f16",
+    "src/lib/pipelines/engineConnectionRefusal.test.ts": "229a609112737ee3b88e5babb714a5067fdcdf3490fe5d1d93e6fe80cb520c8e",
+    "src/lib/pipelines/git.test.ts": "7daeb6f1687d7fb4db2039abe3819e77ddfbf49bb3c70bff517a3338ceb50a07",
+    "src/lib/pipelines/git.ts": "27269073ba8769fb5bc55798cd04e160e49139383c6595ad35f314be6b835318",
+    "src/lib/pipelines/graphEdits.test.ts": "4a461e954f404541e87445c73f0709fde5d6ae0ba3a0d3bb09706267ba482af8",
+    "src/lib/pipelines/handLaunch.test.ts": "a6da7db9b21b6ec1b4ff704e281f9fc12618ccfdb62d6e73adb423aec4c7b47b",
+    "src/lib/pipelines/legacyReviewConversion.test.ts": "cef8916af6b6bbc436615e151cb7bcd34223ebcc366f32d7086815cddbf19cc1",
+    "src/lib/pipelines/materializationHistory.test.ts": "131861ae192646bd3adcf3fdebd86b11d6091a6663c20b15c904a1a89277e55a",
+    "src/lib/pipelines/packageInstalls.test.ts": "cc8237077b75a267f4886b44a7afbf0aab765eda9685f792172a82e36d4b260c",
+    "src/lib/pipelines/parkedPublication.test.ts": "33f2858680bb6f1f92482678e47419c4bebc3f6e3e7bcd075bb9e1f663b1fa17",
+    "src/lib/pipelines/preflight.test.ts": "292f6b58ada0e4f1b80590addbd43cace89c78086c0286e1392521e4e971643a",
+    "src/lib/pipelines/publication.test.ts": "baae834a98812b95d6ce802ae20a3765cde68fe1a0513146f79a52f8e4770bd1",
+    "src/lib/pipelines/publicationRecovery.test.ts": "8b08c9d667b1de364034932c149b4ba240d934010164c3fcdb4e5341e2b80bf4",
+    "src/lib/pipelines/remoteActions.test.ts": "71c00d566ca4330ebe6f538cbe72c7eaa01c50600e5c5844e8aac0a9ef767211",
+    "src/lib/pipelines/repositoryInitialization.test.ts": "55b7c284cc49f7f1dd84b8ce35f052a09cf15894f760252be3572d819fbe0aad",
+    "src/lib/pipelines/resolveDecision.test.ts": "a61ec915547ea100647712194481f38c07f06fb3bba374c8091f3b2a4903067f",
+    "src/lib/pipelines/runtimeReads.test.ts": "b18d5ef8c9049aeffc5b818a7eb56fa6b33182a0135992cc0e5e0787d536e5a7",
+    "src/lib/pipelines/runtimeSwitch.test.ts": "428a7e2eb3316c6fea97ca967e8287be2704b608ae0b89e424712eef212e711b",
+    "src/lib/pipelines/severedStageRetry.test.ts": "46295f9a691ac1e89ce869378437fa8dd574c9cdce54b3c74163196b38bb32a7",
+    "src/lib/pipelines/severedTurnResume.test.ts": "97d63ede205370297c6f035876e28daad652e97751e287d6160a55eb4b43abaf",
+    "src/lib/pipelines/spawnRestartRecovery.test.ts": "2818bd36ea215f63a2fc7b2f2fb17d891326910d17003d771a33a415128432c5",
+    "src/lib/pipelines/stageAccountBinding.test.ts": "8737a20a3eb1a06fd34dd2f30804f0d4c9f29f6cb3572f2624cc4dc41510904b",
+    "src/lib/pipelines/stageAttemptPush.test.ts": "b90ed4ad02b0cda686cc22ef1e92681353a0e258697512788fdfea7a6e04e1b3",
+    "src/lib/pipelines/stageAttemptPush.ts": "d927642c43768d63b44d8e2d63ee8f76fa648a5f5523139c019952c1c7fe3628",
+    "src/lib/pipelines/stageCommitRepair.test.ts": "535174f835b2ad361d6d4186d4a1c3d05c65f8d1e7e0bbffc3c9217a10095a2c",
+    "src/lib/pipelines/stageCompletion.test.ts": "de11a8beddd9127aa3db5c3c73b23bbf362e94361e7595d12a0cc5a3919191dd",
+    "src/lib/pipelines/stageHostGenerationClose.integration.test.ts": "82f953b10cfbf4b13cd17ea26c37ce9b1c9af8ab555214b29bf16a03b2226506",
+    "src/lib/pipelines/stageHostLiveness.test.ts": "ff18c6a14413b515f9c742879f1340ba3feca906961a6f30bf1294748680c9e3",
+    "src/lib/pipelines/stageHostTeardown.test.ts": "11a3a5a4fd58d79399015056231c0b49c62ceaa1579bd267a596966e785aa89b",
+    "src/lib/pipelines/stageInput.test.ts": "90e26feaf86b62b8d056a61ccfa64f8b61919e15fcbd4180cd0d9f10c261889a",
+    "src/lib/pipelines/stageInputExec.test.ts": "6b8b736973ccb4b5d1422e9016a1b25560aa3cd20c5d5272c1682fdbb3e88acb",
+    "src/lib/pipelines/stageProvenance.test.ts": "4e35a0871d27184ae9e52a405d435e332e866aa0381e70934cefdb7db6819ee4",
+    "src/lib/pipelines/stagePublicationRepair.test.ts": "24165d2b78e11d98897d34d98f64ab95cc3be37148ac9e857cd4cd7ce8eef466",
+    "src/lib/pipelines/stagePullRequest.test.ts": "5c47fbc2e8ed87deb671aa5b1a560862cd60d4dd287a6481252fa80c22b517ab",
+    "src/lib/pipelines/stageSizing.test.ts": "6d79b986d6c08af08e07da5fcf647a990a70e0f11d45c806af13c18c8034d503",
+    "src/lib/pipelines/stageVerdictRequest.test.ts": "033d9ef120a3318cd788a2a96ed5079f7dbaf6ba13adecec42b0d7db81378c23",
+    "src/lib/pipelines/startupResponsiveness.test.ts": "deade2ee5dcac90e41cc0c1ec563cdac5a3e005cf995092af9a05d118b751fff",
+    "src/lib/pipelines/store.test.ts": "9a5b331c29f869054e6692e0cd905f52efe74d0f50b16799566629d83d9658d5",
+    "src/lib/pipelines/taskBinding.test.ts": "a5dbf598b2ff0d2af9e8098baa8199e163211980926f612eb5de3a173e9245fc",
+    "src/lib/pipelines/terminalReap.test.ts": "62f35eb40291fc07da7d969af9b72a6d7455b67c346a351b4a3cdd37ff4aecfb",
+    "src/lib/pipelines/worktreeDependencies.test.ts": "94a0c683ff938af74ec1945738486bc715ba805bb560cfda3eb12397b4b328b2",
+    "src/lib/pipelines/worktreeDependencies.ts": "d31800564ed31d04dfc726e307dcf9b382d263e1a018993659d320b81a7591ea",
+    "src/lib/projects/succession.test.ts": "66d9059a5251ecada2f7d15f17a6ea7d88398560eaedc9fb7847da01109b840d",
+    "src/lib/release/stages.test.ts": "4fcee949a230093d5d7d0bb370edc6a2e902cac4bd6c370afe8c3643890836ff",
+    "src/lib/resources.test.ts": "a1f2f56f962fd47a62d6a7291a4ee02a9ce14be3c21c809b8c221f784e0b6dbb",
+    "src/lib/review/extraction.test.ts": "73a345005a15da4035da41125a22daf232ddeb7252922b4e3ca98847abbdf2bc",
+    "src/lib/runtime/accountCreditGuard.test.ts": "8e15c374ab40175c8cb893323b6cd14a1605da32b47bce27124a9c1c8bdf643c",
+    "src/lib/runtime/agentMemorySettings.test.ts": "a2f08d30faba5ea7af65d2e97a1a3cd2386c3a7aa33f91184ac82a02a173837c",
+    "src/lib/runtime/agentPublicationIdentity.test.ts": "153f444fe363b8c32d59a2b91f047c3829718a34de10db678ff27ec1a98d84c8",
+    "src/lib/runtime/agentRecordAuthors.test.ts": "7581c26a27691024a2a1f35d9bfd2f51dfac9424a1f6197e422722e4283f449f",
+    "src/lib/runtime/agentSignalSandbox.integration.test.ts": "665189362990662d1c2a1c16420b83c88528a76311eb41cac8df9b54b4970edd",
+    "src/lib/runtime/agentSignalSandbox.native.test.ts": "1e8cdff33a29a74e468d730f2cd74f6b35fc9d024188f2e18b34623be347f2a7",
+    "src/lib/runtime/agentSignalSandbox.performance.test.ts": "9352628b803b2f67c4bf73380b04b4ba6eb6dd5ab87e4518b668c89894ab87b5",
+    "src/lib/runtime/agentSignalSandbox.test.ts": "4f50bf4f9a199fe7d9339a32cb990a97c8fbef0f1f8ba15a1ad3ce638afb266e",
+    "src/lib/runtime/claudeMessageProvenance.test.ts": "fdb1ca4f77b43357d8360e615da7ba251a27bede64399d6a063df7c55aca85ef",
+    "src/lib/runtime/claudeStreamBrokerHost.compact.test.ts": "0855f4bb0c643c1e3ba67234d477e418ee20fd705f29932801b5886ae155f3e1",
+    "src/lib/runtime/claudeStreamBrokerHost.integration.test.ts": "c5f1424118aa7081949cd31473bb4b7453bda03729ead94ef027d8e8b26c5fb5",
+    "src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts": "06c4c55c989608e328ed2e629ad55f493fc13b94aec6294e7399f235019fd81c",
+    "src/lib/runtime/claudeStreamBrokerHost.test.ts": "8014ac89bfb6c35f610562e1f5f61119e823a0585d837e829c08ec9d87cc1256",
+    "src/lib/runtime/claudeStreamBrokerHost.ts": "419114d3559c782d64ff1775635ff479c1a484a9b85fd8feb23995e0acb9a2a8",
+    "src/lib/runtime/codexAppServerHost.compact.test.ts": "b6e71a87b8ef19e00d88ec1993be9bbf8463e8fbc57e298dc961091ff634d3f0",
+    "src/lib/runtime/codexAppServerHost.inject.test.ts": "44967b1288341a2716311175c9a371adb14a13a157d26c9e28f6c2556c7cd730",
+    "src/lib/runtime/codexAppServerHost.injectResponses.test.ts": "d149623b7b2694bd6a49042c8234e328873e99688ae7a159cbf52b1fb697fed6",
+    "src/lib/runtime/codexAppServerHost.integration.test.ts": "50c1159ecd7542d5ed0048f9f487aecfc4551877715704aa8415868084164223",
+    "src/lib/runtime/codexAppServerHost.pluginGrant.test.ts": "6894956ea897130b4aceb3edf6412a39e5e4a200e3008a69d53ebf339a62edf5",
+    "src/lib/runtime/codexAppServerHost.test.ts": "060e493069dad1d81b81ac0854ddafa4a823c8a0881507a3617b05e3f7d8c7a2",
+    "src/lib/runtime/codexAppServerHost.tier.test.ts": "e77f465205c2443600439faa5a2c787f6eb47671495b30675d5c61c6612f3c4c",
+    "src/lib/runtime/codexAppServerHost.ts": "41e3dedff9e08200a8f47be8008619d9aef1e4292677a9d4f080b2d006cdee69",
+    "src/lib/runtime/codexSteerDelivery.integration.test.ts": "6457da98e68e696656e313cc8bb2d3b09df3748bb437b3b4b073e25e130bb416",
+    "src/lib/runtime/codexSubagentDetection.test.ts": "a1aa916de88cc80880c5e631797229ffe84a1dd6f9be408517188d0da560cb62",
+    "src/lib/runtime/copilotAcpHost.integration.test.ts": "25b4d07735bbb3e021280b2f44803dceb663ea74540d578e9852b1039e505a80",
+    "src/lib/runtime/copilotAcpHost.test.ts": "b88df27a1e19bfc44d9f7ed195e10ea592c4334b97009ec07cfa7813fdbd1266",
+    "src/lib/runtime/copilotAcpHost.ts": "66fe74c614633eea35696b19a7d9d50dc9d66765d93a7fcd96df51c9fba97c76",
+    "src/lib/runtime/cpuAdmissionBudget.test.ts": "189d0e0a51244870cd5af3b18abfb59f125c0a6dfde4c57bf82bf804b5499ed4",
+    "src/lib/runtime/cpuPlacement.scope.test.ts": "25c74918a2aa2ad1efc7b64e35c19b59f6c78c53626774417f728c33a4e68edb",
+    "src/lib/runtime/legacyClaudeRecovery.cleanCi.integration.test.ts": "105332da2abe898f9e331c99fb3285b0963a59f5af9c323622e88a98afdd2d61",
+    "src/lib/runtime/liveTurnControlPlane.test.ts": "4b6501d0cbef26a25a6c16bd487774f31dedcf15db5d98547abfedc514d8f093",
+    "src/lib/runtime/nativeQueueCompaction.integration.test.ts": "8833ea9e9871f7aca55bb8f4f9686d53ce3c46f25daec38ef7fdd1ae5ac48f89",
+    "src/lib/runtime/nativeQueueHost.integration.test.ts": "9ca510bfc8d41da86637b0e24c26668ffbd66347c3be3dc18e0dc0607e8032c7",
+    "src/lib/runtime/permissionGuard.test.ts": "639b2bd2d18c4e9671a28108aabe4da448cd1a87ab8a9c33528454dcf433bd0c",
+    "src/lib/runtime/pipelineStageHostAccess.integration.test.ts": "ab66d41659ebb9aedb196613fc7ff03a49c4519774735efb5e5791f23bca3cd5",
+    "src/lib/runtime/registryPersistence.test.ts": "3d7c2c415dc5d202a692bc2bfb5bf1b7b88a6c41cffa07839ad2ad942fd7076e",
+    "src/lib/runtime/releaseInterruption.test.ts": "86afc805ebe570070b9cec0dfa249fba2ef65b5dcfcf82f5fbbeff38dc0eb8aa",
+    "src/lib/runtime/sendSettlement.test.ts": "e9945ccf11890ea478d184fb9aa02585ce5f596b6758abdbba96e5a3f07bfab4",
+    "src/lib/runtime/startup.test.ts": "4ead3c537cb5e0d430577da237e6f093b3d7fead496f1b217d2d55d791e904d0",
+    "src/lib/runtime/structuredCompactDelivery.test.ts": "c4510fc1312670182ec528bfccf8cbc901d6968baf5212073121e2cb12d6bdc9",
+    "src/lib/runtime/structuredDeliveryQueue.test.ts": "0dcf41efaf9c8093f0237ade6727c7eaddf0bccf927450fe018336a32bc2e658",
+    "src/lib/runtime/structuredHostRetirement.test.ts": "da867a42ebf69428dff08db947cb0102f7a1d30a06b1d05c8672a852d8b26a50",
+    "src/lib/runtime/structuredReconfigure.test.ts": "b735568a40967a360c60e9ec38e6735139879fa5b2a56d5375402b486d338dc2",
+    "src/lib/runtime/structuredSpawn.cpuPlacement.test.ts": "93666b9c8475f3e8fff5a315b803c914192dfd15163a55c674957ae42f83875b",
+    "src/lib/runtime/structuredSpawn.integration.test.ts": "3cd6aeabda44d1ccc10382a1639b97df38e746031d0f0e3b05f6b4be3524a54d",
+    "src/lib/scanner/taskExtractionRetirement.test.ts": "25e58b889d7d0df8f334bdd5164c7daf2f16ebfa36dbdecff92e14086620a88f",
+    "src/lib/selfUpdate/quietOwners.test.ts": "2bcfac75018502dff2b6f2b26e6247f4ba7779e61b280df1c6340eea96615fba",
+    "src/lib/testing/testGitIsolation.test.ts": "a7c991ecc290d686612eff7ec59f61b079f5b90b84f45cc048664e21b21f2c91",
+    "src/lib/tmux.test.ts": "c2a800ab417f802a29bc498cdaaa3a15af72c71946d21ac299f4b14a3ff82409",
+    "src/lib/voiceCompanion/liveSession.test.ts": "39f97c127f92aaf594641b6ead31a8c08a4d3d55558ce30a5264ca75e76ac8f3",
+    "src/lib/voiceCompanion/ownerHistoryRead.test.ts": "a7684faab7d35fa8bb884967d41143ba027679caa528a8352c95672b8e24006d",
+    "src/lib/workflows/engine.cpuAdmission.test.ts": "67fe2fbaba9ce5d94c05414515116b475e646ebbecd96b6dcbbf1878fe087601",
+    "src/lib/workflows/engine.test.ts": "e35ce97b2815788164ad77fbed9c64029dc8a75786dfe4e261b5abb7801e89e6",
+    "src/lib/workflows/execAsync.test.ts": "b978ea2347a2420354f84ad2663afc4e701f98977ebfbb97b173534aadaf8fac",
+    "src/lib/workflows/provision.test.ts": "f76701b0aaeecc97a15ab506a4f7cc1db9b915a4219fac09a8a6625a195bdcec",
+    "src/lib/workflows/provision.ts": "e9bfff440911dc494bb050cbe012294b5e9d9d67c6b7e46110061be0356faf75",
+    "test-preload.ts": "fd5c96c05696b18b80de77db94610961756bf6e99001a32e89186a8e7c4e16e6",
+    "tsconfig.json": "231fb483461672b9fb52cf588f14e0cd8dcec0e64229b630848c787a56c7c4eb"
+  },
+  "exploratoryRuns": [
+    {
+      "records": [
+        {
+          "file": "scripts/gate-runner/client.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/client.test.ts"
+          ],
+          "seconds": 0.879,
+          "counts": {
+            "pass": 17,
+            "fail": 1
+          },
+          "failedCases": [
+            "every environment variable the four drivers and scripts/local-gate*.ts read is classified"
+          ],
+          "logSha256": "f08f0efffde0ac1df2f896e22c4ca05faf04260fee8761eaf882e8702600f0f4"
+        },
+        {
+          "file": "scripts/gate-runner/load.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/load.test.ts"
+          ],
+          "seconds": 19.916,
+          "counts": {
+            "pass": 5,
+            "fail": 2
+          },
+          "failedCases": [
+            "routing keeps remote execution when local load has no headroom",
+            "routing keeps remote execution when the remote load signal is malformed"
+          ],
+          "logSha256": "7ef0bd2e866b11222f4987219d8608225a13b5fa94b2d9391bb2bd8916b7880b"
+        },
+        {
+          "file": "scripts/gate-runner/remote.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remote.test.ts"
+          ],
+          "seconds": 30.197,
+          "counts": {
+            "pass": 2,
+            "fail": 1
+          },
+          "failedCases": [
+            "a passing and a failing test file give the same verdict and output remotely as here, once"
+          ],
+          "logSha256": "e3c08f9fb3853b77f592a7b784b6c6f5381935914940785f05dc2f430f3ca652"
+        },
+        {
+          "file": "scripts/gate-runner/remoteCheckout.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteCheckout.test.ts"
+          ],
+          "seconds": 19.516,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "the runner checks out exactly the working tree, and the local index, refs and objects stay",
+            "a mirror behind or ahead of the local origin/main still verifies the bundle"
+          ],
+          "logSha256": "e0e6b3ac8201e71949b233a73df0bfa5ace13017b2b2ea462f50a2a2af160226"
+        },
+        {
+          "file": "scripts/gate-runner/remoteCleanup.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteCleanup.test.ts"
+          ],
+          "seconds": 10.012,
+          "counts": {
+            "pass": 0,
+            "fail": 1
+          },
+          "failedCases": [
+            "an unconfirmed cleanup never reports a pass, keeps the run for the sweep, and the sweep later removes only those runs"
+          ],
+          "logSha256": "2c214465aac9f0452adda9290fc0e6b20d48b49d7953fe5327972561efad76e8"
+        },
+        {
+          "file": "scripts/gate-runner/remoteControl.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteControl.test.ts"
+          ],
+          "seconds": 16.245,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "the command can neither read nor forge the nonce, and an unterminated last line arrives unchanged",
+            "refused containment runs here before anything starts there; a command's own 69 passes through"
+          ],
+          "logSha256": "12d2402cfeb589fdb10ddcf2852cb8b0fae14fb9d730e6e16fc0c98b20fe2063"
+        },
+        {
+          "file": "scripts/gate-runner/remoteEntry.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteEntry.test.ts"
+          ],
+          "seconds": 43.111,
+          "counts": {
+            "pass": 2,
+            "fail": 2
+          },
+          "failedCases": [
+            "a direct comparator sends head and baseline work to one runner and preserves both verdicts",
+            "a direct comparator preserves a lost verdict and never retries started work locally"
+          ],
+          "logSha256": "048c6ff5f2e5b014c02bf60bf9b02c54f5e612df56e61f144279b81bc3a48d32"
+        },
+        {
+          "file": "scripts/gate-runner/remoteExport.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteExport.test.ts"
+          ],
+          "seconds": 21.144,
+          "counts": {
+            "pass": 1,
+            "fail": 1
+          },
+          "failedCases": [
+            "a review export runs remotely through its record; a copy without one stays here"
+          ],
+          "logSha256": "e57d6407a5424ef30272dc204e675a6da78f7f3ac55fce2f7edb8359a407c9c0"
+        },
+        {
+          "file": "scripts/gate-runner/remoteFaults.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteFaults.test.ts"
+          ],
+          "seconds": 141.231,
+          "counts": {
+            "pass": 2,
+            "fail": 1
+          },
+          "failedCases": [
+            "a session lost after started gives no verdict, and the next calls run here until the mark expires"
+          ],
+          "logSha256": "a6f2d6d5b778348baa84f1113645bda49a2d30eac1958441ac02e0905241997d"
+        },
+        {
+          "file": "scripts/gate-runner/remoteHook.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteHook.test.ts"
+          ],
+          "seconds": 77.71,
+          "counts": {
+            "pass": 6,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "ef1ea23cc27a576943246dc43c880bc42d0b4cb2147ddb77e5d301df067401c4"
+        },
+        {
+          "file": "scripts/gate-runner/remoteLifecycle.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteLifecycle.test.ts"
+          ],
+          "seconds": 490.519,
+          "counts": {
+            "pass": 3,
+            "fail": 4
+          },
+          "failedCases": [
+            "SIGTERM stops the remote unit and removes the run; every finished run is removed; stale runs are swept, live ones kept",
+            "comparator contains remote descendants after SIGTERM",
+            "comparator contains remote descendants after SIGINT",
+            "a cancel during the clone and a lost session during install leave no setup process alive and no run behind"
+          ],
+          "logSha256": "8fcf50549b6d175f5f2859d300c1126b54605891e0e22a9240891f7caf2eed85"
+        },
+        {
+          "file": "scripts/gate-runner/remoteOutputs.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteOutputs.test.ts"
+          ],
+          "seconds": 5.742,
+          "counts": {
+            "pass": 0,
+            "fail": 1
+          },
+          "failedCases": [
+            "a driver's declared outputs come back; nothing else does, and a hostile return writes nothing"
+          ],
+          "logSha256": "4d16a23e2ccb08c6c6bf8e967eac3a1ff6d8c3864518c2d803ab22e457ce6a9f"
+        },
+        {
+          "file": "scripts/gate-runner/remotePrivacy.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remotePrivacy.test.ts"
+          ],
+          "seconds": 22.698,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "an edit after capture neither hides a private value from the scan nor seeds a cached pass, in a checkout and in an export",
+            "a scan that runs out of time is no refusal and leaves no cached answer, and the same capture is scanned again"
+          ],
+          "logSha256": "51b1bd80410734f6fc526d371a3349363a48234664f7e476006906bbabeebbf2"
+        },
+        {
+          "file": "scripts/gate-runner/remoteShip.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteShip.test.ts"
+          ],
+          "seconds": 11.535,
+          "counts": {
+            "pass": 2,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "41e2c5e3ddaa47bf0cbe47724578119b9753a77e5ef2e8ad953199e7e49edec2"
+        },
+        {
+          "file": "scripts/gate-runner/remoteTree.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteTree.test.ts"
+          ],
+          "seconds": 10.662,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "a tree that changes on the runner after install starts nothing there and runs here",
+            "secrets stay here, driver switches travel, and the push deadline keeps its remaining budget"
+          ],
+          "logSha256": "3ebbb7854d5408838a211e266d460b096a49625bb4c284e47f7e20eabe6bfc28"
+        },
+        {
+          "file": "scripts/gate-runner/remoteVerdict.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteVerdict.test.ts"
+          ],
+          "seconds": 12.332,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "a planted completion record never passes, whether the command kills its supervisor or only signals it",
+            "a private value one lane commit added and a later one deleted keeps every byte here"
+          ],
+          "logSha256": "69b2eee8ae033cb12297b86ea3be14483410e3845695a8def56879c1c79e2375"
+        },
+        {
+          "file": "scripts/gate-slot.queue.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-slot.queue.test.ts"
+          ],
+          "seconds": 20.638,
+          "counts": {
+            "pass": 9,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "346cdc198fd2523d611ad273a1ec1f66e56ab4d32dfce5d728049e9ec35fee8e"
+        },
+        {
+          "file": "scripts/pipeline-park-proof.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/pipeline-park-proof.test.ts"
+          ],
+          "seconds": 3.195,
+          "counts": {
+            "pass": 24,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "e39ae25dd3bf08fe0f90810452d45dd40626f3984bc4fa887064eff35c5c4c65"
+        }
+      ],
+      "acceptanceEvidence": false
+    },
+    {
+      "records": [
+        {
+          "file": "scripts/gate-runner/client.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/client.test.ts"
+          ],
+          "seconds": 1.179,
+          "counts": {
+            "pass": 17,
+            "fail": 1
+          },
+          "failedCases": [
+            "every environment variable the four drivers and scripts/local-gate*.ts read is classified"
+          ],
+          "logSha256": "9e21d6c4467df800b146e9a0490585b14de3edbaaf57d8df391c1746fd489b51"
+        },
+        {
+          "file": "scripts/gate-runner/load.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/load.test.ts"
+          ],
+          "seconds": 16.532,
+          "counts": {
+            "pass": 5,
+            "fail": 2
+          },
+          "failedCases": [
+            "routing keeps remote execution when local load has no headroom",
+            "routing keeps remote execution when the remote load signal is malformed"
+          ],
+          "logSha256": "3addaa35f1ca119ed3980032742c747b2c64d1962844adad81b460ce27c817e4"
+        },
+        {
+          "file": "scripts/gate-runner/remote.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remote.test.ts"
+          ],
+          "seconds": 25.393,
+          "counts": {
+            "pass": 2,
+            "fail": 1
+          },
+          "failedCases": [
+            "a passing and a failing test file give the same verdict and output remotely as here, once"
+          ],
+          "logSha256": "9d9917abf73c58db81216958047cebd7f37124fd0a42944833f9abb3b6be3db3"
+        },
+        {
+          "file": "scripts/gate-runner/remoteCheckout.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteCheckout.test.ts"
+          ],
+          "seconds": 10.74,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "the runner checks out exactly the working tree, and the local index, refs and objects stay",
+            "a mirror behind or ahead of the local origin/main still verifies the bundle"
+          ],
+          "logSha256": "e63c807eac0aae5f32692e4bbaaf6c217e8716bd277ca00fdbe703847a89ffda"
+        },
+        {
+          "file": "scripts/gate-runner/remoteCleanup.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteCleanup.test.ts"
+          ],
+          "seconds": 5.229,
+          "counts": {
+            "pass": 0,
+            "fail": 1
+          },
+          "failedCases": [
+            "an unconfirmed cleanup never reports a pass, keeps the run for the sweep, and the sweep later removes only those runs"
+          ],
+          "logSha256": "af771450e7789182e45f2dc3f3b64e06697e9529993fc389f7bf6d9b633dddae"
+        },
+        {
+          "file": "scripts/gate-runner/remoteControl.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteControl.test.ts"
+          ],
+          "seconds": 11.193,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "the command can neither read nor forge the nonce, and an unterminated last line arrives unchanged",
+            "refused containment runs here before anything starts there; a command's own 69 passes through"
+          ],
+          "logSha256": "a36959e6ee04f36e7e62f4a60aca8758f384807aaec432c0075676b2b5698211"
+        },
+        {
+          "file": "scripts/gate-runner/remoteEntry.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteEntry.test.ts"
+          ],
+          "seconds": 27.513,
+          "counts": {
+            "pass": 2,
+            "fail": 2
+          },
+          "failedCases": [
+            "a direct comparator sends head and baseline work to one runner and preserves both verdicts",
+            "a direct comparator preserves a lost verdict and never retries started work locally"
+          ],
+          "logSha256": "c8b16c3922e374a8c22233000c817a7956f94a9808c4e0d8cad3131f6e50b4e3"
+        },
+        {
+          "file": "scripts/gate-runner/remoteExport.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteExport.test.ts"
+          ],
+          "seconds": 11.982,
+          "counts": {
+            "pass": 1,
+            "fail": 1
+          },
+          "failedCases": [
+            "a review export runs remotely through its record; a copy without one stays here"
+          ],
+          "logSha256": "f33ea24285611571f22274e8ed96094e4aaaac8bd1692b83ccc7bf71e543c6f5"
+        },
+        {
+          "file": "scripts/gate-runner/remoteFaults.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteFaults.test.ts"
+          ],
+          "seconds": 133.43,
+          "counts": {
+            "pass": 2,
+            "fail": 1
+          },
+          "failedCases": [
+            "a session lost after started gives no verdict, and the next calls run here until the mark expires"
+          ],
+          "logSha256": "d5e84643f358e02877e434c4fd069a00a03df36e30f242033ac37950a5be034f"
+        },
+        {
+          "file": "scripts/gate-runner/remoteHook.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteHook.test.ts"
+          ],
+          "seconds": 72.115,
+          "counts": {
+            "pass": 6,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "d20b99a99dd8e1f03ad4e07dda53dd17a9b95460ee783e0702e4343413f145b5"
+        },
+        {
+          "file": "scripts/gate-runner/remoteLifecycle.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteLifecycle.test.ts"
+          ],
+          "seconds": 491.583,
+          "counts": {
+            "pass": 3,
+            "fail": 4
+          },
+          "failedCases": [
+            "SIGTERM stops the remote unit and removes the run; every finished run is removed; stale runs are swept, live ones kept",
+            "comparator contains remote descendants after SIGTERM",
+            "comparator contains remote descendants after SIGINT",
+            "a cancel during the clone and a lost session during install leave no setup process alive and no run behind"
+          ],
+          "logSha256": "e3b31c2b1d2d4692f58c6c87d07d667926d327222e665d36eb49f6ec2a25eab3"
+        },
+        {
+          "file": "scripts/gate-runner/remoteOutputs.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteOutputs.test.ts"
+          ],
+          "seconds": 8.075,
+          "counts": {
+            "pass": 0,
+            "fail": 1
+          },
+          "failedCases": [
+            "a driver's declared outputs come back; nothing else does, and a hostile return writes nothing"
+          ],
+          "logSha256": "b4ed37ae5d738ec50718615fccdba8675f0ae28a34d1a3abcc68163a9232ecbf"
+        },
+        {
+          "file": "scripts/gate-runner/remotePrivacy.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remotePrivacy.test.ts"
+          ],
+          "seconds": 26.2,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "an edit after capture neither hides a private value from the scan nor seeds a cached pass, in a checkout and in an export",
+            "a scan that runs out of time is no refusal and leaves no cached answer, and the same capture is scanned again"
+          ],
+          "logSha256": "cc2c3ea256101d6249bd2fc8d93f21c2175c9c03c7f66dd52c97962401930dd3"
+        },
+        {
+          "file": "scripts/gate-runner/remoteShip.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteShip.test.ts"
+          ],
+          "seconds": 12.709,
+          "counts": {
+            "pass": 2,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "3fc03c29d21b735bb9401648dde58086f3d6dab82c7baf4aede0641b935ff2a2"
+        },
+        {
+          "file": "scripts/gate-runner/remoteTree.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteTree.test.ts"
+          ],
+          "seconds": 14.316,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "a tree that changes on the runner after install starts nothing there and runs here",
+            "secrets stay here, driver switches travel, and the push deadline keeps its remaining budget"
+          ],
+          "logSha256": "1058be49edefe4b463ce535208b88254f02bdef554093f74820558ef74bf8836"
+        },
+        {
+          "file": "scripts/gate-runner/remoteVerdict.test.ts",
+          "exit": 1,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-runner/remoteVerdict.test.ts"
+          ],
+          "seconds": 16.315,
+          "counts": {
+            "pass": 0,
+            "fail": 2
+          },
+          "failedCases": [
+            "a planted completion record never passes, whether the command kills its supervisor or only signals it",
+            "a private value one lane commit added and a later one deleted keeps every byte here"
+          ],
+          "logSha256": "56ae708f1a21a6d368297e17a706e27cb339b80954e89a815fa580faeac65b56"
+        },
+        {
+          "file": "scripts/gate-slot.queue.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/gate-slot.queue.test.ts"
+          ],
+          "seconds": 20.519,
+          "counts": {
+            "pass": 9,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "b5162fcc7a99ab1515b118e6721281644c7971f7b3ef5258266900823c5dd565"
+        },
+        {
+          "file": "scripts/pipeline-park-proof.test.ts",
+          "exit": 0,
+          "command": [
+            "setsid",
+            "bun",
+            "test",
+            "--timeout=60000",
+            "scripts/pipeline-park-proof.test.ts"
+          ],
+          "seconds": 2.674,
+          "counts": {
+            "pass": 24,
+            "fail": 0
+          },
+          "failedCases": [],
+          "logSha256": "f162783edfcace37d9caae8f0ab3503146bd1c40e878859416a2aea61c8963c6"
+        }
+      ],
+      "acceptanceEvidence": false
+    }
+  ],
+  "exploratoryCause": "Capture logs inside the export were copied into gate fixtures. Their home paths caused privacy refusals. Copying the interpreter did not resolve this. Final capture directories are siblings outside both checkouts.",
+  "commands": [
+    {
+      "label": "baseline-clone",
+      "command": [
+        "git",
+        "clone",
+        "--shared",
+        "--no-checkout",
+        ".",
+        "$STAGE_SCRATCH/resume/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:29:37.809843+00:00",
+      "finishedAt": "2026-10-23T23:29:37.943435+00:00"
+    },
+    {
+      "label": "baseline-checkout",
+      "command": [
+        "git",
+        "-C",
+        "$STAGE_SCRATCH/resume/main",
+        "checkout",
+        "--detach",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:29:37.977755+00:00",
+      "finishedAt": "2026-10-23T23:29:38.674484+00:00"
+    },
+    {
+      "label": "baseline-origin",
+      "command": [
+        "git",
+        "-C",
+        "$STAGE_SCRATCH/resume/main",
+        "remote",
+        "set-url",
+        "origin",
+        "$ORIGIN_URL"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:29:38.712900+00:00",
+      "finishedAt": "2026-10-23T23:29:38.717132+00:00"
+    },
+    {
+      "label": "baseline-main-ref",
+      "command": [
+        "git",
+        "-C",
+        "$STAGE_SCRATCH/resume/main",
+        "update-ref",
+        "refs/remotes/origin/main",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:29:38.743605+00:00",
+      "finishedAt": "2026-10-23T23:29:38.769776+00:00"
+    },
+    {
+      "label": "open-overlap-diffs",
+      "command": [
+        "gh",
+        "pr",
+        "diff",
+        "<3318,3316,3314,3311,3310,3303,3302,3301>",
+        "--patch"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "self-review",
+      "command": [
+        "bash",
+        "-c",
+        "git show --cc --format= edcbf9c3 -- src/lib/agent/headless.ts src/lib/pipelines/git.test.ts src/lib/runtime/copilotAcpHost.test.ts; git diff --cached --check; git diff --name-only origin/main -- .github/workflows; git status --short"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:32:17.923442+00:00",
+      "finishedAt": "2026-10-23T23:32:17.980669+00:00"
+    },
+    {
+      "label": "prepare-commit-message",
+      "command": [
+        "python3",
+        "-c",
+        "import subprocess,pathlib,os,re; msg=subprocess.check_output([\"git\",\"show\",\"-s\",\"--format=%B\",\"HEAD\"],text=True); trailers=[s for s in msg.splitlines() if re.match(r\"(?i)(Co-authored-by|Signed-off-by):\",s)]; assert trailers; assert all(re.search(r\"<(?:noreply|no-reply)@[^>]+>\",s) for s in trailers); p=pathlib.Path(os.environ[\"TMPDIR\"])/\"resume\"/\"merge-message.txt\"; p.write_text(\"Merge refreshed main after package installation validation\\n\\nRetain the reviewed conflict resolutions and include the current gate-runner admission changes. Record paired checks and command exit codes.\\n\\n\"+\"\\n\".join(trailers)+\"\\n\"); print(\"Prepared merge message with existing machine attribution.\")"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:36:08.572961+00:00",
+      "finishedAt": "2026-10-23T23:36:08.627540+00:00"
+    },
+    {
+      "label": "paired-main",
+      "command": [
+        "env",
+        "LLV_GATE_RUNNER=off",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "bash",
+        "$GATE_SLOT",
+        "gate-remote",
+        "--get",
+        "resume-results",
+        "--out",
+        "$STAGE_SCRATCH/resume/paired-main",
+        "--",
+        "env",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "LLV_GATE_RUNNER=off",
+        "bash",
+        "scripts/gate-slot.sh",
+        "python3",
+        "-c",
+        "$PAIRED_CHECK_DRIVER",
+        "[\"scripts/gate-runner/client.test.ts\", \"scripts/gate-runner/load.test.ts\", \"scripts/gate-runner/remote.test.ts\", \"scripts/gate-runner/remoteCheckout.test.ts\", \"scripts/gate-runner/remoteCleanup.test.ts\", \"scripts/gate-runner/remoteControl.test.ts\", \"scripts/gate-runner/remoteEntry.test.ts\", \"scripts/gate-runner/remoteExport.test.ts\", \"scripts/gate-runner/remoteFaults.test.ts\", \"scripts/gate-runner/remoteHook.test.ts\", \"scripts/gate-runner/remoteLifecycle.test.ts\", \"scripts/gate-runner/remoteOutputs.test.ts\", \"scripts/gate-runner/remotePrivacy.test.ts\", \"scripts/gate-runner/remoteShip.test.ts\", \"scripts/gate-runner/remoteTree.test.ts\", \"scripts/gate-runner/remoteVerdict.test.ts\", \"scripts/gate-slot.queue.test.ts\", \"scripts/pipeline-park-proof.test.ts\"]",
+        "paired-main"
+      ],
+      "exit": 1,
+      "startedAt": "2026-10-23T23:29:38.895666+00:00",
+      "finishedAt": "2026-10-23T23:53:25.610723+00:00"
+    },
+    {
+      "label": "main-tip-observation",
+      "command": [
+        "git",
+        "ls-remote",
+        "origin",
+        "refs/heads/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:54:17.616903+00:00",
+      "finishedAt": "2026-10-23T23:54:18.168385+00:00"
+    },
+    {
+      "label": "refresh-main-observation",
+      "command": [
+        "git",
+        "fetch",
+        "origin",
+        "main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:54:23.267280+00:00",
+      "finishedAt": "2026-10-23T23:54:23.764093+00:00"
+    },
+    {
+      "label": "inspect-refreshed-main",
+      "command": [
+        "git",
+        "diff",
+        "--stat",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:54:23.912606+00:00",
+      "finishedAt": "2026-10-23T23:54:23.923090+00:00"
+    },
+    {
+      "label": "refreshed-main-history",
+      "command": [
+        "git",
+        "log",
+        "--format=%h %s",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3..origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:54:24.123232+00:00",
+      "finishedAt": "2026-10-23T23:54:24.131679+00:00"
+    },
+    {
+      "label": "refreshed-account-change",
+      "command": [
+        "git",
+        "diff",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3",
+        "origin/main",
+        "--",
+        "src/lib/accounts/manager.ts",
+        "src/lib/accounts/spawnHealth.test.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:54:47.635733+00:00",
+      "finishedAt": "2026-10-23T23:54:47.643462+00:00"
+    },
+    {
+      "label": "pending-merge-status",
+      "command": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:55:11.836766+00:00",
+      "finishedAt": "2026-10-23T23:55:11.861208+00:00"
+    },
+    {
+      "label": "before-followup-refresh",
+      "command": [
+        "git",
+        "diff",
+        "--quiet"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:55:30.207409+00:00",
+      "finishedAt": "2026-10-23T23:55:30.230382+00:00"
+    },
+    {
+      "label": "abort-uncommitted-refresh",
+      "command": [
+        "git",
+        "merge",
+        "--abort"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:55:30.412812+00:00",
+      "finishedAt": "2026-10-23T23:55:30.536792+00:00"
+    },
+    {
+      "label": "merge-final-main",
+      "command": [
+        "git",
+        "merge",
+        "--no-ff",
+        "--no-commit",
+        "19bbd6d7c28100e17de36a68eedad366446ee788"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:55:30.679941+00:00",
+      "finishedAt": "2026-10-23T23:55:30.795584+00:00"
+    },
+    {
+      "label": "account-baseline-bundle",
+      "command": [
+        "git",
+        "bundle",
+        "create",
+        "$STAGE_SCRATCH/resume/account-main.bundle",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3..19bbd6d7c28100e17de36a68eedad366446ee788"
+      ],
+      "exit": 128,
+      "startedAt": "2026-10-23T23:55:30.948288+00:00",
+      "finishedAt": "2026-10-23T23:55:30.957296+00:00"
+    },
+    {
+      "label": "account-baseline-bundle-named",
+      "command": [
+        "git",
+        "bundle",
+        "create",
+        "$STAGE_SCRATCH/resume/account-main.bundle",
+        "fd7a0a14e75725b8d612237bf5a4413b0081e9a3..refs/remotes/origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:55:38.673132+00:00",
+      "finishedAt": "2026-10-23T23:55:38.696373+00:00"
+    },
+    {
+      "label": "account-baseline-bundle-verify",
+      "command": [
+        "git",
+        "bundle",
+        "verify",
+        "$STAGE_SCRATCH/resume/account-main.bundle"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-23T23:55:38.845561+00:00",
+      "finishedAt": "2026-10-23T23:55:38.883114+00:00"
+    },
+    {
+      "label": "final-main",
+      "command": [
+        "env",
+        "LLV_GATE_RUNNER=off",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "bash",
+        "$GATE_SLOT",
+        "gate-remote",
+        "--get",
+        "resume-results",
+        "--out",
+        "$STAGE_SCRATCH/resume/final-main",
+        "--",
+        "env",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "LLV_GATE_RUNNER=off",
+        "bash",
+        "scripts/gate-slot.sh",
+        "python3",
+        "-c",
+        "$PAIRED_CHECK_DRIVER",
+        "[\"scripts/gate-runner/client.test.ts\", \"scripts/gate-runner/load.test.ts\", \"scripts/gate-runner/remote.test.ts\", \"scripts/gate-runner/remoteCheckout.test.ts\", \"scripts/gate-runner/remoteCleanup.test.ts\", \"scripts/gate-runner/remoteControl.test.ts\", \"scripts/gate-runner/remoteEntry.test.ts\", \"scripts/gate-runner/remoteExport.test.ts\", \"scripts/gate-runner/remoteFaults.test.ts\", \"scripts/gate-runner/remoteHook.test.ts\", \"scripts/gate-runner/remoteLifecycle.test.ts\", \"scripts/gate-runner/remoteOutputs.test.ts\", \"scripts/gate-runner/remotePrivacy.test.ts\", \"scripts/gate-runner/remoteShip.test.ts\", \"scripts/gate-runner/remoteTree.test.ts\", \"scripts/gate-runner/remoteVerdict.test.ts\", \"scripts/gate-slot.queue.test.ts\", \"scripts/pipeline-park-proof.test.ts\"]",
+        "final-main"
+      ],
+      "exit": 1,
+      "startedAt": "2026-10-23T23:53:56.246454+00:00",
+      "finishedAt": "2026-10-24T00:14:26.257638+00:00"
+    },
+    {
+      "label": "clean-paired-tests-and-checks",
+      "command": [
+        "env",
+        "LLV_GATE_RUNNER=off",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "bash",
+        "$GATE_SLOT",
+        "gate-remote",
+        "--get",
+        "../main-results",
+        "--get",
+        "../branch-results",
+        "--get",
+        "../final-check-results",
+        "--get",
+        "../source-digests.json",
+        "--out",
+        "$STAGE_SCRATCH/resume/clean-pair",
+        "--",
+        "env",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "LLV_GATE_RUNNER=off",
+        "bash",
+        "scripts/gate-slot.sh",
+        "python3",
+        "-c",
+        "$PAIRED_CHECK_DRIVER"
+      ],
+      "exit": 255,
+      "startedAt": "2026-10-24T00:14:27.981728+00:00",
+      "finishedAt": "2026-10-24T00:30:18.729253+00:00"
+    },
+    {
+      "label": "resumed-branch-tests-and-checks",
+      "command": [
+        "env",
+        "LLV_GATE_RUNNER=off",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "bash",
+        "$GATE_SLOT",
+        "gate-remote",
+        "--get",
+        "../branch-rest-results",
+        "--get",
+        "../final-check-results",
+        "--get",
+        "../source-digests.json",
+        "--out",
+        "$STAGE_SCRATCH/resume/resumed-pair",
+        "--",
+        "env",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "LLV_GATE_RUNNER=off",
+        "bash",
+        "scripts/gate-slot.sh",
+        "python3",
+        "-c",
+        "$PAIRED_CHECK_DRIVER"
+      ],
+      "exit": 1,
+      "startedAt": "2026-10-24T00:32:26.311214+00:00",
+      "finishedAt": "2026-10-24T00:45:08.932248+00:00"
+    },
+    {
+      "label": "whole-file-route-confirmations",
+      "command": [
+        "env",
+        "LLV_GATE_RUNNER=off",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "bash",
+        "$GATE_SLOT",
+        "gate-remote",
+        "--get",
+        "../confirmations",
+        "--get",
+        "../source-digests.json",
+        "--out",
+        "$STAGE_SCRATCH/resume/route-confirmation",
+        "--",
+        "env",
+        "LLV_OWNED_RUN_TIMEOUT_MS=14400000",
+        "LLV_GATE_RUNNER=off",
+        "bash",
+        "scripts/gate-slot.sh",
+        "python3",
+        "-c",
+        "$PAIRED_CHECK_DRIVER"
+      ],
+      "exit": 143,
+      "startedAt": "2026-10-24T00:46:26.529440+00:00",
+      "finishedAt": "2026-10-24T02:05:25.128654+00:00"
+    },
+    {
+      "label": "workflow-scope-check",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "origin/main",
+        "--",
+        ".github/workflows"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:46.914953+00:00",
+      "finishedAt": "2026-10-24T02:06:46.919982+00:00"
+    },
+    {
+      "label": "stage-checkpoint",
+      "command": [
+        "git",
+        "add",
+        "evidence/package-installs-merge-refresh.json"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:47.006610+00:00",
+      "finishedAt": "2026-10-24T02:06:47.018654+00:00"
+    },
+    {
+      "label": "staged-checkpoint-whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:47.103228+00:00",
+      "finishedAt": "2026-10-24T02:06:47.112848+00:00"
+    },
+    {
+      "label": "commit-merge-checkpoint",
+      "command": [
+        "git",
+        "commit",
+        "-F",
+        "$STAGE_SCRATCH/resume/merge-message.txt"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:47.201735+00:00",
+      "finishedAt": "2026-10-24T02:06:54.653317+00:00"
+    },
+    {
+      "label": "original-head-ancestry",
+      "command": [
+        "git",
+        "merge-base",
+        "--is-ancestor",
+        "bf7c711e4c46dfba23899859cfbdac28b23199ac",
+        "HEAD"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.154313+00:00",
+      "finishedAt": "2026-10-24T02:08:02.159958+00:00"
+    },
+    {
+      "label": "committed-workflow-scope",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "HEAD",
+        "--",
+        ".github/workflows"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.160497+00:00",
+      "finishedAt": "2026-10-24T02:08:02.164824+00:00"
+    },
+    {
+      "label": "captured-main-ancestry",
+      "command": [
+        "git",
+        "merge-base",
+        "--is-ancestor",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "HEAD"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.166889+00:00",
+      "finishedAt": "2026-10-24T02:08:02.171366+00:00"
+    },
+    {
+      "label": "post-commit-verification",
+      "command": [
+        "python3",
+        "$STAGE_SCRATCH/resume/post-commit.py"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.154313+00:00",
+      "finishedAt": "2026-10-24T02:08:02.569354+00:00"
+    },
+    {
+      "label": "final-publication-privacy",
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.632358+00:00",
+      "finishedAt": "2026-10-24T02:09:11.048564+00:00"
+    },
+    {
+      "label": "final-origin-observation",
+      "command": [
+        "git",
+        "rev-parse",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:09:59.721025+00:00",
+      "finishedAt": "2026-10-24T02:09:59.724642+00:00"
+    },
+    {
+      "label": "newer-main-scope",
+      "command": [
+        "git",
+        "diff",
+        "--stat",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:09:59.810152+00:00",
+      "finishedAt": "2026-10-24T02:09:59.815803+00:00"
+    },
+    {
+      "label": "final-worktree-status",
+      "command": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:09:59.900790+00:00",
+      "finishedAt": "2026-10-24T02:09:59.913890+00:00"
+    },
+    {
+      "label": "latest-main-files",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:11:58.000070+00:00",
+      "finishedAt": "2026-10-24T02:11:58.004855+00:00"
+    },
+    {
+      "label": "latest-main-code-review",
+      "command": [
+        "git",
+        "diff",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "origin/main",
+        "--",
+        "*.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:11:58.086674+00:00",
+      "finishedAt": "2026-10-24T02:11:58.091798+00:00"
+    },
+    {
+      "label": "latest-main-merge",
+      "command": [
+        "git",
+        "merge",
+        "--no-ff",
+        "--no-commit",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:11:58.171132+00:00",
+      "finishedAt": "2026-10-24T02:11:58.213280+00:00"
+    },
+    {
+      "label": "latest-input-scope",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "HEAD"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.613221+00:00",
+      "finishedAt": "2026-10-24T02:15:06.620680+00:00"
+    },
+    {
+      "label": "latest-upstream-file-match",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "origin/main",
+        "--",
+        "evidence/native-queue-compaction-startup.md",
+        "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.710044+00:00",
+      "finishedAt": "2026-10-24T02:15:06.717024+00:00"
+    },
+    {
+      "label": "stage-latest-evidence",
+      "command": [
+        "git",
+        "add",
+        "evidence/package-installs-merge-refresh.json"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.808570+00:00",
+      "finishedAt": "2026-10-24T02:15:06.825974+00:00"
+    },
+    {
+      "label": "latest-staged-whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.914924+00:00",
+      "finishedAt": "2026-10-24T02:15:06.922172+00:00"
+    },
+    {
+      "label": "commit-latest-main",
+      "command": [
+        "git",
+        "commit",
+        "-F",
+        "$STAGE_SCRATCH/resume/latest-merge-message.txt"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:07.011918+00:00",
+      "finishedAt": "2026-10-24T02:15:11.585089+00:00"
+    },
+    {
+      "label": "verify-latest-checkpoint",
+      "command": [
+        "python3",
+        "$STAGE_SCRATCH/resume/verify-latest-checkpoint.py"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:16:51.128860+00:00",
+      "finishedAt": "2026-10-24T02:16:51.242516+00:00"
+    },
+    {
+      "label": "final-admission-owner-read",
+      "command": [
+        "bun",
+        "$STAGE_SCRATCH/resume/read-final-owner.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:17:12.628735+00:00",
+      "finishedAt": "2026-10-24T02:17:12.648259+00:00"
+    },
+    {
+      "label": "latest-publication-privacy",
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:16:36.987130+00:00",
+      "finishedAt": "2026-10-24T02:17:26.380301+00:00"
+    },
+    {
+      "label": "final-clean-status",
+      "command": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:17:38.602848+00:00",
+      "finishedAt": "2026-10-24T02:17:38.615356+00:00"
+    }
+  ],
+  "shellCommandReceipts": [
+    {
+      "command": "pwd; git status --short; git status --branch; printenv TMPDIR; cat $HOME/.agents/skills/using-superpowers/SKILL.md; cat $HOME/.codex/skills/delegatus-orchestration/SKILL.md; cat $HOME/.codex/RTK.md",
+      "exit": 0,
+      "commandSha256": "9e3fba783575ca00a86915e508a239d15194b2943cfe2fda99a32154940869be"
+    },
+    {
+      "command": "rtk proxy bash -lc 'git rev-parse HEAD MERGE_HEAD origin/main; git diff --cached --stat; ls -la \"$TMPDIR\"; cat CONTRIBUTING.md; cat package.json'",
+      "exit": 0,
+      "commandSha256": "182162f2339c51b43bfce981d96aab4d468769de0b9571362d7cf3c3aed236a6"
+    },
+    {
+      "command": "rtk proxy bash -lc 'git log -5 --format=\"%h %s\"; git diff --name-status bf7c711e HEAD; ls -la $HOME/.config/delegatus/state/scratch; cat $HOME/.codex/desktop-memory/memory_summary.md; cat $HOME/.codex/memories/SERVER_MEMORY_INDEX.md; command -v gate-remote; git config core.hooksPath; rg --files -g AGENTS.md -g CLAUDE.md'",
+      "exit": 0,
+      "exitSource": "Original tool result; serialized envelope was truncated",
+      "commandSha256": "3d5afa2ca2c92f4486b1d125fa48cadccaa22296d54094fa0fc7ba7bb160992a"
+    },
+    {
+      "command": "rtk proxy bash -lc 'git show -s --format=\"%h %s%n%P\" HEAD; git diff --name-only HEAD^1 HEAD -- evidence; rg --files evidence | rg \"3260|merge|package\"; git show --format= --stat HEAD | tail -8; ls -d $HOME/.config/delegatus/state/scratch/*; cat $HOME/.local/bin/gate-remote'",
+      "exit": 0,
+      "commandSha256": "bf1a6af10203e12c3387cd08c790330b4ca353fd3b94accaaa92e6cc206e2725"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2e6df69d9dc1dfa261863b17aaefbedcea861bb46638a4ac4d256712f48744d3",
+      "stdinSha256": "d484de572f7b54d6ca451665d060a0d72e80922c05f2fcee58b935ad2a6e3068"
+    },
+    {
+      "command": "rtk proxy bash -lc 'git diff --stat MERGE_HEAD origin/main; git log --format=\"%h %s\" MERGE_HEAD..origin/main; rg -n \"3260|package-installs|identity\" $HOME/.codex/desktop-memory/MEMORY.md $HOME/.codex/memories/MEMORY.md | head -12; sed -n \"1,100p\" CLAUDE.md; git diff origin/main --stat; ls -ld node_modules'",
+      "exit": 0,
+      "exitSource": "Original tool result; serialized envelope was truncated",
+      "commandSha256": "20add5567780c0ae59592ac557cfd350023077ccb9dff699eafb687ce3b8a8a4"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "9021fa0f06c40cbc8ebf452bd5e4490ef2d4176ac5fac553d3f5b8e7ac625141",
+      "stdinSha256": "eaefdbec72fc3de5366cfa37ba26a597bda2da859d7f08158143114cfb6a3013"
+    },
+    {
+      "command": "rtk proxy bash -lc 'git fetch origin main; git rev-parse origin/main; git status --short; git diff --cached --check; git diff --cached --quiet MERGE_HEAD -- docs/design/cloud-checks.md scripts/pipeline-park-proof.ts scripts/pipeline-park-proof.test.ts; git merge --abort; git merge --no-ff --no-commit origin/main'",
+      "exit": 0,
+      "commandSha256": "e4e68499cae7a25b748de51987977abce14bc5b5e4a3af3a79a80fe544dcd459"
+    },
+    {
+      "command": "rtk proxy bash -lc 'git status --short; git diff --stat HEAD; git diff origin/main -- src/lib/agent/headless.ts src/lib/pipelines/git.test.ts src/lib/runtime/copilotAcpHost.test.ts src/lib/pipelines/stageCommitRepair.test.ts src/lib/runtime/agentSignalSandbox.test.ts; rg -n \"client.ts|harness.fixture|load[\\\"\\x27]|gate-slot.sh\" scripts/gate-runner/*.test.ts scripts/pipeline-park-proof.test.ts; sed -n \"1,100p\" scripts/pipeline-park-proof.test.ts; cat scripts/gate-runner/load.test.ts'",
+      "exit": 0,
+      "commandSha256": "4f4dcb4fd5460cf61ae1cf10cb2337c7320210844a08e0d5065dbf687dd99819"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "a68a9a0c4bae323aaa4c6d7ceb45e460ff46d5e80a434ebcffc291cecc0907c7",
+      "stdinSha256": "d38ecdb2441c839625dd7a6213416796ea375b7658299209f4767042a4589bfe"
+    },
+    {
+      "command": "rtk proxy bash -lc 'cat $HOME/.codex/skills/managing-github-projects/SKILL.md; cat $HOME/.codex/skills/anthropic-pr-code-review/SKILL.md'",
+      "exit": 0,
+      "commandSha256": "c28868926c7a7294ee0ddbed683b4a9d8fddfca3b80c8d80ca5159d25d5dc9c0"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "d3b554a477d7e39a2da13971f7d3ff639fcc197d639c21bf9ccd04128317e005",
+      "stdinSha256": "d8114e3efdb123116ff5c2399c8df3b805d602319aa6f65e3d8f7cd9417005a9"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/launch.py\" paired-main \"$TMPDIR/resume/main\"",
+      "exit": 1,
+      "session": 21210,
+      "commandSha256": "77289e49bfbf60d84a9921942380b12c178b104cc28ec272ec87ac29b29dea24"
+    },
+    {
+      "command": "rtk proxy bash -lc 'cat src/lib/pipelines/worktreeDependencies.ts; cat src/lib/git/repositoryCommitIdentity.ts; git diff origin/main -- src/lib/pipelines/git.ts src/lib/git/agentHistoryGuard.ts src/lib/agent/cli.ts src/lib/pipelines/engine.ts src/lib/workflows/provision.ts'",
+      "exit": 0,
+      "commandSha256": "4388337f89e34349a20ba484adb350e97a302456e8a268b4d59fdb102db86054"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "cf649929670626f554897f38ec32b648774260e45ba3252b744359b04097b1d4",
+      "stdinSha256": "25fd6a4b562d77ea6f0e99895576297db400ef9e2d0d52fb98d7d6f45294bddf"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "f400c888bc22f919a0c334c875047e85057a547cc499149e9ca859d1b936a048",
+      "stdinSha256": "a2816807d659dd58934f1ca4645c0cdd6974f31760e094988160597dae214e91"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "08215198d755f74b1082b40220320d1e7847ce4733185b81258065beb340fe46",
+      "stdinSha256": "5bacd94b0c36abd967def8984add4dc38ba5165f4523bc41a7ac4519e0be902c"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2acd0697bfcb26b4a5a1662c8dea05d3bf763e0f222751116de8c5b5137c6d16",
+      "stdinSha256": "093b3b48250a69e90affa04f92ad5e0f53f5864e7843928c45f157437c74ad61"
+    },
+    {
+      "command": "rtk proxy bash -lc 'cat \"$TMPDIR/resume/overlap-3318.diff\" \"$TMPDIR/resume/overlap-3316.diff\" \"$TMPDIR/resume/overlap-3314.diff\" \"$TMPDIR/resume/overlap-3311.diff\" \"$TMPDIR/resume/overlap-3310.diff\" \"$TMPDIR/resume/overlap-3303.diff\"'",
+      "exit": 0,
+      "commandSha256": "ad540592881f4a1e7175cbc98b6773bb1a2527afef79604de2abecace9abd268"
+    },
+    {
+      "command": "rtk proxy bash -lc 'cat \"$TMPDIR/resume/overlap-3302.diff\" \"$TMPDIR/resume/overlap-3301.diff\"; cat docs/design/pipeline-package-installs.md; sed -n \"1,100p\" $HOME/.codex/skills/anthropic-pr-code-review/agents/code-reviewer.md'",
+      "exit": 0,
+      "commandSha256": "526b56c1f97e8535f5576fc5e9b69771fce0069fb1a177a8399a0cbacddede67"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "f98362d9f3cb0ed4ab4f4cc51440b08be0426ecaabba1c1f444d65aff008fb53",
+      "stdinSha256": "ca34904014a89d5d463845bb50c629bba3a942d0b73b16bf491d3190a6e74c29"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "d5cdf9e65498e0b8ed00e50841d2330742291eceeeba64233ee8589091bdb3a1",
+      "stdinSha256": "c030fda5fa05677b01b1185128c644aa3a075a95e0ad1fc95a5913ad66183c11"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" self-review bash -c 'git show --cc --format= edcbf9c3 -- src/lib/agent/headless.ts src/lib/pipelines/git.test.ts src/lib/runtime/copilotAcpHost.test.ts; git diff --cached --check; git diff --name-only origin/main -- .github/workflows; git status --short'",
+      "exit": 0,
+      "commandSha256": "114c09088fc8df4669df68e2d5924b9300b99613811c0ee06b819f508fda701a"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "96c7c8b338dfe22c3c6cab84e9cdec006098ffacbf569a822f6d77877b0474ba",
+      "stdinSha256": "f0e53401bba2d3ba5845d7e9e4ebe695447ae4f162c73d0282d37b9348c2a50c"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "99986eb68148c4921045bd05350260c10fad0ddfc40e3e7f77c822fb7bfacafb",
+      "stdinSha256": "ee324943934ffcb39b86dc7e8164d8b6f080a3c10073641890cb0ea9d61ed1ef"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" prepare-commit-message python3 -c 'import subprocess,pathlib,os,re; msg=subprocess.check_output([\"git\",\"show\",\"-s\",\"--format=%B\",\"HEAD\"],text=True); trailers=[s for s in msg.splitlines() if re.match(r\"(?i)(Co-authored-by|Signed-off-by):\",s)]; assert trailers; assert all(re.search(r\"<(?:noreply|no-reply)@[^>]+>\",s) for s in trailers); p=pathlib.Path(os.environ[\"TMPDIR\"])/\"resume\"/\"merge-message.txt\"; p.write_text(\"Merge refreshed main after package installation validation\\n\\nRetain the reviewed conflict resolutions and include the current gate-runner admission changes. Record paired checks and command exit codes.\\n\\n\"+\"\\n\".join(trailers)+\"\\n\"); print(\"Prepared merge message with existing machine attribution.\")'",
+      "exit": 0,
+      "commandSha256": "bbf5ec96e995cb0ec552c3fa87c97b01e6eb3dd6f87d4984a33949d90d5df1d0"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "214b9a5fb1419f58fc528f70e422c3c63b7674a60e87ae4dc5cc6f424640bb1d",
+      "stdinSha256": "cc1f114475ee4068a767aae2a59ce3ce45dfdbee5ebbee8fe33788de2bf45a2f"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "e2f07137b64196a999acc806ab00a68efa7c371029a6d2a20bd72e6fb40f2bb8",
+      "stdinSha256": "fef78f5ebf8fbbdcf640dc652ccaafdaa607fc608dd37fbe66a5c4e2209ac1b5"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "965fa9577547c72cae3200402fe8356d4d662890dedd9040a50338cef9d87859",
+      "stdinSha256": "6017a2ffcb692ca2a41f8741709fbec585e5549d8cd66465e4b5e78ac4f36927"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "4d92b9adc66c0eeadc91f25e0dce34f7180c0bead46e617068cc3af3a3272ce9",
+      "stdinSha256": "d3bede24b66f5ed5609df9eb879e9d6e1aa8645de2dfc1ea9353feff6bd40176"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "6c41e26e878a4af966d7226be1198e8b85395c99e80fd15916969371b1af8a05",
+      "stdinSha256": "05ab22d85f30ceeab3fd74870c0d86d808ac85573b5199b0965ebd6cead481da"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "daabc5ea129f6c5169c2aab5ad76250b5152901ec4da8b129163c6e25ffd4704",
+      "stdinSha256": "3592caf7427790ae005203c9f145ac3782b9acd3d5bfd29b4f908bdc1ab1cb28"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "547a1de6e742b51ce788cb62097a01fe4079eb12be21e4b1ed9332f120a21749",
+      "stdinSha256": "4f824271dd00dc9d189b3254b3841841cc361d2b7734c12277d4543716363102"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "4fb839a589309457b3c775de8138c2e77028c04f3272e3e39b29e05634e81b91",
+      "stdinSha256": "e9e8523814497343baafb2aacad96d157067384cba100780c8ebaf89f669e8ab"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "56a41a97eaf24ed162c72ea648f4138359ce648f97ff2520989d0d7e9c1ff7dd",
+      "stdinSha256": "1521c65302f71f3f0a01052cf9767029b5020dadc334bbbe610a1e3b34d77bf5"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "6471e663d30fde7ad2114f536313da43c149e4ecdf0adedf664186330806b4f5",
+      "stdinSha256": "e5dc087b89dd8d7832fd90e7dc04d1f5a110a07b784f101b413faacd621e8541"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "4c2e7a952bfc929c1c4cdb1e251b77a5f588c5995854e0e2adfabd04afdfc810",
+      "stdinSha256": "26facd4565ebb389e240fe943773e16be56f026538436d574b4d3f90bd8db6bc"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "e92bf91e1d7be02288b3e3637e997394d93fc03db68f37a02a709ccbaf62d762",
+      "stdinSha256": "ce338fba1727b90a254a2c74108483a29eead5d7b601d65c6d87683d3a7abee5"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "e922810d2f0b673486aec2098f04c3b19dff27b9f65efb1f6bdb81b34dd16184",
+      "stdinSha256": "00143697ded6f5f67b4e252edccc9749de99f86dcdca61372c955986120386a8"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "5dab76192b58be00cefc1db54c9133f37e9864fe20c4fdf3317b5d02bdc8e7cb",
+      "stdinSha256": "cbdf3c528088bc8b957d58258b0d0e5c07c28ef86b07a599801104f0409dfa30"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "373b1b3e48c4f30a1b4a56a4a354571821f1aa02cd913b43935eadc2d7571989",
+      "stdinSha256": "0d39cae73f63eb3489cd03a0bb17102cdc75fb39f711f2d357c1270a5889d516"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2e2e5b0b87a3f96eb1ea9bca5e32460a72314766088b75225563ebd5251f9e2a",
+      "stdinSha256": "04d370c139b59e780a919491d8a3e25f0a417890fe05db8d2dc33a042d8c9c20"
+    },
+    {
+      "command": "rtk proxy sed -n '1,145p' scripts/gate-runner/remoteLifecycle.test.ts",
+      "exit": 0,
+      "commandSha256": "7f157b9e655c14980e2562c602bbad7b8f30ea09a6ae2fd7d3e9c09c955c6aab"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "0a966aa55ed766a0371ff1de4f29a272025a6bb4689bebc8f6853fd0a5fb2bf1",
+      "stdinSha256": "245f00885e7d2994f1188720a70817416eb80231f22f9c5ec8064e5381f4a89a"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2892312843e67d0d50757a792878c44ab48327f2016e1737bc1041dcdbb31a7a",
+      "stdinSha256": "e6cd75187196849ab46c33a3840ed82c8e6ad6eddad7d676f235a62594c96dfc"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "5eb2582785494b175c2b98252d3e47f162dbe5468c941ff221c5cd9a90de7ca6",
+      "stdinSha256": "8cbb634d1de366a9a70310afbfc2a3e5ccde55a10c74ee65652dfbae29f05803"
+    },
+    {
+      "command": "rtk proxy rg -n 'OWNED_RUN_TIMEOUT|OWNED_RUNNER|ensureOwnedTestProcess|TEST_PROCESS|already' test-preload.ts scripts/owned-runner.ts scripts/test-runner.ts scripts/gate-slot.sh",
+      "exit": 2,
+      "commandSha256": "7c78c705337ccc1eb1785f979096ef0d8db6453fb89ea088112c227f54185491"
+    },
+    {
+      "command": "rtk proxy bash -lc 'sed -n \"1,110p\" test-preload.ts; sed -n \"1,130p\" scripts/owned-runner.ts; sed -n \"100,150p\" scripts/gate-slot.sh'",
+      "exit": 0,
+      "commandSha256": "4db20fb971614bd25580a8a2c1232714abe7fab48b622785309a7ce2d99caab3"
+    },
+    {
+      "command": "rtk proxy sed -n '145,320p' scripts/gate-runner/remoteLifecycle.test.ts",
+      "exit": 0,
+      "commandSha256": "e50c86ca1f8aac9138c9823f1435ce7f4cc423f2d1e42e129f3c91e6ec6eda80"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "4c2e7a952bfc929c1c4cdb1e251b77a5f588c5995854e0e2adfabd04afdfc810",
+      "stdinSha256": "26facd4565ebb389e240fe943773e16be56f026538436d574b4d3f90bd8db6bc"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "e636eb0a9bcc3b41929cc6f68b34f18d7b6dc52257c6cfee5820a5f16d12b7b6",
+      "stdinSha256": "df2b693ec873bd02e76bd019f35e1bb4520ab20bea4fee00ea082f30a655d660"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "68f347d1a628e98f34bf78dacbfa62b22b6623670ba75e2c76bbe8776c839d96",
+      "stdinSha256": "5094b11552477f48edfecfe3966c91d3a5ca08509f654352b72ef467421bc34c"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/launch-safe-main.py\" final-main \"$TMPDIR/resume/main\"",
+      "exit": 1,
+      "session": 22253,
+      "commandSha256": "e639a67975c8480f9c9664ec72a692234c3095b3a19723f4eff646920d5dc1a1"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "6097dcf27d671ea87d58203c0296d05bb9f7896c564b7824fade9da42bfbe922",
+      "stdinSha256": "1b88d06c3498f44834be25beed4ac9d0a86714467154ee3d47c30c3e2484bf7b"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" main-tip-observation git ls-remote origin refs/heads/main",
+      "exit": 0,
+      "commandSha256": "0de0d5910f0e00d6b496479af01f995adc5067f04f609f2b1f1e4e14e5e6afb3"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "3c8facf8fcd619ca1730044dc6158132acfb136ce995fc1d38e7652c186294b8",
+      "stdinSha256": "08cb99155ac4f08e08dac9fbb799a93d18c905c1698f4229db6a37570c6cb7ca"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" refresh-main-observation git fetch origin main",
+      "exit": 0,
+      "commandSha256": "32459036423963874379a70de4b8ddd7c1539ff017b9fbcdd039ab93b1f2abad"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" inspect-refreshed-main git diff --stat fd7a0a14e75725b8d612237bf5a4413b0081e9a3 origin/main",
+      "exit": 0,
+      "commandSha256": "72e5bb1c9195b3d81d12975e9f070382cd3a3da18de3655733e2f2a6d8c6f7a5"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" refreshed-main-history git log --format=%h\\ %s fd7a0a14e75725b8d612237bf5a4413b0081e9a3..origin/main",
+      "exit": 0,
+      "commandSha256": "932d1afd513a19a5130672e9257a1bf8526232c170266f0786de4dccbbe75e76"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" refreshed-account-change git diff fd7a0a14e75725b8d612237bf5a4413b0081e9a3 origin/main -- src/lib/accounts/manager.ts src/lib/accounts/spawnHealth.test.ts",
+      "exit": 0,
+      "commandSha256": "db5b8a8d0e00921ca68d05bfe0dfdb8fc28269e5fa7fe0a8dcf53a26fc7bb036"
+    },
+    {
+      "command": "rtk proxy rg -l 'resolveHealthySpawnAccount' src scripts --glob '*test*'",
+      "exit": 0,
+      "commandSha256": "680fe95fe0c850158cad1966768ca39750c7d22b0009fde9a4b04637bcefb5b1"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" pending-merge-status git status --short",
+      "exit": 0,
+      "commandSha256": "d29341ec8aab62a9aab67437ac506e8c7988f4ed1c8dde30c58a98d292467af0"
+    },
+    {
+      "command": "rtk proxy rg -n 'resolveHealthySpawnAccount' src/lib/accounts/{spawnHealth,managerProjectBinding,manager.copilotSelection}.test.ts src/lib/agent/spawnCommand*.test.ts src/lib/monitor/seatTickController*.test.ts src/lib/orchestrator/{rotationAccountChoice,seatRecoveryBusy}.test.ts src/app/api/spawn/{validate/route,membership,route,route.admission,route.binding,route.engineKeys,route.launcher,route.stageTasks}.test.ts src/lib/mcp/{spawnRecovery.integration,spawnAccount}.test.ts src/lib/telegram/reportSpawn.test.ts",
+      "exit": 0,
+      "commandSha256": "86258c323f54f25f209b24a73b83e75cc620ff9cce91df26d8c89450bc0eff41"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" before-followup-refresh git diff --quiet",
+      "exit": 0,
+      "commandSha256": "8801713bf5fdfe7bc4ccb2432c95ad79163c33fc772130f4c522c6320403d50e"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" abort-uncommitted-refresh git merge --abort",
+      "exit": 0,
+      "commandSha256": "39d7134b2288a853bc2c74ddd973ed0d8ad6b4d52e1ccd6068825b786d837015"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" merge-final-main git merge --no-ff --no-commit 19bbd6d7c28100e17de36a68eedad366446ee788",
+      "exit": 0,
+      "commandSha256": "e992c825afc6447fcdc6feaed0fcb6d536092648a7f08a1a75a26f2635797e06"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" account-baseline-bundle git bundle create \"$TMPDIR/resume/account-main.bundle\" fd7a0a14e75725b8d612237bf5a4413b0081e9a3..19bbd6d7c28100e17de36a68eedad366446ee788",
+      "exit": 128,
+      "commandSha256": "92fd1624bba1dc911c21dc016c73d7379b00d9c9c412e7651fa677d57a0a9e2a"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "d27c6c5aea0fe6bc11b06b2d4d593e2d5bbb05d7586d5346a19d4134a88c7b1a",
+      "stdinSha256": "ef2846cb81013876c0b9048da3d995d2b5c3b082196f0b91645753fc613329dc"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" account-baseline-bundle-named git bundle create \"$TMPDIR/resume/account-main.bundle\" fd7a0a14e75725b8d612237bf5a4413b0081e9a3..refs/remotes/origin/main",
+      "exit": 0,
+      "commandSha256": "f9117d1a8973d46171dae072e95a59a69205f93c85b00ec8b770544dfb5e98ee"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" account-baseline-bundle-verify git bundle verify \"$TMPDIR/resume/account-main.bundle\"",
+      "exit": 0,
+      "commandSha256": "d63470fd07a504a263926893954fbb9db2758aacc944395dac4534d0adb68d7a"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "d5d6beb3b0b46758451ca60ec7cbd70ad846e1c52a37668cd8f002a9ad334739",
+      "stdinSha256": "df759a3de8afdbd86e7631f6a4d2ee86cb5fb00b3f59caba798a5f960144fb6e"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "1946009298ce6f11f4b549f02d3b986a5f248ea10e6f1e4da6420390e90cbd36",
+      "stdinSha256": "771bd1150bb7711db5cdb52439c3b26a5cb629239dc9b4838317bd58a98d35f4"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "495a380407ab3419334d84d0c811948029ad428ed0b690aea9644e215bb9de83",
+      "stdinSha256": "c18aad90392dd4004124bf1ac8a584bd84bea47954869f06635c9dcd72aa9f95"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "cfd17a04517c2652cc1b9ddb2269ec996f2ff64ebeea52eb75a7fd4738f2ab9d",
+      "stdinSha256": "defd83aa2cf9b9cdedfd9a0ce5c4c1ac933fd2a1d95a906e685cfa1aef0da211"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2c15b276e88840e26d8db4f383d15eff1d34d11a1bf36dacd8202c399dc1204d",
+      "stdinSha256": "262fb7f52a6a1b7421d2c504e121ce757b023a872d46c0fe6cefede801671bf8"
+    },
+    {
+      "command": "rtk proxy rg -n 'execPath|bunBin|LLV_GATE_BUN|process.env.PATH|PATH:' scripts/gate-runner/harness.fixture.ts scripts/owned-runner.ts | head -35",
+      "exit": 0,
+      "commandSha256": "a3a7dd4c03a051bedc100149c7c516e7bb0463da09306022c2e8815979e1b8ed"
+    },
+    {
+      "command": "rtk proxy sed -n '125,205p' scripts/owned-runner.ts",
+      "exit": 0,
+      "commandSha256": "f27569a1555db2c7ca75fde87ba64c453ef42773af9d6da710aadbb603404d46"
+    },
+    {
+      "command": "rtk proxy sed -n '110,175p' scripts/gate-runner/harness.fixture.ts",
+      "exit": 0,
+      "commandSha256": "d8b9254662b20e6af996ada4a975acae3103c5006bff794e89dc00a64e1378d2"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "5d0907ccdd1e60d2f8868c058a74bd34b0fd457b5dc29e14f72e4456567ffd20",
+      "stdinSha256": "7513ed8d0e32a98a038ec3934560b4d39940196a2c4f8e5ac0da0315de4a7190"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "a5769d193bbe7c39ee8cc2584fe7454c3214d089dc9d62d36f199502d7c7f55d",
+      "stdinSha256": "426ba23ab395d7c59bd42650971e1b8851ab676df15daaa80440f3e77cda215b"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "6e5da328ee8ece44b38feae8710debc3b891b797204e823a18b73f53607ce1a6",
+      "stdinSha256": "18754e13cc1f61034976393c42424f028c70dc59f9808460ba8e3652209f2ac9"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/snapshot.py\"",
+      "exit": 0,
+      "commandSha256": "72abc24f4326ab62d46c39089a9a769fc2a9697a9f57386360c16c19b876935b"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "b3469025e7456675cf23c8388f2474f2338216e2f5901e94d423cacbcdd714d8",
+      "stdinSha256": "7ac33af763473b3ee6d77bb9debb78608333d50c936d1ac749c716c218798d06"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "b5e3bc922f480f5b778d26576ac20aa4b6231d5c2f0d0c4885bcc67e5c41f0d0",
+      "stdinSha256": "1c18e83b80cd31079dc867cb48f0cb20dfd2b949bc6fe0b05e675f589f586462"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "e12cb694c3c3feaa9b528ef3aed168464157a8ab1d2268b1f05c3c59d2a7cdc0",
+      "stdinSha256": "816fbf6ad36ab089fb8f2786ab085275a82d1825e54ee5dc15d8851ab34253f2"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "63f931e9fcb1a2fd969933383647d4349f405dad8ee7c8aa277fae99668a3142",
+      "stdinSha256": "657911e4c77b7fbd61a7887d2352c4fba59024527fe895dc5681255c33e231ce"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/launch-clean-pair.py\"",
+      "exit": 255,
+      "session": 65036,
+      "commandSha256": "feaa460fbaa887d7a65c8bda29a6b867723a31bc8a22f3e0ec1bd9e89ec0ca42"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "02e6b72eee827e2dcd13365e53b020278e1345a668ca52e9d83f6c3a1a479379",
+      "stdinSha256": "9601907f5934c98985729a84fd6901a5afc2ca8c76a6f0a7fafb3a329e91f3cd"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "8f162b9b21139806ae498248afc69a369af58beafe7abdd28a4b8a5c598ae92c",
+      "stdinSha256": "c11cca5c9fa67669018b44078a84488e102838b8e7631bbaa18342bd5cb30fa5"
+    },
+    {
+      "command": "rtk proxy rg -n 'ls-files|exclude-standard|harness.fixture|copyFileSync|cpSync|archive' scripts/local-gate.fixture.ts scripts/local-gate.test.ts scripts/local-gate.receipts.test.ts scripts/gate-cache.test.ts src/lib/pipelines/engine.fixture.ts",
+      "exit": 0,
+      "commandSha256": "99e12171852556dde71105011ceedaff45565cd66a00086ba34ff475ed43b1c4"
+    },
+    {
+      "command": "rtk proxy rg -n 'ls-files.*(others|exclude-standard)|\\[\"ls-files\"|\"ls-files\",' scripts src --glob '*.ts' --glob '*.tsx'",
+      "exit": 0,
+      "commandSha256": "067ae6c4b908fdd76693e4ef83195fb7fb221ff3afea159e047afcfc9814baf3"
+    },
+    {
+      "command": "rtk proxy sed -n '1,80p' scripts/local-gate.fixture.ts",
+      "exit": 0,
+      "commandSha256": "ca0ca1ebc8eddac53d2622466a98f973ee717fe8e57e98bf70850260a37ad914"
+    },
+    {
+      "command": "rtk proxy sed -n '1,85p' src/lib/pipelines/controllerArtifacts.test.ts",
+      "exit": 0,
+      "commandSha256": "e5a0bbbb41364ef07997a9a75e9e19f84c8b12d1b543520a85e33a28780c2a1f"
+    },
+    {
+      "command": "rtk proxy rg -n 'function run|cwd:|mkdtempSync|spawnSync\\(' scripts/privacy-publication-gate.test.ts | head -30",
+      "exit": 0,
+      "commandSha256": "8ae29d4bf9660740115b179b6120d90b867bc654823aa5f81d292904dbb042af"
+    },
+    {
+      "command": "rtk proxy sed -n '385,437p' scripts/privacy-publication-gate.test.ts",
+      "exit": 0,
+      "commandSha256": "8cbe48ca6c1b20ce2631430834c248fb5bccd34b699a65320b93172867b4f391"
+    },
+    {
+      "command": "rtk proxy rg -n 'function repository|function git' src/lib/pipelines/controllerArtifacts.test.ts",
+      "exit": 0,
+      "commandSha256": "578dda818fcc772cededac73c0966bb218157264662962334a4337660af7ba49"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "adae0d7b0196d54d90deaa54d041f5eb44b6568c45ac30969a2d9f12acffe78d",
+      "stdinSha256": "11d41a68bff444d776dc0d46c969253e058f2920503215fde2e5d5b1c466140b"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "b507343856608dc49927e8f0042326275123389c6b6091c4b5efd8b5705b2e83",
+      "stdinSha256": "10991638637bedcc33330e768c43e6148e5f100b0349387f47e2aa0c81c2e3c5"
+    },
+    {
+      "command": "rtk proxy sed -n '1,100p' src/lib$PROC_ROOT.ts",
+      "exit": 2,
+      "commandSha256": "2bdd04b6014f24bd19754ccde1b3e1dff767ea61d658b9c972ca7bb3e132e5da"
+    },
+    {
+      "command": "rtk proxy rg --files src/lib$PROC_ROOT scripts | rg 'proc/|owned|sandbox|host-proc'",
+      "exit": 0,
+      "commandSha256": "a9290515f5212ee6d3ea849726ed26d32c3295653dd5a0d826a81755ad7bfca6"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "342ffd3acbbfe91373fa8a41fe069bbbe50715004345d80c930c4467d78f0711",
+      "stdinSha256": "7d33de8a0be90675c3fe07e9c63acd267313863c2f19bced3783a3b6784961e3"
+    },
+    {
+      "command": "rtk proxy bash -lc 'sed -n \"1,125p\" src/lib$PROC_ROOT/index.ts; sed -n \"1,100p\" src/lib$PROC_ROOT/linux.ts; sed -n \"1,125p\" src/lib/runtime/signalSandboxContext.ts'",
+      "exit": 0,
+      "commandSha256": "0c35134988c889dfe318c7521f65fba797acfa3ec2f31d5dce632b7354b921bc"
+    },
+    {
+      "command": "rtk proxy bun -e 'import { signalSandboxContext, cpuOwnerStatus } from \"./src/lib/runtime/signalSandboxContext\"; const context = signalSandboxContext(); if (!context) throw new Error(\"host namespace proof unavailable\"); const status = cpuOwnerStatus({ pid: 3521767, startIdentity: \"3521767:193297114\", bootEpoch: context.hostEpoch }); console.log(JSON.stringify({ recordedOwnedSurvivor: status })); if (status !== \"dead\") process.exit(1);'",
+      "exit": 0,
+      "commandSha256": "fd547a6bb3c10b40898a0599cdc0065c922319b8a9758e7bb205daed9b4eea57"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "9420590b56b89dc38f6da7e1b66159b362e9040f7770fc5b9b67e429b30a5390",
+      "stdinSha256": "839136e8e3a66397fbcd2589d9fdeef9296b3fc2502fb93652e4b63917e2a47e"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/launch-resume-pair.py\"",
+      "exit": 1,
+      "session": 94174,
+      "commandSha256": "c67c3edb140c40c8d9be25acbe09212ad9f7759775827f0cabb88bd67917e6a6"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "5f274f5a08326c2110671d9b6a4636a2455a97e2f94c21e8105fcf85852b694f",
+      "stdinSha256": "23864040f0bafa9bd0a1b9af867ad3ff41357d2dca22ed27373be9e440e45a9f"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "db71cbb3faa626aa5fbe7b585cfcc78b36dc5b4e4cdb11e77ff033b408f760f9",
+      "stdinSha256": "4cc648e2c453d61d3ba6e44fc80aadcea248cbfbda0d94b35c576e5c2b76af95"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/clean-report.py\"",
+      "exit": 1,
+      "commandSha256": "bf24c04514c734547ee8c7e96bd1cb6a664124ee3e1574884e01955d3f09592a"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "0da4a604bd4a1ce29fa4ba0eb7d497285afa8cb3d6382ad91f8955638be92868",
+      "stdinSha256": "f18f6e1be140ea7f56b10ee61f7ce6388a9553b92a177c90edd9f183e25fa44a"
+    },
+    {
+      "command": "rtk proxy rg -n 'a pinned preflight waits out|foreign holder|2 s timeout' src/app/api/spawn/route.test.ts",
+      "exit": 0,
+      "commandSha256": "e967f351a164595e2667857f8586fb93afa645a314a467c834796dc184c0b1b9"
+    },
+    {
+      "command": "rtk proxy git status --short",
+      "exit": 0,
+      "commandSha256": "a90740112ad9a7e9da95180d6f5e5a5da167c610b33958b2bfb2a27244a6dfae"
+    },
+    {
+      "command": "rtk proxy sed -n '1,180p' src/app/api/spawn/route.test.ts",
+      "exit": 0,
+      "commandSha256": "790a3ed2dfbcd787bfabe3beb0986f30504e6548dafc6af1ef1789fd370f0d44"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "ef9f37b0f3a40c6b63d8673d509de4e8af984aded6ba95ac196cddfee4babd25",
+      "stdinSha256": "c7fdd8c8cd1bf1e077df283f9e072d7cc62f9fe92d46319692c65e9790e2294a"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/launch-route-confirmation.py\"",
+      "exit": 143,
+      "session": 61521,
+      "commandSha256": "3a58a2352d3533e00bc3322f8252aaf2d3cf05db77dfd9207689ad7ddf85ee68"
+    },
+    {
+      "command": "rtk proxy bash -lc 'cat src/lib/accounts/accountMutation.fixture.ts; rg -n \"statePath|STATE_DIR|lockFile|timeoutMs|accountMutationLock\" src/lib/accounts/accountMutation.ts'",
+      "exit": 0,
+      "commandSha256": "caa68231e25e4055bebe1dc3029a403c82068e4317b8f6a365b5af427bc9219d"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "daa19b20caa9c33fbcab5a58127122584191447a21078f6246b3d6e530c94ae2",
+      "stdinSha256": "dc605e54031172410090c4bd35f2806fc65f127e191c498ef2ed7389676fa183"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "8e78e3fb6f455a9f2997f094065a29be898ccf834662bb88a234928d44e55c49",
+      "stdinSha256": "7ca9a097976f781137ef18932dca5b983465febb7c721b4001f4adeab57f0991"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "7f600d77ae2ba9b1ab14a54c2ebfba54bd9e18c5a4e9df316bf2f68bfe3fdde8",
+      "stdinSha256": "8c05f57ba0edba72ec93a86a1fb92dfbcfb0572e7ad640658b879dd20247ca4c"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "f9d597172732750763b2011a323974f3d2d1399484793312585171532db50cab",
+      "stdinSha256": "2ab47bf46e295c91f3fd83e4a4348de0b7fae361f4b8c7284b05777d62e6e3d7"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "9df9c8fddc8d5313b714dd6844e025f51954f1e6987f37f6b6eb989952d3f574",
+      "stdinSha256": "e80c6b44ac044a247782e65bd59b4684342f0eae6b4295315577ef5bbd61ce2d"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "e0703f2d0c8243d9a1eee509d97d4da509a0b981c811396f2b83636ba03af365",
+      "stdinSha256": "77834324b19023f5fd4373d00dcc28437e924264da387be6f1a8c1440715f219"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "3624b186cd1df35b0bf9008c403d15dc9527a4c72ec751cd63ffa03bc97a458a",
+      "stdinSha256": "18b179be9c53fe6d02df4e4080137f3357be3166dfdeab40d5cbe63659c1c3d7"
+    },
+    {
+      "command": "rtk proxy rg -n 'slot.*lock|flock|lock_dir|admission.sqlite' scripts/gate-slot.sh scripts/cpu-admission.ts",
+      "exit": 0,
+      "commandSha256": "adb627a8dc12a2d3a31afe02409be963835833f14f65dc22c34dd7c72091fa55"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import { signalSandboxContext } from \"./src/lib/runtime/signalSandboxContext\"; const context = signalSandboxContext(); if (!context) throw new Error(\"host namespace proof unavailable\"); fs.writeFileSync(path.join(process.env.TMPDIR!, \"resume/host-proc-context.json\"), JSON.stringify({ hostProc: context.hostProc, hostPidNamespace: context.hostPidNamespace })); console.log(\"Verified host proc context for read-only admission diagnostics.\");'",
+      "exit": 0,
+      "commandSha256": "1819c99fc1a77c5ea81128bc3bc20f8e6f9a449cd9b9a027339807d255bc4b81"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "ac21a5a55e60ec13d603f7f49591fa2f1789225c84859918d68b8c5530da4e33",
+      "stdinSha256": "69d87f326f04c897f2a12993b798ce0b610b7b3563a8d51f57076a6b0642365d"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "be8a37e415f2441c9027cffadf88e9acb9d9d5283791bf0861b8a55083ae99c4",
+      "stdinSha256": "8f722a2cc5ad807f67a142a42531726d1d503d3dfb032206f31e901c8aad16f9"
+    },
+    {
+      "command": "rtk proxy sed -n '1,110p' scripts/cpu-admission.ts",
+      "exit": 0,
+      "commandSha256": "4d3fa203940a14adcfa026d187d7ab01b3915e9cc8694f668eabb660366377c1"
+    },
+    {
+      "command": "rtk proxy rg -n 'admission.sqlite|function machineCpuAdmissionQueue|suspend|stage_admission|ready|tickets|last' src/lib/runtime/cpuAdmission.ts",
+      "exit": 0,
+      "commandSha256": "6b658e9d8aaa4d960b4f3492029700b403daf05eb4b803b5f5b47b2cbb4a53ac"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "5748394bdfd627bbf082313dcd654df87b6d831684f7a6980dc47137ae60c96d",
+      "stdinSha256": "5b5d6e07e908e2615831014ad046e10ca88ee817e4df33856e4aa05f6e648942"
+    },
+    {
+      "command": "rtk proxy sed -n '78,105p' src/lib/runtime/cpuAdmission.ts",
+      "exit": 0,
+      "commandSha256": "6174e41a156fa2cf66ceef4d50aaf69ce899f0475b5f8a8b8bc064aaeb66e5db"
+    },
+    {
+      "command": "rtk proxy sed -n '240,320p' src/lib/runtime/cpuAdmission.ts",
+      "exit": 0,
+      "commandSha256": "47f35dc903c2698211248d1ec9fd8d3401e16fd0612799bbdfc87e4c721bfb24"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import { cpuAdmissionFile } from \"./src/lib/runtime/cpuAdmission\"; fs.writeFileSync(path.join(process.env.TMPDIR!, \"resume/admission-db-path\"), cpuAdmissionFile()); console.log(\"Resolved the admission database for read-only inspection.\");'",
+      "exit": 0,
+      "commandSha256": "84b7812cb66679293fe9f49595e530390e28552af1305a167a0f00a30f49859b"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "c3f9ef98d803aa7d3974bdc24be56cc247fbdfcb49fa1b20f9fd3c1797ed14b5",
+      "stdinSha256": "81518b19cf2f120912399b0d60d225966d9a2f212b42c0584bbac910cc99843d"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import { signalSandboxContext, cpuOwnerStatus, cpuOwnerExited } from \"./src/lib/runtime/signalSandboxContext\"; const c=signalSandboxContext()!; const input=JSON.parse(fs.readFileSync(path.join(process.env.TMPDIR!,\"resume/admission-queue-observation.json\"),\"utf8\")); const rows=input.tickets.filter((r:any)=>r.owner&&!r.held&&!r.admitted).map((r:any)=>{const owner=JSON.parse(r.owner); let kind=\"unreadable\",state=\"unreadable\",wait=\"unreadable\";try{const root=path.join(c.hostProc,String(owner.pid));const args=fs.readFileSync(path.join(root,\"cmdline\"),\"utf8\").split(\"\\0\");kind=path.basename(args[0]);state=fs.readFileSync(path.join(root,\"stat\"),\"utf8\").split(\") \").at(-1)!.split(\" \")[0];wait=fs.readFileSync(path.join(root,\"wchan\"),\"utf8\").trim();}catch{}return {status:cpuOwnerStatus(owner),exited:cpuOwnerExited(owner),kind,state,wait};}); console.log(JSON.stringify(rows)); fs.writeFileSync(path.join(process.env.TMPDIR!,\"resume/admission-owner-statuses.json\"),JSON.stringify(rows,null,2));'",
+      "exit": 0,
+      "commandSha256": "f775e72e04f58899e9a2c88be89409c88a6f6b09866eff535635705880ef7c5e"
+    },
+    {
+      "command": "rtk proxy sed -n '150,185p' scripts/gate-slot.sh",
+      "exit": 0,
+      "commandSha256": "8ba2382b9f4c31f0464f5ec4495abcaf7c51745048f9eaf025be71de68e8eff4"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "ee3c7b0f114f7e93326fff4c3d0f25240de3a971c5aa62d7f1beee6fd4724fa4",
+      "stdinSha256": "b02ed0d3987cdccc1c43dd1c0b9e0595f9da341ae91605616431bb1e77164e19"
+    },
+    {
+      "command": "rtk proxy cat .githooks/pre-commit",
+      "exit": 0,
+      "commandSha256": "6d02b2201761857b80db131913e31f87a218fd44dcbb06df784d66ef1f3d0965"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 1,
+      "commandSha256": "e143d0a3de14e469c47147add290a0f21367662dde31d02f531e000a8ddac898",
+      "stdinSha256": "b460fcfbf3d719105081a7090d90806d590db5474e7bdc940080c0c7de56cf56"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import { captureProcessIdentity } from \"./src/lib$PROC_ROOTessIdentity\"; import { hostProcessIdentity, cpuOwnerStatus } from \"./src/lib/runtime/signalSandboxContext\"; const root=path.join(process.env.TMPDIR!,\"resume\"); const own=JSON.parse(fs.readFileSync(path.join(root,\"owned-confirmation-caller.json\"),\"utf8\")); const local=captureProcessIdentity(own.pid); if(local.startIdentity!==own.startIdentity)throw new Error(\"owned caller moved\"); const host=hostProcessIdentity(local); const queue=JSON.parse(fs.readFileSync(path.join(root,\"admission-queue-observation.json\"),\"utf8\")); const rows=queue.tickets.filter((r:any)=>r.owner&&JSON.stringify(JSON.parse(r.owner))===JSON.stringify(host)); if(rows.length!==1)throw new Error(\"owned ticket not uniquely reconciled\"); fs.writeFileSync(path.join(root,\"owned-confirmation-ticket.json\"),JSON.stringify({local,host,key:rows[0].key})); console.log(JSON.stringify({ownedTicketMatched:true,status:cpuOwnerStatus(host)}));'",
+      "exit": 1,
+      "commandSha256": "c05a4a7d7e83323680eda48366357febc06682463a5befd54e12542fd177e566"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "458562d39ffdb3e925782705abf87d80e6353e11f3ec5be10ab3455683de8499",
+      "stdinSha256": "7ab221b6e1bba96df182d76e52e58219174cd1c9141880dd137b63e28b923082"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import { captureProcessIdentity } from \"./src/lib$PROC_ROOTessIdentity\"; import { hostProcessIdentity, cpuOwnerStatus } from \"./src/lib/runtime/signalSandboxContext\"; const root=path.join(process.env.TMPDIR!,\"resume\"); const own=JSON.parse(fs.readFileSync(path.join(root,\"owned-confirmation-caller.json\"),\"utf8\")); const local=captureProcessIdentity(own.pid); if(local.startIdentity!==own.startIdentity)throw new Error(\"owned caller moved\"); const host=hostProcessIdentity(local); const queue=JSON.parse(fs.readFileSync(path.join(root,\"admission-queue-observation.json\"),\"utf8\")); const rows=queue.tickets.filter((r:any)=>{if(!r.owner)return false;const o=JSON.parse(r.owner);return o.pid===host.pid&&o.startIdentity===host.startIdentity&&o.bootEpoch===host.bootEpoch;}); if(rows.length!==1)throw new Error(\"owned ticket not uniquely reconciled\"); fs.writeFileSync(path.join(root,\"owned-confirmation-ticket.json\"),JSON.stringify({local,host,key:rows[0].key})); console.log(JSON.stringify({ownedTicketMatched:true,status:cpuOwnerStatus(host)}));'",
+      "exit": 0,
+      "commandSha256": "4cd042e3f1d9ef09251fc11a5581dc5bdf2ce302303ba2bdddcd47e8f5c6d981"
+    },
+    {
+      "command": "rtk proxy rg -n 'preCommit|pre-commit|40|eslint|gate-slot' scripts/local-gate.ts",
+      "exit": 0,
+      "commandSha256": "73dd1a5c58ad8a4ba39eb879acd67736752cf565cdf861fb593636acef34652e"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "69f5be9c3f4c9bde307843f6d5634c993fb813c88f1cd9f760bf640023de402b",
+      "stdinSha256": "e8a74194f22a21c22bddb3dcce59d038b246ffce2ba04460ddc5a4f48a8d8d9c"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import { cpuOwnerStatus } from \"./src/lib/runtime/signalSandboxContext\";const root=path.join(process.env.TMPDIR!,\"resume\");const data=JSON.parse(fs.readFileSync(path.join(root,\"admission-queue-current.json\"),\"utf8\"));const head=data.tickets.find((r:any)=>r.priority===1);const status=cpuOwnerStatus(JSON.parse(head.owner));fs.writeFileSync(path.join(root,\"admission-blocker.json\"),JSON.stringify({normalHeadStatus:status,normalHeadAgeMinutes:(data.observedAtMs-head.since)/60000,cpuPressureAvg10:0.84,kernelSlotsAvailableObserved:true,checksWaiting:\"three whole-file observations per side\"}));console.log(JSON.stringify({normalHeadStatus:status,normalHeadAgeMinutes:Math.round((data.observedAtMs-head.since)/60000)}));'",
+      "exit": 0,
+      "commandSha256": "812ce81f0e42a9ba944d811320f2b4fd673ffc127283688ce5a7ad3cc058209e"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "ac9a79cbd72eab643dc65886f3b8c4fc53da20b6023f160b79ddf411db0ea175",
+      "stdinSha256": "34f98c5facdf3c15b187db8e6d5a8117922560856ea97dad4dc9ab9d874f42c6"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "6ec90d020f3bc140a5a26bf4e997bc2cded4373351efc74a2448257be5a02274",
+      "stdinSha256": "20e5e4051495a134d1bca3a572ee604699f86e2ce630a20da3e9825a0d370872"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/checkpoint-report.py\"",
+      "exit": 0,
+      "commandSha256": "cb18da53a7df35eff4109c22ef8f0bb7b0285352789d916dfbc4b2110f74e291"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2d284329806d33fa656f45982c033d4bac03aee7a27cc3067c3d178e03608a37",
+      "stdinSha256": "bbddc84d058d8d19318faf12a51fc99dff39e29a437a664a7f9f01cd5bb80722"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" workflow-scope-check git diff --name-only origin/main -- .github/workflows",
+      "exit": 0,
+      "commandSha256": "418e75549cffa0c5245b3813ffc1972a08dbea5a45a402fd7cf6164c3b7a4d18"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" stage-checkpoint git add evidence/package-installs-merge-refresh.json",
+      "exit": 0,
+      "commandSha256": "80673ff9142da922d020d648b322871b2a469e060bbe1f69afc2a9b0ec5ee6b6"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" staged-checkpoint-whitespace git diff --cached --check",
+      "exit": 0,
+      "commandSha256": "2baf45c6e94d694ec6747d2c90c6ba94666b90cdd896cd33d52c062d57ffa119"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" commit-merge-checkpoint git commit -F \"$TMPDIR/resume/merge-message.txt\"",
+      "exit": 0,
+      "session": 57034,
+      "commandSha256": "bc6e1f89153acb87a7e23d502ec35f7783fd786e1468963e83cacc2a71378b28"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" post-commit-verification python3 \"$TMPDIR/resume/post-commit.py\"",
+      "exit": 0,
+      "commandSha256": "820bce34cf0897d3271f2428cdd9dd19bb306395afd5752ab5880cb32e415e6c"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" original-head-ancestry git merge-base --is-ancestor bf7c711e4c46dfba23899859cfbdac28b23199ac HEAD",
+      "exit": 0,
+      "commandSha256": "914a27edf48af30257e166f56b8936264fc459711a2b1c040253828bd5203693"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" captured-main-ancestry git merge-base --is-ancestor 19bbd6d7c28100e17de36a68eedad366446ee788 HEAD",
+      "exit": 0,
+      "commandSha256": "0dc21b6ea01870d52b0645693f555a344fc3433408261b99293c5af86cb32a72"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" committed-workflow-scope git diff --name-only 19bbd6d7c28100e17de36a68eedad366446ee788 HEAD -- .github/workflows",
+      "exit": 0,
+      "commandSha256": "dd03365571da645a4cc8b0c2e84f01bfe13c56ab456104a87f460d9abbe0cf28"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" final-publication-privacy bun run privacy:check",
+      "exit": 0,
+      "session": 28332,
+      "commandSha256": "f80928ab983a7cc1a55298dbb39958fbdabdf08c8d2ddee7366c5ff1412666c4"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" final-origin-observation git rev-parse origin/main",
+      "exit": 0,
+      "commandSha256": "fefb38fbf0fd35166e3356bb238b4369317bdcca193722d5d5ac95011957db85"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" newer-main-scope git diff --stat 19bbd6d7c28100e17de36a68eedad366446ee788 origin/main",
+      "exit": 0,
+      "commandSha256": "31b2725c5325786617359af46f7bd8085c585c6720184d9b87d084336a38f993"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" final-worktree-status git status --short",
+      "exit": 0,
+      "commandSha256": "26a80dd76073f99e6b184388c5ae6e7c3ece5c03285fbaf1751e9162715daaed"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "704e6c961eba3f27db40606ecab4b778f902f8564ab1623581382fb81963e2a9",
+      "stdinSha256": "d56a3dff4a6078f3c3d05e5e3e516ea58092135d61eaa02e8dfa61dbf909498f"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import {cpuOwnerStatus} from \"./src/lib/runtime/signalSandboxContext\";const p=path.join(process.env.TMPDIR!,\"resume/final-admission-head.json\");const r=JSON.parse(fs.readFileSync(p,\"utf8\"));console.log(JSON.stringify({normalHeadStatus:r?cpuOwnerStatus(JSON.parse(r.owner)):\"absent\"}));'",
+      "exit": 0,
+      "commandSha256": "a09ef097597f7d7b2a5ae661e29a1f5329eed447ff2dbe0459e63b9eb15025b5"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-files git diff --name-only 19bbd6d7c28100e17de36a68eedad366446ee788 origin/main",
+      "exit": 0,
+      "commandSha256": "54947e8d8d370f3ed879c617eb8cd0be7964cbdeeb61e59dc7c2f7f17930ab73"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-code-review git diff 19bbd6d7c28100e17de36a68eedad366446ee788 origin/main -- \"*.ts\"",
+      "exit": 0,
+      "commandSha256": "ac06c8c611fd4876f947a8b475d30b66bfa18fd3c7fd51a31087aee17173bd1b"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-merge git merge --no-ff --no-commit origin/main",
+      "exit": 0,
+      "commandSha256": "268d12cfee847a21c1023aa2eb7601ad282b0ccf8d217b76b48c08254700104e"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "690b4edb52cb56e6a55dcc176eb397aaa03db7b0368e36a63a4520ca675f03ed",
+      "stdinSha256": "4d2a7c17e93dc11f782426785844a3666418dfe8d927660b8baf53d393a46443"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "fa5a6594d40fdcc8d9a00495c961f20dd16e1156b9c273fb6371f32c634d1e83",
+      "stdinSha256": "803115ef87f64a06fb2d39ecc6499d8459e917a675bd204f24d572460ef6450b"
+    },
+    {
+      "command": "rtk proxy rg -n 'priority|operator' docs/design/cpu-placement.md src/lib/runtime/cpuPriority.ts",
+      "exit": 0,
+      "commandSha256": "28fca9dbdcd6129c9add00d8180b1862d4973191e8dc5deaaed9c38d62dcce05"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\";import path from \"node:path\";import{systemBootEpoch}from\"./src/lib$PROC_ROOTessIdentity\";import{signalSandboxContext}from\"./src/lib/runtime/signalSandboxContext\";const root=path.join(process.env.TMPDIR!,\"resume\");const r=JSON.parse(fs.readFileSync(path.join(root,\"final-admission-head.json\"),\"utf8\"));const o=JSON.parse(r.owner);const c=signalSandboxContext()!;const result={headNamespaceMatchesThisAttempt:o.bootEpoch===systemBootEpoch(),headNamespaceMatchesHost:o.bootEpoch===c.hostEpoch,headPidVisibleInThisAttempt:fs.existsSync(\"$PROC_ROOT/\"+o.pid)};fs.writeFileSync(path.join(root,\"head-ownership-comparison.json\"),JSON.stringify(result));console.log(JSON.stringify(result));'",
+      "exit": 0,
+      "commandSha256": "61fb52b6729ae1565e44342cec706d88d26df310a65a173d2c8f731615385b59"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-input-scope git diff --name-only HEAD",
+      "exit": 0,
+      "commandSha256": "fbabc169e2dc9fb398a548ed7325f8043b85d39169984effe2f0ea61be0bea6c"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-upstream-file-match git diff --name-only origin/main -- evidence/native-queue-compaction-startup.md src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+      "exit": 0,
+      "commandSha256": "bd4271e48d38e084d9d41284a5d4f753b229a0cd3f67fdd9b4324245967ff297"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" stage-latest-evidence git add evidence/package-installs-merge-refresh.json",
+      "exit": 0,
+      "commandSha256": "4de7634a5c520d595c516bba5d8a159341a66ee38b7844df0fd9f73dfcce2d55"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-staged-whitespace git diff --cached --check",
+      "exit": 0,
+      "commandSha256": "11efaf8ed87aca6e1623bf6676dcef75f5057d4d57708a2fdee6ca72d0078662"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" commit-latest-main git commit -F \"$TMPDIR/resume/latest-merge-message.txt\"",
+      "exit": 0,
+      "session": 56996,
+      "exitSource": "Completed command journal; original tool output envelope was truncated.",
+      "commandSha256": "93ec715021b70011d96c6176a9568a2a2175f9288c6e6622afe8ed9b1ed00def"
+    },
+    {
+      "command": "git status --short --branch\n git show -s --format='%H %s%n%P' HEAD\npython3 - <<'PY'\nimport os,json\np=os.path.join(os.environ['TMPDIR'],'resume','commands.jsonl')\nfor line in open(p).readlines()[-12:]:\n d=json.loads(line); print(json.dumps(d))\nPY",
+      "exit": 0,
+      "commandSha256": "5f5976ea180931504a93b5796ce4d90f87418db574d417f813816afa96ac36cc"
+    },
+    {
+      "command": "sed -n '1,110p' \"$TMPDIR/resume/run.py\"\npython3 - <<'PY'\nimport json,os\np='evidence/package-installs-merge-refresh.json'\nd=json.load(open(p));print('FIELDS',list(d))\nfor k in ['status','checkedMain','mergedMain','newerMainPendingChecks','admissionBlocker','pendingChecks','decisionRequired']:\n if k in d:print(k,json.dumps(d[k],ensure_ascii=False)[:7500])\nprint('HELPERS')\nfor n in os.listdir(os.path.join(os.environ['TMPDIR'],'resume')):\n if any(s in n for s in ['admission','checkpoint','post-commit','cancellation','backup','ownership']):print(n)\nPY",
+      "exit": 0,
+      "commandSha256": "6d09b20a9a5cb8d8d85414ac9a6e7f555befac4a5f955011a22209cf8e95f0ad"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "cb82315d23843d720e3435c116736f39a0d8de59c6bea5a8be30b1dba7beec62",
+      "stdinSha256": "17269c887ea8f31392514fc7599ffad0d6cc2bf7bec572775ea114710708f107"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "session": 14315,
+      "commandSha256": "be6b3c2f33e6ad141601d50cdcc17f0fd0f71384279d18610665a6e38fd942ed",
+      "stdinSha256": "ecfcd12aaa14399286554c84e79af598e14c7045bf7e552064750b1155d9a21e"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "cd65ce2e36d8fff421375c3417d41eacd558ea044275e15bcfd0aa293cc7547a",
+      "stdinSha256": "26f90c0da0e23a6cb41f7b744c97d7d904402c647dbfb0f654a264dbfc96d7a6"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "36001bb9628cbb79451d76aa60419721146617b86dd47eb1f9c065330bbc8aa1",
+      "stdinSha256": "31636a56ce30f3b06a49adbac357b0d69cbb1bb0b82ac4b99f9347abc1ece866"
+    },
+    {
+      "command": "python3 -",
+      "exit": 2,
+      "commandSha256": "8663cfc3575ee9bad07f8ed55f4b98694fa3ff9d0438ce4b80f05f7bf69e88a0",
+      "stdinSha256": "31337ca8f59d74a7be4bb6256aa8630d46164a218a9253c8d92ca4fe88067e34"
+    },
+    {
+      "command": "rg -n 'export.*cpuOwnerStatus|function cpuOwnerStatus|interface.*Context|export.*signalSandboxContext' src/lib/runtime/signalSandboxContext.ts\nsed -n '1,65p' src/lib/runtime/signalSandboxContext.ts\npython3 - <<'PY'\nimport pathlib,os,json\nr=pathlib.Path(os.environ['TMPDIR'])/'resume'\nprint((r/'host-proc-context.json').read_text())\nprint((r/'admission-owner-statuses.json').read_text()[:1400])\nPY",
+      "exit": 0,
+      "commandSha256": "71abd6b5bd21477c4ece6506876bcdb0da8dbfc0e6ca2235804b397a5241089d"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "5f77831c8f051949c43a87e13b2d106c79f64e8625bf8acb3dabea01b8575f64",
+      "stdinSha256": "04f64f7b8423924d5d55c2c8482d226deb5dc38e328e605384c0dd7ce0300635"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "4bc36e1230d92f2f87efafacc45982dbaa0fe0c9d913444c577454a765990bdf",
+      "stdinSha256": "a19a6cac33c3cfcd4638ef24e6f588ed537b5e94ff30640034f944072806c714"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "7ce6fa2cc25a789b4efe7170c3fb4c07ec7b6a71c9ec8d6f175db3dfa3f54b31",
+      "stdinSha256": "cbcf1c04aa6d8d3d74825340fff019161765f053880972a14297411c99dc1719"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "680019993aecc1564019884596504885be7d829e506a1e40543b024c98616a93",
+      "stdinSha256": "6a145f629f697155df1e644d055d5d270b8f2f539f3fe6b9d3bc91f1f79de132"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "f8f16c6ed4aec4b009e6ada8c6f4dc30d5f3afbbef63f79a0b3d59929a89f369",
+      "stdinSha256": "34de4aee8e825aab6bbc2b1bfbab83dd60a3a0f7b1172d133ed853b0ffe50ba6"
+    },
+    {
+      "command": "sed -n '1,100p' \"$TMPDIR/resume/checkpoint-report.py\"",
+      "exit": 0,
+      "commandSha256": "638c869d2e950a6282ed16ed0169b7d19736e411a1acc7d896b2645c0cc9f84d"
+    }
+  ],
+  "commandNotation": "$GATE_SLOT names the prescribed wrapper, $STAGE_SCRATCH the owned scratch directory, $GATE_RUNNER the runner, $ORIGIN_URL the existing repository remote, $BASH the shell, and $PAIRED_CHECK_DRIVER the inline serial test/check program. Here-document inputs are represented by SHA256; every shell invocation, test file command and exit is listed. Hook/commit and post-commit commands after this report's cutoff are reported in the stage summary.",
+  "nonzeroCommandNotes": {
+    "diagnosticLookup": "Exploratory path lookups for missing scripts/modules exited 2; the current file inventory was read before the corrected lookups.",
+    "baselineBundle": "A raw commit range produced no named bundle ref and exited 128 without creating a file. A named-ref retry and bundle verification both exited 0.",
+    "exploratoryTests": "Both complete exploratory main runs are superseded by clean captures outside the exports.",
+    "pairedTests": "Shared main failures remain explicit. One contention assertion is still unresolved in the initial current-main pair; the six requested confirmations could not start.",
+    "initialComparison": "The first report attempt exited 1 on a preflight contention assertion seen only on the branch in that initial pair. Three whole-file observations per side were requested but could not start behind an earlier unverified admission owner.",
+    "transport": "Exit 255 interrupted the first clean capture after a complete 22-file main phase and eleven branch files. The recorded local survivor was proven dead and the owned remote run was removed. The remaining files and final checks run over private SSH connections."
+  },
+  "limitations": [
+    "Conditional native-platform and browser cases retain their own skips. No native macOS run was performed.",
+    "The current-main pair has one unresolved contention assertion; the same assertion failed in the earlier main campaign. The confirmation batch was cancelled before execution after verifying ownership and cleanup.",
+    "Earlier paired remoteActions.test.ts invocations both reached their deadlines with matching observed failures and diagnostics; later unobserved cases are unverified.",
+    "The prior full comparison retains shared main failures and has no remaining branch-only failed assertion."
+  ],
+  "checkedMain": "19bbd6d7c28100e17de36a68eedad366446ee788",
+  "mergedMain": "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+  "newerMainPendingChecks": [
+    "src/lib/runtime/nativeQueueCompaction.integration.test.ts on main and branch",
+    "typecheck of the latest merged fixture"
+  ],
+  "pendingContentionConfirmations": "Three whole-file observations per side; cancelled before execution behind the unverified admission head.",
+  "upstreamOnlyUpdate": {
+    "files": [
+      "evidence/native-queue-compaction-startup.md",
+      "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+    ],
+    "conflicts": [],
+    "sha256": {
+      "evidence/native-queue-compaction-startup.md": "8765186ecd37078be12497b1746ad131c7388212f239b2abacb2e5173acf1d50",
+      "src/lib/runtime/nativeQueueCompaction.integration.test.ts": "0815b74ef29f68070a9310801ea0bf1f71de0f2bfa8f8300ad6814e31512ffe2"
+    }
+  },
+  "finalSourceHashesCoverage": "Hashes of the previously checked inputs. Upstream-only hashes above identify the later unchecked fixture/evidence.",
+  "finalCheckpointVerification": {
+    "latestMergeParentsVerified": true,
+    "worktreeCleanAtVerification": true,
+    "workflowEdits": false,
+    "upstreamFilesMatchCapturedMain": true,
+    "finalPublicationPrivacyExit": 0,
+    "pendingHeavyChecksRemain": true
+  }
+}

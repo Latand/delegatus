@@ -414,6 +414,8 @@ export type PipelineStageAttempt = {
   executionRuntime?: "local" | "cloud" | "cloud-then-local";
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
+    /** Explicit retry binds the current stage after stop and delivery settlement. */
+    retryRequestedAt?: string;
     hold?: PipelineAccountHold };
   /** Holds an account suspension of this attempt confirmed, kept when the
       attempt, never launched, launches again on another account. */
@@ -581,6 +583,20 @@ export type PipelineStageAttempt = {
       witness the controller has that a deploy cut its turn. Absent on attempts
       recorded before the field existed and on pane-hosted ones. */
   hostEpoch?: number;
+  /** Claude restore continuation, retained on this attempt across controller
+      restarts. Reserve each key before admission; an uncertain ACK reuses it.
+      The initial instruction and two no-report nudges share this budget. */
+  restoreContinuation?: {
+    cutAt: string;
+    conversationId: string;
+    transcriptPath: string;
+    promptBoundary: number | null;
+    count: number;
+    clientMessageId: string;
+    requestedAt: string;
+    deadline: string;
+    acceptedAt?: string;
+  };
   /** One durable automatic replacement attempt per interrupted attempt and boot. */
   restartRecovery?: {
     bootId: string;

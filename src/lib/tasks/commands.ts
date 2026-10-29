@@ -15,6 +15,7 @@ import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
 import { readTaskPriorityInput } from "./priority";
 import { readTaskSteps } from "./steps";
+import { readTaskProgress } from "./progress";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
@@ -63,6 +64,8 @@ export type CreateTaskResult =
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  /** Integer estimate from 0 to 100; null leaves it absent. */
+  progress?: unknown;
   findingKey?: unknown;
   note?: unknown;
   hold?: unknown;
@@ -95,6 +98,8 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  /** Integer estimate from 0 to 100; null clears, omitted preserves it. */
+  progress?: unknown;
   dueReason?: unknown;
   findingKey?: unknown;
   /** Dashboard undo only, accepted with operator authority and both fences. */
@@ -408,6 +413,11 @@ export function createTask(
   if (text.length > TASK_TEXT_LIMIT) return textLimitError();
   const details = normalizeDetails(input.details);
   if (!details.ok) return details;
+  const now = deps.now?.() ?? isoNow();
+  const progress = Object.hasOwn(input, "progress")
+    ? readTaskProgress(input.progress, now, deps.statusActor ?? taskProgressActor(deps))
+    : { ok: true as const, progress: undefined };
+  if (!progress.ok) return progress;
 
   if (deps.requireDue && (input.dueAt === undefined || input.dueAt === null || input.dueAt === "")) {
     return { ok: false, error: "A dueAt date is required for a new task", status: 400, code: "TASK_DUE_REQUIRED", field: "dueAt" };
@@ -431,15 +441,16 @@ export function createTask(
   const key = findingKey.key;
   // Keyed admission uses the same project identity the store persists.
   if (key !== undefined) project = canonicalProject(project);
-  const now = deps.now?.() ?? isoNow();
   const receipt = (taskId: string, matched = false): RecentCreate[] => clientRequestId
     ? [...recentCreates.filter(entry => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId, ...(key !== undefined ? { matched } : {}) }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
   if (key !== undefined) {
     const prior = existing.find(task => task.project === project && task.findingKey === key && task.status !== "done");
     if (prior) {
-      // Only the current note and occurrence metadata change on a match.
-      const updated = patchTask(existing, prior.id, { note: input.note ?? null }, now, deps);
+      // A recurring report preserves the estimate unless it supplies a new one.
+      const updated = patchTask(existing, prior.id, { note: input.note ?? null,
+        ...(Object.hasOwn(input, "progress") ? { progress: input.progress } : {}),
+      }, now, deps);
       if (!updated.ok) return updated;
       const task: BoardTask = { ...updated.task, finding: { ...prior.finding, count: (prior.finding?.count ?? 1) + 1, lastSeenAt: now } };
       return { ok: true, tasks: updated.tasks.map(row => row.id === task.id ? task : row), task, recentCreates: receipt(task.id, true), replay: false, matched: true };
@@ -500,6 +511,7 @@ export function createTask(
       ...(previous ? { previousTaskId: previous.id } : {}),
     } } : {}),
     status: hold ? "blocked" : "inbox",
+    ...(progress.progress ? { progress: progress.progress } : {}),
     ...(deps.statusActor ? { statusBy: { actor: structuredClone(deps.statusActor), from: null, at: now } } : {}),
     ...(hold ? { hold } : {}),
     text,
@@ -529,8 +541,9 @@ export function createTask(
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(key !== undefined ? { matched: false } : {}), ...(notes.length ? { notes } : {}) };
 }
 
-/** Presentation of a task, never work on it: `updatedAt` stays (see below). */
-const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind"]);
+/** Presentation of a task, never work on it: `updatedAt` stays (see below). A
+    progress estimate carries its own `setAt`, so reporting one moves no age either. */
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind", "progress"]);
 
 function editTaskWorkLinks(
   task: BoardTask,
@@ -564,6 +577,12 @@ function editTaskWorkLinks(
   return { ok: true, links: edit.links, changed: edit.changed };
 }
 
+function taskProgressActor(options: Pick<PatchTaskOptions, "actor" | "conversationId">): PauseResumeActor {
+  return options.actor === "agent"
+    ? { kind: "agent", role: null, conversationId: options.conversationId ?? null }
+    : { kind: "operator" };
+}
+
 export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
@@ -590,6 +609,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "progress")) {
+    const progress = readTaskProgress(input.progress, now, options.statusActor ?? taskProgressActor(options));
+    if (!progress.ok) return progress;
+    patch.progress = progress.progress;
+  }
   if (Object.hasOwn(input, "findingKey")) {
     const key = readFindingKey(input.findingKey);
     if (!key.ok) return key;
@@ -785,6 +809,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueHistory;
   }
   if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
+  if (Object.hasOwn(patch, "progress") && patch.progress === undefined) delete updated.progress;
   if (Object.hasOwn(patch, "findingKey") && patch.findingKey === undefined) delete updated.findingKey;
   if (Object.hasOwn(patch, "finding") && patch.finding === undefined) delete updated.finding;
   if (updated.placement === "unplaced") delete updated.pos;

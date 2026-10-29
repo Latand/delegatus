@@ -29,6 +29,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { worktreeDiskWait } from "@/lib/state/diskPressure";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
@@ -340,8 +341,8 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const h = harness();
-  // Model the identity pinned into a launched agent, independently of the
-  // runner's author/committer variables and the repository's Fixture config.
+  // Upstream writers use a fixed machine identity. Dispatched agents below
+  // bind the repository identity through the production launch helper.
   const { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL } = agentPublicationIdentityEnv(process.env);
   const identity = { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL };
   let agentEnv: Record<string, string | undefined> = identity;
@@ -354,7 +355,8 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
     const spawned = await spawnAgent(input, async reservation => {
       await onReserved({ ...reservation, launchId });
       const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now(), () => onReserved({ ...reservation, launchId }));
-      agentEnv = { ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...guard }) };
+      const source = await repositoryPublicationSource(input.cwd, { ...process.env, ...guard }, realExec);
+      agentEnv = { ...guard, ...agentPublicationIdentityEnv(source) };
       agentWorktree = input.cwd;
     });
     return { ...spawned, launchId };

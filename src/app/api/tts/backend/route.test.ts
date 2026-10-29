@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { configFilePath } from "@/lib/configDir";
+import { writeFishAudioModel, writeTtsBackend, writeTtsVoice } from "@/lib/ttsBackend";
 import { GET, POST } from "./route";
 
 const names = ["XDG_CONFIG_HOME", "LLV_TTS_BACKEND", "LLV_TTS_FISHAUDIO_MODEL", "LLV_TTS_ELEVENLABS_VOICE"];
@@ -62,4 +63,24 @@ test("saves each voice independently and allows the locked provider voice", asyn
 test.each(["", "a\nb", "x".repeat(129), 7, null])("refuses invalid voice %j", async (voice) => {
   expect((await POST(request({ backend: "elevenlabs", voice }))).status).toBe(400);
   expect(fs.existsSync(configFilePath("tts-backend"))).toBe(false);
+});
+
+for (const choice of [
+  { file: "tts-backend", body: { backend: "soniox" }, expected: "soniox" },
+  { file: "tts-model-fishaudio", body: { backend: "fishaudio", model: "s2.1-pro" }, expected: "s2.1-pro" },
+  { file: "tts-voice-soniox", body: { backend: "soniox", voice: "saved voice" }, expected: "saved voice" },
+]) test(`a failed ${choice.file} write keeps its error and releases admission for retry`, async () => {
+  const file = configFilePath(choice.file);
+  fs.mkdirSync(file, { recursive: true });
+  await expect(POST(request(choice.body))).rejects.toThrow("EISDIR");
+  expect(fs.existsSync(`${file}.write-lock`)).toBe(false);
+  expect(fs.readdirSync(`${file}.write-locks`)).toEqual([]);
+  fs.rmdirSync(file);
+  // A failed async commit must release the in-process synchronous admission too.
+  if (choice.file === "tts-voice-soniox") writeTtsVoice("soniox", choice.expected);
+  else if (choice.file === "tts-model-fishaudio") writeFishAudioModel("s2.1-pro");
+  else writeTtsBackend("soniox");
+  expect(fs.readFileSync(file, "utf8")).toBe(`${choice.expected}\n`);
+  expect((await POST(request(choice.body))).status).toBe(200);
+  expect(fs.readFileSync(file, "utf8")).toBe(`${choice.expected}\n`);
 });

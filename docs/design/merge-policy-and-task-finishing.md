@@ -452,8 +452,12 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    The branch is kept, because worktree cleanup owns lane branches.
 5. **One at a time per repository.** Each merge moves main and puts every other
    PR behind it, so the runner keeps a FIFO per repository (ordered by
-   completion time) and only the head of the queue goes past `queued`. This is
-   the order the seat enforces by hand today. A blocked lane leaves the queue.
+   completion time). A blocked lane leaves the queue. While a refresh lane is
+   outstanding, bounded readiness reads rotate by the persisted last-read time,
+   with expired check holds first. Clean, green PRs may merge while refreshes
+   run. Refresh capacity applies only to the refresh stage's preparation, execution and
+   publication; review and any later stages release it. Each sweep still makes
+   at most one merge per repository, and a PR keeps its own check-settle clock.
 6. **Merged elsewhere**: when the forge sweep or a read sees the PR `MERGED`,
    whoever merged it, the record becomes `merged` with `by: "outside"`.
    Since 2026-10-15, a closed PR also qualifies through the batch merger's
