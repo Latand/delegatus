@@ -1,6 +1,7 @@
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
@@ -7230,6 +7231,14 @@ async function spawnRunStage(
   const recoveringReservation = attempt.activation?.replay === true;
   let roleMemoryWaitReady = false;
   try {
+    // A source-owned link may survive an interrupted turn or an older
+    // read-only launch. Release it before every stage can run package code.
+    isolateWorktreeDependencies(pipeline);
+    if (fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
+      const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
+      if (ignored.code !== 0 && ignored.code !== 1) throw new Error("could not check ignored stage dependencies");
+      if (ignored.code === 0) await prepareWorktreeDependencies({ ...pipeline, stages: [{ ...stage, access: "read-only" }] });
+    }
     if (attempt.roleMemoryWait) {
       if (attempt.roleMemoryWait.ready === true) {
         roleMemoryWaitReady = true;
@@ -9956,8 +9965,8 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   if (!pending.length) return outcomes;
   // Existing injected synchronous ports remain usable by state-machine tests.
   // Production's realExec always selects the native asynchronous implementation.
-  const exec = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
-    : async (command, args, cwd) => (await ports.exec(command, args, cwd)));
+  const exec: ProvisionExecPort = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
+    : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs })));
   const jobs = pending.map((pipeline) => {
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
@@ -9991,14 +10000,14 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
         outcomes.set(job.pipeline.id, { id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null, error: diskWait });
         return;
       }
-      const guardedExec: ProvisionExecPort = async (command, args, cwd, signal) => {
+      const guardedExec: ProvisionExecPort = async (command, args, cwd, signal, options) => {
         revalidate();
         if (command === "git" && args[0] === "worktree" && args[1] === "add") {
           const wait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
           if (wait) return { code: 1, stdout: "", stderr: wait };
         }
         if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
-        try { return await exec(command, args, cwd, signal); }
+        try { return await exec(command, args, cwd, signal, options); }
         catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
       };
       let releaseRepository: (() => void) | undefined;
