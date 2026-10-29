@@ -156,8 +156,15 @@ current built-in default when the incumbent's mandate is based on an older
 version, and the summary line says so; **Keep the incumbent's mandate** carries
 its text forward instead. A seat already on the current version, or on your own
 rules, keeps its text. The seat row flags a stale seat as "mandate vN, default
-vM", and `rotate_orchestrator` defaults identically, with
-`keepIncumbentMandate: true` as the explicit carry-forward.
+vM". The panel submits the mandate text you chose as an explicit override.
+
+`rotate_orchestrator` with no `mandate`, and automatic rotations, render the
+current built-in default and record its current prompt version for the
+successor, including when the incumbent has bespoke rules. Bounded predecessor
+handoff history is retained. `keepIncumbentMandate` is deprecated, accepted and
+ignored. To retain custom rules, pass their text explicitly as `mandate`;
+custom text carries no default-version stamp. An explicit built-in default
+core records the current default version.
 
 The successor receives the mandate plus a handoff the server composes: the
 predecessor's identity and exact `conversation_messages` call, the project's

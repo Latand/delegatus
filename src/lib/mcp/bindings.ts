@@ -5766,8 +5766,9 @@ async function rotateOrchestrator(
     );
   }
   const project = canonicalOrchestratorProject(required(args, "project"));
-  /* Omitting mandate preserves the incumbent's core and handoff history;
-     sending one explicitly replaces the core. */
+  /* The route refreshes an omitted core to the current default and retains
+     bounded handoff history. Explicit mandate text overrides that core.
+     The legacy keep flag is forwarded for compatibility and ignored there. */
   const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "fast", "serviceTier", "accountId", "keepIncumbentMandate"]);
   const result = await dispatchControl(control)("/api/orchestrator/rotate", {
     project,
