@@ -101,10 +101,10 @@ export function openRouterRoleSelectionProvider(options: { apiKey?: string | nul
           signal.throwIfAborted();
           details.limit = finite(data.limit) ? data.limit : null;
           details.remaining = finite(data.limit_remaining) ? data.limit_remaining : null;
-          // An unlimited key has no per-key cap. A finite cap requires an
-          // observed remaining balance; missing or malformed values fail closed.
+          // A null limit has no per-key cap. A numeric remaining balance still
+          // governs admission when returned; malformed values fail closed.
           details.status = data.limit === null && data.limit_remaining === null ? "admitted"
-            : nonnegative(data.limit) && finite(data.limit_remaining) ? (data.limit_remaining >= ceilingUsd ? "admitted" : "insufficient") : "shape";
+            : (data.limit === null || nonnegative(data.limit)) && finite(data.limit_remaining) ? (data.limit_remaining >= ceilingUsd ? "admitted" : "insufficient") : "shape";
           return details;
         },
         async decide(key, signal, authorize, observe) {
