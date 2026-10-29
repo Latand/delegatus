@@ -1,6 +1,7 @@
 import { constants, promises as fs, lstatSync, readlinkSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type { Pipeline } from "./types";
+import { prepareLockedDependencies } from "./lockedDependencies";
 
 const inputs = ["package.json", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".npmrc", ".yarnrc.yml"];
 const unsupported = new Set(["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"]);
@@ -49,7 +50,7 @@ async function cloneTree(source: string, target: string, root: string, destinati
   } else throw Object.assign(new Error("unsupported dependency entry"), { code: "ENOTSUP" });
 }
 
-export type DependencySharing = "clone" | "copy" | "private-install" | "unchanged";
+export type DependencySharing = "shared-install" | "clone" | "copy" | "private-install" | "unchanged";
 /** Called before a writer starts, including a stage whose access was changed
  * after provisioning. A private install or an unrelated link is preserved. */
 export function isolateWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" | "worktreeDir">): void {
@@ -66,6 +67,7 @@ export function isolateWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" |
 
 export async function prepareWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" | "worktreeDir" | "stages">,
   options: { platform?: NodeJS.Platform; copyFile?: typeof fs.copyFile; signal?: AbortSignal } = {}): Promise<DependencySharing> {
+  if (await prepareLockedDependencies(pipeline.worktreeDir, { signal: options.signal })) return "shared-install";
   const source = path.join(pipeline.repoDir, "node_modules"), local = path.join(pipeline.worktreeDir, "node_modules");
   if (path.resolve(source) === path.resolve(local) || await entry(local)) return "unchanged";
   if (!(await entry(source)) || !await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";

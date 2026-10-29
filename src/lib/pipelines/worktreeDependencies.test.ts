@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import type { Pipeline } from "./types";
+import { lockedFixture } from "./fixtures/lockedDependencies";
+import { provisionPipelineWorktree, provisionPipelineWorktreeAsync } from "./git";
+import { realExec } from "../workflows/provision";
 
 function fixture(writable = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-dependencies-"));
@@ -129,3 +132,132 @@ test("the native filesystem either produces an independent CoW tree or takes the
     }
   } finally { f.close(); }
 });
+
+test.each(["missing", "lagging-link", "lagging-directory", "matching"].flatMap(shape => ["sync", "async"].map(mode => [shape, mode])))("lockfile cache repairs %s dependencies during %s provisioning", async (shape, mode) => {
+  const f = await lockedFixture();
+  try {
+    const source = path.join(f.repoDir, "node_modules"), local = path.join(f.worktreeDir, "node_modules");
+    if (shape === "missing") fs.rmSync(source, { recursive: true });
+    if (shape === "lagging-link" || shape === "lagging-directory") {
+      fs.writeFileSync(path.join(source, "fixture-tool/package.json"), JSON.stringify({ name: "fixture-tool", version: "1.0.0" }));
+      if (shape === "lagging-link") fs.symlinkSync(source, local, "dir");
+      else fs.cpSync(source, local, { recursive: true });
+    }
+    const provisioned = mode === "sync" ? await provisionPipelineWorktree(f.pipeline, realExec)
+      : await provisionPipelineWorktreeAsync(f.pipeline, (command, args, cwd, signal, options) =>
+        Promise.resolve(realExec(command, args, cwd, options?.env, { ...options, signal })));
+    expect(provisioned).toMatchObject({ ok: true });
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+    expect(fs.lstatSync(local).isSymbolicLink()).toBe(true);
+    const resolved = fs.realpathSync(local);
+    expect(resolved).not.toBe(source);
+    expect(fs.existsSync(path.join(f.worktreeDir, "lifecycle-ran"))).toBe(false);
+    await prepareWorktreeDependencies(f.pipeline);
+    expect(fs.realpathSync(local)).toBe(resolved);
+    fs.writeFileSync(path.join(f.repoDir, ".git/hooks/pre-commit"), "#!/bin/sh\nexec node_modules/.bin/fixture-tool\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(f.worktreeDir, "change.txt"), "stage output\n");
+    await f.run(["git", "add", "change.txt"], f.worktreeDir);
+    await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "-m", "hooked stage output"], f.worktreeDir);
+    if (shape === "lagging-link") expect(JSON.parse(fs.readFileSync(path.join(source, "fixture-tool/package.json"), "utf8")).version).toBe("1.0.0");
+  } finally { f.close(); }
+}, 30_000);
+
+
+test("a real post-merge hook switches to the merged lockfile and a new process reuses it", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules");
+    const original = fs.realpathSync(local);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.repoDir, "package.json"), "utf8"));
+    manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${f.server.port}/next.tgz`;
+    fs.writeFileSync(path.join(f.repoDir, "package.json"), JSON.stringify(manifest));
+    await f.run(["bun", "install", "--ignore-scripts", "--backend=copyfile"]);
+    await f.run(["git", "add", "."]);
+    await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "-m", "next dependency"]);
+    fs.symlinkSync(path.resolve("scripts"), path.join(f.worktreeDir, "scripts"), "dir");
+    fs.copyFileSync(path.resolve(".githooks/post-merge"), path.join(f.repoDir, ".git/hooks/post-merge"));
+    await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "merge", "--no-ff", "main", "-m", "merge dependencies"], f.worktreeDir);
+    expect(fs.realpathSync(local)).not.toBe(original);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("3.0.0");
+    f.server.stop(true);
+    await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(fs.existsSync(path.join(f.worktreeDir, "lifecycle-ran"))).toBe(false);
+  } finally { f.close(); }
+}, 30_000);
+
+test("an unrepaired lockfile is an environment refusal and preserves the installed link", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
+    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment: dependency preparation failed: frozen dependency installation failed");
+    expect(fs.realpathSync(local)).toBe(before);
+    expect(fs.readdirSync(path.join(f.repoDir, ".git/delegatus-dependencies/v1")).some(name => name.startsWith("building-"))).toBe(false);
+  } finally { f.close(); }
+}, 30_000);
+
+test("two fresh processes share one completed installation", async () => {
+  const f = await lockedFixture();
+  try {
+    await Promise.all([0, 1].map(() => f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir)));
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v1");
+    expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "node_modules/fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+  } finally { f.close(); }
+}, 30_000);
+
+
+test("cache eviction retains registered worktrees and four unused input graphs", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const pinned = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const other = path.join(f.root, "other");
+    await f.run(["git", "worktree", "add", "-b", "other", other]);
+    await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], other);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
+    for (let revision = 0; revision < 7; revision++) {
+      fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify({ ...manifest, description: `fixture revision ${revision}` }));
+      await prepareWorktreeDependencies(f.pipeline);
+    }
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v1");
+    expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(6);
+    expect(fs.realpathSync(path.join(other, "node_modules"))).toBe(pinned);
+    expect(fs.existsSync(path.join(pinned, "fixture-tool/package.json"))).toBe(true);
+  } finally { f.close(); }
+}, 30_000);
+
+test("cancelled setup leaves the old dependency link available", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    const abort = new AbortController(); abort.abort();
+    await expect(prepareWorktreeDependencies(f.pipeline, { signal: abort.signal })).rejects.toThrow("stage environment:");
+    expect(fs.realpathSync(local)).toBe(before);
+  } finally { f.close(); }
+}, 30_000);
+
+
+test.each(["missing-lock", "local-dependency", "workspace", "escaping-patch", "symlink-patch"])("%s refuses setup before linking an unproved installation", async shape => {
+  const f = await lockedFixture();
+  try {
+    const manifestPath = path.join(f.worktreeDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (shape === "missing-lock") fs.unlinkSync(path.join(f.worktreeDir, "bun.lock"));
+    if (shape === "local-dependency") manifest.devDependencies["fixture-tool"] = "file:../package";
+    if (shape === "workspace") manifest.workspaces = ["packages/*"];
+    if (shape === "escaping-patch") manifest.patchedDependencies = { "fixture-tool@2.0.0": "../outside.patch" };
+    if (shape === "symlink-patch") {
+      fs.writeFileSync(path.join(f.root, "outside.patch"), "outside input");
+      fs.symlinkSync(path.join(f.root, "outside.patch"), path.join(f.worktreeDir, "linked.patch"));
+      manifest.patchedDependencies = { "fixture-tool@2.0.0": "linked.patch" };
+    }
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment:");
+    expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(f.repoDir, "node_modules/fixture-tool/package.json"))).toBe(true);
+  } finally { f.close(); }
+}, 30_000);

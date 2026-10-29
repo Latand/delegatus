@@ -1,5 +1,42 @@
 # Pipeline dependencies and commit identity
 
+## Delegatus stage toolchain
+
+Linked worktrees of this repository (`package.json` name `delegatus-cli`) use a
+shared installation under the common Git directory's
+`delegatus-dependencies/v1`. Its key includes the complete Bun lockfile,
+manifest, Bun configuration, npm configuration, referenced patch bytes,
+platform, architecture and Bun version. A source checkout's installation is
+never evidence that its current lockfile built those installed packages.
+
+Provisioning, every stage launch, settlement and publication validate this
+installation. The repository's post-merge hook refreshes it immediately after
+a merge; pre-commit and pre-push repeat preparation before running checks.
+Only an installation with a completed receipt for those inputs may be linked.
+On a miss, Bun installs the captured inputs once with `--frozen-lockfile
+--ignore-scripts --backend=copyfile`, including development dependencies.
+The installation is published by rename before any worktree links to it.
+Package tools share that installation; run dependency preparation again after
+editing dependency inputs, rather than installing through the shared link.
+
+A kernel lock serializes cache writers and releases ownership if the process
+dies. Queueing, installation and linking share a three-minute deadline;
+cancelled or failed setup refuses with `stage environment: dependency
+preparation failed` before checks or agent launch. The previous dependency
+link remains intact until a replacement install succeeds. An older real
+dependency directory is preserved under `preserved-*` in the cache rather
+than deleted. Those preserved directories require an owner's cleanup choice.
+Completed cache entries retain every registered worktree's current target and
+the four newest unused input graphs; older unused entries are removed under
+the same lock. An incomplete entry is preserved and reported for inspection.
+
+The worktree owns only its dependency symlink. Package files are installed
+once per input graph, with no per-worktree package copy. Local and workspace
+dependencies require an explicit policy before this repository can use them.
+Ordinary checkouts and other repositories retain the policy below.
+
+## Other repositories
+
 Provisioning borrows an existing dependency installation only when the source
 and worktree manifests, supported lockfiles and package-manager configuration
 match byte for byte. Workspaces, local dependency references and patched

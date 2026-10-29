@@ -1,6 +1,7 @@
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
+import { prepareLockedDependencies } from "./lockedDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
@@ -214,7 +215,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try { await prepareStageToolchain(pipeline, exec); }
-  catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
+  catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -227,9 +228,9 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
 }
 
 /** Provisioning uses the same bounded executor with a cancellation signal. */
-export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number }) => Promise<ExecResult>;
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number; inheritFd?: number }) => Promise<ExecResult>;
 export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal, options) =>
-  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs });
+  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -445,11 +446,11 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try {
     await prepareStageToolchain(pipeline,
-      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs }), signal);
+      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd }), signal);
   }
-  catch {
+  catch (error) {
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-    return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" };
+    return { ok: false, error: dependencyEnvironmentError(error) };
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
@@ -744,11 +745,11 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
-/** Provisioning and settlement prepare hooks from matching dependency inputs.
-    Incompatible or unavailable installations require a private frozen install.
-    Existing local installations and unrelated links remain their owner's. */
+/** Delegatus worktrees use the completed per-input cache. Other repositories
+    retain private hook tools and preserve installations their writers own. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?: AbortSignal): Promise<void> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  if (await prepareLockedDependencies(pipeline.worktreeDir, { exec, signal })) return;
   isolateWorktreeDependencies(pipeline);
   const local = path.join(pipeline.worktreeDir, "node_modules");
   try { fs.lstatSync(local); return; }
@@ -769,6 +770,11 @@ async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?
     pipelinePublicationHookEnv(), { signal, timeoutMs: 180_000 });
   signal?.throwIfAborted();
   if (installed.code !== 0) throw new Error("private repository hook dependency installation failed");
+}
+
+function dependencyEnvironmentError(error: unknown): string {
+  return error instanceof Error && error.message.startsWith("stage environment:") ? error.message
+    : "stage environment: preparing isolated worktree dependencies failed; source dependencies preserved";
 }
 
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
@@ -2243,9 +2249,13 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // left node_modules incomplete, or a merged lockfile may have moved on.
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
-    await isolateWorktreeDependencies(pipeline);
-    const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
-    if (installed.code !== 0) return failure("preparing publication dependencies", installed);
+    try {
+      if (!await prepareLockedDependencies(pipeline.worktreeDir, { exec })) {
+        await isolateWorktreeDependencies(pipeline);
+        const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
+        if (installed.code !== 0) return failure("preparing publication dependencies", installed);
+      }
+    } catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
     // Lifecycle scripts must not change the accepted head or tracked work.
     const prepared = await currentPipelineBranchHead(pipeline, exec);
     if (!prepared.ok) return prepared;
