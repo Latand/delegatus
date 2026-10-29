@@ -1037,7 +1037,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     if (!completed) continue;
     const successor = mergeSuccessor(pipeline, successorOwners);
     if (successor) {
-      if (pipeline.merge && pipeline.merge.state !== "merged"
+      if (successor.merge && pipeline.merge && pipeline.merge.state !== "merged"
         && pipeline.merge.reason !== `Merge superseded by delivery owner ${successor.id}`) {
         await commit(ports, pipeline, live => {
           live.state = "cancelled";
@@ -1095,7 +1095,11 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       await commit(ports, pipeline, (live) => { live.state = "cancelled"; live.reason = MERGE_REASONS.settingOff; live.nextReadAt = null; });
       continue;
     }
-    if (merge.state !== "merged" && merge.state !== "cancelled" && (merge.state === "refreshing" || merge.refresh?.pipelineId)) {
+    // Only retirement by this reserved refresh may reopen a cancelled parent.
+    if (merge.state !== "merged"
+      && (merge.state !== "cancelled" || (setting.enabled
+        && merge.reason === `Merge superseded by delivery owner ${merge.refresh?.pipelineId}`))
+      && (merge.state === "refreshing" || merge.refresh?.pipelineId)) {
       const refreshed = ports.loadPipelines().find((lane) => lane.id === merge.refresh?.pipelineId);
       const cached = merge.prNumber ? ports.cachedState(merge.repository, merge.prNumber) : null;
       if (refreshed?.merge?.state === "merged" || cached === "merged") {
@@ -1155,10 +1159,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
             live.nextReadAt = progress.nextReadAt;
           });
         }
-      } else if (refreshed?.state === "needs_decision") {
-        await commit(ports, pipeline, (live) => block(live, refreshed.stateDetail || "Refresh needs a decision", now));
-      } else if (refreshed?.state === "closed") {
-        await commit(ports, pipeline, (live) => block(live, MERGE_REASONS.refreshClosed, now));
+      } else if (refreshed?.state === "needs_decision" || refreshed?.state === "closed") {
+        const reason = refreshed.state === "closed" ? MERGE_REASONS.refreshClosed : refreshed.stateDetail || "Refresh needs a decision";
+        // Observing the same stopped refresh is no new wait. In particular it
+        // must not move blockedAt past a dismissal and wake the seat again.
+        if (merge.state !== "blocked" || merge.reason !== reason) {
+          await commit(ports, pipeline, (live) => block(live, reason, now));
+        }
       }
       continue;
     }
