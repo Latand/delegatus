@@ -128,7 +128,8 @@ More: [The orchestrator in depth](docs/guide/orchestrator.md).
 
 Each task is a card in one of four columns: Inbox, In progress, Waiting and
 Done. A card shows the agents working on it, each pipeline with its stages and
-pull request, and, when it needs you, what it is waiting for.
+pull request, a short bar with the agent's progress estimate once it has given
+one, and, when it needs you, what it is waiting for.
 
 ![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](docs/media/readme/board.svg)
 
