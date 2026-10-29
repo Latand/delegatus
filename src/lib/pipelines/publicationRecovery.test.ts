@@ -1,6 +1,11 @@
 import { expect, test, fs, os, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { RuntimeHost } from "@/runtime-host/host";
+import { serveRuntimeHost } from "@/runtime-host/socket";
+import { once } from "node:events";
+import { defaultPipelinePorts } from "./engine";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { pipelinePublicationFence } from "./git";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
