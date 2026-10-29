@@ -12,7 +12,10 @@ import { commitAndAdoptStageBranch } from "./stageBranch";
 import { adoptStructuredHostsAtStartup } from "@/lib/runtime/startup";
 import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
 import { AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
-import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { emptyLaunchProfile, type ProviderReceipt } from "@/lib/accounts/migration/contracts";
+import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
+import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
+import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
 import { buildPipeline, loadPipelines, savePipelines } from "./store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -1788,7 +1791,7 @@ test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line 
 });
 
 test.each((["claude", "codex"] as const).flatMap(engine =>
-  (["original operation", "resume operation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
+  (["original operation", "resume operation", "migration operation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
     "superseded owner", "missing pipeline", "settled attempt", "settled during restoration"] as const).map(proof => ({ engine, proof }))))
 ("a $engine rehost retains stage custody with $proof", async ({ engine, proof }) => {
   const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-rehost-state-"));
@@ -1815,8 +1818,12 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
       stages: [{ id: "build", kind: "run", "prompt": "", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: START });
     Object.assign(pipeline, { worktreeDir: proof === "foreign worktree" ? f.foreign : f.lane,
       state: "running", baseBranch: "main", baseRef: f.pipeline.baseRef, lastPassedCommit: f.pipeline.baseRef });
-    pipeline.runs[0]!.attempts = [{ ...f.attempt, n: 1, state: proof === "settled attempt" ? "passed" : "running", effectiveRole: role,
-      conversationId: proof === "foreign conversation" ? "conversation_foreign" : conversation.id, agentPath: entry.artifactPath } as PipelineStageAttempt];
+    pipeline.branch = f.pipeline.branch;
+    pipeline.cursor!.state = "running";
+    pipeline.runs[0]!.attempts = [{ n: 1, state: proof === "settled attempt" ? "passed" : "running", effectiveRole: role, launchId: f.attempt.launchId,
+      conversationId: proof === "foreign conversation" ? "conversation_foreign" : conversation.id, agentPath: entry.artifactPath,
+      sessionId: entry.key.sessionId, paneId: null, flowId: null, startedAt: START, completedAt: proof === "settled attempt" ? NOW : null,
+      input: null, activatedBy: null, output: null, verdict: null, error: null }];
     registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build:1",
       stageId: "build", stageOrder: 0, round: proof === "missing attempt" ? 2 : 1, parentConversationId: null });
     if (proof === "ambiguous membership") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: "other-pipeline", role: "builder", slot: "build:1",
@@ -1837,17 +1844,23 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
       restoreGuardRead = () => read.mockRestore();
     }
     let shell: NodeJS.ProcessEnv = { NODE_ENV: "test" };
+    const configureShell = async (env: NodeJS.ProcessEnv) => {
+      if (engine === "codex") shell = agentCodexPublicationPolicy({}, { ...env, HOME: f!.root }).set as NodeJS.ProcessEnv;
+      else {
+        const policy = applyClaudeSpawnPolicy(home, { publicationEnv: env });
+        shell = JSON.parse(await fs.readFile(policy.settingsPath, "utf8")).env;
+      }
+    };
     const observeCodex = async (store: AgentRegistry, optionsFor: Parameters<NonNullable<import("@/lib/runtime/startup").StructuredStartupDependencies["adopt"]>>[1]) => {
       const options = await optionsFor(store.readOnlySnapshot().entries["codex:stage-rehost"]!);
-      try { shell = agentCodexPublicationPolicy({}, { ...options.env, HOME: f.root }).set as NodeJS.ProcessEnv; }
+      try { await configureShell(options.env ?? { NODE_ENV: "test" }); }
       finally { options.releaseCleanup?.(); }
       return [];
     };
     const observeClaude = async (store: AgentRegistry, optionsFor: Parameters<NonNullable<import("@/lib/runtime/startup").StructuredStartupDependencies["adoptClaude"]>>[1]) => {
       const options = await optionsFor(store.readOnlySnapshot().entries["claude:stage-rehost"]!);
       try {
-        const policy = applyClaudeSpawnPolicy(home, { publicationEnv: options.env });
-        shell = JSON.parse(await fs.readFile(policy.settingsPath, "utf8")).env;
+        await configureShell(options.env ?? { NODE_ENV: "test" });
       } finally { options.releaseCleanup?.(); }
       return [];
     };
@@ -1858,11 +1871,39 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
       resolveClaudeOwner: () => ({ home, kind: "managed", transcriptRoot: f.root, env: { NODE_ENV: "test", HOME: f.root, PATH: process.env.PATH } }),
       adopt: engine === "codex" ? observeCodex : async () => [], adoptClaude: engine === "claude" ? observeClaude : async () => [],
     });
-    if (!["original operation", "resume operation"].includes(proof)) {
+    if (!["original operation", "resume operation", "migration operation"].includes(proof)) {
       await expect(adopt()).rejects.toThrow(/stage Git rehost/);
       expect(shell.LLV_STAGE_GIT_RECEIPT).toBeUndefined();
     } else {
-      await adopt();
+      if (proof === "migration operation") {
+        const target = { engine, accountId: "target", kind: "managed" as const, home, transcriptRoot: home,
+          env: { NODE_ENV: "test" as const, HOME: f.root, PATH: process.env.PATH } };
+        const nativeId = ["aaaaaaaa", "1111", "4111", "8111", "aaaaaaaaaaaa"].join("-");
+        const transcript = path.join(home, nativeId + ".jsonl");
+        await fs.writeFile(transcript, JSON.stringify({ sessionId: nativeId }) + "\n");
+        const receipt: ProviderReceipt = { operationId: "migration-stage-operation", nativeId, path: transcript, continuityPaths: [], historyHash: "fixture",
+          host: { kind: engine === "codex" ? "codex-app-server" : "claude-fork", identity: nativeId, epoch: 1, verifiedAt: START } };
+        const provider = new RegisteredSuccessorProvider({ registry, accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
+          startCodex: async () => { throw new Error("unexpected feature client"); }, claudeStatus: async () => ({ loggedIn: true }) });
+        const capture = async (_id: string, options?: { env?: NodeJS.ProcessEnv }) => {
+          await configureShell(options?.env ?? { NODE_ENV: "test" });
+          throw new Error("captured migration environment");
+        };
+        const native = engine === "codex" ? spyOn(CodexAppServerHost, "adopt").mockImplementation(capture)
+          : spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(capture);
+        const deliveryController = (process as typeof process & { __llvStructuredDeliveryController: { registerActiveHost: (() => Promise<() => Promise<void>>) | null } }).__llvStructuredDeliveryController;
+        const register = deliveryController.registerActiveHost, structured = process.env.LLV_STRUCTURED_HOSTS;
+        deliveryController.registerActiveHost = async () => async () => {};
+        process.env.LLV_STRUCTURED_HOSTS = "1";
+        try {
+          await expect(provider.publishHost(receipt, { engine, conversationId: conversation.id, targetAccountId: target.accountId, launchProfile: entry.launchProfile! }))
+            .rejects.toThrow("captured migration environment");
+        } finally {
+          native.mockRestore(); deliveryController.registerActiveHost = register;
+          if (structured === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+          else process.env.LLV_STRUCTURED_HOSTS = structured;
+        }
+      } else await adopt();
       expect(shell.LLV_STAGE_GIT_RECEIPT).toBe(f.receipt);
       expect(shell.LLV_STAGE_GIT_WORKTREE).toBe(f.lane);
       const made = await realExec("git", ["commit", "--allow-empty", "-m", "fix after rehost"], f.lane, { ...f.env, ...shell });
