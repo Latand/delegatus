@@ -1,0 +1,5 @@
+/* The product's stylesheet, plus the utilities this prototype's own markup
+   uses: globals.css generates utilities from src/ only, so it names this
+   directory as a second source. */
+@import "../../../../src/app/globals.css";
+@source "./";
